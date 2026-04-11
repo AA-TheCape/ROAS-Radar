@@ -5,6 +5,7 @@ import { type PoolClient } from 'pg';
 import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
 import { buildCanonicalTouchpointDimensions } from '../marketing-dimensions/index.js';
+import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
 import {
   ATTRIBUTION_MODELS,
   type AttributionCredit,
@@ -903,7 +904,9 @@ async function processAttributionJob(job: AttributionJobRow): Promise<void> {
 
     await persistAttributionCredits(client, order.shopify_order_id, outputs);
     await upsertLegacyAttributionResult(client, order.shopify_order_id, outputs);
-    await refreshDailyAttributionCampaignMetrics(client, [orderOccurredAt.toISOString().slice(0, 10)]);
+    const metricDate = orderOccurredAt.toISOString().slice(0, 10);
+    await refreshDailyAttributionCampaignMetrics(client, [metricDate]);
+    await refreshDailyReportingMetrics(client, [metricDate]);
     await completeAttributionJob(client, job.id);
   });
 }

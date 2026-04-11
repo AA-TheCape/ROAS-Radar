@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
 import { buildCanonicalSpendDimensions } from '../marketing-dimensions/index.js';
+import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
 
 const META_OAUTH_STATE_TTL_MINUTES = 10;
 const META_GRAPH_BASE_URL = 'https://graph.facebook.com';
@@ -968,6 +969,8 @@ async function persistDailySpendSnapshot(
       }
     }
   }
+
+  await refreshDailyReportingMetrics(client, [params.syncDate]);
 }
 
 async function markSyncJobSucceeded(jobId: number, connectionId: number): Promise<void> {

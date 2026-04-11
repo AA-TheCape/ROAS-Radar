@@ -39,13 +39,23 @@ export function createReportingRouter(): Router {
         visits: string;
         orders: string;
         revenue: string;
+        spend: string;
+        new_customer_orders: string;
+        returning_customer_orders: string;
+        new_customer_revenue: string;
+        returning_customer_revenue: string;
       }>(
         `
           SELECT
             COALESCE(SUM(visits), 0)::text AS visits,
-            COALESCE(SUM(orders), 0)::text AS orders,
-            COALESCE(SUM(revenue), 0)::text AS revenue
-          FROM daily_attribution_campaign_metrics
+            COALESCE(SUM(attributed_orders), 0)::text AS orders,
+            COALESCE(SUM(attributed_revenue), 0)::text AS revenue,
+            COALESCE(SUM(spend), 0)::text AS spend,
+            COALESCE(SUM(new_customer_orders), 0)::text AS new_customer_orders,
+            COALESCE(SUM(returning_customer_orders), 0)::text AS returning_customer_orders,
+            COALESCE(SUM(new_customer_revenue), 0)::text AS new_customer_revenue,
+            COALESCE(SUM(returning_customer_revenue), 0)::text AS returning_customer_revenue
+          FROM daily_reporting_metrics
           WHERE metric_date BETWEEN $1::date AND $2::date
             AND attribution_model = $3
             AND ($4::text IS NULL OR source = $4)
@@ -69,7 +79,13 @@ export function createReportingRouter(): Router {
           orders,
           revenue: Number(row.revenue),
           conversionRate: visits === 0 ? 0 : orders / visits,
-          roas: null
+          spend: Number(row.spend),
+          roas: Number(row.spend) === 0 ? null : Number(row.revenue) / Number(row.spend),
+          cac: orders === 0 ? null : Number(row.spend) / orders,
+          newCustomerOrders: Number(row.new_customer_orders),
+          returningCustomerOrders: Number(row.returning_customer_orders),
+          newCustomerRevenue: Number(row.new_customer_revenue),
+          returningCustomerRevenue: Number(row.returning_customer_revenue)
         }
       });
     } catch (error) {
@@ -95,6 +111,9 @@ export function createReportingRouter(): Router {
         visits: string;
         orders: string;
         revenue: string;
+        spend: string;
+        new_customer_orders: string;
+        returning_customer_orders: string;
       }>(
         `
           SELECT
@@ -103,9 +122,12 @@ export function createReportingRouter(): Router {
             campaign,
             content,
             SUM(visits)::text AS visits,
-            SUM(orders)::text AS orders,
-            SUM(revenue)::text AS revenue
-          FROM daily_attribution_campaign_metrics
+            SUM(attributed_orders)::text AS orders,
+            SUM(attributed_revenue)::text AS revenue,
+            SUM(spend)::text AS spend,
+            SUM(new_customer_orders)::text AS new_customer_orders,
+            SUM(returning_customer_orders)::text AS returning_customer_orders
+          FROM daily_reporting_metrics
           WHERE metric_date BETWEEN $1::date AND $2::date
             AND attribution_model = $3
             AND ($4::text IS NULL OR source = $4)
@@ -138,7 +160,12 @@ export function createReportingRouter(): Router {
             visits,
             orders,
             revenue: Number(row.revenue),
-            conversionRate: visits === 0 ? 0 : orders / visits
+            spend: Number(row.spend),
+            conversionRate: visits === 0 ? 0 : orders / visits,
+            roas: Number(row.spend) === 0 ? null : Number(row.revenue) / Number(row.spend),
+            cac: orders === 0 ? null : Number(row.spend) / orders,
+            newCustomerOrders: Number(row.new_customer_orders),
+            returningCustomerOrders: Number(row.returning_customer_orders)
           };
         }),
         nextCursor: null
@@ -158,14 +185,25 @@ export function createReportingRouter(): Router {
       const attributionModel = filters.attributionModel ?? 'last_touch';
 
       if (filters.groupBy === 'day') {
-        const result = await query<{ metric_date: string; visits: string; orders: string; revenue: string }>(
+        const result = await query<{
+          metric_date: string;
+          visits: string;
+          orders: string;
+          revenue: string;
+          spend: string;
+          new_customer_orders: string;
+          returning_customer_orders: string;
+        }>(
           `
             SELECT
               metric_date::text,
               SUM(visits)::text AS visits,
-              SUM(orders)::text AS orders,
-              SUM(revenue)::text AS revenue
-            FROM daily_attribution_campaign_metrics
+              SUM(attributed_orders)::text AS orders,
+              SUM(attributed_revenue)::text AS revenue,
+              SUM(spend)::text AS spend,
+              SUM(new_customer_orders)::text AS new_customer_orders,
+              SUM(returning_customer_orders)::text AS returning_customer_orders
+            FROM daily_reporting_metrics
             WHERE metric_date BETWEEN $1::date AND $2::date
               AND attribution_model = $3
               AND ($4::text IS NULL OR source = $4)
@@ -178,25 +216,46 @@ export function createReportingRouter(): Router {
 
         res.json({
           attributionModel,
-          points: result.rows.map((row: (typeof result.rows)[number]) => ({
-            date: row.metric_date,
-            visits: Number(row.visits),
-            orders: Number(row.orders),
-            revenue: Number(row.revenue)
-          }))
+          points: result.rows.map((row: (typeof result.rows)[number]) => {
+            const orders = Number(row.orders);
+            const spend = Number(row.spend);
+
+            return {
+              date: row.metric_date,
+              visits: Number(row.visits),
+              orders,
+              revenue: Number(row.revenue),
+              spend,
+              roas: spend === 0 ? null : Number(row.revenue) / spend,
+              cac: orders === 0 ? null : spend / orders,
+              newCustomerOrders: Number(row.new_customer_orders),
+              returningCustomerOrders: Number(row.returning_customer_orders)
+            };
+          })
         });
         return;
       }
 
       const dimension = filters.groupBy;
-      const result = await query<{ dimension: string; visits: string; orders: string; revenue: string }>(
+      const result = await query<{
+        dimension: string;
+        visits: string;
+        orders: string;
+        revenue: string;
+        spend: string;
+        new_customer_orders: string;
+        returning_customer_orders: string;
+      }>(
         `
           SELECT
             ${dimension} AS dimension,
             SUM(visits)::text AS visits,
-            SUM(orders)::text AS orders,
-            SUM(revenue)::text AS revenue
-          FROM daily_attribution_campaign_metrics
+            SUM(attributed_orders)::text AS orders,
+            SUM(attributed_revenue)::text AS revenue,
+            SUM(spend)::text AS spend,
+            SUM(new_customer_orders)::text AS new_customer_orders,
+            SUM(returning_customer_orders)::text AS returning_customer_orders
+          FROM daily_reporting_metrics
           WHERE metric_date BETWEEN $1::date AND $2::date
             AND attribution_model = $3
             AND ($4::text IS NULL OR source = $4)
@@ -209,12 +268,22 @@ export function createReportingRouter(): Router {
 
       res.json({
         attributionModel,
-        points: result.rows.map((row: (typeof result.rows)[number]) => ({
-          [dimension]: row.dimension,
-          visits: Number(row.visits),
-          orders: Number(row.orders),
-          revenue: Number(row.revenue)
-        }))
+        points: result.rows.map((row: (typeof result.rows)[number]) => {
+          const orders = Number(row.orders);
+          const spend = Number(row.spend);
+
+          return {
+            [dimension]: row.dimension,
+            visits: Number(row.visits),
+            orders,
+            revenue: Number(row.revenue),
+            spend,
+            roas: spend === 0 ? null : Number(row.revenue) / spend,
+            cac: orders === 0 ? null : spend / orders,
+            newCustomerOrders: Number(row.new_customer_orders),
+            returningCustomerOrders: Number(row.returning_customer_orders)
+          };
+        })
       });
     } catch (error) {
       next(error);

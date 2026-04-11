@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
 import { buildCanonicalSpendDimensions } from '../marketing-dimensions/index.js';
+import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
 
 const GOOGLE_OAUTH_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const GOOGLE_ADS_API_BASE_URL = 'https://googleads.googleapis.com';
@@ -1147,6 +1148,8 @@ async function persistDailySpendSnapshot(
       ]
     );
   }
+
+  await refreshDailyReportingMetrics(client, [params.syncDate]);
 }
 
 async function markSyncJobSucceeded(jobId: number, connectionId: number): Promise<void> {

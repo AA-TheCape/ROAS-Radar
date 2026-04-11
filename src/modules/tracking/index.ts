@@ -8,6 +8,7 @@ import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
 import { enqueueAttributionForTrackingTouchpoint } from '../attribution/index.js';
 import { buildCanonicalTouchpointDimensions } from '../marketing-dimensions/index.js';
+import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
 
 const EVENT_TYPES = ['page_view', 'product_view', 'add_to_cart', 'checkout_started'] as const;
 const MAX_URL_LENGTH = 2048;
@@ -626,6 +627,7 @@ async function ingestTrackingEvent(
   const eventId = await withTransaction(async (client) => {
     const occurredAt = new Date(sanitizedInput.occurredAt);
     const userAgent = sanitizedInput.context.userAgent ?? null;
+    const metricDate = occurredAt.toISOString().slice(0, 10);
 
     await upsertTrackingSession(sanitizedInput, occurredAt, userAgent, ipHash, client);
     const insertedEventId = await insertTrackingEvent(client, sanitizedInput, ingestionFingerprint);
@@ -634,6 +636,7 @@ async function ingestTrackingEvent(
       shopifyCheckoutToken: normalizeNullableString(sanitizedInput.shopifyCheckoutToken),
       shopifyCartToken: normalizeNullableString(sanitizedInput.shopifyCartToken)
     });
+    await refreshDailyReportingMetrics(client, [metricDate]);
 
     return insertedEventId;
   });
