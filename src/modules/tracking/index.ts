@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
 import { enqueueAttributionForTrackingTouchpoint } from '../attribution/index.js';
+import { buildCanonicalTouchpointDimensions } from '../marketing-dimensions/index.js';
 
 const EVENT_TYPES = ['page_view', 'product_view', 'add_to_cart', 'checkout_started'] as const;
 const MAX_URL_LENGTH = 2048;
@@ -252,6 +253,17 @@ async function upsertTrackingSession(
   client: PoolClient
 ): Promise<void> {
   const params = parseCampaignParameters(input.pageUrl);
+  const canonicalDimensions = buildCanonicalTouchpointDimensions({
+    source: params.utm_source,
+    medium: params.utm_medium,
+    campaign: params.utm_campaign,
+    content: params.utm_content,
+    term: params.utm_term,
+    gclid: params.gclid,
+    fbclid: params.fbclid,
+    ttclid: params.ttclid,
+    msclkid: params.msclkid
+  });
 
   await client.query(
     `
@@ -318,15 +330,15 @@ async function upsertTrackingSession(
       occurredAt,
       input.pageUrl,
       input.referrerUrl ?? null,
-      params.utm_source,
-      params.utm_medium,
-      params.utm_campaign,
-      params.utm_content,
-      params.utm_term,
-      params.gclid,
-      params.fbclid,
-      params.ttclid,
-      params.msclkid,
+      canonicalDimensions.source,
+      canonicalDimensions.medium,
+      canonicalDimensions.campaign,
+      canonicalDimensions.content,
+      canonicalDimensions.term,
+      canonicalDimensions.clickIdType === 'gclid' ? canonicalDimensions.clickIdValue : null,
+      canonicalDimensions.clickIdType === 'fbclid' ? canonicalDimensions.clickIdValue : null,
+      canonicalDimensions.clickIdType === 'ttclid' ? canonicalDimensions.clickIdValue : null,
+      canonicalDimensions.clickIdType === 'msclkid' ? canonicalDimensions.clickIdValue : null,
       userAgent,
       ipHash
     ]
@@ -339,6 +351,17 @@ async function insertTrackingEvent(
   ingestionFingerprint: string
 ): Promise<string> {
   const params = parseCampaignParameters(input.pageUrl);
+  const canonicalDimensions = buildCanonicalTouchpointDimensions({
+    source: params.utm_source,
+    medium: params.utm_medium,
+    campaign: params.utm_campaign,
+    content: params.utm_content,
+    term: params.utm_term,
+    gclid: params.gclid,
+    fbclid: params.fbclid,
+    ttclid: params.ttclid,
+    msclkid: params.msclkid
+  });
   const eventId = randomUUID();
 
   try {
@@ -398,20 +421,23 @@ async function insertTrackingEvent(
         new Date(input.occurredAt),
         input.pageUrl,
         input.referrerUrl ?? null,
-        params.utm_source,
-        params.utm_medium,
-        params.utm_campaign,
-        params.utm_content,
-        params.utm_term,
-        params.gclid,
-        params.fbclid,
-        params.ttclid,
-        params.msclkid,
+        canonicalDimensions.source,
+        canonicalDimensions.medium,
+        canonicalDimensions.campaign,
+        canonicalDimensions.content,
+        canonicalDimensions.term,
+        canonicalDimensions.clickIdType === 'gclid' ? canonicalDimensions.clickIdValue : null,
+        canonicalDimensions.clickIdType === 'fbclid' ? canonicalDimensions.clickIdValue : null,
+        canonicalDimensions.clickIdType === 'ttclid' ? canonicalDimensions.clickIdValue : null,
+        canonicalDimensions.clickIdType === 'msclkid' ? canonicalDimensions.clickIdValue : null,
         normalizeNullableString(input.shopifyCartToken),
         normalizeNullableString(input.shopifyCheckoutToken),
         input.clientEventId ?? null,
         ingestionFingerprint,
-        JSON.stringify(input)
+        JSON.stringify({
+          ...input,
+          marketingDimensions: canonicalDimensions
+        })
       ]
     );
   } catch (error) {

@@ -7,6 +7,7 @@ import { z } from 'zod';
 
 import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
+import { buildCanonicalSpendDimensions } from '../marketing-dimensions/index.js';
 
 const GOOGLE_OAUTH_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const GOOGLE_ADS_API_BASE_URL = 'https://googleads.googleapis.com';
@@ -156,6 +157,11 @@ type GoogleAdsNormalizedSpendRow = {
   adName: string | null;
   creativeId: string | null;
   creativeName: string | null;
+  canonicalSource: string;
+  canonicalMedium: string;
+  canonicalCampaign: string;
+  canonicalContent: string;
+  canonicalTerm: string;
   currency: string | null;
   spend: string;
   impressions: number;
@@ -508,6 +514,11 @@ function normalizeSpendSnapshot(params: {
     adName: null,
     creativeId: null,
     creativeName: null,
+    canonicalSource: 'google',
+    canonicalMedium: 'cpc',
+    canonicalCampaign: 'unknown',
+    canonicalContent: 'unknown',
+    canonicalTerm: 'unknown',
     currency: params.customer.currencyCode,
     spend: accountSpend.toFixed(2),
     impressions: accountImpressions,
@@ -523,6 +534,14 @@ function normalizeSpendSnapshot(params: {
       continue;
     }
 
+    const campaignDimensions = buildCanonicalSpendDimensions({
+      source: 'google',
+      medium: 'cpc',
+      campaign: row.campaign.name ?? null,
+      content: null,
+      term: null
+    });
+
     upsertRow({
       granularity: 'campaign',
       entityKey: row.campaign.id,
@@ -536,6 +555,11 @@ function normalizeSpendSnapshot(params: {
       adName: null,
       creativeId: null,
       creativeName: null,
+      canonicalSource: campaignDimensions.source,
+      canonicalMedium: campaignDimensions.medium,
+      canonicalCampaign: campaignDimensions.campaign,
+      canonicalContent: campaignDimensions.content,
+      canonicalTerm: campaignDimensions.term,
       currency: row.customer?.currencyCode ?? params.customer.currencyCode,
       spend: parseMicrosToDecimal(row.metrics?.costMicros),
       impressions: parseMetricInteger(row.metrics?.impressions),
@@ -553,6 +577,20 @@ function normalizeSpendSnapshot(params: {
     const clicks = parseMetricInteger(row.metrics?.clicks);
     const currency = row.customer?.currencyCode ?? params.customer.currencyCode;
     const accountName = row.customer?.descriptiveName ?? params.customer.descriptiveName;
+    const adsetDimensions = buildCanonicalSpendDimensions({
+      source: 'google',
+      medium: 'cpc',
+      campaign: row.campaign?.name ?? null,
+      content: null,
+      term: null
+    });
+    const adDimensions = buildCanonicalSpendDimensions({
+      source: 'google',
+      medium: 'cpc',
+      campaign: row.campaign?.name ?? null,
+      content: adName,
+      term: null
+    });
 
     if (adGroupId) {
       upsertRow({
@@ -568,6 +606,11 @@ function normalizeSpendSnapshot(params: {
         adName: null,
         creativeId: null,
         creativeName: null,
+        canonicalSource: adsetDimensions.source,
+        canonicalMedium: adsetDimensions.medium,
+        canonicalCampaign: adsetDimensions.campaign,
+        canonicalContent: adsetDimensions.content,
+        canonicalTerm: adsetDimensions.term,
         currency,
         spend,
         impressions,
@@ -590,6 +633,11 @@ function normalizeSpendSnapshot(params: {
         adName,
         creativeId: null,
         creativeName: null,
+        canonicalSource: adDimensions.source,
+        canonicalMedium: adDimensions.medium,
+        canonicalCampaign: adDimensions.campaign,
+        canonicalContent: adDimensions.content,
+        canonicalTerm: adDimensions.term,
         currency,
         spend,
         impressions,
@@ -610,6 +658,11 @@ function normalizeSpendSnapshot(params: {
         adName,
         creativeId: adId,
         creativeName: adName,
+        canonicalSource: adDimensions.source,
+        canonicalMedium: adDimensions.medium,
+        canonicalCampaign: adDimensions.campaign,
+        canonicalContent: adDimensions.content,
+        canonicalTerm: adDimensions.term,
         currency,
         spend,
         impressions,
@@ -1046,6 +1099,11 @@ async function persistDailySpendSnapshot(
           ad_name,
           creative_id,
           creative_name,
+          canonical_source,
+          canonical_medium,
+          canonical_campaign,
+          canonical_content,
+          canonical_term,
           currency,
           spend,
           impressions,
@@ -1055,7 +1113,8 @@ async function persistDailySpendSnapshot(
         )
         VALUES (
           $1, $2, $3, $4::date, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-          $18::numeric, $19, $20, $21::jsonb, now()
+          $18, $19, $20, $21, $22,
+          $23::numeric, $24, $25, $26::jsonb, now()
         )
       `,
       [
@@ -1075,6 +1134,11 @@ async function persistDailySpendSnapshot(
         normalizedRow.adName,
         normalizedRow.creativeId,
         normalizedRow.creativeName,
+        normalizedRow.canonicalSource,
+        normalizedRow.canonicalMedium,
+        normalizedRow.canonicalCampaign,
+        normalizedRow.canonicalContent,
+        normalizedRow.canonicalTerm,
         normalizedRow.currency,
         normalizedRow.spend,
         normalizedRow.impressions,

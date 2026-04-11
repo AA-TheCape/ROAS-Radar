@@ -7,6 +7,7 @@ import { z } from 'zod';
 
 import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
+import { buildCanonicalSpendDimensions } from '../marketing-dimensions/index.js';
 
 const META_OAUTH_STATE_TTL_MINUTES = 10;
 const META_GRAPH_BASE_URL = 'https://graph.facebook.com';
@@ -124,6 +125,11 @@ type MetaAdsNormalizedSpendRow = {
   adName: string | null;
   creativeId: string | null;
   creativeName: string | null;
+  canonicalSource: string;
+  canonicalMedium: string;
+  canonicalCampaign: string;
+  canonicalContent: string;
+  canonicalTerm: string;
   currency: string | null;
   spend: string;
   impressions: number;
@@ -333,6 +339,13 @@ function normalizeInsightRows(
   currency: string | null
 ): MetaAdsNormalizedSpendRow[] {
   const normalized: MetaAdsNormalizedSpendRow[] = [];
+  const baseDimensions = buildCanonicalSpendDimensions({
+    source: 'meta',
+    medium: 'paid_social',
+    campaign: row.campaign_name ?? null,
+    content: null,
+    term: null
+  });
   const baseRow = {
     accountId: row.account_id ?? null,
     accountName: row.account_name ?? null,
@@ -344,6 +357,11 @@ function normalizeInsightRows(
     adName: row.ad_name ?? null,
     creativeId: null,
     creativeName: null,
+    canonicalSource: baseDimensions.source,
+    canonicalMedium: baseDimensions.medium,
+    canonicalCampaign: baseDimensions.campaign,
+    canonicalContent: baseDimensions.content,
+    canonicalTerm: baseDimensions.term,
     currency,
     spend: parseMetricDecimal(row.spend),
     impressions: parseMetricInteger(row.impressions),
@@ -376,21 +394,39 @@ function normalizeInsightRows(
   }
 
   if (row.ad_id) {
+    const adDimensions = buildCanonicalSpendDimensions({
+      source: 'meta',
+      medium: 'paid_social',
+      campaign: row.campaign_name ?? null,
+      content: row.ad_name ?? null,
+      term: null
+    });
+
     normalized.push({
       ...baseRow,
       granularity: 'ad',
-      entityKey: row.ad_id
+      entityKey: row.ad_id,
+      canonicalContent: adDimensions.content
     });
 
     const creative = creativeMap[row.ad_id];
 
     if (creative?.creativeId) {
+      const creativeDimensions = buildCanonicalSpendDimensions({
+        source: 'meta',
+        medium: 'paid_social',
+        campaign: row.campaign_name ?? null,
+        content: creative.creativeName ?? row.ad_name ?? null,
+        term: null
+      });
+
       normalized.push({
         ...baseRow,
         granularity: 'creative',
         entityKey: creative.creativeId,
         creativeId: creative.creativeId,
-        creativeName: creative.creativeName
+        creativeName: creative.creativeName,
+        canonicalContent: creativeDimensions.content
       });
     }
   }
@@ -882,6 +918,11 @@ async function persistDailySpendSnapshot(
               ad_name,
               creative_id,
               creative_name,
+              canonical_source,
+              canonical_medium,
+              canonical_campaign,
+              canonical_content,
+              canonical_term,
               currency,
               spend,
               impressions,
@@ -891,7 +932,8 @@ async function persistDailySpendSnapshot(
             )
             VALUES (
               $1, $2, $3, $4::date, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-              $18::numeric, $19, $20, $21::jsonb, now()
+              $18, $19, $20, $21, $22,
+              $23::numeric, $24, $25, $26::jsonb, now()
             )
           `,
           [
@@ -911,6 +953,11 @@ async function persistDailySpendSnapshot(
             normalizedRow.adName,
             normalizedRow.creativeId,
             normalizedRow.creativeName,
+            normalizedRow.canonicalSource,
+            normalizedRow.canonicalMedium,
+            normalizedRow.canonicalCampaign,
+            normalizedRow.canonicalContent,
+            normalizedRow.canonicalTerm,
             normalizedRow.currency,
             normalizedRow.spend,
             normalizedRow.impressions,

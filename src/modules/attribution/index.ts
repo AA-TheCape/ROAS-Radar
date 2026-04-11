@@ -4,6 +4,7 @@ import { type PoolClient } from 'pg';
 
 import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
+import { buildCanonicalTouchpointDimensions } from '../marketing-dimensions/index.js';
 import {
   ATTRIBUTION_MODELS,
   type AttributionCredit,
@@ -334,17 +335,26 @@ async function resolveTouchpointChain(client: PoolClient, order: PendingOrder): 
       rank: 4,
       forced: false
     };
-
-    return {
-      sessionId: row.session_id,
-      occurredAt: row.touchpoint_occurred_at,
+    const canonicalDimensions = buildCanonicalTouchpointDimensions({
       source: row.attributed_source,
       medium: row.attributed_medium,
       campaign: row.attributed_campaign,
       content: row.attributed_content,
       term: row.attributed_term,
       clickIdType: row.attributed_click_id_type,
-      clickIdValue: row.attributed_click_id_value,
+      clickIdValue: row.attributed_click_id_value
+    });
+
+    return {
+      sessionId: row.session_id,
+      occurredAt: row.touchpoint_occurred_at,
+      source: canonicalDimensions.source,
+      medium: canonicalDimensions.medium,
+      campaign: canonicalDimensions.campaign,
+      content: canonicalDimensions.content,
+      term: canonicalDimensions.term,
+      clickIdType: canonicalDimensions.clickIdType,
+      clickIdValue: canonicalDimensions.clickIdValue,
       attributionReason: evidence.reason,
       isDirect: isDirectTouchpoint(row),
       isForced: evidence.forced
@@ -375,6 +385,17 @@ function deriveLegacyAttributionResult(
   fallbackReason = 'unattributed'
 ): LegacyAttributionResult {
   const primaryCredit = attributionCredits.find((credit) => credit.isPrimary) ?? attributionCredits[0];
+  const canonicalDimensions = primaryCredit
+    ? buildCanonicalTouchpointDimensions({
+        source: primaryCredit.source,
+        medium: primaryCredit.medium,
+        campaign: primaryCredit.campaign,
+        content: primaryCredit.content,
+        term: primaryCredit.term,
+        clickIdType: primaryCredit.clickIdType,
+        clickIdValue: primaryCredit.clickIdValue
+      })
+    : null;
 
   if (!primaryCredit || primaryCredit.sessionId === null) {
     return {
@@ -393,13 +414,13 @@ function deriveLegacyAttributionResult(
 
   return {
     sessionId: primaryCredit.sessionId,
-    source: primaryCredit.source,
-    medium: primaryCredit.medium,
-    campaign: primaryCredit.campaign,
-    content: primaryCredit.content,
-    term: primaryCredit.term,
-    clickIdType: primaryCredit.clickIdType,
-    clickIdValue: primaryCredit.clickIdValue,
+    source: canonicalDimensions?.source ?? null,
+    medium: canonicalDimensions?.medium ?? null,
+    campaign: canonicalDimensions?.campaign ?? null,
+    content: canonicalDimensions?.content ?? null,
+    term: canonicalDimensions?.term ?? null,
+    clickIdType: canonicalDimensions?.clickIdType ?? null,
+    clickIdValue: canonicalDimensions?.clickIdValue ?? null,
     confidenceScore: confidenceForReason(primaryCredit.attributionReason),
     reason: primaryCredit.attributionReason
   };
@@ -414,6 +435,16 @@ async function persistAttributionCredits(
 
   for (const attributionModel of ATTRIBUTION_MODELS) {
     for (const credit of outputs[attributionModel]) {
+      const canonicalDimensions = buildCanonicalTouchpointDimensions({
+        source: credit.source,
+        medium: credit.medium,
+        campaign: credit.campaign,
+        content: credit.content,
+        term: credit.term,
+        clickIdType: credit.clickIdType,
+        clickIdValue: credit.clickIdValue
+      });
+
       await client.query(
         `
           INSERT INTO attribution_order_credits (
@@ -462,13 +493,13 @@ async function persistAttributionCredits(
           credit.touchpointPosition,
           credit.sessionId,
           credit.touchpointOccurredAt,
-          credit.source,
-          credit.medium,
-          credit.campaign,
-          credit.content,
-          credit.term,
-          credit.clickIdType,
-          credit.clickIdValue,
+          canonicalDimensions.source,
+          canonicalDimensions.medium,
+          canonicalDimensions.campaign,
+          canonicalDimensions.content,
+          canonicalDimensions.term,
+          canonicalDimensions.clickIdType,
+          canonicalDimensions.clickIdValue,
           credit.creditWeight.toFixed(8),
           credit.revenueCredit,
           credit.isPrimary,

@@ -113,4 +113,9 @@ test('normalizeSpendSnapshot maps ad groups into Meta-aligned adset fields and e
   assert.equal(rows[4].granularity, 'creative');
   assert.equal(rows[4].creativeId, 'ad_1');
   assert.equal(rows[4].spend, '2.34');
+  assert.equal(rows[1].canonicalSource, 'google');
+  assert.equal(rows[1].canonicalMedium, 'cpc');
+  assert.equal(rows[1].canonicalCampaign, 'brand');
+  assert.equal(rows[1].canonicalContent, 'unknown');
+  assert.equal(rows[4].canonicalContent, 'headline a');
 });

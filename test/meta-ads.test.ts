@@ -82,4 +82,9 @@ test('normalizeInsightRows expands ad rows to creative granularity when creative
   assert.equal(rows[4].creativeId, 'creative_1');
   assert.equal(rows[4].currency, 'USD');
   assert.equal(rows[4].spend, '12.34');
+  assert.equal(rows[1].canonicalSource, 'meta');
+  assert.equal(rows[1].canonicalMedium, 'paid_social');
+  assert.equal(rows[1].canonicalCampaign, 'prospecting');
+  assert.equal(rows[1].canonicalContent, 'unknown');
+  assert.equal(rows[4].canonicalContent, 'creative a');
 });
