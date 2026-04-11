@@ -13,7 +13,9 @@
     "worker": "tsx src/worker.ts",
     "worker:start": "node dist/worker.js",
     "meta-ads:sync": "tsx src/meta-ads-worker.ts",
-    "meta-ads:sync:start": "node dist/meta-ads-worker.js"
+    "meta-ads:sync:start": "node dist/meta-ads-worker.js",
+    "google-ads:sync": "tsx src/google-ads-worker.ts",
+    "google-ads:sync:start": "node dist/google-ads-worker.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

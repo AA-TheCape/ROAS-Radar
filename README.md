@@ -40,6 +40,13 @@ Optional environment variables:
 - `META_ADS_SYNC_BATCH_SIZE`
 - `META_ADS_SYNC_MAX_RETRIES`
 - `META_ADS_WORKER_LOOP`
+- `GOOGLE_ADS_API_VERSION`
+- `GOOGLE_ADS_ENCRYPTION_KEY`
+- `GOOGLE_ADS_SYNC_LOOKBACK_DAYS`
+- `GOOGLE_ADS_SYNC_INITIAL_LOOKBACK_DAYS`
+- `GOOGLE_ADS_SYNC_BATCH_SIZE`
+- `GOOGLE_ADS_SYNC_MAX_RETRIES`
+- `GOOGLE_ADS_WORKER_LOOP`
 - `SHOPIFY_WEBHOOK_SECRET`
 - `SHOPIFY_APP_API_KEY`
 - `SHOPIFY_APP_API_SECRET`
@@ -77,3 +84,14 @@ The backend now includes a Meta Ads OAuth connection flow plus a retryable daily
 - `npm run meta-ads:sync` processes the queue, refreshes tokens when nearing expiry, fetches daily spend at account/campaign/adset/ad level, enriches ad rows with creative metadata, and writes both raw and normalized spend tables.
 
 In production, run `npm run meta-ads:sync` from a Cloud Run Job or scheduled worker once per day. The worker will automatically enqueue the configured rolling lookback window and retry API failures with exponential backoff.
+
+## Google Ads Spend Sync
+
+The backend now includes a Google Ads spend ingestion worker with encrypted credential storage and reconciliation:
+
+- `POST /api/google-ads/connections` validates a customer against the Google Ads API and stores the developer token, client secret, and refresh token encrypted in PostgreSQL.
+- `POST /api/google-ads/sync` can enqueue a manual backfill date range.
+- `POST /api/google-ads/reconcile` checks the rolling sync window for missing completed dates and re-enqueues gaps.
+- `npm run google-ads:sync` processes the queue, exchanges the refresh token for a short-lived access token, fetches daily spend from Google Ads at campaign and ad level, maps Google ad groups into the Meta-aligned `adset_*` fields, and writes both raw and normalized daily spend tables.
+
+In production, run `npm run google-ads:sync` from a Cloud Run Job or scheduled worker once per day. The worker keeps a rolling lookback window warm and writes reconciliation records so missing dates are visible and automatically requeued.

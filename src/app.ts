@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import express from 'express';
 import { ZodError } from 'zod';
 
+import { createGoogleAdsAdminRouter } from './modules/google-ads/index.js';
 import { createMetaAdsAdminRouter, createMetaAdsPublicRouter } from './modules/meta-ads/index.js';
 import { createReportingRouter } from './modules/reporting/index.js';
 import {
@@ -58,6 +59,7 @@ export function createApp() {
   app.use('/api/reporting', createReportingRouter());
   app.use('/api/shopify', createShopifyAdminRouter());
   app.use('/api/meta-ads', createMetaAdsAdminRouter());
+  app.use('/api/google-ads', createGoogleAdsAdminRouter());
 
   app.use((error: unknown, req: express.Request, res: express.Response, _next: express.NextFunction) => {
     if (error instanceof ZodError) {
