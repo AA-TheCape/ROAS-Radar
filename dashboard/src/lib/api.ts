@@ -1,3 +1,5 @@
+import type { PerformanceMetrics } from '../../../src/shared/metrics';
+
 export type AttributionModel = 'last_touch' | 'first_touch' | 'linear' | 'position_based' | 'time_decay';
 
 export type Filters = {
@@ -21,37 +23,12 @@ export type ModelsResponse = {
 
 export type OverviewResponse = {
   data: {
-    totals: {
-      visits: number;
-      orders: number;
-      revenue: number;
-      spend: number;
-      clicks: number;
-      impressions: number;
-      conversionRate: number;
-      roas: number | null;
-      cac: number | null;
-      averageOrderValue: number | null;
-      clickThroughRate: number | null;
-      newCustomerOrders: number;
-      returningCustomerOrders: number;
-      newCustomerRevenue: number;
-      returningCustomerRevenue: number;
-    };
+    totals: PerformanceMetrics;
   };
 };
 
-export type TimeseriesPoint = {
+export type TimeseriesPoint = PerformanceMetrics & {
   date: string;
-  visits: number;
-  orders: number;
-  revenue: number;
-  spend: number;
-  clicks: number;
-  impressions: number;
-  conversionRate: number;
-  roas: number | null;
-  clickThroughRate: number | null;
 };
 
 export type TimeseriesResponse = {
@@ -60,17 +37,9 @@ export type TimeseriesResponse = {
   };
 };
 
-export type ChannelRow = {
+export type ChannelRow = PerformanceMetrics & {
   source: string;
   medium: string;
-  visits: number;
-  orders: number;
-  revenue: number;
-  spend: number;
-  clicks: number;
-  impressions: number;
-  conversionRate: number;
-  roas: number | null;
   shareOfRevenue: number;
 };
 
@@ -84,21 +53,13 @@ export type ChannelsResponse = {
   };
 };
 
-export type CampaignRow = {
+export type CampaignRow = PerformanceMetrics & {
   source: string;
   medium: string;
   campaign: string;
-  visits: number;
-  orders: number;
-  revenue: number;
-  spend: number;
-  clicks: number;
-  impressions: number;
-  conversionRate: number;
-  roas: number | null;
 };
 
-export type CreativeRow = {
+export type CreativeRow = PerformanceMetrics & {
   source: string;
   medium: string;
   campaign: string;
@@ -109,15 +70,6 @@ export type CreativeRow = {
   creativeId: string | null;
   creativeName: string;
   content: string;
-  visits: number;
-  orders: number;
-  revenue: number;
-  spend: number;
-  clicks: number;
-  impressions: number;
-  conversionRate: number;
-  roas: number | null;
-  clickThroughRate: number | null;
   costPerClick: number | null;
 };
 

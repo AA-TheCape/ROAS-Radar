@@ -22,6 +22,7 @@ import {
   type TimeseriesPoint
 } from './lib/api';
 import { formatCompactCurrency, formatCurrency, formatDateLabel, formatNumber, formatPercent } from './lib/format';
+import { compareMetricValues, type PerformanceMetrics } from '../../src/shared/metrics';
 
 type AsyncSection<T> = {
   data: T | null;
@@ -30,23 +31,7 @@ type AsyncSection<T> = {
 };
 
 type DashboardState = {
-  overview: AsyncSection<{
-    visits: number;
-    orders: number;
-    revenue: number;
-    spend: number;
-    clicks: number;
-    impressions: number;
-    conversionRate: number;
-    roas: number | null;
-    cac: number | null;
-    averageOrderValue: number | null;
-    clickThroughRate: number | null;
-    newCustomerOrders: number;
-    returningCustomerOrders: number;
-    newCustomerRevenue: number;
-    returningCustomerRevenue: number;
-  }>;
+  overview: AsyncSection<PerformanceMetrics>;
   timeseries: AsyncSection<TimeseriesPoint[]>;
   channels: AsyncSection<ChannelRow[]>;
   campaigns: AsyncSection<CampaignRow[]>;
@@ -248,14 +233,6 @@ function useDashboardData(filters: Filters) {
   return state;
 }
 
-function compareValues(left: string | number | null, right: string | number | null) {
-  if (typeof left === 'number' || typeof right === 'number') {
-    return (typeof left === 'number' ? left : -Infinity) - (typeof right === 'number' ? right : -Infinity);
-  }
-
-  return (left ?? '').localeCompare(right ?? '', undefined, { sensitivity: 'base' });
-}
-
 function sortCreativeRows(rows: CreativeRow[], sort: CreativeSortState): CreativeRow[] {
   const nextRows = [...rows];
 
@@ -264,45 +241,45 @@ function sortCreativeRows(rows: CreativeRow[], sort: CreativeSortState): Creativ
 
     switch (sort.key) {
       case 'creativeName':
-        result = compareValues(left.creativeName, right.creativeName);
+        result = compareMetricValues(left.creativeName, right.creativeName);
         break;
       case 'creativeId':
-        result = compareValues(left.creativeId, right.creativeId);
+        result = compareMetricValues(left.creativeId, right.creativeId);
         break;
       case 'campaign':
-        result = compareValues(left.campaign, right.campaign);
+        result = compareMetricValues(left.campaign, right.campaign);
         break;
       case 'revenue':
-        result = compareValues(left.revenue, right.revenue);
+        result = compareMetricValues(left.revenue, right.revenue);
         break;
       case 'spend':
-        result = compareValues(left.spend, right.spend);
+        result = compareMetricValues(left.spend, right.spend);
         break;
       case 'roas':
-        result = compareValues(left.roas ?? -Infinity, right.roas ?? -Infinity);
+        result = compareMetricValues(left.roas ?? -Infinity, right.roas ?? -Infinity);
         break;
       case 'orders':
-        result = compareValues(left.orders, right.orders);
+        result = compareMetricValues(left.orders, right.orders);
         break;
       case 'visits':
-        result = compareValues(left.visits, right.visits);
+        result = compareMetricValues(left.visits, right.visits);
         break;
       case 'clicks':
-        result = compareValues(left.clicks, right.clicks);
+        result = compareMetricValues(left.clicks, right.clicks);
         break;
       case 'clickThroughRate':
-        result = compareValues(left.clickThroughRate ?? -Infinity, right.clickThroughRate ?? -Infinity);
+        result = compareMetricValues(left.clickThroughRate ?? -Infinity, right.clickThroughRate ?? -Infinity);
         break;
       case 'conversionRate':
-        result = compareValues(left.conversionRate, right.conversionRate);
+        result = compareMetricValues(left.conversionRate, right.conversionRate);
         break;
       case 'costPerClick':
-        result = compareValues(left.costPerClick ?? -Infinity, right.costPerClick ?? -Infinity);
+        result = compareMetricValues(left.costPerClick ?? -Infinity, right.costPerClick ?? -Infinity);
         break;
     }
 
     if (result === 0) {
-      result = compareValues(left.creativeName, right.creativeName);
+      result = compareMetricValues(left.creativeName, right.creativeName);
     }
 
     return sort.direction === 'asc' ? result : -result;
@@ -965,7 +942,6 @@ function ChannelTable(props: {
         <tbody>
           {props.rows.map((row) => {
             const channelName = `${row.source} / ${row.medium}`;
-            const cac = row.orders > 0 ? row.spend / row.orders : null;
 
             return (
               <tr key={channelName} className={props.selectedChannel === channelName ? 'is-selected' : undefined}>
@@ -980,7 +956,7 @@ function ChannelTable(props: {
                 <td>{formatCurrency(row.revenue)}</td>
                 <td>{formatCurrency(row.spend)}</td>
                 <td>{formatNumber(row.roas)}</td>
-                <td>{formatCurrency(cac)}</td>
+                <td>{formatCurrency(row.cac)}</td>
                 <td>{formatPercent(row.conversionRate)}</td>
                 <td>{formatPercent(row.shareOfRevenue)}</td>
               </tr>

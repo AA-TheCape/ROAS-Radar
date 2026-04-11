@@ -98,7 +98,10 @@ test('reporting overview returns versioned KPI payloads', async () => {
     assert.equal(body.data.totals.visits, 100);
     assert.equal(body.data.totals.orders, 5);
     assert.equal(body.data.totals.roas, 3);
+    assert.equal(body.data.totals.cac, 175 / 3);
+    assert.equal(body.data.totals.blendedCac, 35);
     assert.equal(body.data.totals.averageOrderValue, 105);
+    assert.equal(body.data.totals.newCustomerRate, 0.6);
   } finally {
     await closeServer(server);
   }
@@ -117,7 +120,11 @@ test('reporting channels, campaigns, and creatives return paginated rows under a
             revenue: '400.00',
             spend: '100.00',
             clicks: '40',
-            impressions: '500'
+            impressions: '500',
+            new_customer_orders: '2',
+            returning_customer_orders: '2',
+            new_customer_revenue: '240.00',
+            returning_customer_revenue: '160.00'
           },
           {
             source: 'facebook',
@@ -127,7 +134,11 @@ test('reporting channels, campaigns, and creatives return paginated rows under a
             revenue: '150.00',
             spend: '75.00',
             clicks: '20',
-            impressions: '300'
+            impressions: '300',
+            new_customer_orders: '1',
+            returning_customer_orders: '1',
+            new_customer_revenue: '90.00',
+            returning_customer_revenue: '60.00'
           }
         ]
       };
@@ -145,7 +156,11 @@ test('reporting channels, campaigns, and creatives return paginated rows under a
             revenue: '320.00',
             spend: '105.00',
             clicks: '30',
-            impressions: '350'
+            impressions: '350',
+            new_customer_orders: '2',
+            returning_customer_orders: '1',
+            new_customer_revenue: '210.00',
+            returning_customer_revenue: '110.00'
           }
         ]
       };
@@ -170,7 +185,11 @@ test('reporting channels, campaigns, and creatives return paginated rows under a
             revenue: '220.00',
             spend: '70.00',
             clicks: '18',
-            impressions: '200'
+            impressions: '200',
+            new_customer_orders: '2',
+            returning_customer_orders: '0',
+            new_customer_revenue: '220.00',
+            returning_customer_revenue: '0.00'
           },
           {
             source: 'google',
@@ -188,7 +207,11 @@ test('reporting channels, campaigns, and creatives return paginated rows under a
             revenue: '100.00',
             spend: '35.00',
             clicks: '12',
-            impressions: '150'
+            impressions: '150',
+            new_customer_orders: '1',
+            returning_customer_orders: '0',
+            new_customer_revenue: '100.00',
+            returning_customer_revenue: '0.00'
           },
           {
             source: 'facebook',
@@ -206,7 +229,11 @@ test('reporting channels, campaigns, and creatives return paginated rows under a
             revenue: '80.00',
             spend: '20.00',
             clicks: '8',
-            impressions: '120'
+            impressions: '120',
+            new_customer_orders: '1',
+            returning_customer_orders: '0',
+            new_customer_revenue: '80.00',
+            returning_customer_revenue: '0.00'
           }
         ]
       };
@@ -230,6 +257,7 @@ test('reporting channels, campaigns, and creatives return paginated rows under a
     assert.equal(channelsBody.attributionModel, 'last_touch');
     assert.equal(channelsBody.data.rows.length, 1);
     assert.equal(channelsBody.data.rows[0].source, 'google');
+    assert.equal(channelsBody.data.rows[0].cac, 50);
     assert.ok(channelsBody.data.pagination.nextCursor);
 
     const campaignsResponse = await fetch(
@@ -245,6 +273,7 @@ test('reporting channels, campaigns, and creatives return paginated rows under a
     assert.equal(campaignsBody.data.rows.length, 1);
     assert.equal(campaignsBody.data.rows[0].campaign, 'spring-sale');
     assert.equal(campaignsBody.data.rows[0].roas, 320 / 105);
+    assert.equal(campaignsBody.data.rows[0].blendedCac, 35);
     assert.ok(campaignsBody.data.pagination.nextCursor);
 
     const creativesResponse = await fetch(

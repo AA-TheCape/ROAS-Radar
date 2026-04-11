@@ -5,6 +5,7 @@ import { z } from 'zod';
 
 import { env } from '../../config/env.js';
 import { query } from '../../db/pool.js';
+import { calculatePerformanceMetrics, safeDivide, toNumber } from '../../shared/metrics.js';
 import { ATTRIBUTION_MODELS, type AttributionModel } from '../attribution/engine.js';
 
 const REPORTING_API_VERSION = '2026-04-11';
@@ -84,6 +85,10 @@ type TimeseriesRow = {
   spend: string;
   clicks: string;
   impressions: string;
+  new_customer_orders: string;
+  returning_customer_orders: string;
+  new_customer_revenue: string;
+  returning_customer_revenue: string;
 };
 
 type ChannelRow = {
@@ -95,6 +100,10 @@ type ChannelRow = {
   spend: string;
   clicks: string;
   impressions: string;
+  new_customer_orders: string;
+  returning_customer_orders: string;
+  new_customer_revenue: string;
+  returning_customer_revenue: string;
 };
 
 type CampaignRow = {
@@ -107,6 +116,10 @@ type CampaignRow = {
   spend: string;
   clicks: string;
   impressions: string;
+  new_customer_orders: string;
+  returning_customer_orders: string;
+  new_customer_revenue: string;
+  returning_customer_revenue: string;
 };
 
 type CreativeRow = {
@@ -126,6 +139,10 @@ type CreativeRow = {
   spend: string;
   clicks: string;
   impressions: string;
+  new_customer_orders: string;
+  returning_customer_orders: string;
+  new_customer_revenue: string;
+  returning_customer_revenue: string;
 };
 
 type OrderRow = {
@@ -156,26 +173,6 @@ type ResponseEnvelope<T> = {
   };
   data: T;
 };
-
-function toNumber(value: string | number | null | undefined): number {
-  if (typeof value === 'number') {
-    return value;
-  }
-
-  if (typeof value !== 'string') {
-    return 0;
-  }
-
-  return Number(value);
-}
-
-function safeDivide(numerator: number, denominator: number): number | null {
-  if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator === 0) {
-    return null;
-  }
-
-  return numerator / denominator;
-}
 
 function parseReportingAuth(authHeader: string | undefined): ReportingPrincipal | null {
   if (!authHeader?.startsWith('Bearer ')) {
@@ -335,31 +332,21 @@ async function fetchOverview(filters: ReportingFilters): Promise<OverviewRow> {
 }
 
 function formatOverviewResponse(principal: ReportingPrincipal, filters: ReportingFilters, row: OverviewRow) {
-  const visits = toNumber(row.visits);
-  const orders = toNumber(row.orders);
-  const revenue = toNumber(row.revenue);
-  const spend = toNumber(row.spend);
-  const clicks = toNumber(row.clicks);
-  const impressions = toNumber(row.impressions);
+  const metrics = calculatePerformanceMetrics({
+    visits: row.visits,
+    orders: row.orders,
+    attributedRevenue: row.revenue,
+    spend: row.spend,
+    clicks: row.clicks,
+    impressions: row.impressions,
+    newCustomerOrders: row.new_customer_orders,
+    returningCustomerOrders: row.returning_customer_orders,
+    newCustomerRevenue: row.new_customer_revenue,
+    returningCustomerRevenue: row.returning_customer_revenue
+  });
 
   return createEnvelope(principal, filters, {
-    totals: {
-      visits,
-      orders,
-      revenue,
-      spend,
-      clicks,
-      impressions,
-      conversionRate: safeDivide(orders, visits) ?? 0,
-      roas: safeDivide(revenue, spend),
-      cac: safeDivide(spend, orders),
-      averageOrderValue: safeDivide(revenue, orders),
-      clickThroughRate: safeDivide(clicks, impressions),
-      newCustomerOrders: toNumber(row.new_customer_orders),
-      returningCustomerOrders: toNumber(row.returning_customer_orders),
-      newCustomerRevenue: toNumber(row.new_customer_revenue),
-      returningCustomerRevenue: toNumber(row.returning_customer_revenue)
-    }
+    totals: metrics
   });
 }
 
@@ -373,7 +360,11 @@ async function fetchTimeseries(filters: ReportingFilters): Promise<TimeseriesRow
         SUM(attributed_revenue)::text AS revenue,
         SUM(spend)::text AS spend,
         SUM(clicks)::text AS clicks,
-        SUM(impressions)::text AS impressions
+        SUM(impressions)::text AS impressions,
+        SUM(new_customer_orders)::text AS new_customer_orders,
+        SUM(returning_customer_orders)::text AS returning_customer_orders,
+        SUM(new_customer_revenue)::text AS new_customer_revenue,
+        SUM(returning_customer_revenue)::text AS returning_customer_revenue
       FROM daily_reporting_metrics
       WHERE ${baseMetricWhereClause()}
       GROUP BY metric_date
@@ -388,24 +379,22 @@ async function fetchTimeseries(filters: ReportingFilters): Promise<TimeseriesRow
 function formatTimeseriesResponse(principal: ReportingPrincipal, filters: ReportingFilters, rows: TimeseriesRow[]) {
   return createEnvelope(principal, filters, {
     points: rows.map((row) => {
-      const visits = toNumber(row.visits);
-      const orders = toNumber(row.orders);
-      const revenue = toNumber(row.revenue);
-      const spend = toNumber(row.spend);
-      const clicks = toNumber(row.clicks);
-      const impressions = toNumber(row.impressions);
+      const metrics = calculatePerformanceMetrics({
+        visits: row.visits,
+        orders: row.orders,
+        attributedRevenue: row.revenue,
+        spend: row.spend,
+        clicks: row.clicks,
+        impressions: row.impressions,
+        newCustomerOrders: row.new_customer_orders,
+        returningCustomerOrders: row.returning_customer_orders,
+        newCustomerRevenue: row.new_customer_revenue,
+        returningCustomerRevenue: row.returning_customer_revenue
+      });
 
       return {
         date: row.metric_date,
-        visits,
-        orders,
-        revenue,
-        spend,
-        clicks,
-        impressions,
-        conversionRate: safeDivide(orders, visits) ?? 0,
-        roas: safeDivide(revenue, spend),
-        clickThroughRate: safeDivide(clicks, impressions)
+        ...metrics
       };
     })
   });
@@ -435,7 +424,11 @@ async function fetchChannels(
           SUM(attributed_revenue)::numeric(12, 2) AS revenue,
           SUM(spend)::numeric(12, 2) AS spend,
           SUM(clicks)::bigint AS clicks,
-          SUM(impressions)::bigint AS impressions
+          SUM(impressions)::bigint AS impressions,
+          SUM(new_customer_orders)::numeric(12, 8) AS new_customer_orders,
+          SUM(returning_customer_orders)::numeric(12, 8) AS returning_customer_orders,
+          SUM(new_customer_revenue)::numeric(12, 2) AS new_customer_revenue,
+          SUM(returning_customer_revenue)::numeric(12, 2) AS returning_customer_revenue
         FROM daily_reporting_metrics
         WHERE ${baseMetricWhereClause()}
         GROUP BY source, medium
@@ -448,7 +441,11 @@ async function fetchChannels(
         revenue::text AS revenue,
         spend::text AS spend,
         clicks::text AS clicks,
-        impressions::text AS impressions
+        impressions::text AS impressions,
+        new_customer_orders::text AS new_customer_orders,
+        returning_customer_orders::text AS returning_customer_orders,
+        new_customer_revenue::text AS new_customer_revenue,
+        returning_customer_revenue::text AS returning_customer_revenue
       FROM grouped
       WHERE (
         $9::numeric IS NULL
@@ -481,23 +478,24 @@ function formatChannelRows(rows: ChannelRow[]) {
   const totalRevenue = rows.reduce((sum, row) => sum + toNumber(row.revenue), 0);
 
   return rows.map((row) => {
-    const visits = toNumber(row.visits);
-    const orders = toNumber(row.orders);
-    const revenue = toNumber(row.revenue);
-    const spend = toNumber(row.spend);
+    const metrics = calculatePerformanceMetrics({
+      visits: row.visits,
+      orders: row.orders,
+      attributedRevenue: row.revenue,
+      spend: row.spend,
+      clicks: row.clicks,
+      impressions: row.impressions,
+      newCustomerOrders: row.new_customer_orders,
+      returningCustomerOrders: row.returning_customer_orders,
+      newCustomerRevenue: row.new_customer_revenue,
+      returningCustomerRevenue: row.returning_customer_revenue
+    });
 
     return {
       source: row.source,
       medium: row.medium,
-      visits,
-      orders,
-      revenue,
-      spend,
-      clicks: toNumber(row.clicks),
-      impressions: toNumber(row.impressions),
-      conversionRate: safeDivide(orders, visits) ?? 0,
-      roas: safeDivide(revenue, spend),
-      shareOfRevenue: safeDivide(revenue, totalRevenue) ?? 0
+      ...metrics,
+      shareOfRevenue: safeDivide(metrics.revenue, totalRevenue) ?? 0
     };
   });
 }
@@ -528,7 +526,11 @@ async function fetchCampaigns(
           SUM(attributed_revenue)::numeric(12, 2) AS revenue,
           SUM(spend)::numeric(12, 2) AS spend,
           SUM(clicks)::bigint AS clicks,
-          SUM(impressions)::bigint AS impressions
+          SUM(impressions)::bigint AS impressions,
+          SUM(new_customer_orders)::numeric(12, 8) AS new_customer_orders,
+          SUM(returning_customer_orders)::numeric(12, 8) AS returning_customer_orders,
+          SUM(new_customer_revenue)::numeric(12, 2) AS new_customer_revenue,
+          SUM(returning_customer_revenue)::numeric(12, 2) AS returning_customer_revenue
         FROM daily_reporting_metrics
         WHERE ${baseMetricWhereClause()}
         GROUP BY source, medium, campaign
@@ -542,7 +544,11 @@ async function fetchCampaigns(
         revenue::text AS revenue,
         spend::text AS spend,
         clicks::text AS clicks,
-        impressions::text AS impressions
+        impressions::text AS impressions,
+        new_customer_orders::text AS new_customer_orders,
+        returning_customer_orders::text AS returning_customer_orders,
+        new_customer_revenue::text AS new_customer_revenue,
+        returning_customer_revenue::text AS returning_customer_revenue
       FROM grouped
       WHERE (
         $9::numeric IS NULL
@@ -577,23 +583,24 @@ async function fetchCampaigns(
 
 function formatCampaignRows(rows: CampaignRow[]) {
   return rows.map((row) => {
-    const visits = toNumber(row.visits);
-    const orders = toNumber(row.orders);
-    const revenue = toNumber(row.revenue);
-    const spend = toNumber(row.spend);
+    const metrics = calculatePerformanceMetrics({
+      visits: row.visits,
+      orders: row.orders,
+      attributedRevenue: row.revenue,
+      spend: row.spend,
+      clicks: row.clicks,
+      impressions: row.impressions,
+      newCustomerOrders: row.new_customer_orders,
+      returningCustomerOrders: row.returning_customer_orders,
+      newCustomerRevenue: row.new_customer_revenue,
+      returningCustomerRevenue: row.returning_customer_revenue
+    });
 
     return {
       source: row.source,
       medium: row.medium,
       campaign: row.campaign,
-      visits,
-      orders,
-      revenue,
-      spend,
-      clicks: toNumber(row.clicks),
-      impressions: toNumber(row.impressions),
-      conversionRate: safeDivide(orders, visits) ?? 0,
-      roas: safeDivide(revenue, spend)
+      ...metrics
     };
   });
 }
@@ -831,7 +838,11 @@ async function fetchCreatives(
           SUM(revenue)::numeric(12, 2) AS revenue,
           SUM(spend)::numeric(12, 2) AS spend,
           SUM(clicks)::numeric(12, 4) AS clicks,
-          SUM(impressions)::numeric(12, 4) AS impressions
+          SUM(impressions)::numeric(12, 4) AS impressions,
+          SUM(orders)::numeric(12, 8) AS new_customer_orders,
+          0::numeric(12, 8) AS returning_customer_orders,
+          SUM(revenue)::numeric(12, 2) AS new_customer_revenue,
+          0::numeric(12, 2) AS returning_customer_revenue
         FROM (
           SELECT * FROM spend_backed_rows
           UNION ALL
@@ -855,7 +866,11 @@ async function fetchCreatives(
         revenue::text AS revenue,
         spend::text AS spend,
         clicks::text AS clicks,
-        impressions::text AS impressions
+        impressions::text AS impressions,
+        new_customer_orders::text AS new_customer_orders,
+        returning_customer_orders::text AS returning_customer_orders,
+        new_customer_revenue::text AS new_customer_revenue,
+        returning_customer_revenue::text AS returning_customer_revenue
       FROM grouped
       WHERE (
         $9::numeric IS NULL
@@ -894,12 +909,18 @@ async function fetchCreatives(
 
 function formatCreativeRows(rows: CreativeRow[]) {
   return rows.map((row) => {
-    const visits = toNumber(row.visits);
-    const orders = toNumber(row.orders);
-    const revenue = toNumber(row.revenue);
-    const spend = toNumber(row.spend);
-    const clicks = toNumber(row.clicks);
-    const impressions = toNumber(row.impressions);
+    const metrics = calculatePerformanceMetrics({
+      visits: row.visits,
+      orders: row.orders,
+      attributedRevenue: row.revenue,
+      spend: row.spend,
+      clicks: row.clicks,
+      impressions: row.impressions,
+      newCustomerOrders: row.new_customer_orders,
+      returningCustomerOrders: row.returning_customer_orders,
+      newCustomerRevenue: row.new_customer_revenue,
+      returningCustomerRevenue: row.returning_customer_revenue
+    });
 
     return {
       source: row.source,
@@ -912,16 +933,8 @@ function formatCreativeRows(rows: CreativeRow[]) {
       creativeId: row.creative_id,
       creativeName: row.creative_name ?? row.content,
       content: row.content,
-      visits,
-      orders,
-      revenue,
-      spend,
-      clicks,
-      impressions,
-      conversionRate: safeDivide(orders, visits) ?? 0,
-      roas: safeDivide(revenue, spend),
-      clickThroughRate: safeDivide(clicks, impressions),
-      costPerClick: safeDivide(spend, clicks)
+      ...metrics,
+      costPerClick: safeDivide(metrics.spend, metrics.clicks)
     };
   });
 }
@@ -1000,6 +1013,7 @@ const overviewResponseSchema = z.object({
     totals: z.object({
       visits: z.number(),
       orders: z.number(),
+      attributedRevenue: z.number(),
       revenue: z.number(),
       spend: z.number(),
       clicks: z.number(),
@@ -1007,12 +1021,15 @@ const overviewResponseSchema = z.object({
       conversionRate: z.number(),
       roas: z.number().nullable(),
       cac: z.number().nullable(),
+      blendedCac: z.number().nullable(),
       averageOrderValue: z.number().nullable(),
       clickThroughRate: z.number().nullable(),
       newCustomerOrders: z.number(),
       returningCustomerOrders: z.number(),
       newCustomerRevenue: z.number(),
-      returningCustomerRevenue: z.number()
+      returningCustomerRevenue: z.number(),
+      newCustomerRate: z.number(),
+      returningCustomerRate: z.number()
     })
   })
 });
@@ -1029,13 +1046,23 @@ const timeseriesResponseSchema = z.object({
         date: z.string(),
         visits: z.number(),
         orders: z.number(),
+        attributedRevenue: z.number(),
         revenue: z.number(),
         spend: z.number(),
         clicks: z.number(),
         impressions: z.number(),
         conversionRate: z.number(),
         roas: z.number().nullable(),
-        clickThroughRate: z.number().nullable()
+        cac: z.number().nullable(),
+        blendedCac: z.number().nullable(),
+        averageOrderValue: z.number().nullable(),
+        clickThroughRate: z.number().nullable(),
+        newCustomerOrders: z.number(),
+        returningCustomerOrders: z.number(),
+        newCustomerRevenue: z.number(),
+        returningCustomerRevenue: z.number(),
+        newCustomerRate: z.number(),
+        returningCustomerRate: z.number()
       })
     )
   })
