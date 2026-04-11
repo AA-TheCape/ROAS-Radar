@@ -1,32 +1,59 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 
-import { Router } from 'express';
+import { type RequestHandler, Router } from 'express';
+import { z } from 'zod';
 
 import { env } from '../../config/env.js';
-import { withTransaction } from '../../db/pool.js';
+import { query, withTransaction } from '../../db/pool.js';
 
-type ShopifyOrderPayload = {
-  id: number | string;
-  order_number?: number | string;
-  customer?: {
-    id?: number | string;
-    email?: string | null;
-    phone?: string | null;
-  } | null;
-  email?: string | null;
-  currency?: string;
-  subtotal_price?: string | number;
-  total_price?: string | number;
-  financial_status?: string | null;
-  fulfillment_status?: string | null;
-  processed_at?: string | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-  checkout_token?: string | null;
-  cart_token?: string | null;
-  source_name?: string | null;
-  note_attributes?: Array<{ name?: string; value?: string | null }>;
-  attributes?: Array<{ name?: string; value?: string | null }>;
+const shopifyAttributeSchema = z.object({
+  name: z.string().optional(),
+  value: z.union([z.string(), z.number(), z.boolean()]).nullable().optional()
+});
+
+const shopifyCustomerSchema = z
+  .object({
+    id: z.union([z.string(), z.number()]).optional(),
+    email: z.string().email().nullable().optional(),
+    phone: z.string().nullable().optional()
+  })
+  .nullable()
+  .optional();
+
+const shopifyOrderPayloadSchema = z.object({
+  id: z.union([z.string(), z.number()]),
+  order_number: z.union([z.string(), z.number()]).optional(),
+  customer: shopifyCustomerSchema,
+  email: z.string().email().nullable().optional(),
+  currency: z.string().min(1).optional(),
+  subtotal_price: z.union([z.string(), z.number()]).optional(),
+  total_price: z.union([z.string(), z.number()]).optional(),
+  financial_status: z.string().nullable().optional(),
+  fulfillment_status: z.string().nullable().optional(),
+  processed_at: z.string().datetime().nullable().optional(),
+  created_at: z.string().datetime().nullable().optional(),
+  updated_at: z.string().datetime().nullable().optional(),
+  checkout_token: z.string().nullable().optional(),
+  cart_token: z.string().nullable().optional(),
+  source_name: z.string().nullable().optional(),
+  note_attributes: z.array(shopifyAttributeSchema).optional(),
+  attributes: z.array(shopifyAttributeSchema).optional()
+});
+
+type ShopifyOrderPayload = z.infer<typeof shopifyOrderPayloadSchema>;
+
+type WebhookReceiptRow = {
+  id: number;
+  status: string;
+  processed_at: Date | null;
+};
+
+type PersistWebhookInput = {
+  payload: ShopifyOrderPayload;
+  rawBody: Buffer;
+  shopDomain: string;
+  topic: string;
+  webhookId: string | null;
 };
 
 function verifyWebhookSignature(rawBody: Buffer, signature: string | undefined): boolean {
@@ -34,9 +61,7 @@ function verifyWebhookSignature(rawBody: Buffer, signature: string | undefined):
     return false;
   }
 
-  const digest = createHmac('sha256', env.SHOPIFY_WEBHOOK_SECRET)
-    .update(rawBody)
-    .digest('base64');
+  const digest = createHmac('sha256', env.SHOPIFY_WEBHOOK_SECRET).update(rawBody).digest('base64');
 
   if (digest.length !== signature.length) {
     return false;
@@ -46,11 +71,17 @@ function verifyWebhookSignature(rawBody: Buffer, signature: string | undefined):
 }
 
 function getAttributeValue(
-  attributes: Array<{ name?: string; value?: string | null }> | undefined,
+  attributes: Array<z.infer<typeof shopifyAttributeSchema>> | undefined,
   key: string
 ): string | null {
   const match = attributes?.find((attribute) => attribute.name === key);
-  return match?.value ?? null;
+
+  if (match?.value === undefined || match.value === null) {
+    return null;
+  }
+
+  const normalized = String(match.value).trim();
+  return normalized ? normalized : null;
 }
 
 function toNumericString(value: string | number | undefined): string {
@@ -71,36 +102,83 @@ function toNullableUuid(value: string | null): string | null {
     : null;
 }
 
-async function persistWebhook(topic: string, shopDomain: string, webhookId: string | null, payload: ShopifyOrderPayload): Promise<void> {
-  const payloadHash = createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+async function createOrReuseWebhookReceipt(
+  topic: string,
+  shopDomain: string,
+  webhookId: string | null,
+  payloadHash: string,
+  payload: ShopifyOrderPayload
+): Promise<WebhookReceiptRow> {
+  const insertResult = await query<WebhookReceiptRow>(
+    `
+      INSERT INTO shopify_webhook_receipts (
+        topic,
+        shop_domain,
+        webhook_id,
+        payload_hash,
+        received_at,
+        status,
+        raw_payload
+      )
+      VALUES ($1, $2, $3, $4, now(), 'received', $5::jsonb)
+      ON CONFLICT DO NOTHING
+      RETURNING id, status, processed_at
+    `,
+    [topic, shopDomain, webhookId, payloadHash, JSON.stringify(payload)]
+  );
+
+  if (insertResult.rowCount) {
+    return insertResult.rows[0];
+  }
+
+  const existingResult = await query<WebhookReceiptRow>(
+    `
+      SELECT
+        id,
+        status,
+        processed_at
+      FROM shopify_webhook_receipts
+      WHERE (
+        $1::text IS NOT NULL
+        AND webhook_id = $1
+      ) OR (
+        topic = $2
+        AND shop_domain = $3
+        AND payload_hash = $4
+      )
+      ORDER BY id DESC
+      LIMIT 1
+    `,
+    [webhookId, topic, shopDomain, payloadHash]
+  );
+
+  if (!existingResult.rowCount) {
+    throw new Error('Failed to create Shopify webhook receipt.');
+  }
+
+  return existingResult.rows[0];
+}
+
+async function markWebhookReceiptStatus(receiptId: number, status: 'processed' | 'failed'): Promise<void> {
+  await query(
+    `
+      UPDATE shopify_webhook_receipts
+      SET
+        status = $2,
+        processed_at = CASE WHEN $2 = 'processed' THEN now() ELSE processed_at END
+      WHERE id = $1
+    `,
+    [receiptId, status]
+  );
+}
+
+async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPayload): Promise<void> {
   const landingSessionId =
     getAttributeValue(payload.note_attributes, 'roas_radar_session_id') ??
     getAttributeValue(payload.attributes, 'roas_radar_session_id');
   const shopifyCustomerId = payload.customer?.id ? String(payload.customer.id) : null;
 
   await withTransaction(async (client) => {
-    const receiptInsert = await client.query(
-      `
-        INSERT INTO shopify_webhook_receipts (
-          topic,
-          shop_domain,
-          webhook_id,
-          payload_hash,
-          received_at,
-          status,
-          raw_payload
-        )
-        VALUES ($1, $2, $3, $4, now(), 'received', $5::jsonb)
-        ON CONFLICT DO NOTHING
-        RETURNING id
-      `,
-      [topic, shopDomain, webhookId, payloadHash, JSON.stringify(payload)]
-    );
-
-    if (webhookId && receiptInsert.rowCount === 0) {
-      return;
-    }
-
     if (shopifyCustomerId) {
       await client.query(
         `
@@ -114,8 +192,8 @@ async function persistWebhook(topic: string, shopDomain: string, webhookId: stri
           VALUES ($1, $2, $3, now(), now())
           ON CONFLICT (shopify_customer_id)
           DO UPDATE SET
-            email = EXCLUDED.email,
-            phone = EXCLUDED.phone,
+            email = COALESCE(EXCLUDED.email, shopify_customers.email),
+            phone = COALESCE(EXCLUDED.phone, shopify_customers.phone),
             updated_at = now()
         `,
         [shopifyCustomerId, payload.customer?.email ?? payload.email ?? null, payload.customer?.phone ?? null]
@@ -166,21 +244,21 @@ async function persistWebhook(topic: string, shopDomain: string, webhookId: stri
         )
         ON CONFLICT (shopify_order_id)
         DO UPDATE SET
-          shopify_order_number = EXCLUDED.shopify_order_number,
-          shopify_customer_id = EXCLUDED.shopify_customer_id,
-          email = EXCLUDED.email,
+          shopify_order_number = COALESCE(EXCLUDED.shopify_order_number, shopify_orders.shopify_order_number),
+          shopify_customer_id = COALESCE(EXCLUDED.shopify_customer_id, shopify_orders.shopify_customer_id),
+          email = COALESCE(EXCLUDED.email, shopify_orders.email),
           currency_code = EXCLUDED.currency_code,
           subtotal_price = EXCLUDED.subtotal_price,
           total_price = EXCLUDED.total_price,
-          financial_status = EXCLUDED.financial_status,
-          fulfillment_status = EXCLUDED.fulfillment_status,
-          processed_at = EXCLUDED.processed_at,
-          created_at_shopify = EXCLUDED.created_at_shopify,
-          updated_at_shopify = EXCLUDED.updated_at_shopify,
+          financial_status = COALESCE(EXCLUDED.financial_status, shopify_orders.financial_status),
+          fulfillment_status = COALESCE(EXCLUDED.fulfillment_status, shopify_orders.fulfillment_status),
+          processed_at = COALESCE(EXCLUDED.processed_at, shopify_orders.processed_at),
+          created_at_shopify = COALESCE(EXCLUDED.created_at_shopify, shopify_orders.created_at_shopify),
+          updated_at_shopify = COALESCE(EXCLUDED.updated_at_shopify, shopify_orders.updated_at_shopify),
           landing_session_id = COALESCE(EXCLUDED.landing_session_id, shopify_orders.landing_session_id),
           checkout_token = COALESCE(EXCLUDED.checkout_token, shopify_orders.checkout_token),
           cart_token = COALESCE(EXCLUDED.cart_token, shopify_orders.cart_token),
-          source_name = EXCLUDED.source_name,
+          source_name = COALESCE(EXCLUDED.source_name, shopify_orders.source_name),
           raw_payload = EXCLUDED.raw_payload,
           ingested_at = now()
       `,
@@ -211,65 +289,73 @@ async function persistWebhook(topic: string, shopDomain: string, webhookId: stri
         SET
           status = 'processed',
           processed_at = now()
-        WHERE topic = $1
-          AND shop_domain = $2
-          AND payload_hash = $3
+        WHERE id = $1
       `,
-      [topic, shopDomain, payloadHash]
+      [receiptId]
     );
   });
+}
+
+async function persistWebhook(input: PersistWebhookInput): Promise<{ duplicated: boolean }> {
+  const payloadHash = createHash('sha256').update(input.rawBody).digest('hex');
+  const receipt = await createOrReuseWebhookReceipt(
+    input.topic,
+    input.shopDomain,
+    input.webhookId,
+    payloadHash,
+    input.payload
+  );
+
+  if (receipt.status === 'processed') {
+    return { duplicated: true };
+  }
+
+  try {
+    await normalizeShopifyOrder(receipt.id, input.payload);
+    return { duplicated: false };
+  } catch (error) {
+    await markWebhookReceiptStatus(receipt.id, 'failed');
+    throw error;
+  }
+}
+
+function createOrderWebhookHandler(defaultTopic: string): RequestHandler {
+  return async (req, res, next) => {
+    try {
+      const rawBody = req.body as Buffer;
+      const signature = req.header('x-shopify-hmac-sha256') ?? undefined;
+
+      if (!Buffer.isBuffer(rawBody)) {
+        res.status(400).json({ error: 'Expected a raw Shopify webhook payload.' });
+        return;
+      }
+
+      if (!verifyWebhookSignature(rawBody, signature)) {
+        res.status(401).json({ error: 'Invalid Shopify webhook signature.' });
+        return;
+      }
+
+      const payload = shopifyOrderPayloadSchema.parse(JSON.parse(rawBody.toString('utf8')));
+      await persistWebhook({
+        payload,
+        rawBody,
+        topic: req.header('x-shopify-topic') ?? defaultTopic,
+        shopDomain: req.header('x-shopify-shop-domain') ?? 'unknown',
+        webhookId: req.header('x-shopify-webhook-id') ?? null
+      });
+
+      res.status(200).json({ ok: true });
+    } catch (error) {
+      next(error);
+    }
+  };
 }
 
 export function createShopifyRouter(): Router {
   const router = Router();
 
-  router.post('/orders-create', async (req, res, next) => {
-    try {
-      const rawBody = req.body as Buffer;
-      const signature = req.header('x-shopify-hmac-sha256') ?? undefined;
-
-      if (!verifyWebhookSignature(rawBody, signature)) {
-        res.status(401).json({ error: 'Invalid Shopify webhook signature.' });
-        return;
-      }
-
-      const payload = JSON.parse(rawBody.toString('utf8')) as ShopifyOrderPayload;
-      await persistWebhook(
-        req.header('x-shopify-topic') ?? 'orders/create',
-        req.header('x-shopify-shop-domain') ?? 'unknown',
-        req.header('x-shopify-webhook-id'),
-        payload
-      );
-
-      res.status(200).json({ ok: true });
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  router.post('/orders-paid', async (req, res, next) => {
-    try {
-      const rawBody = req.body as Buffer;
-      const signature = req.header('x-shopify-hmac-sha256') ?? undefined;
-
-      if (!verifyWebhookSignature(rawBody, signature)) {
-        res.status(401).json({ error: 'Invalid Shopify webhook signature.' });
-        return;
-      }
-
-      const payload = JSON.parse(rawBody.toString('utf8')) as ShopifyOrderPayload;
-      await persistWebhook(
-        req.header('x-shopify-topic') ?? 'orders/paid',
-        req.header('x-shopify-shop-domain') ?? 'unknown',
-        req.header('x-shopify-webhook-id'),
-        payload
-      );
-
-      res.status(200).json({ ok: true });
-    } catch (error) {
-      next(error);
-    }
-  });
+  router.post('/orders-create', createOrderWebhookHandler('orders/create'));
+  router.post('/orders-paid', createOrderWebhookHandler('orders/paid'));
 
   return router;
 }

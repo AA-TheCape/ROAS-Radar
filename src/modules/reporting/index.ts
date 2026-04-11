@@ -107,7 +107,7 @@ export function createReportingRouter(): Router {
       );
 
       res.json({
-        rows: result.rows.map((row) => {
+        rows: result.rows.map((row: (typeof result.rows)[number]) => {
           const visits = Number(row.visits);
           const orders = Number(row.orders);
 
@@ -154,7 +154,7 @@ export function createReportingRouter(): Router {
         );
 
         res.json({
-          points: result.rows.map((row) => ({
+          points: result.rows.map((row: (typeof result.rows)[number]) => ({
             date: row.metric_date,
             visits: Number(row.visits),
             orders: Number(row.orders),
@@ -183,7 +183,7 @@ export function createReportingRouter(): Router {
       );
 
       res.json({
-        points: result.rows.map((row) => ({
+        points: result.rows.map((row: (typeof result.rows)[number]) => ({
           [dimension]: row.dimension,
           visits: Number(row.visits),
           orders: Number(row.orders),
@@ -231,7 +231,7 @@ export function createReportingRouter(): Router {
       );
 
       res.json({
-        rows: result.rows.map((row) => ({
+        rows: result.rows.map((row: (typeof result.rows)[number]) => ({
           shopifyOrderId: row.shopify_order_id,
           processedAt: row.processed_at?.toISOString() ?? null,
           totalPrice: Number(row.total_price),
