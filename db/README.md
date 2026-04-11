@@ -1,27 +1,25 @@
 # Database Migrations
 
-This directory contains PostgreSQL schema migrations for ROAS Radar.
+This directory contains PostgreSQL schema migrations for the ROAS Radar MVP backend.
 
 ## Current schema
 
-`migrations/0001_create_roas_radar_core_schema.sql` creates the MVP analytics schema for:
+`migrations/0001_create_roas_radar_core_schema.sql` creates the launch schema defined in the MVP architecture artifact:
 
-- `visitors`
-- `sessions`
-- `touchpoints`
-- `orders`
-- `order_line_items`
-- `attribution_models`
+- `tracking_sessions`
+- `tracking_events`
+- `shopify_customers`
+- `shopify_orders`
 - `attribution_results`
-- `ad_platforms`
-- `traffic_channels`
-- `campaigns`
-- `ad_groups`
-- `creatives`
-- `ad_spend_daily`
+- `shopify_webhook_receipts`
+- `daily_campaign_metrics`
 
-## Notes
+## Applying migrations
 
-- `orders.visitor_id`, `orders.source_session_id`, and `orders.source_touchpoint_id` are foreign-keyed so visitor-to-order lineage is enforced when attribution is known.
-- `attribution_results` stores weighted allocations per `order_id`, `model_id`, and `touchpoint_id`, which supports first touch, last touch, linear, time decay, position based, and rule based weighted models.
-- BRIN and composite time-series indexes are included on `sessions.started_at`, `touchpoints.occurred_at`, `orders.ordered_at`, `attribution_results.conversion_at`, and `ad_spend_daily.spend_date` to support reporting workloads.
+Run the migration runner from the repository root after setting `DATABASE_URL`:
+
+```bash
+npm run db:migrate
+```
+
+The runner records applied files in `schema_migrations` and executes `.sql` files in lexical order.

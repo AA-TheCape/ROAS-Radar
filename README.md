@@ -1,57 +1,35 @@
-# ROAS-Radar
-Version 0.01
+# ROAS Radar
 
-## Shopify Storefront Session Propagation
+ROAS Radar is a Shopify attribution and reporting product built around a Node.js API, PostgreSQL, and a React dashboard.
 
-This repository now includes a Shopify theme integration that preserves the ROAS Radar browser `session_id` into Shopify cart attributes before checkout. That gives the backend a stable path to recover the originating session from order payloads and attribute orders reliably.
+## Backend scaffold
 
-### Files
+This repository now includes an MVP backend foundation with:
 
-- `shopify/theme/assets/roas-radar-session-propagation.js`
-- `shopify/theme/snippets/roas-radar-session-propagation.liquid`
+- an Express API service for `/track`, Shopify order webhooks, and authenticated reporting endpoints,
+- a PostgreSQL migration runner,
+- an attribution worker entrypoint for batch order attribution,
+- the MVP analytics schema under `db/migrations`.
 
-### What it does
+## Commands
 
-- Reads the existing ROAS Radar session identifier from:
-  - `window.__ROAS_RADAR_SESSION_ID`
-  - the `roas_radar_session_id` cookie
-  - `sessionStorage` / `localStorage`
-- Writes the session into Shopify cart attributes under `roas_radar_session_id`
-- Writes the current landing path into `roas_radar_landing_path`
-- Injects hidden cart form fields so non-AJAX cart flows still carry the same metadata
-- Syncs attributes on page load and again when checkout/cart forms are submitted
-
-### Shopify theme install
-
-1. Copy `shopify/theme/assets/roas-radar-session-propagation.js` into your theme assets.
-2. Copy `shopify/theme/snippets/roas-radar-session-propagation.liquid` into your theme snippets.
-3. Render the snippet in `theme.liquid` before `</body>`:
-
-```liquid
-{% render 'roas-radar-session-propagation' %}
+```bash
+npm install
+npm run db:migrate
+npm run dev
 ```
 
-If your tracking cookie uses a different name, pass it explicitly:
+Required environment variables:
 
-```liquid
-{% render 'roas-radar-session-propagation',
-  cookie_name: 'custom_roas_session',
-  cart_attribute_key: 'roas_radar_session_id',
-  landing_path_attribute_key: 'roas_radar_landing_path'
-%}
-```
+- `DATABASE_URL`
+- `SHOPIFY_WEBHOOK_SECRET`
+- `REPORTING_API_TOKEN`
 
-### Order-side expectation
+Optional environment variables:
 
-With this snippet installed, Shopify cart and checkout flows should carry:
+- `PORT`
+- `ATTRIBUTION_WINDOW_DAYS`
 
-- `attributes.roas_radar_session_id`
-- `attributes.roas_radar_landing_path`
+## Existing Shopify storefront assets
 
-Your webhook normalization layer should map `attributes.roas_radar_session_id` into `shopify_orders.landing_session_id` when present. That satisfies the MVP requirement to prefer an exact session match before token or email fallbacks.
-
-## Database Schema
-
-The repository now includes a PostgreSQL migration at [db/migrations/0001_create_roas_radar_core_schema.sql](/workspace/services/ai-service/.codex-broker-runtime/run-kOcHDf/repos/AA-TheCape/ROAS-Radar/db/migrations/0001_create_roas_radar_core_schema.sql) covering the normalized MVP analytics schema.
-
-It adds visitors, sessions, touchpoints, orders, line items, campaign dimensions, creatives, daily spend, and weighted attribution tables designed for first touch, last touch, linear, time decay, position based, and rule based attribution outputs.
+The Shopify theme snippet and asset under `shopify/theme/` are still the expected frontend mechanism for propagating `roas_radar_session_id` into cart and checkout attributes.
