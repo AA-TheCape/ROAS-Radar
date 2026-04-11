@@ -17,6 +17,10 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
   REPORTING_API_TOKEN: z.string().min(1).default('dev-reporting-token'),
+  REPORTING_TENANT_ID: z.string().trim().min(1).default('default'),
+  REPORTING_API_SCOPES: z
+    .union([z.string().trim().min(1), z.undefined()])
+    .transform((value) => (value ? csvStringSchema.parse(value) : ['reporting:read'])),
   META_ADS_APP_ID: z.string().default(''),
   META_ADS_APP_SECRET: z.string().default(''),
   META_ADS_APP_BASE_URL: z.string().default(''),
