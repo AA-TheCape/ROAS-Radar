@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import express from 'express';
 import { ZodError } from 'zod';
 
+import { createMetaAdsAdminRouter, createMetaAdsPublicRouter } from './modules/meta-ads/index.js';
 import { createReportingRouter } from './modules/reporting/index.js';
 import {
   createShopifyAdminRouter,
@@ -49,12 +50,14 @@ export function createApp() {
   });
 
   app.use('/shopify', createShopifyPublicRouter());
+  app.use('/meta-ads', createMetaAdsPublicRouter());
   app.use('/webhooks/shopify', express.raw({ type: 'application/json', limit: '2mb' }), createShopifyWebhookRouter());
   app.use('/track', trackingBodyParser, createTrackingRouter());
   app.use('/api/track', trackingBodyParser, createTrackingRouter());
   app.use(express.json({ limit: '1mb' }));
   app.use('/api/reporting', createReportingRouter());
   app.use('/api/shopify', createShopifyAdminRouter());
+  app.use('/api/meta-ads', createMetaAdsAdminRouter());
 
   app.use((error: unknown, req: express.Request, res: express.Response, _next: express.NextFunction) => {
     if (error instanceof ZodError) {

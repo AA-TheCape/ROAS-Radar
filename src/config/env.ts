@@ -17,6 +17,34 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
   REPORTING_API_TOKEN: z.string().min(1).default('dev-reporting-token'),
+  META_ADS_APP_ID: z.string().default(''),
+  META_ADS_APP_SECRET: z.string().default(''),
+  META_ADS_APP_BASE_URL: z.string().default(''),
+  META_ADS_APP_SCOPES: z
+    .union([z.string().trim().min(1), z.undefined()])
+    .transform((value) => (value ? csvStringSchema.parse(value) : ['ads_read', 'business_management'])),
+  META_ADS_API_VERSION: z.string().default('v22.0'),
+  META_ADS_ENCRYPTION_KEY: z.string().default(''),
+  META_ADS_AD_ACCOUNT_ID: z.string().default(''),
+  META_ADS_TOKEN_REFRESH_LEEWAY_HOURS: z.coerce.number().int().positive().default(72),
+  META_ADS_SYNC_LOOKBACK_DAYS: z.coerce.number().int().positive().default(7),
+  META_ADS_SYNC_INITIAL_LOOKBACK_DAYS: z.coerce.number().int().positive().default(30),
+  META_ADS_SYNC_BATCH_SIZE: z.coerce.number().int().positive().default(10),
+  META_ADS_SYNC_MAX_RETRIES: z.coerce.number().int().positive().default(8),
+  META_ADS_WORKER_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(60_000),
+  META_ADS_WORKER_LOOP: z
+    .union([z.string(), z.boolean(), z.undefined()])
+    .transform((value) => {
+      if (typeof value === 'boolean') {
+        return value;
+      }
+
+      if (typeof value !== 'string') {
+        return false;
+      }
+
+      return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase());
+    }),
   SHOPIFY_APP_API_KEY: z.string().default(''),
   SHOPIFY_APP_API_SECRET: z.string().default(''),
   SHOPIFY_APP_API_VERSION: z.string().default(''),

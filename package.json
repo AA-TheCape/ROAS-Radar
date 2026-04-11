@@ -11,7 +11,9 @@
     "test": "tsx --test test/*.test.ts test/*.test.js",
     "db:migrate": "tsx src/db/migrate.ts",
     "worker": "tsx src/worker.ts",
-    "worker:start": "node dist/worker.js"
+    "worker:start": "node dist/worker.js",
+    "meta-ads:sync": "tsx src/meta-ads-worker.ts",
+    "meta-ads:sync:start": "node dist/meta-ads-worker.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
