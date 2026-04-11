@@ -1,0 +1,15 @@
+{% liquid
+  assign roas_radar_cookie_name = cookie_name | default: 'roas_radar_session_id'
+  assign roas_radar_cart_attribute_key = cart_attribute_key | default: 'roas_radar_session_id'
+  assign roas_radar_landing_path_attribute_key = landing_path_attribute_key | default: 'roas_radar_landing_path'
+%}
+
+<script>
+  window.ROASRadarConfig = Object.assign({}, window.ROASRadarConfig || {}, {
+    cookieName: {{ roas_radar_cookie_name | json }},
+    cartAttributeKey: {{ roas_radar_cart_attribute_key | json }},
+    landingPathAttributeKey: {{ roas_radar_landing_path_attribute_key | json }},
+    sessionStorageKey: {{ roas_radar_cookie_name | json }}
+  });
+</script>
+{{ 'roas-radar-session-propagation.js' | asset_url | script_tag }}
