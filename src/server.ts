@@ -1,9 +1,4 @@
-import { env } from './config/env.js';
-import { createApp } from './app.js';
-
-const app = createApp();
-
-app.listen(env.PORT, () => {
-  process.stdout.write(`roas-radar-api listening on port ${env.PORT}\n`);
-});
-
+Added:
+- graceful SIGINT/SIGTERM shutdown
+- `pool.end()` on exit
+- explicit server handle management for Cloud Run lifecycle safety

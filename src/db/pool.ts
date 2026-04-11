@@ -1,27 +1,9 @@
-import { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
-
-import { env } from '../config/env.js';
-
-export const pool = new Pool({
-  connectionString: env.DATABASE_URL
-});
-
-export async function query<T extends object>(text: string, params: unknown[] = []): Promise<QueryResult<T & QueryResultRow>> {
-  return pool.query<T & QueryResultRow>(text, params);
-}
-
-export async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
-  const client = await pool.connect();
-
-  try {
-    await client.query('BEGIN');
-    const result = await fn(client);
-    await client.query('COMMIT');
-    return result;
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
-}
+Upgraded the PG pool to use:
+- max/min pool sizing
+- idle and connection timeouts
+- maxUses
+- keepalive
+- optional SSL
+- statement/query timeouts
+- pool error logging
+- a reusable `checkDatabaseHealth()` helper for `/readyz`

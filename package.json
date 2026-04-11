@@ -1,6 +1,25 @@
 {
+  "name": "roas-radar-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "db:migrate:start": "node dist/db/migrate.js",
+    "dev": "tsx watch src/server.ts",
+    "start:api": "node dist/server.js",
+    "start:worker": "node dist/worker.js",
+    "start:worker-service": "node dist/worker-service.js",
+    "meta-ads:sync": "tsx src/meta-ads-worker.ts",
+    "meta-ads:sync:start": "node dist/meta-ads-worker.js",
+    "google-ads:sync": "tsx src/google-ads-worker.ts",
+    "google-ads:sync:start": "node dist/google-ads-worker.js",
     "data-quality:check": "tsx src/data-quality-worker.ts",
-    "data-quality:check:start": "node dist/data-quality-worker.js"
+    "data-quality:check:start": "node dist/data-quality-worker.js",
+    "test": "node --test test/**/*.test.ts test/**/*.test.js"
   }
 }
