@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 import { type RequestHandler, Router } from 'express';
+import { type PoolClient } from 'pg';
 import { z } from 'zod';
 
 import { env } from '../../config/env.js';
@@ -38,6 +39,22 @@ const shopifyCustomerSchema = z
   .nullable()
   .optional();
 
+const shopifyLineItemSchema = z.object({
+  id: z.union([z.string(), z.number()]).optional(),
+  product_id: z.union([z.string(), z.number()]).nullable().optional(),
+  variant_id: z.union([z.string(), z.number()]).nullable().optional(),
+  sku: z.string().nullable().optional(),
+  title: z.string().nullable().optional(),
+  name: z.string().nullable().optional(),
+  vendor: z.string().nullable().optional(),
+  quantity: z.coerce.number().int().optional(),
+  price: z.union([z.string(), z.number()]).optional(),
+  total_discount: z.union([z.string(), z.number()]).optional(),
+  fulfillment_status: z.string().nullable().optional(),
+  requires_shipping: z.boolean().nullable().optional(),
+  taxable: z.boolean().nullable().optional()
+});
+
 const shopifyOrderPayloadSchema = z.object({
   id: z.union([z.string(), z.number()]),
   order_number: z.union([z.string(), z.number()]).optional(),
@@ -54,6 +71,7 @@ const shopifyOrderPayloadSchema = z.object({
   checkout_token: z.string().nullable().optional(),
   cart_token: z.string().nullable().optional(),
   source_name: z.string().nullable().optional(),
+  line_items: z.array(shopifyLineItemSchema).default([]),
   note_attributes: z.array(shopifyAttributeSchema).optional(),
   attributes: z.array(shopifyAttributeSchema).optional()
 });
@@ -71,6 +89,7 @@ const callbackQuerySchema = z.object({
 });
 
 type ShopifyOrderPayload = z.infer<typeof shopifyOrderPayloadSchema>;
+type ShopifyLineItemPayload = z.infer<typeof shopifyLineItemSchema>;
 
 type WebhookReceiptRow = {
   id: number;
@@ -702,6 +721,146 @@ function toNullableUuid(value: string | null): string | null {
     : null;
 }
 
+function normalizeNullableString(value: string | null | undefined): string | null {
+  const normalized = value?.trim();
+  return normalized ? normalized : null;
+}
+
+function isEligibleOnlineStoreOrder(sourceName: string | null | undefined): boolean {
+  const normalizedSource = normalizeNullableString(sourceName)?.toLowerCase();
+  return normalizedSource === 'web';
+}
+
+function buildLineItemExternalId(orderId: string, lineItem: ShopifyLineItemPayload, index: number): string {
+  if (lineItem.id !== undefined && lineItem.id !== null) {
+    return String(lineItem.id);
+  }
+
+  return `${orderId}:line:${index + 1}`;
+}
+
+function normalizeLineItemText(value: string | null | undefined): string | null {
+  return normalizeNullableString(value);
+}
+
+async function resolveLandingSessionId(
+  client: PoolClient,
+  payload: ShopifyOrderPayload
+): Promise<string | null> {
+  const explicitSessionId =
+    getAttributeValue(payload.note_attributes, 'roas_radar_session_id') ??
+    getAttributeValue(payload.attributes, 'roas_radar_session_id');
+  const normalizedExplicitSessionId = toNullableUuid(explicitSessionId);
+
+  if (normalizedExplicitSessionId) {
+    return normalizedExplicitSessionId;
+  }
+
+  if (payload.checkout_token) {
+    const checkoutMatch = await client.query<{ session_id: string }>(
+      `
+        SELECT e.session_id
+        FROM tracking_events e
+        WHERE e.shopify_checkout_token = $1
+        ORDER BY e.occurred_at DESC
+        LIMIT 1
+      `,
+      [payload.checkout_token]
+    );
+
+    if (checkoutMatch.rowCount) {
+      return checkoutMatch.rows[0].session_id;
+    }
+  }
+
+  if (payload.cart_token) {
+    const cartMatch = await client.query<{ session_id: string }>(
+      `
+        SELECT e.session_id
+        FROM tracking_events e
+        WHERE e.shopify_cart_token = $1
+        ORDER BY e.occurred_at DESC
+        LIMIT 1
+      `,
+      [payload.cart_token]
+    );
+
+    if (cartMatch.rowCount) {
+      return cartMatch.rows[0].session_id;
+    }
+  }
+
+  return null;
+}
+
+async function upsertShopifyOrderLineItems(
+  client: PoolClient,
+  shopifyOrderId: string,
+  lineItems: ShopifyLineItemPayload[]
+): Promise<void> {
+  await client.query('DELETE FROM shopify_order_line_items WHERE shopify_order_id = $1', [shopifyOrderId]);
+
+  for (const [index, lineItem] of lineItems.entries()) {
+    await client.query(
+      `
+        INSERT INTO shopify_order_line_items (
+          shopify_order_id,
+          shopify_line_item_id,
+          shopify_product_id,
+          shopify_variant_id,
+          sku,
+          title,
+          variant_title,
+          vendor,
+          quantity,
+          price,
+          total_discount,
+          fulfillment_status,
+          requires_shipping,
+          taxable,
+          raw_payload,
+          ingested_at
+        )
+        VALUES (
+          $1,
+          $2,
+          $3,
+          $4,
+          $5,
+          $6,
+          $7,
+          $8,
+          $9,
+          $10,
+          $11,
+          $12,
+          $13,
+          $14,
+          $15::jsonb,
+          now()
+        )
+      `,
+      [
+        shopifyOrderId,
+        buildLineItemExternalId(shopifyOrderId, lineItem, index),
+        lineItem.product_id !== undefined && lineItem.product_id !== null ? String(lineItem.product_id) : null,
+        lineItem.variant_id !== undefined && lineItem.variant_id !== null ? String(lineItem.variant_id) : null,
+        normalizeLineItemText(lineItem.sku),
+        normalizeLineItemText(lineItem.title),
+        normalizeLineItemText(lineItem.name),
+        normalizeLineItemText(lineItem.vendor),
+        lineItem.quantity ?? 0,
+        toNumericString(lineItem.price),
+        toNumericString(lineItem.total_discount),
+        normalizeLineItemText(lineItem.fulfillment_status),
+        lineItem.requires_shipping ?? null,
+        lineItem.taxable ?? null,
+        JSON.stringify(lineItem)
+      ]
+    );
+  }
+}
+
 async function createOrReuseWebhookReceipt(
   topic: string,
   shopDomain: string,
@@ -759,13 +918,13 @@ async function createOrReuseWebhookReceipt(
   return existingResult.rows[0];
 }
 
-async function markWebhookReceiptStatus(receiptId: number, status: 'processed' | 'failed'): Promise<void> {
+async function markWebhookReceiptStatus(receiptId: number, status: 'processed' | 'failed' | 'ignored'): Promise<void> {
   await query(
     `
       UPDATE shopify_webhook_receipts
       SET
         status = $2,
-        processed_at = CASE WHEN $2 = 'processed' THEN now() ELSE processed_at END
+        processed_at = CASE WHEN $2 IN ('processed', 'ignored') THEN now() ELSE processed_at END
       WHERE id = $1
     `,
     [receiptId, status]
@@ -773,14 +932,14 @@ async function markWebhookReceiptStatus(receiptId: number, status: 'processed' |
 }
 
 async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPayload): Promise<void> {
-  const landingSessionId =
-    getAttributeValue(payload.note_attributes, 'roas_radar_session_id') ??
-    getAttributeValue(payload.attributes, 'roas_radar_session_id');
   const shopifyCustomerId = payload.customer?.id ? String(payload.customer.id) : null;
   const normalizedOrderEmail = payload.email ?? payload.customer?.email ?? null;
   const orderEmailHash = hashIdentityEmail(normalizedOrderEmail);
+  const shopifyOrderId = String(payload.id);
 
   await withTransaction(async (client) => {
+    const landingSessionId = await resolveLandingSessionId(client, payload);
+
     if (shopifyCustomerId) {
       await client.query(
         `
@@ -870,7 +1029,7 @@ async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPay
           ingested_at = now()
       `,
       [
-        String(payload.id),
+        shopifyOrderId,
         payload.order_number ? String(payload.order_number) : null,
         shopifyCustomerId,
         normalizedOrderEmail,
@@ -883,7 +1042,7 @@ async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPay
         payload.processed_at ?? null,
         payload.created_at ?? null,
         payload.updated_at ?? null,
-        toNullableUuid(landingSessionId),
+        landingSessionId,
         payload.checkout_token ?? null,
         payload.cart_token ?? null,
         payload.source_name ?? null,
@@ -891,11 +1050,13 @@ async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPay
       ]
     );
 
+    await upsertShopifyOrderLineItems(client, shopifyOrderId, payload.line_items);
+
     await stitchKnownCustomerIdentity(client, {
-      shopifyOrderId: String(payload.id),
+      shopifyOrderId,
       shopifyCustomerId,
       email: normalizedOrderEmail,
-      landingSessionId: toNullableUuid(landingSessionId),
+      landingSessionId,
       checkoutToken: payload.checkout_token ?? null,
       cartToken: payload.cart_token ?? null
     });
@@ -925,6 +1086,11 @@ async function persistWebhook(input: PersistWebhookInput): Promise<{ duplicated:
 
   if (receipt.status === 'processed') {
     return { duplicated: true };
+  }
+
+  if (!isEligibleOnlineStoreOrder(input.payload.source_name)) {
+    await markWebhookReceiptStatus(receipt.id, 'ignored');
+    return { duplicated: false };
   }
 
   try {
@@ -1195,5 +1361,8 @@ export const __shopifyTestUtils = {
   normalizeShopDomain,
   createOAuthHmacMessage,
   verifyShopifyOAuthHmac,
-  buildShopifyInstallUrl
+  buildShopifyInstallUrl,
+  verifyWebhookSignature,
+  isEligibleOnlineStoreOrder,
+  buildLineItemExternalId
 };
