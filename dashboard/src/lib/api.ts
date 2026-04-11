@@ -1,116 +1,85 @@
-import type { PerformanceMetrics } from '../../../src/shared/metrics';
-
-export type AttributionModel = 'last_touch' | 'first_touch' | 'linear' | 'position_based' | 'time_decay';
-
-export type Filters = {
+export type ReportingFilters = {
   startDate: string;
   endDate: string;
-  attributionModel: AttributionModel;
   source?: string;
-  medium?: string;
   campaign?: string;
-  content?: string;
-  search?: string;
 };
 
-export type ModelsResponse = {
-  data: {
-    defaultModel: AttributionModel;
-    supportedModels: AttributionModel[];
-    requiredScope: string;
+export type SummaryTotals = {
+  visits: number;
+  orders: number;
+  revenue: number;
+  conversionRate: number;
+  roas: number | null;
+};
+
+export type SummaryResponse = {
+  range: {
+    startDate: string;
+    endDate: string;
   };
+  totals: SummaryTotals;
 };
 
-export type OverviewResponse = {
-  data: {
-    totals: PerformanceMetrics;
-  };
-};
-
-export type TimeseriesPoint = PerformanceMetrics & {
-  date: string;
-};
-
-export type TimeseriesResponse = {
-  data: {
-    points: TimeseriesPoint[];
-  };
-};
-
-export type ChannelRow = PerformanceMetrics & {
-  source: string;
-  medium: string;
-  shareOfRevenue: number;
-};
-
-export type ChannelsResponse = {
-  data: {
-    rows: ChannelRow[];
-    pagination: {
-      limit: number;
-      nextCursor: string | null;
-    };
-  };
-};
-
-export type CampaignRow = PerformanceMetrics & {
+export type CampaignRow = {
   source: string;
   medium: string;
   campaign: string;
-};
-
-export type CreativeRow = PerformanceMetrics & {
-  source: string;
-  medium: string;
-  campaign: string;
-  campaignId: string | null;
-  campaignName: string | null;
-  adId: string | null;
-  adName: string | null;
-  creativeId: string | null;
-  creativeName: string;
-  content: string;
-  costPerClick: number | null;
-};
-
-export type CreativesResponse = {
-  data: {
-    rows: CreativeRow[];
-    pagination: {
-      limit: number;
-      nextCursor: string | null;
-    };
-  };
+  content: string | null;
+  visits: number;
+  orders: number;
+  revenue: number;
+  conversionRate: number;
 };
 
 export type CampaignsResponse = {
-  data: {
-    rows: CampaignRow[];
-    pagination: {
-      limit: number;
-      nextCursor: string | null;
-    };
-  };
+  rows: CampaignRow[];
+  nextCursor: string | null;
+};
+
+export type TimeseriesGroupBy = 'day' | 'source' | 'campaign';
+
+export type TimeseriesPoint = {
+  date: string;
+  visits: number;
+  orders: number;
+  revenue: number;
+};
+
+export type TimeseriesResponse = {
+  points: TimeseriesPoint[];
+};
+
+export type OrderRow = {
+  shopifyOrderId: string;
+  processedAt: string | null;
+  totalPrice: number;
+  source: string | null;
+  medium: string | null;
+  campaign: string | null;
+  attributionReason: string;
+};
+
+export type OrdersResponse = {
+  rows: OrderRow[];
 };
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3000').replace(/\/$/, '');
 const REPORTING_TOKEN = import.meta.env.VITE_REPORTING_API_TOKEN ?? '';
 const TENANT_ID = import.meta.env.VITE_REPORTING_TENANT_ID ?? 'roas-radar';
 
-function buildSearchParams(filters: Filters, extras: Record<string, string> = {}): URLSearchParams {
+function buildSearchParams(filters: ReportingFilters, extras: Record<string, string> = {}): URLSearchParams {
   const params = new URLSearchParams({
     startDate: filters.startDate,
-    endDate: filters.endDate,
-    attributionModel: filters.attributionModel
+    endDate: filters.endDate
   });
 
-  const optionalFilters = ['source', 'medium', 'campaign', 'content', 'search'] as const;
+  if (filters.source?.trim()) {
+    params.set('source', filters.source.trim());
+  }
 
-  for (const key of optionalFilters) {
-    const value = filters[key];
-    if (value) {
-      params.set(key, value);
-    }
+  if (filters.campaign?.trim()) {
+    params.set('campaign', filters.campaign.trim());
   }
 
   for (const [key, value] of Object.entries(extras)) {
@@ -121,23 +90,26 @@ function buildSearchParams(filters: Filters, extras: Record<string, string> = {}
 }
 
 async function requestJson<T>(path: string, searchParams: URLSearchParams): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}?${searchParams.toString()}`, {
-    headers: {
-      authorization: REPORTING_TOKEN ? `Bearer ${REPORTING_TOKEN}` : '',
-      'x-roas-radar-tenant-id': TENANT_ID
-    }
-  });
+  const headers: Record<string, string> = {
+    'x-roas-radar-tenant-id': TENANT_ID
+  };
+
+  if (REPORTING_TOKEN) {
+    headers.authorization = `Bearer ${REPORTING_TOKEN}`;
+  }
+
+  const response = await fetch(`${API_BASE_URL}${path}?${searchParams.toString()}`, { headers });
 
   if (!response.ok) {
     let message = `Request failed with status ${response.status}`;
 
     try {
-      const errorBody = (await response.json()) as { error?: { message?: string } };
-      if (errorBody.error?.message) {
-        message = errorBody.error.message;
+      const errorBody = (await response.json()) as { message?: string };
+      if (errorBody.message) {
+        message = errorBody.message;
       }
     } catch {
-      // Ignore JSON parsing errors and keep the status-based message.
+      // Ignore malformed error payloads and keep the status message.
     }
 
     throw new Error(message);
@@ -146,26 +118,18 @@ async function requestJson<T>(path: string, searchParams: URLSearchParams): Prom
   return (await response.json()) as T;
 }
 
-export async function fetchModels(): Promise<ModelsResponse> {
-  return requestJson<ModelsResponse>('/api/reporting/models', new URLSearchParams());
+export function fetchSummary(filters: ReportingFilters) {
+  return requestJson<SummaryResponse>('/api/reporting/summary', buildSearchParams(filters));
 }
 
-export async function fetchOverview(filters: Filters): Promise<OverviewResponse> {
-  return requestJson<OverviewResponse>('/api/reporting/overview', buildSearchParams(filters));
-}
-
-export async function fetchTimeseries(filters: Filters): Promise<TimeseriesResponse> {
-  return requestJson<TimeseriesResponse>('/api/reporting/timeseries', buildSearchParams(filters));
-}
-
-export async function fetchChannels(filters: Filters, limit = 8): Promise<ChannelsResponse> {
-  return requestJson<ChannelsResponse>('/api/reporting/channels', buildSearchParams(filters, { limit: `${limit}` }));
-}
-
-export async function fetchCampaigns(filters: Filters, limit = 6): Promise<CampaignsResponse> {
+export function fetchCampaigns(filters: ReportingFilters, limit = 12) {
   return requestJson<CampaignsResponse>('/api/reporting/campaigns', buildSearchParams(filters, { limit: `${limit}` }));
 }
 
-export async function fetchCreatives(filters: Filters, limit = 50): Promise<CreativesResponse> {
-  return requestJson<CreativesResponse>('/api/reporting/creatives', buildSearchParams(filters, { limit: `${limit}` }));
+export function fetchTimeseries(filters: ReportingFilters, groupBy: TimeseriesGroupBy) {
+  return requestJson<TimeseriesResponse>('/api/reporting/timeseries', buildSearchParams(filters, { groupBy }));
+}
+
+export function fetchOrders(filters: ReportingFilters, limit = 10) {
+  return requestJson<OrdersResponse>('/api/reporting/orders', buildSearchParams(filters, { limit: `${limit}` }));
 }

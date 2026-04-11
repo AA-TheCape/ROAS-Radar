@@ -49,3 +49,23 @@ export function formatDateLabel(value: string): string {
     day: 'numeric'
   }).format(date);
 }
+
+export function formatDateTimeLabel(value: string | null | undefined): string {
+  if (!value) {
+    return 'N/A';
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: 'UTC'
+  }).format(date);
+}
