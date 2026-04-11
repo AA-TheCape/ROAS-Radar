@@ -1,33 +1,6 @@
 {
-  "name": "roas-radar-api",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
   "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "build": "tsc -p tsconfig.json",
-    "start": "node dist/server.js",
-    "check": "tsc --noEmit -p tsconfig.json",
-    "test": "tsx --test test/*.test.ts test/*.test.js",
-    "db:migrate": "tsx src/db/migrate.ts",
-    "worker": "tsx src/worker.ts",
-    "worker:start": "node dist/worker.js",
-    "meta-ads:sync": "tsx src/meta-ads-worker.ts",
-    "meta-ads:sync:start": "node dist/meta-ads-worker.js",
-    "google-ads:sync": "tsx src/google-ads-worker.ts",
-    "google-ads:sync:start": "node dist/google-ads-worker.js"
-  },
-  "dependencies": {
-    "dotenv": "^16.4.5",
-    "express": "^4.21.2",
-    "pg": "^8.13.1",
-    "zod": "^3.24.1"
-  },
-  "devDependencies": {
-    "@types/express": "^5.0.0",
-    "@types/node": "^22.10.2",
-    "@types/pg": "^8.20.0",
-    "tsx": "^4.19.2",
-    "typescript": "^5.7.2"
+    "data-quality:check": "tsx src/data-quality-worker.ts",
+    "data-quality:check:start": "node dist/data-quality-worker.js"
   }
 }
