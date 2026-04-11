@@ -49,3 +49,9 @@ With this snippet installed, Shopify cart and checkout flows should carry:
 - `attributes.roas_radar_landing_path`
 
 Your webhook normalization layer should map `attributes.roas_radar_session_id` into `shopify_orders.landing_session_id` when present. That satisfies the MVP requirement to prefer an exact session match before token or email fallbacks.
+
+## Database Schema
+
+The repository now includes a PostgreSQL migration at [db/migrations/0001_create_roas_radar_core_schema.sql](/workspace/services/ai-service/.codex-broker-runtime/run-kOcHDf/repos/AA-TheCape/ROAS-Radar/db/migrations/0001_create_roas_radar_core_schema.sql) covering the normalized MVP analytics schema.
+
+It adds visitors, sessions, touchpoints, orders, line items, campaign dimensions, creatives, daily spend, and weighted attribution tables designed for first touch, last touch, linear, time decay, position based, and rule based attribution outputs.
