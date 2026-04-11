@@ -5,6 +5,7 @@ import { z } from 'zod';
 
 import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
+import { hashIdentityEmail, stitchKnownCustomerIdentity } from '../identity/index.js';
 
 const shopifyAttributeSchema = z.object({
   name: z.string().optional(),
@@ -177,6 +178,8 @@ async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPay
     getAttributeValue(payload.note_attributes, 'roas_radar_session_id') ??
     getAttributeValue(payload.attributes, 'roas_radar_session_id');
   const shopifyCustomerId = payload.customer?.id ? String(payload.customer.id) : null;
+  const normalizedOrderEmail = payload.email ?? payload.customer?.email ?? null;
+  const orderEmailHash = hashIdentityEmail(normalizedOrderEmail);
 
   await withTransaction(async (client) => {
     if (shopifyCustomerId) {
@@ -185,18 +188,20 @@ async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPay
           INSERT INTO shopify_customers (
             shopify_customer_id,
             email,
+            email_hash,
             phone,
             created_at,
             updated_at
           )
-          VALUES ($1, $2, $3, now(), now())
+          VALUES ($1, $2, $3, $4, now(), now())
           ON CONFLICT (shopify_customer_id)
           DO UPDATE SET
             email = COALESCE(EXCLUDED.email, shopify_customers.email),
+            email_hash = COALESCE(EXCLUDED.email_hash, shopify_customers.email_hash),
             phone = COALESCE(EXCLUDED.phone, shopify_customers.phone),
             updated_at = now()
         `,
-        [shopifyCustomerId, payload.customer?.email ?? payload.email ?? null, payload.customer?.phone ?? null]
+        [shopifyCustomerId, normalizedOrderEmail, orderEmailHash, payload.customer?.phone ?? null]
       );
     }
 
@@ -207,6 +212,7 @@ async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPay
           shopify_order_number,
           shopify_customer_id,
           email,
+          email_hash,
           currency_code,
           subtotal_price,
           total_price,
@@ -235,11 +241,12 @@ async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPay
           $10,
           $11,
           $12,
-          $13::uuid,
-          $14,
+          $13,
+          $14::uuid,
           $15,
           $16,
-          $17::jsonb,
+          $17,
+          $18::jsonb,
           now()
         )
         ON CONFLICT (shopify_order_id)
@@ -247,6 +254,7 @@ async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPay
           shopify_order_number = COALESCE(EXCLUDED.shopify_order_number, shopify_orders.shopify_order_number),
           shopify_customer_id = COALESCE(EXCLUDED.shopify_customer_id, shopify_orders.shopify_customer_id),
           email = COALESCE(EXCLUDED.email, shopify_orders.email),
+          email_hash = COALESCE(EXCLUDED.email_hash, shopify_orders.email_hash),
           currency_code = EXCLUDED.currency_code,
           subtotal_price = EXCLUDED.subtotal_price,
           total_price = EXCLUDED.total_price,
@@ -266,7 +274,8 @@ async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPay
         String(payload.id),
         payload.order_number ? String(payload.order_number) : null,
         shopifyCustomerId,
-        payload.email ?? payload.customer?.email ?? null,
+        normalizedOrderEmail,
+        orderEmailHash,
         payload.currency ?? 'USD',
         toNumericString(payload.subtotal_price),
         toNumericString(payload.total_price),
@@ -282,6 +291,15 @@ async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPay
         JSON.stringify(payload)
       ]
     );
+
+    await stitchKnownCustomerIdentity(client, {
+      shopifyOrderId: String(payload.id),
+      shopifyCustomerId,
+      email: normalizedOrderEmail,
+      landingSessionId: toNullableUuid(landingSessionId),
+      checkoutToken: payload.checkout_token ?? null,
+      cartToken: payload.cart_token ?? null
+    });
 
     await client.query(
       `

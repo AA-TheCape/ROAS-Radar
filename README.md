@@ -37,3 +37,9 @@ The Shopify theme snippet and assets under `shopify/theme/` are the expected fro
 - creating and persisting the first-party `_hba_id` tracking cookie for 365 days,
 - sending a `page_view` payload to `/track` on page load with `sendBeacon` plus fetch/XMLHttpRequest fallback and retry queueing,
 - propagating the same UUID into `roas_radar_session_id` cart and checkout attributes for order attribution.
+
+## Identity Stitching
+
+Visitor identity stitching is documented in [docs/visitor-identity-stitching.md](docs/visitor-identity-stitching.md).
+
+The backend now creates canonical customer identities from hashed email plus Shopify customer id, links historical tracked sessions when checkout evidence is present, and refuses automatic merges when those identifiers disagree with already-linked records.

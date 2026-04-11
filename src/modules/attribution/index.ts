@@ -22,6 +22,7 @@ type PendingOrder = {
   landing_session_id: string | null;
   checkout_token: string | null;
   cart_token: string | null;
+  customer_identity_id: string | null;
 };
 
 async function findCandidate(client: PoolClient, order: PendingOrder): Promise<Candidate | null> {
@@ -129,6 +130,99 @@ async function findCandidate(client: PoolClient, order: PendingOrder): Promise<C
     }
   }
 
+  if (order.customer_identity_id) {
+    const nonDirectResult = await client.query<Candidate>(
+      `
+        WITH latest_session_event AS (
+          SELECT DISTINCT ON (e.session_id)
+            e.session_id,
+            e.occurred_at,
+            e.gclid,
+            e.fbclid,
+            e.ttclid,
+            e.msclkid
+          FROM tracking_events e
+          INNER JOIN tracking_sessions s ON s.id = e.session_id
+          WHERE s.customer_identity_id = $1::uuid
+            AND ($2::timestamptz IS NULL OR e.occurred_at >= $2::timestamptz - ($3::int * interval '1 day'))
+            AND ($2::timestamptz IS NULL OR e.occurred_at <= $2::timestamptz)
+          ORDER BY e.session_id, e.occurred_at DESC
+        )
+        SELECT
+          s.id AS session_id,
+          s.initial_utm_source AS attributed_source,
+          s.initial_utm_medium AS attributed_medium,
+          s.initial_utm_campaign AS attributed_campaign,
+          s.initial_utm_content AS attributed_content,
+          s.initial_utm_term AS attributed_term,
+          CASE
+            WHEN COALESCE(l.gclid, s.initial_gclid) IS NOT NULL THEN 'gclid'
+            WHEN COALESCE(l.fbclid, s.initial_fbclid) IS NOT NULL THEN 'fbclid'
+            WHEN COALESCE(l.ttclid, s.initial_ttclid) IS NOT NULL THEN 'ttclid'
+            WHEN COALESCE(l.msclkid, s.initial_msclkid) IS NOT NULL THEN 'msclkid'
+            ELSE NULL
+          END AS attributed_click_id_type,
+          COALESCE(l.gclid, l.fbclid, l.ttclid, l.msclkid, s.initial_gclid, s.initial_fbclid, s.initial_ttclid, s.initial_msclkid)
+            AS attributed_click_id_value,
+          'matched_by_customer_identity' AS attribution_reason,
+          '0.60' AS confidence_score
+        FROM tracking_sessions s
+        LEFT JOIN latest_session_event l ON l.session_id = s.id
+        WHERE s.customer_identity_id = $1::uuid
+          AND ($2::timestamptz IS NULL OR s.first_seen_at >= $2::timestamptz - ($3::int * interval '1 day'))
+          AND ($2::timestamptz IS NULL OR s.first_seen_at <= $2::timestamptz)
+          AND (
+            s.initial_utm_source IS NOT NULL
+            OR s.initial_utm_medium IS NOT NULL
+            OR s.initial_utm_campaign IS NOT NULL
+            OR s.initial_gclid IS NOT NULL
+            OR s.initial_fbclid IS NOT NULL
+            OR s.initial_ttclid IS NOT NULL
+            OR s.initial_msclkid IS NOT NULL
+          )
+        ORDER BY
+          CASE
+            WHEN COALESCE(l.gclid, l.fbclid, l.ttclid, l.msclkid, s.initial_gclid, s.initial_fbclid, s.initial_ttclid, s.initial_msclkid) IS NOT NULL THEN 0
+            ELSE 1
+          END,
+          COALESCE(l.occurred_at, s.last_seen_at, s.first_seen_at) DESC
+        LIMIT 1
+      `,
+      [order.customer_identity_id, order.created_at_shopify, env.ATTRIBUTION_WINDOW_DAYS]
+    );
+
+    if (nonDirectResult.rowCount) {
+      return nonDirectResult.rows[0];
+    }
+
+    const directFallbackResult = await client.query<Candidate>(
+      `
+        SELECT
+          s.id AS session_id,
+          s.initial_utm_source AS attributed_source,
+          s.initial_utm_medium AS attributed_medium,
+          s.initial_utm_campaign AS attributed_campaign,
+          s.initial_utm_content AS attributed_content,
+          s.initial_utm_term AS attributed_term,
+          NULL AS attributed_click_id_type,
+          NULL AS attributed_click_id_value,
+          'matched_by_customer_identity_direct_fallback' AS attribution_reason,
+          '0.40' AS confidence_score
+        FROM tracking_sessions s
+        WHERE s.customer_identity_id = $1::uuid
+          AND ($2::timestamptz IS NULL OR s.first_seen_at >= $2::timestamptz - ($3::int * interval '1 day'))
+          AND ($2::timestamptz IS NULL OR s.first_seen_at <= $2::timestamptz)
+        ORDER BY COALESCE(s.last_seen_at, s.first_seen_at) DESC
+        LIMIT 1
+      `,
+      [order.customer_identity_id, order.created_at_shopify, env.ATTRIBUTION_WINDOW_DAYS]
+    );
+
+    if (directFallbackResult.rowCount) {
+      return directFallbackResult.rows[0];
+    }
+  }
+
   return null;
 }
 
@@ -213,7 +307,8 @@ export async function processPendingAttribution(limit = 100): Promise<number> {
         o.created_at_shopify,
         o.landing_session_id,
         o.checkout_token,
-        o.cart_token
+        o.cart_token,
+        o.customer_identity_id
       FROM shopify_orders o
       LEFT JOIN attribution_results a ON a.shopify_order_id = o.shopify_order_id
       WHERE a.shopify_order_id IS NULL
@@ -307,4 +402,3 @@ export async function processPendingAttribution(limit = 100): Promise<number> {
 
   return pendingOrders.rowCount;
 }
-

@@ -14,6 +14,12 @@ This directory contains PostgreSQL schema migrations for the ROAS Radar MVP back
 - `shopify_webhook_receipts`
 - `daily_campaign_metrics`
 
+`migrations/0004_add_customer_identity_stitching.sql` extends the schema with:
+
+- `customer_identities`
+- canonical identity foreign keys on tracked sessions, events, Shopify customers, and Shopify orders
+- hashed email columns for deterministic identity stitching
+
 ## Applying migrations
 
 Run the migration runner from the repository root after setting `DATABASE_URL`:
