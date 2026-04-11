@@ -7,10 +7,32 @@ import { createReportingRouter } from './modules/reporting/index.js';
 import { createShopifyRouter } from './modules/shopify/index.js';
 import { createTrackingRouter } from './modules/tracking/index.js';
 
+type HttpErrorShape = {
+  statusCode: number;
+  code: string;
+  details?: unknown;
+};
+
+function isHttpErrorShape(error: unknown): error is HttpErrorShape {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'statusCode' in error &&
+    typeof error.statusCode === 'number' &&
+    'code' in error &&
+    typeof error.code === 'string'
+  );
+}
+
 export function createApp() {
   const app = express();
+  const trackingBodyParser = express.text({
+    type: ['application/json', 'text/plain'],
+    limit: '1mb'
+  });
 
   app.disable('x-powered-by');
+  app.set('trust proxy', true);
 
   app.use((req, res, next) => {
     const requestId = req.header('x-request-id') ?? randomUUID();
@@ -23,22 +45,45 @@ export function createApp() {
   });
 
   app.use('/webhooks/shopify', express.raw({ type: 'application/json', limit: '2mb' }), createShopifyRouter());
+  app.use('/track', trackingBodyParser, createTrackingRouter());
+  app.use('/api/track', trackingBodyParser, createTrackingRouter());
   app.use(express.json({ limit: '1mb' }));
-  app.use('/track', createTrackingRouter());
   app.use('/api/reporting', createReportingRouter());
 
-  app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  app.use((error: unknown, req: express.Request, res: express.Response, _next: express.NextFunction) => {
     if (error instanceof ZodError) {
       res.status(400).json({
-        error: 'Validation failed',
-        details: error.flatten()
+        error: {
+          code: 'validation_failed',
+          message: 'Validation failed',
+          details: error.flatten(),
+          requestId: res.getHeader('x-request-id') ?? req.header('x-request-id') ?? null
+        }
+      });
+      return;
+    }
+
+    if (isHttpErrorShape(error)) {
+      res.status(error.statusCode).json({
+        error: {
+          code: error.code,
+          message: error instanceof Error ? error.message : 'Request failed',
+          details: error.details ?? null,
+          requestId: res.getHeader('x-request-id') ?? req.header('x-request-id') ?? null
+        }
       });
       return;
     }
 
     const message = error instanceof Error ? error.message : 'Internal server error';
     process.stderr.write(`${message}\n`);
-    res.status(500).json({ error: message });
+    res.status(500).json({
+      error: {
+        code: 'internal_server_error',
+        message,
+        requestId: res.getHeader('x-request-id') ?? req.header('x-request-id') ?? null
+      }
+    });
   });
 
   return app;
