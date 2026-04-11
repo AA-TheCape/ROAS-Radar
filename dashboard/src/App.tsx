@@ -1,14 +1,23 @@
-import { startTransition, useEffect, useMemo, useState, type ReactNode } from 'react';
+import {
+  startTransition,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode
+} from 'react';
 
 import {
   fetchCampaigns,
   fetchChannels,
+  fetchCreatives,
   fetchModels,
   fetchOverview,
   fetchTimeseries,
   type AttributionModel,
   type CampaignRow,
   type ChannelRow,
+  type CreativeRow,
   type Filters,
   type TimeseriesPoint
 } from './lib/api';
@@ -41,11 +50,31 @@ type DashboardState = {
   timeseries: AsyncSection<TimeseriesPoint[]>;
   channels: AsyncSection<ChannelRow[]>;
   campaigns: AsyncSection<CampaignRow[]>;
+  creatives: AsyncSection<CreativeRow[]>;
 };
 
 type ModelState = {
   defaultModel: AttributionModel;
   supportedModels: AttributionModel[];
+};
+
+type CreativeSortKey =
+  | 'creativeName'
+  | 'creativeId'
+  | 'campaign'
+  | 'revenue'
+  | 'spend'
+  | 'roas'
+  | 'orders'
+  | 'visits'
+  | 'clicks'
+  | 'clickThroughRate'
+  | 'conversionRate'
+  | 'costPerClick';
+
+type CreativeSortState = {
+  key: CreativeSortKey;
+  direction: 'asc' | 'desc';
 };
 
 const MODEL_LABELS: Record<AttributionModel, string> = {
@@ -106,7 +135,8 @@ function useDashboardData(filters: Filters) {
     overview: createLoadingSection(),
     timeseries: createLoadingSection(),
     channels: createLoadingSection(),
-    campaigns: createLoadingSection()
+    campaigns: createLoadingSection(),
+    creatives: createLoadingSection()
   });
 
   useEffect(() => {
@@ -116,7 +146,8 @@ function useDashboardData(filters: Filters) {
       overview: createLoadingSection(),
       timeseries: createLoadingSection(),
       channels: createLoadingSection(),
-      campaigns: createLoadingSection()
+      campaigns: createLoadingSection(),
+      creatives: createLoadingSection()
     });
 
     fetchOverview(filters)
@@ -155,7 +186,7 @@ function useDashboardData(filters: Filters) {
         }
       });
 
-    fetchChannels(filters)
+    fetchChannels(filters, 10)
       .then((response) => {
         if (!cancelled) {
           setState((current) => ({
@@ -173,7 +204,7 @@ function useDashboardData(filters: Filters) {
         }
       });
 
-    fetchCampaigns(filters)
+    fetchCampaigns(filters, 12)
       .then((response) => {
         if (!cancelled) {
           setState((current) => ({
@@ -191,12 +222,156 @@ function useDashboardData(filters: Filters) {
         }
       });
 
+    fetchCreatives(filters, 100)
+      .then((response) => {
+        if (!cancelled) {
+          setState((current) => ({
+            ...current,
+            creatives: createResolvedSection(response.data.rows)
+          }));
+        }
+      })
+      .catch((error: Error) => {
+        if (!cancelled) {
+          setState((current) => ({
+            ...current,
+            creatives: createErroredSection(error.message)
+          }));
+        }
+      });
+
     return () => {
       cancelled = true;
     };
   }, [filters]);
 
   return state;
+}
+
+function compareValues(left: string | number | null, right: string | number | null) {
+  if (typeof left === 'number' || typeof right === 'number') {
+    return (typeof left === 'number' ? left : -Infinity) - (typeof right === 'number' ? right : -Infinity);
+  }
+
+  return (left ?? '').localeCompare(right ?? '', undefined, { sensitivity: 'base' });
+}
+
+function sortCreativeRows(rows: CreativeRow[], sort: CreativeSortState): CreativeRow[] {
+  const nextRows = [...rows];
+
+  nextRows.sort((left, right) => {
+    let result = 0;
+
+    switch (sort.key) {
+      case 'creativeName':
+        result = compareValues(left.creativeName, right.creativeName);
+        break;
+      case 'creativeId':
+        result = compareValues(left.creativeId, right.creativeId);
+        break;
+      case 'campaign':
+        result = compareValues(left.campaign, right.campaign);
+        break;
+      case 'revenue':
+        result = compareValues(left.revenue, right.revenue);
+        break;
+      case 'spend':
+        result = compareValues(left.spend, right.spend);
+        break;
+      case 'roas':
+        result = compareValues(left.roas ?? -Infinity, right.roas ?? -Infinity);
+        break;
+      case 'orders':
+        result = compareValues(left.orders, right.orders);
+        break;
+      case 'visits':
+        result = compareValues(left.visits, right.visits);
+        break;
+      case 'clicks':
+        result = compareValues(left.clicks, right.clicks);
+        break;
+      case 'clickThroughRate':
+        result = compareValues(left.clickThroughRate ?? -Infinity, right.clickThroughRate ?? -Infinity);
+        break;
+      case 'conversionRate':
+        result = compareValues(left.conversionRate, right.conversionRate);
+        break;
+      case 'costPerClick':
+        result = compareValues(left.costPerClick ?? -Infinity, right.costPerClick ?? -Infinity);
+        break;
+    }
+
+    if (result === 0) {
+      result = compareValues(left.creativeName, right.creativeName);
+    }
+
+    return sort.direction === 'asc' ? result : -result;
+  });
+
+  return nextRows;
+}
+
+function downloadCreativeCsv(rows: CreativeRow[], filters: Filters) {
+  const header = [
+    'source',
+    'medium',
+    'campaign',
+    'campaign_id',
+    'campaign_name',
+    'ad_id',
+    'ad_name',
+    'creative_id',
+    'creative_name',
+    'content',
+    'visits',
+    'orders',
+    'revenue',
+    'spend',
+    'roas',
+    'clicks',
+    'impressions',
+    'ctr',
+    'conversion_rate',
+    'cpc'
+  ];
+
+  const csvLines = [
+    header.join(','),
+    ...rows.map((row) =>
+      [
+        row.source,
+        row.medium,
+        row.campaign,
+        row.campaignId ?? '',
+        row.campaignName ?? '',
+        row.adId ?? '',
+        row.adName ?? '',
+        row.creativeId ?? '',
+        row.creativeName,
+        row.content,
+        row.visits,
+        row.orders,
+        row.revenue,
+        row.spend,
+        row.roas ?? '',
+        row.clicks,
+        row.impressions,
+        row.clickThroughRate ?? '',
+        row.conversionRate,
+        row.costPerClick ?? ''
+      ]
+        .map((value) => `"${String(value).split('"').join('""')}"`)
+        .join(',')
+    )
+  ];
+
+  const blob = new Blob([csvLines.join('\n')], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `creative-performance-${filters.startDate}-to-${filters.endDate}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 function App() {
@@ -206,6 +381,11 @@ function App() {
   const [filters, setFilters] = useState<Filters>({
     ...buildRange(30),
     attributionModel: 'last_touch'
+  });
+  const [creativeSearch, setCreativeSearch] = useState('');
+  const [creativeSort, setCreativeSort] = useState<CreativeSortState>({
+    key: 'revenue',
+    direction: 'desc'
   });
 
   useEffect(() => {
@@ -247,11 +427,12 @@ function App() {
   }, []);
 
   const dashboard = useDashboardData(filters);
-
+  const deferredCreativeSearch = useDeferredValue(creativeSearch);
   const headline = dashboard.overview.data;
   const hasAnyData = Boolean(
     (dashboard.timeseries.data && dashboard.timeseries.data.length > 0) ||
       (dashboard.channels.data && dashboard.channels.data.length > 0) ||
+      (dashboard.creatives.data && dashboard.creatives.data.length > 0) ||
       (headline && headline.revenue > 0)
   );
 
@@ -259,14 +440,16 @@ function App() {
     dashboard.overview.loading,
     dashboard.timeseries.loading,
     dashboard.channels.loading,
-    dashboard.campaigns.loading
+    dashboard.campaigns.loading,
+    dashboard.creatives.loading
   ].filter(Boolean).length;
 
   const readySections = [
     dashboard.overview.data,
     dashboard.timeseries.data,
     dashboard.channels.data,
-    dashboard.campaigns.data
+    dashboard.campaigns.data,
+    dashboard.creatives.data
   ].filter(Boolean).length;
 
   const summaryCards = useMemo(
@@ -300,6 +483,48 @@ function App() {
     [headline]
   );
 
+  const activeChannelLabel =
+    filters.source && filters.medium ? `${filters.source} / ${filters.medium}` : filters.source ?? filters.medium ?? null;
+
+  const filteredCreativeRows = useMemo(() => {
+    const rows = dashboard.creatives.data ?? [];
+    const search = deferredCreativeSearch.trim().toLowerCase();
+    const searchFilteredRows = search
+      ? rows.filter((row) =>
+          [
+            row.source,
+            row.medium,
+            row.campaign,
+            row.campaignId,
+            row.campaignName,
+            row.adId,
+            row.adName,
+            row.creativeId,
+            row.creativeName,
+            row.content
+          ]
+            .filter(Boolean)
+            .some((value) => value!.toLowerCase().includes(search))
+        )
+      : rows;
+
+    return sortCreativeRows(searchFilteredRows, creativeSort);
+  }, [creativeSort, dashboard.creatives.data, deferredCreativeSearch]);
+
+  const creativeTotals = useMemo(
+    () =>
+      filteredCreativeRows.reduce(
+        (totals, row) => ({
+          revenue: totals.revenue + row.revenue,
+          spend: totals.spend + row.spend,
+          orders: totals.orders + row.orders,
+          visits: totals.visits + row.visits
+        }),
+        { revenue: 0, spend: 0, orders: 0, visits: 0 }
+      ),
+    [filteredCreativeRows]
+  );
+
   return (
     <main className="app-shell">
       <section className="hero">
@@ -307,14 +532,14 @@ function App() {
           <p className="eyebrow">Unified attribution dashboard</p>
           <h1>ROAS Radar</h1>
           <p className="hero-copy">
-            Compare channels, spend, and revenue under one attribution model with global filters that keep every
-            visualization aligned.
+            Compare channels, campaigns, and native ad creatives under one attribution model with drill-down filters
+            that keep revenue and spend reconciled.
           </p>
         </div>
         <div className="hero-status-card">
           <span>Sections ready</span>
           <strong>
-            {readySections}/4
+            {readySections}/5
           </strong>
           <small>{loadingCount > 0 ? `${loadingCount} updating` : 'All sections in sync'}</small>
         </div>
@@ -402,14 +627,65 @@ function App() {
         </div>
       </section>
 
+      {activeChannelLabel || filters.campaign ? (
+        <section className="drilldown-bar">
+          <div className="drilldown-summary">
+            <span>Active context</span>
+            <strong>
+              {activeChannelLabel ? activeChannelLabel : 'All channels'}
+              {filters.campaign ? ` -> ${filters.campaign}` : ''}
+            </strong>
+          </div>
+          <div className="drilldown-actions">
+            {filters.campaign ? (
+              <button
+                type="button"
+                className="ghost-chip"
+                onClick={() =>
+                  startTransition(() => {
+                    setFilters((current) => ({
+                      ...current,
+                      campaign: undefined,
+                      content: undefined
+                    }));
+                  })
+                }
+              >
+                Clear campaign
+              </button>
+            ) : null}
+            {activeChannelLabel ? (
+              <button
+                type="button"
+                className="ghost-chip"
+                onClick={() =>
+                  startTransition(() => {
+                    setFilters((current) => ({
+                      ...current,
+                      source: undefined,
+                      medium: undefined,
+                      campaign: undefined,
+                      content: undefined
+                    }));
+                  })
+                }
+              >
+                Clear channel
+              </button>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
+
       {!hasAnyData &&
       !dashboard.overview.loading &&
       !dashboard.timeseries.loading &&
       !dashboard.channels.loading &&
-      !dashboard.campaigns.loading ? (
+      !dashboard.campaigns.loading &&
+      !dashboard.creatives.loading ? (
         <section className="empty-state">
           <h2>No attributed activity for this filter range</h2>
-          <p>Try a wider date window or switch attribution models to compare how credit changes across channels.</p>
+          <p>Try a wider date window or switch attribution models to compare how credit shifts across your creatives.</p>
         </section>
       ) : null}
 
@@ -455,22 +731,90 @@ function App() {
 
         <Panel
           title="Channel comparison"
-          subtitle="Source and medium performance under the selected model"
+          subtitle="Select a channel to scope the campaign and creative views"
           loading={dashboard.channels.loading}
           error={dashboard.channels.error}
           empty={!dashboard.channels.data?.length}
         >
-          {dashboard.channels.data ? <ChannelTable rows={dashboard.channels.data} /> : null}
+          {dashboard.channels.data ? (
+            <ChannelTable
+              rows={dashboard.channels.data}
+              selectedChannel={activeChannelLabel}
+              onSelect={(row) =>
+                startTransition(() => {
+                  setFilters((current) => ({
+                    ...current,
+                    source: row.source,
+                    medium: row.medium,
+                    campaign: undefined,
+                    content: undefined
+                  }));
+                })
+              }
+            />
+          ) : null}
         </Panel>
 
         <Panel
           title="Campaign leaders"
-          subtitle="Top campaigns ranked by attributed revenue"
+          subtitle={activeChannelLabel ? `Campaigns within ${activeChannelLabel}` : 'Select a campaign to inspect creatives'}
           loading={dashboard.campaigns.loading}
           error={dashboard.campaigns.error}
           empty={!dashboard.campaigns.data?.length}
         >
-          {dashboard.campaigns.data ? <CampaignGrid rows={dashboard.campaigns.data} /> : null}
+          {dashboard.campaigns.data ? (
+            <CampaignTable
+              rows={dashboard.campaigns.data}
+              selectedCampaign={filters.campaign ?? null}
+              onSelect={(row) =>
+                startTransition(() => {
+                  setFilters((current) => ({
+                    ...current,
+                    source: row.source,
+                    medium: row.medium,
+                    campaign: row.campaign,
+                    content: undefined
+                  }));
+                })
+              }
+            />
+          ) : null}
+        </Panel>
+
+        <Panel
+          title="Creative revenue mix"
+          subtitle="Attributed revenue and spend at the native creative level"
+          loading={dashboard.creatives.loading}
+          error={dashboard.creatives.error}
+          empty={!filteredCreativeRows.length}
+          className="panel-wide"
+        >
+          <CreativeMixChart rows={filteredCreativeRows.slice(0, 8)} />
+        </Panel>
+
+        <Panel
+          title="Creative analysis"
+          subtitle="Sort, search, and export creative performance in the current drill-down context"
+          loading={dashboard.creatives.loading}
+          error={dashboard.creatives.error}
+          empty={!filteredCreativeRows.length}
+          className="panel-wide"
+        >
+          <CreativeTable
+            rows={filteredCreativeRows}
+            search={creativeSearch}
+            sort={creativeSort}
+            totals={creativeTotals}
+            onSearchChange={setCreativeSearch}
+            onSortChange={(key) =>
+              setCreativeSort((current) => ({
+                key,
+                direction: current.key === key && current.direction === 'desc' ? 'asc' : 'desc'
+              }))
+            }
+            onExport={() => downloadCreativeCsv(filteredCreativeRows, filters)}
+            revenueReference={headline?.revenue ?? 0}
+          />
         </Panel>
       </section>
     </main>
@@ -500,9 +844,10 @@ function Panel(props: {
   error: string | null;
   empty: boolean;
   children: ReactNode;
+  className?: string;
 }) {
   return (
-    <article className="panel">
+    <article className={props.className ? `panel ${props.className}` : 'panel'}>
       <div className="panel-header">
         <div>
           <h2>{props.title}</h2>
@@ -598,7 +943,11 @@ function EfficiencyBars(props: { points: TimeseriesPoint[] }) {
   );
 }
 
-function ChannelTable(props: { rows: ChannelRow[] }) {
+function ChannelTable(props: {
+  rows: ChannelRow[];
+  selectedChannel: string | null;
+  onSelect: (row: ChannelRow) => void;
+}) {
   return (
     <div className="table-wrap">
       <table>
@@ -619,12 +968,14 @@ function ChannelTable(props: { rows: ChannelRow[] }) {
             const cac = row.orders > 0 ? row.spend / row.orders : null;
 
             return (
-              <tr key={channelName}>
+              <tr key={channelName} className={props.selectedChannel === channelName ? 'is-selected' : undefined}>
                 <td>
-                  <div className="channel-cell">
-                    <strong>{channelName}</strong>
-                    <span>{formatNumber(row.visits)} visits</span>
-                  </div>
+                  <button type="button" className="table-select" onClick={() => props.onSelect(row)}>
+                    <div className="channel-cell">
+                      <strong>{channelName}</strong>
+                      <span>{formatNumber(row.visits)} visits</span>
+                    </div>
+                  </button>
                 </td>
                 <td>{formatCurrency(row.revenue)}</td>
                 <td>{formatCurrency(row.spend)}</td>
@@ -641,37 +992,181 @@ function ChannelTable(props: { rows: ChannelRow[] }) {
   );
 }
 
-function CampaignGrid(props: { rows: CampaignRow[] }) {
+function CampaignTable(props: {
+  rows: CampaignRow[];
+  selectedCampaign: string | null;
+  onSelect: (row: CampaignRow) => void;
+}) {
   return (
-    <div className="campaign-grid">
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Campaign</th>
+            <th>Revenue</th>
+            <th>Spend</th>
+            <th>ROAS</th>
+            <th>Orders</th>
+            <th>CVR</th>
+          </tr>
+        </thead>
+        <tbody>
+          {props.rows.map((row) => (
+            <tr key={`${row.source}-${row.medium}-${row.campaign}`} className={props.selectedCampaign === row.campaign ? 'is-selected' : undefined}>
+              <td>
+                <button type="button" className="table-select" onClick={() => props.onSelect(row)}>
+                  <div className="channel-cell">
+                    <strong>{row.campaign}</strong>
+                    <span>
+                      {row.source} / {row.medium}
+                    </span>
+                  </div>
+                </button>
+              </td>
+              <td>{formatCurrency(row.revenue)}</td>
+              <td>{formatCurrency(row.spend)}</td>
+              <td>{formatNumber(row.roas)}</td>
+              <td>{formatNumber(row.orders)}</td>
+              <td>{formatPercent(row.conversionRate)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function CreativeMixChart(props: { rows: CreativeRow[] }) {
+  const maxValue = Math.max(...props.rows.flatMap((row) => [row.revenue, row.spend]), 1);
+
+  return (
+    <div className="creative-mix">
       {props.rows.map((row) => (
-        <article className="campaign-card" key={`${row.source}-${row.campaign}-${row.content}`}>
-          <div className="campaign-heading">
-            <span>{row.source}</span>
-            <strong>{row.campaign}</strong>
-            <small>{row.content}</small>
+        <div className="creative-mix-row" key={`${row.campaign}-${row.creativeId ?? row.creativeName}`}>
+          <div className="creative-mix-copy">
+            <strong>{row.creativeName}</strong>
+            <span>
+              {row.creativeId ?? 'No creative ID'} · {row.campaign}
+            </span>
           </div>
-          <div className="campaign-metric-row">
-            <div>
-              <span>Revenue</span>
-              <strong>{formatCurrency(row.revenue)}</strong>
+          <div className="creative-mix-bars">
+            <div className="creative-mix-bar-track">
+              <div className="creative-mix-bar creative-mix-bar-revenue" style={{ width: `${(row.revenue / maxValue) * 100}%` }} />
             </div>
-            <div>
-              <span>Spend</span>
-              <strong>{formatCurrency(row.spend)}</strong>
-            </div>
-            <div>
-              <span>ROAS</span>
-              <strong>{formatNumber(row.roas)}</strong>
-            </div>
-            <div>
-              <span>Conversion</span>
-              <strong>{formatPercent(row.conversionRate)}</strong>
+            <div className="creative-mix-bar-track">
+              <div className="creative-mix-bar creative-mix-bar-spend" style={{ width: `${(row.spend / maxValue) * 100}%` }} />
             </div>
           </div>
-        </article>
+          <div className="creative-mix-metrics">
+            <strong>{formatCurrency(row.revenue)}</strong>
+            <span>{formatCurrency(row.spend)} spend</span>
+            <small>{formatNumber(row.roas)} ROAS</small>
+          </div>
+        </div>
       ))}
     </div>
+  );
+}
+
+function CreativeTable(props: {
+  rows: CreativeRow[];
+  search: string;
+  sort: CreativeSortState;
+  totals: { revenue: number; spend: number; orders: number; visits: number };
+  revenueReference: number;
+  onSearchChange: (value: string) => void;
+  onSortChange: (key: CreativeSortKey) => void;
+  onExport: () => void;
+}) {
+  return (
+    <div className="creative-table-wrap">
+      <div className="table-toolbar">
+        <label className="toolbar-search">
+          <span>Filter creatives</span>
+          <input
+            type="search"
+            value={props.search}
+            onChange={(event) => props.onSearchChange(event.target.value)}
+            placeholder="Search creative name, ID, ad, or campaign"
+          />
+        </label>
+        <div className="toolbar-meta">
+          <span>
+            Displaying {formatNumber(props.rows.length)} creatives · {formatCurrency(props.totals.revenue)} revenue
+          </span>
+          <span>
+            {formatPercent(props.revenueReference > 0 ? props.totals.revenue / props.revenueReference : 0)} of current
+            attributed revenue
+          </span>
+          <button type="button" className="export-button" onClick={props.onExport}>
+            Export CSV
+          </button>
+        </div>
+      </div>
+
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <SortableHeader label="Creative" sortKey="creativeName" state={props.sort} onClick={props.onSortChange} />
+              <SortableHeader label="Creative ID" sortKey="creativeId" state={props.sort} onClick={props.onSortChange} />
+              <SortableHeader label="Campaign" sortKey="campaign" state={props.sort} onClick={props.onSortChange} />
+              <SortableHeader label="Revenue" sortKey="revenue" state={props.sort} onClick={props.onSortChange} />
+              <SortableHeader label="Spend" sortKey="spend" state={props.sort} onClick={props.onSortChange} />
+              <SortableHeader label="ROAS" sortKey="roas" state={props.sort} onClick={props.onSortChange} />
+              <SortableHeader label="Orders" sortKey="orders" state={props.sort} onClick={props.onSortChange} />
+              <SortableHeader label="CVR" sortKey="conversionRate" state={props.sort} onClick={props.onSortChange} />
+              <SortableHeader label="CTR" sortKey="clickThroughRate" state={props.sort} onClick={props.onSortChange} />
+              <SortableHeader label="CPC" sortKey="costPerClick" state={props.sort} onClick={props.onSortChange} />
+            </tr>
+          </thead>
+          <tbody>
+            {props.rows.map((row) => (
+              <tr key={`${row.campaign}-${row.creativeId ?? row.creativeName}`}>
+                <td>
+                  <div className="creative-cell">
+                    <strong>{row.creativeName}</strong>
+                    <span>{row.adName ?? row.content}</span>
+                  </div>
+                </td>
+                <td>{row.creativeId ?? 'N/A'}</td>
+                <td>
+                  <div className="creative-cell">
+                    <strong>{row.campaignName ?? row.campaign}</strong>
+                    <span>{row.campaignId ?? `${row.source} / ${row.medium}`}</span>
+                  </div>
+                </td>
+                <td>{formatCurrency(row.revenue)}</td>
+                <td>{formatCurrency(row.spend)}</td>
+                <td>{formatNumber(row.roas)}</td>
+                <td>{formatNumber(row.orders)}</td>
+                <td>{formatPercent(row.conversionRate)}</td>
+                <td>{formatPercent(row.clickThroughRate)}</td>
+                <td>{formatCurrency(row.costPerClick)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function SortableHeader(props: {
+  label: string;
+  sortKey: CreativeSortKey;
+  state: CreativeSortState;
+  onClick: (key: CreativeSortKey) => void;
+}) {
+  const isActive = props.state.key === props.sortKey;
+
+  return (
+    <th>
+      <button type="button" className={isActive ? 'sort-button is-active' : 'sort-button'} onClick={() => props.onClick(props.sortKey)}>
+        {props.label}
+        <span>{isActive ? (props.state.direction === 'desc' ? '↓' : '↑') : '↕'}</span>
+      </button>
+    </th>
   );
 }
 

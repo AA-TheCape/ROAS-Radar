@@ -39,7 +39,9 @@ const rowValueSchema = z.object({
   source: z.string(),
   medium: z.string(),
   campaign: z.string().optional(),
-  content: z.string().optional()
+  content: z.string().optional(),
+  creativeId: z.string().optional(),
+  creativeName: z.string().optional()
 });
 
 type ReportingPrincipal = {
@@ -57,6 +59,8 @@ type CursorValue = {
   medium: string;
   campaign?: string;
   content?: string;
+  creativeId?: string;
+  creativeName?: string;
 };
 
 type OverviewRow = {
@@ -93,10 +97,28 @@ type ChannelRow = {
   impressions: string;
 };
 
+type CampaignRow = {
+  source: string;
+  medium: string;
+  campaign: string;
+  visits: string;
+  orders: string;
+  revenue: string;
+  spend: string;
+  clicks: string;
+  impressions: string;
+};
+
 type CreativeRow = {
   source: string;
   medium: string;
   campaign: string;
+  campaign_id: string | null;
+  campaign_name: string | null;
+  ad_id: string | null;
+  ad_name: string | null;
+  creative_id: string | null;
+  creative_name: string | null;
   content: string;
   visits: string;
   orders: string;
@@ -480,6 +502,102 @@ function formatChannelRows(rows: ChannelRow[]) {
   });
 }
 
+async function fetchCampaigns(
+  filters: ReportingFilters,
+  limit: number,
+  cursor: CursorValue | null
+): Promise<{ rows: CampaignRow[]; nextCursor: string | null }> {
+  const params = [
+    ...baseMetricParams(filters),
+    cursor?.revenue ?? null,
+    cursor?.source ?? null,
+    cursor?.medium ?? null,
+    cursor?.campaign ?? null,
+    limit + 1
+  ];
+
+  const result = await query<CampaignRow>(
+    `
+      WITH grouped AS (
+        SELECT
+          source,
+          medium,
+          campaign,
+          SUM(visits)::bigint AS visits,
+          SUM(attributed_orders)::numeric(12, 8) AS orders,
+          SUM(attributed_revenue)::numeric(12, 2) AS revenue,
+          SUM(spend)::numeric(12, 2) AS spend,
+          SUM(clicks)::bigint AS clicks,
+          SUM(impressions)::bigint AS impressions
+        FROM daily_reporting_metrics
+        WHERE ${baseMetricWhereClause()}
+        GROUP BY source, medium, campaign
+      )
+      SELECT
+        source,
+        medium,
+        campaign,
+        visits::text AS visits,
+        orders::text AS orders,
+        revenue::text AS revenue,
+        spend::text AS spend,
+        clicks::text AS clicks,
+        impressions::text AS impressions
+      FROM grouped
+      WHERE (
+        $9::numeric IS NULL
+        OR revenue < $9::numeric
+        OR (
+          revenue = $9::numeric
+          AND (source, medium, campaign) > ($10::text, $11::text, $12::text)
+        )
+      )
+      ORDER BY revenue DESC, source ASC, medium ASC, campaign ASC
+      LIMIT $13
+    `,
+    params
+  );
+
+  const pageRows = result.rows.slice(0, limit);
+  const nextRow = result.rows[limit];
+  const nextCursor = nextRow
+    ? encodeCursor({
+        revenue: nextRow.revenue,
+        source: nextRow.source,
+        medium: nextRow.medium,
+        campaign: nextRow.campaign
+      })
+    : null;
+
+  return {
+    rows: pageRows,
+    nextCursor
+  };
+}
+
+function formatCampaignRows(rows: CampaignRow[]) {
+  return rows.map((row) => {
+    const visits = toNumber(row.visits);
+    const orders = toNumber(row.orders);
+    const revenue = toNumber(row.revenue);
+    const spend = toNumber(row.spend);
+
+    return {
+      source: row.source,
+      medium: row.medium,
+      campaign: row.campaign,
+      visits,
+      orders,
+      revenue,
+      spend,
+      clicks: toNumber(row.clicks),
+      impressions: toNumber(row.impressions),
+      conversionRate: safeDivide(orders, visits) ?? 0,
+      roas: safeDivide(revenue, spend)
+    };
+  });
+}
+
 async function fetchCreatives(
   filters: ReportingFilters,
   limit: number,
@@ -492,31 +610,245 @@ async function fetchCreatives(
     cursor?.medium ?? null,
     cursor?.campaign ?? null,
     cursor?.content ?? null,
+    cursor?.creativeId ?? null,
+    cursor?.creativeName ?? null,
     limit + 1
   ];
 
   const result = await query<CreativeRow>(
     `
-      WITH grouped AS (
+      WITH attributed_groups AS (
         SELECT
+          metric_date,
           source,
           medium,
           campaign,
           content,
-          SUM(visits)::bigint AS visits,
+          SUM(visits)::numeric(12, 4) AS visits,
           SUM(attributed_orders)::numeric(12, 8) AS orders,
-          SUM(attributed_revenue)::numeric(12, 2) AS revenue,
-          SUM(spend)::numeric(12, 2) AS spend,
-          SUM(clicks)::bigint AS clicks,
-          SUM(impressions)::bigint AS impressions
+          SUM(attributed_revenue)::numeric(12, 2) AS revenue
         FROM daily_reporting_metrics
         WHERE ${baseMetricWhereClause()}
-        GROUP BY source, medium, campaign, content
+        GROUP BY metric_date, source, medium, campaign, content
+      ),
+      spend_creatives AS (
+        SELECT
+          report_date AS metric_date,
+          canonical_source AS source,
+          canonical_medium AS medium,
+          canonical_campaign AS campaign,
+          canonical_content AS content,
+          campaign_id,
+          campaign_name,
+          ad_id,
+          ad_name,
+          creative_id,
+          creative_name,
+          spend::numeric(12, 2) AS spend,
+          clicks::numeric(12, 4) AS clicks,
+          impressions::numeric(12, 4) AS impressions
+        FROM meta_ads_daily_spend
+        WHERE report_date BETWEEN $1::date AND $2::date
+          AND granularity = 'creative'
+          AND ($4::text IS NULL OR canonical_source = $4)
+          AND ($5::text IS NULL OR canonical_medium = $5)
+          AND ($6::text IS NULL OR canonical_campaign = $6)
+          AND ($7::text IS NULL OR canonical_content = $7)
+          AND (
+            $8::text IS NULL
+            OR canonical_source ILIKE $8
+            OR canonical_medium ILIKE $8
+            OR canonical_campaign ILIKE $8
+            OR canonical_content ILIKE $8
+            OR campaign_name ILIKE $8
+            OR ad_name ILIKE $8
+            OR creative_name ILIKE $8
+            OR creative_id ILIKE $8
+          )
+
+        UNION ALL
+
+        SELECT
+          report_date AS metric_date,
+          canonical_source AS source,
+          canonical_medium AS medium,
+          canonical_campaign AS campaign,
+          canonical_content AS content,
+          campaign_id,
+          campaign_name,
+          ad_id,
+          ad_name,
+          creative_id,
+          creative_name,
+          spend::numeric(12, 2) AS spend,
+          clicks::numeric(12, 4) AS clicks,
+          impressions::numeric(12, 4) AS impressions
+        FROM google_ads_daily_spend
+        WHERE report_date BETWEEN $1::date AND $2::date
+          AND granularity = 'creative'
+          AND ($4::text IS NULL OR canonical_source = $4)
+          AND ($5::text IS NULL OR canonical_medium = $5)
+          AND ($6::text IS NULL OR canonical_campaign = $6)
+          AND ($7::text IS NULL OR canonical_content = $7)
+          AND (
+            $8::text IS NULL
+            OR canonical_source ILIKE $8
+            OR canonical_medium ILIKE $8
+            OR canonical_campaign ILIKE $8
+            OR canonical_content ILIKE $8
+            OR campaign_name ILIKE $8
+            OR ad_name ILIKE $8
+            OR creative_name ILIKE $8
+            OR creative_id ILIKE $8
+          )
+      ),
+      spend_creative_totals AS (
+        SELECT
+          metric_date,
+          source,
+          medium,
+          campaign,
+          content,
+          COUNT(*)::numeric(12, 4) AS creative_count,
+          COALESCE(SUM(spend), 0)::numeric(12, 4) AS spend_total,
+          COALESCE(SUM(clicks), 0)::numeric(12, 4) AS clicks_total,
+          COALESCE(SUM(impressions), 0)::numeric(12, 4) AS impressions_total
+        FROM spend_creatives
+        GROUP BY metric_date, source, medium, campaign, content
+      ),
+      spend_backed_rows AS (
+        SELECT
+          s.source,
+          s.medium,
+          s.campaign,
+          s.campaign_id,
+          s.campaign_name,
+          s.ad_id,
+          s.ad_name,
+          s.creative_id,
+          s.creative_name,
+          s.content,
+          SUM(
+            COALESCE(a.visits, 0)
+            * CASE
+                WHEN t.spend_total > 0 THEN s.spend / t.spend_total
+                WHEN t.clicks_total > 0 THEN s.clicks / t.clicks_total
+                WHEN t.impressions_total > 0 THEN s.impressions / t.impressions_total
+                WHEN t.creative_count > 0 THEN 1 / t.creative_count
+                ELSE 0
+              END
+          )::numeric(12, 4) AS visits,
+          SUM(
+            COALESCE(a.orders, 0)
+            * CASE
+                WHEN t.spend_total > 0 THEN s.spend / t.spend_total
+                WHEN t.clicks_total > 0 THEN s.clicks / t.clicks_total
+                WHEN t.impressions_total > 0 THEN s.impressions / t.impressions_total
+                WHEN t.creative_count > 0 THEN 1 / t.creative_count
+                ELSE 0
+              END
+          )::numeric(12, 8) AS orders,
+          SUM(
+            COALESCE(a.revenue, 0)
+            * CASE
+                WHEN t.spend_total > 0 THEN s.spend / t.spend_total
+                WHEN t.clicks_total > 0 THEN s.clicks / t.clicks_total
+                WHEN t.impressions_total > 0 THEN s.impressions / t.impressions_total
+                WHEN t.creative_count > 0 THEN 1 / t.creative_count
+                ELSE 0
+              END
+          )::numeric(12, 2) AS revenue,
+          COALESCE(SUM(s.spend), 0)::numeric(12, 2) AS spend,
+          COALESCE(SUM(s.clicks), 0)::numeric(12, 4) AS clicks,
+          COALESCE(SUM(s.impressions), 0)::numeric(12, 4) AS impressions
+        FROM spend_creatives s
+        LEFT JOIN attributed_groups a
+          ON a.metric_date = s.metric_date
+         AND a.source = s.source
+         AND a.medium = s.medium
+         AND a.campaign = s.campaign
+         AND a.content = s.content
+        INNER JOIN spend_creative_totals t
+          ON t.metric_date = s.metric_date
+         AND t.source = s.source
+         AND t.medium = s.medium
+         AND t.campaign = s.campaign
+         AND t.content = s.content
+        GROUP BY
+          s.source,
+          s.medium,
+          s.campaign,
+          s.campaign_id,
+          s.campaign_name,
+          s.ad_id,
+          s.ad_name,
+          s.creative_id,
+          s.creative_name,
+          s.content
+      ),
+      unattributed_dimension_rows AS (
+        SELECT
+          a.source,
+          a.medium,
+          a.campaign,
+          NULL::text AS campaign_id,
+          a.campaign AS campaign_name,
+          NULL::text AS ad_id,
+          NULL::text AS ad_name,
+          NULL::text AS creative_id,
+          NULLIF(a.content, 'unknown') AS creative_name,
+          a.content,
+          SUM(a.visits)::numeric(12, 4) AS visits,
+          SUM(a.orders)::numeric(12, 8) AS orders,
+          SUM(a.revenue)::numeric(12, 2) AS revenue,
+          0::numeric(12, 2) AS spend,
+          0::numeric(12, 4) AS clicks,
+          0::numeric(12, 4) AS impressions
+        FROM attributed_groups a
+        LEFT JOIN spend_creative_totals t
+          ON t.metric_date = a.metric_date
+         AND t.source = a.source
+         AND t.medium = a.medium
+         AND t.campaign = a.campaign
+         AND t.content = a.content
+        WHERE t.metric_date IS NULL
+        GROUP BY a.source, a.medium, a.campaign, a.content
+      ),
+      grouped AS (
+        SELECT
+          source,
+          medium,
+          campaign,
+          campaign_id,
+          campaign_name,
+          ad_id,
+          ad_name,
+          creative_id,
+          creative_name,
+          content,
+          SUM(visits)::numeric(12, 4) AS visits,
+          SUM(orders)::numeric(12, 8) AS orders,
+          SUM(revenue)::numeric(12, 2) AS revenue,
+          SUM(spend)::numeric(12, 2) AS spend,
+          SUM(clicks)::numeric(12, 4) AS clicks,
+          SUM(impressions)::numeric(12, 4) AS impressions
+        FROM (
+          SELECT * FROM spend_backed_rows
+          UNION ALL
+          SELECT * FROM unattributed_dimension_rows
+        ) combined
+        GROUP BY source, medium, campaign, campaign_id, campaign_name, ad_id, ad_name, creative_id, creative_name, content
       )
       SELECT
         source,
         medium,
         campaign,
+        campaign_id,
+        campaign_name,
+        ad_id,
+        ad_name,
+        creative_id,
+        creative_name,
         content,
         visits::text AS visits,
         orders::text AS orders,
@@ -530,11 +862,12 @@ async function fetchCreatives(
         OR revenue < $9::numeric
         OR (
           revenue = $9::numeric
-          AND (source, medium, campaign, content) > ($10::text, $11::text, $12::text, $13::text)
+          AND (source, medium, campaign, content, COALESCE(creative_id, ''), COALESCE(creative_name, ''))
+            > ($10::text, $11::text, $12::text, $13::text, $14::text, $15::text)
         )
       )
-      ORDER BY revenue DESC, source ASC, medium ASC, campaign ASC, content ASC
-      LIMIT $14
+      ORDER BY revenue DESC, source ASC, medium ASC, campaign ASC, content ASC, creative_id ASC NULLS FIRST, creative_name ASC NULLS FIRST
+      LIMIT $16
     `,
     params
   );
@@ -547,7 +880,9 @@ async function fetchCreatives(
         source: nextRow.source,
         medium: nextRow.medium,
         campaign: nextRow.campaign,
-        content: nextRow.content
+        content: nextRow.content,
+        creativeId: nextRow.creative_id ?? '',
+        creativeName: nextRow.creative_name ?? ''
       })
     : null;
 
@@ -563,20 +898,30 @@ function formatCreativeRows(rows: CreativeRow[]) {
     const orders = toNumber(row.orders);
     const revenue = toNumber(row.revenue);
     const spend = toNumber(row.spend);
+    const clicks = toNumber(row.clicks);
+    const impressions = toNumber(row.impressions);
 
     return {
       source: row.source,
       medium: row.medium,
       campaign: row.campaign,
+      campaignId: row.campaign_id,
+      campaignName: row.campaign_name,
+      adId: row.ad_id,
+      adName: row.ad_name,
+      creativeId: row.creative_id,
+      creativeName: row.creative_name ?? row.content,
       content: row.content,
       visits,
       orders,
       revenue,
       spend,
-      clicks: toNumber(row.clicks),
-      impressions: toNumber(row.impressions),
+      clicks,
+      impressions,
       conversionRate: safeDivide(orders, visits) ?? 0,
-      roas: safeDivide(revenue, spend)
+      roas: safeDivide(revenue, spend),
+      clickThroughRate: safeDivide(clicks, impressions),
+      costPerClick: safeDivide(spend, clicks)
     };
   });
 }
@@ -843,11 +1188,14 @@ export function createReportingRouter(): Router {
       const principal = res.locals.reportingPrincipal as ReportingPrincipal;
       const filters = normalizeFilters(baseFilterSchema.parse(req.query));
       const pagination = paginationSchema.parse(req.query);
-      const cursor = decodeCursor(pagination.cursor, rowValueSchema);
-      const page = await fetchCreatives(filters, pagination.limit, cursor);
+      const cursor = decodeCursor(
+        pagination.cursor,
+        rowValueSchema.pick({ revenue: true, source: true, medium: true, campaign: true })
+      );
+      const page = await fetchCampaigns(filters, pagination.limit, cursor);
       const response = paginatedResponseSchema.parse(
         createEnvelope(principal, filters, {
-          rows: formatCreativeRows(page.rows),
+          rows: formatCampaignRows(page.rows),
           pagination: {
             limit: pagination.limit,
             nextCursor: page.nextCursor

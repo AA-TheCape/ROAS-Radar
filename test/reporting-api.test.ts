@@ -23,6 +23,11 @@ function createServer() {
   return server;
 }
 
+async function closeServer(server: ReturnType<typeof createServer>) {
+  server.closeAllConnections?.();
+  await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+}
+
 function buildHeaders(overrides: Record<string, string> = {}): HeadersInit {
   return {
     authorization: 'Bearer reporting-token',
@@ -46,7 +51,7 @@ test('reporting API rejects requests without tenant context', async () => {
     assert.equal(response.status, 401);
     assert.equal(body.error.code, 'reporting_tenant_required');
   } finally {
-    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    await closeServer(server);
   }
 });
 
@@ -95,11 +100,11 @@ test('reporting overview returns versioned KPI payloads', async () => {
     assert.equal(body.data.totals.roas, 3);
     assert.equal(body.data.totals.averageOrderValue, 105);
   } finally {
-    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    await closeServer(server);
   }
 });
 
-test('reporting channels and creatives return paginated rows under a shared attribution model', async () => {
+test('reporting channels, campaigns, and creatives return paginated rows under a shared attribution model', async () => {
   pool.query = (async (text: string) => {
     if (text.includes('GROUP BY source, medium') && text.includes('LIMIT $12')) {
       return {
@@ -128,13 +133,37 @@ test('reporting channels and creatives return paginated rows under a shared attr
       };
     }
 
-    if (text.includes('GROUP BY source, medium, campaign, content') && text.includes('LIMIT $14')) {
+    if (text.includes('GROUP BY source, medium, campaign') && text.includes('LIMIT $13')) {
       return {
         rows: [
           {
             source: 'google',
             medium: 'cpc',
             campaign: 'spring-sale',
+            visits: '35',
+            orders: '3',
+            revenue: '320.00',
+            spend: '105.00',
+            clicks: '30',
+            impressions: '350'
+          }
+        ]
+      };
+    }
+
+    if (text.includes('WITH attributed_groups AS') && text.includes('LIMIT $16')) {
+      return {
+        rows: [
+          {
+            source: 'google',
+            medium: 'cpc',
+            campaign: 'spring-sale',
+            campaign_id: 'cmp_1',
+            campaign_name: 'Spring Sale',
+            ad_id: 'ad_1',
+            ad_name: 'Hero Ad 1',
+            creative_id: 'creative_1',
+            creative_name: 'Hero Creative 1',
             content: 'hero-1',
             visits: '20',
             orders: '2',
@@ -147,6 +176,12 @@ test('reporting channels and creatives return paginated rows under a shared attr
             source: 'google',
             medium: 'cpc',
             campaign: 'spring-sale',
+            campaign_id: 'cmp_1',
+            campaign_name: 'Spring Sale',
+            ad_id: 'ad_2',
+            ad_name: 'Hero Ad 2',
+            creative_id: 'creative_2',
+            creative_name: 'Hero Creative 2',
             content: 'hero-2',
             visits: '15',
             orders: '1',
@@ -159,6 +194,12 @@ test('reporting channels and creatives return paginated rows under a shared attr
             source: 'facebook',
             medium: 'paid_social',
             campaign: 'retargeting',
+            campaign_id: 'cmp_2',
+            campaign_name: 'Retargeting',
+            ad_id: 'ad_3',
+            ad_name: 'Carousel Ad',
+            creative_id: 'creative_3',
+            creative_name: 'Carousel Creative',
             content: 'carousel-1',
             visits: '10',
             orders: '1',
@@ -191,6 +232,21 @@ test('reporting channels and creatives return paginated rows under a shared attr
     assert.equal(channelsBody.data.rows[0].source, 'google');
     assert.ok(channelsBody.data.pagination.nextCursor);
 
+    const campaignsResponse = await fetch(
+      `${baseUrl}/campaigns?startDate=2026-04-01&endDate=2026-04-10&attributionModel=position_based&limit=1`,
+      {
+        headers: buildHeaders()
+      }
+    );
+    const campaignsBody = await campaignsResponse.json();
+
+    assert.equal(campaignsResponse.status, 200);
+    assert.equal(campaignsBody.attributionModel, 'position_based');
+    assert.equal(campaignsBody.data.rows.length, 1);
+    assert.equal(campaignsBody.data.rows[0].campaign, 'spring-sale');
+    assert.equal(campaignsBody.data.rows[0].roas, 320 / 105);
+    assert.ok(campaignsBody.data.pagination.nextCursor);
+
     const creativesResponse = await fetch(
       `${baseUrl}/creatives?startDate=2026-04-01&endDate=2026-04-10&attributionModel=position_based&limit=2`,
       {
@@ -203,8 +259,10 @@ test('reporting channels and creatives return paginated rows under a shared attr
     assert.equal(creativesBody.attributionModel, 'position_based');
     assert.equal(creativesBody.data.rows.length, 2);
     assert.equal(creativesBody.data.rows[0].campaign, 'spring-sale');
+    assert.equal(creativesBody.data.rows[0].creativeId, 'creative_1');
+    assert.equal(creativesBody.data.rows[0].creativeName, 'Hero Creative 1');
     assert.ok(creativesBody.data.pagination.nextCursor);
   } finally {
-    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    await closeServer(server);
   }
 });

@@ -4,6 +4,11 @@ export type Filters = {
   startDate: string;
   endDate: string;
   attributionModel: AttributionModel;
+  source?: string;
+  medium?: string;
+  campaign?: string;
+  content?: string;
+  search?: string;
 };
 
 export type ModelsResponse = {
@@ -83,6 +88,26 @@ export type CampaignRow = {
   source: string;
   medium: string;
   campaign: string;
+  visits: number;
+  orders: number;
+  revenue: number;
+  spend: number;
+  clicks: number;
+  impressions: number;
+  conversionRate: number;
+  roas: number | null;
+};
+
+export type CreativeRow = {
+  source: string;
+  medium: string;
+  campaign: string;
+  campaignId: string | null;
+  campaignName: string | null;
+  adId: string | null;
+  adName: string | null;
+  creativeId: string | null;
+  creativeName: string;
   content: string;
   visits: number;
   orders: number;
@@ -92,6 +117,18 @@ export type CampaignRow = {
   impressions: number;
   conversionRate: number;
   roas: number | null;
+  clickThroughRate: number | null;
+  costPerClick: number | null;
+};
+
+export type CreativesResponse = {
+  data: {
+    rows: CreativeRow[];
+    pagination: {
+      limit: number;
+      nextCursor: string | null;
+    };
+  };
 };
 
 export type CampaignsResponse = {
@@ -114,6 +151,15 @@ function buildSearchParams(filters: Filters, extras: Record<string, string> = {}
     endDate: filters.endDate,
     attributionModel: filters.attributionModel
   });
+
+  const optionalFilters = ['source', 'medium', 'campaign', 'content', 'search'] as const;
+
+  for (const key of optionalFilters) {
+    const value = filters[key];
+    if (value) {
+      params.set(key, value);
+    }
+  }
 
   for (const [key, value] of Object.entries(extras)) {
     params.set(key, value);
@@ -166,4 +212,8 @@ export async function fetchChannels(filters: Filters, limit = 8): Promise<Channe
 
 export async function fetchCampaigns(filters: Filters, limit = 6): Promise<CampaignsResponse> {
   return requestJson<CampaignsResponse>('/api/reporting/campaigns', buildSearchParams(filters, { limit: `${limit}` }));
+}
+
+export async function fetchCreatives(filters: Filters, limit = 50): Promise<CreativesResponse> {
+  return requestJson<CreativesResponse>('/api/reporting/creatives', buildSearchParams(filters, { limit: `${limit}` }));
 }
