@@ -6,6 +6,7 @@ import { z } from 'zod';
 
 import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
+import { enqueueAttributionForTrackingTouchpoint } from '../attribution/index.js';
 
 const EVENT_TYPES = ['page_view', 'product_view', 'add_to_cart', 'checkout_started'] as const;
 const MAX_URL_LENGTH = 2048;
@@ -601,7 +602,14 @@ async function ingestTrackingEvent(
     const userAgent = sanitizedInput.context.userAgent ?? null;
 
     await upsertTrackingSession(sanitizedInput, occurredAt, userAgent, ipHash, client);
-    return insertTrackingEvent(client, sanitizedInput, ingestionFingerprint);
+    const insertedEventId = await insertTrackingEvent(client, sanitizedInput, ingestionFingerprint);
+    await enqueueAttributionForTrackingTouchpoint(client, {
+      sessionId: sanitizedInput.sessionId,
+      shopifyCheckoutToken: normalizeNullableString(sanitizedInput.shopifyCheckoutToken),
+      shopifyCartToken: normalizeNullableString(sanitizedInput.shopifyCartToken)
+    });
+
+    return insertedEventId;
   });
 
   return {

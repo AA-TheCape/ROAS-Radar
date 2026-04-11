@@ -28,6 +28,25 @@ const envSchema = z.object({
     .transform((value) => (value ? csvStringSchema.parse(value) : ['read_orders'])),
   SHOPIFY_WEBHOOK_SECRET: z.string().default(''),
   ATTRIBUTION_WINDOW_DAYS: z.coerce.number().int().positive().default(7),
+  ATTRIBUTION_MODEL_VERSION: z.coerce.number().int().positive().default(1),
+  ATTRIBUTION_JOB_BATCH_SIZE: z.coerce.number().int().positive().default(50),
+  ATTRIBUTION_STALE_SCAN_BATCH_SIZE: z.coerce.number().int().positive().default(200),
+  ATTRIBUTION_JOB_LEASE_SECONDS: z.coerce.number().int().positive().default(120),
+  ATTRIBUTION_JOB_MAX_RETRIES: z.coerce.number().int().positive().default(10),
+  ATTRIBUTION_WORKER_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
+  ATTRIBUTION_WORKER_LOOP: z
+    .union([z.string(), z.boolean(), z.undefined()])
+    .transform((value) => {
+      if (typeof value === 'boolean') {
+        return value;
+      }
+
+      if (typeof value !== 'string') {
+        return false;
+      }
+
+      return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase());
+    }),
   TRACKING_ALLOWED_ORIGINS: z
     .union([z.string().trim().min(1), z.undefined()])
     .transform((value) => (value ? csvStringSchema.parse(value) : [])),

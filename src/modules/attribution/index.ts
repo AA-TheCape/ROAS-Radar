@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { type PoolClient } from 'pg';
 
 import { env } from '../../config/env.js';
@@ -13,7 +15,6 @@ import {
 type PendingOrder = {
   shopify_order_id: string;
   order_occurred_at: Date | null;
-  created_at_shopify: Date | null;
   landing_session_id: string | null;
   checkout_token: string | null;
   cart_token: string | null;
@@ -51,6 +52,34 @@ type LegacyAttributionResult = {
   confidenceScore: string;
   reason: string;
 };
+
+type AttributionJobRow = {
+  id: number;
+  queue_key: string;
+  shopify_order_id: string;
+  requested_reason: string;
+  requested_model_version: number;
+  attempts: number;
+};
+
+export type AttributionQueueProcessOptions = {
+  limit?: number;
+  workerId?: string;
+  staleScanLimit?: number;
+  emitMetrics?: boolean;
+};
+
+export type AttributionQueueProcessResult = {
+  workerId: string;
+  modelVersion: number;
+  staleJobsEnqueued: number;
+  claimedJobs: number;
+  succeededJobs: number;
+  failedJobs: number;
+  durationMs: number;
+};
+
+const DEFAULT_ATTRIBUTION_JOB_REASON = 'order_recompute_requested';
 
 function uniqueSessionIds(sessionIds: Array<string | null | undefined>): string[] {
   return [...new Set(sessionIds.filter((sessionId): sessionId is string => Boolean(sessionId)))];
@@ -94,6 +123,28 @@ function confidenceForReason(reason: string): string {
     default:
       return '0.00';
   }
+}
+
+function computeRetryDelaySeconds(attempts: number): number {
+  const safeAttempts = Math.max(attempts, 1);
+  return Math.min(30 * 2 ** (safeAttempts - 1), 30 * 60);
+}
+
+function buildQueueKey(shopifyOrderId: string): string {
+  return `order:${shopifyOrderId}`;
+}
+
+function buildProcessingMetricsLog(result: AttributionQueueProcessResult): string {
+  return JSON.stringify({
+    event: 'attribution_queue_run',
+    workerId: result.workerId,
+    modelVersion: result.modelVersion,
+    staleJobsEnqueued: result.staleJobsEnqueued,
+    claimedJobs: result.claimedJobs,
+    succeededJobs: result.succeededJobs,
+    failedJobs: result.failedJobs,
+    durationMs: result.durationMs
+  });
 }
 
 async function fetchSessionIdsByCheckoutToken(
@@ -368,6 +419,7 @@ async function persistAttributionCredits(
           INSERT INTO attribution_order_credits (
             shopify_order_id,
             attribution_model,
+            model_version,
             touchpoint_position,
             session_id,
             touchpoint_occurred_at,
@@ -387,8 +439,8 @@ async function persistAttributionCredits(
             $1,
             $2,
             $3,
-            $4::uuid,
-            $5,
+            $4,
+            $5::uuid,
             $6,
             $7,
             $8,
@@ -399,12 +451,14 @@ async function persistAttributionCredits(
             $13,
             $14,
             $15,
-            $16
+            $16,
+            $17
           )
         `,
         [
           shopifyOrderId,
           credit.attributionModel,
+          env.ATTRIBUTION_MODEL_VERSION,
           credit.touchpointPosition,
           credit.sessionId,
           credit.touchpointOccurredAt,
@@ -438,6 +492,7 @@ async function upsertLegacyAttributionResult(
         shopify_order_id,
         session_id,
         attribution_model,
+        model_version,
         attributed_source,
         attributed_medium,
         attributed_campaign,
@@ -463,6 +518,7 @@ async function upsertLegacyAttributionResult(
         $9,
         $10,
         $11,
+        $12,
         now(),
         1
       )
@@ -470,6 +526,7 @@ async function upsertLegacyAttributionResult(
       DO UPDATE SET
         session_id = EXCLUDED.session_id,
         attribution_model = EXCLUDED.attribution_model,
+        model_version = EXCLUDED.model_version,
         attributed_source = EXCLUDED.attributed_source,
         attributed_medium = EXCLUDED.attributed_medium,
         attributed_campaign = EXCLUDED.attributed_campaign,
@@ -485,6 +542,7 @@ async function upsertLegacyAttributionResult(
     [
       shopifyOrderId,
       primaryLastTouchResult.sessionId,
+      env.ATTRIBUTION_MODEL_VERSION,
       primaryLastTouchResult.source,
       primaryLastTouchResult.medium,
       primaryLastTouchResult.campaign,
@@ -579,53 +637,416 @@ async function refreshDailyAttributionCampaignMetrics(client: PoolClient, metric
   );
 }
 
-export async function processPendingAttribution(limit = 100): Promise<number> {
-  const pendingOrders = await query<PendingOrder>(
+async function enqueueAttributionJob(
+  client: PoolClient,
+  shopifyOrderId: string,
+  requestedReason: string,
+  requestedModelVersion = env.ATTRIBUTION_MODEL_VERSION
+): Promise<void> {
+  await client.query(
+    `
+      INSERT INTO attribution_jobs (
+        queue_key,
+        job_type,
+        shopify_order_id,
+        requested_reason,
+        requested_model_version,
+        status,
+        attempts,
+        available_at,
+        locked_at,
+        locked_by,
+        last_error,
+        completed_at,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        $1,
+        'order',
+        $2,
+        $3,
+        $4,
+        'pending',
+        0,
+        now(),
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        now(),
+        now()
+      )
+      ON CONFLICT (queue_key)
+      DO UPDATE SET
+        requested_reason = EXCLUDED.requested_reason,
+        requested_model_version = GREATEST(
+          attribution_jobs.requested_model_version,
+          EXCLUDED.requested_model_version
+        ),
+        available_at = CASE
+          WHEN attribution_jobs.status = 'processing' THEN attribution_jobs.available_at
+          ELSE now()
+        END,
+        status = CASE
+          WHEN attribution_jobs.status = 'processing' THEN attribution_jobs.status
+          ELSE 'pending'
+        END,
+        locked_at = CASE
+          WHEN attribution_jobs.status = 'processing' THEN attribution_jobs.locked_at
+          ELSE NULL
+        END,
+        locked_by = CASE
+          WHEN attribution_jobs.status = 'processing' THEN attribution_jobs.locked_by
+          ELSE NULL
+        END,
+        last_error = NULL,
+        completed_at = CASE
+          WHEN attribution_jobs.status = 'processing' THEN attribution_jobs.completed_at
+          ELSE NULL
+        END,
+        updated_at = now()
+    `,
+    [buildQueueKey(shopifyOrderId), shopifyOrderId, requestedReason, requestedModelVersion]
+  );
+}
+
+async function fetchImpactedOrderIdsForTouchpoint(
+  client: PoolClient,
+  input: {
+    sessionId: string;
+    shopifyCheckoutToken: string | null;
+    shopifyCartToken: string | null;
+  }
+): Promise<string[]> {
+  const sessionResult = await client.query<{ customer_identity_id: string | null }>(
+    `
+      SELECT customer_identity_id
+      FROM tracking_sessions
+      WHERE id = $1::uuid
+      LIMIT 1
+    `,
+    [input.sessionId]
+  );
+
+  const customerIdentityId = sessionResult.rows[0]?.customer_identity_id ?? null;
+
+  const result = await client.query<{ shopify_order_id: string }>(
+    `
+      SELECT DISTINCT shopify_order_id
+      FROM shopify_orders
+      WHERE landing_session_id = $1::uuid
+         OR ($2::text IS NOT NULL AND checkout_token = $2)
+         OR ($3::text IS NOT NULL AND cart_token = $3)
+         OR ($4::uuid IS NOT NULL AND customer_identity_id = $4::uuid)
+      ORDER BY shopify_order_id ASC
+    `,
+    [input.sessionId, input.shopifyCheckoutToken, input.shopifyCartToken, customerIdentityId]
+  );
+
+  return result.rows.map((row) => row.shopify_order_id);
+}
+
+async function fetchPendingOrder(client: PoolClient, shopifyOrderId: string): Promise<PendingOrder | null> {
+  const result = await client.query<PendingOrder>(
     `
       SELECT
         o.shopify_order_id,
         COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) AS order_occurred_at,
-        o.created_at_shopify,
         o.landing_session_id,
         o.checkout_token,
         o.cart_token,
         o.customer_identity_id,
         o.total_price::text
       FROM shopify_orders o
-      WHERE NOT EXISTS (
-        SELECT 1
-        FROM attribution_order_credits c
-        WHERE c.shopify_order_id = o.shopify_order_id
-      )
-      ORDER BY COALESCE(o.created_at_shopify, o.ingested_at) ASC
-      LIMIT $1
+      WHERE o.shopify_order_id = $1
+      LIMIT 1
     `,
-    [limit]
+    [shopifyOrderId]
   );
 
-  if (!pendingOrders.rowCount) {
-    return 0;
-  }
+  return result.rows[0] ?? null;
+}
 
+async function completeAttributionJob(client: PoolClient, jobId: number): Promise<void> {
+  await client.query(
+    `
+      UPDATE attribution_jobs
+      SET
+        status = 'completed',
+        locked_at = NULL,
+        locked_by = NULL,
+        last_error = NULL,
+        completed_at = now(),
+        updated_at = now()
+      WHERE id = $1
+    `,
+    [jobId]
+  );
+}
+
+async function retryAttributionJob(client: PoolClient, job: AttributionJobRow, error: unknown): Promise<void> {
+  const delaySeconds = computeRetryDelaySeconds(job.attempts);
+  const boundedAttempts = Math.max(job.attempts, 1);
+  const nextStatus = boundedAttempts >= env.ATTRIBUTION_JOB_MAX_RETRIES ? 'completed' : 'retry';
+  const serializedError = error instanceof Error ? error.stack ?? error.message : String(error);
+
+  await client.query(
+    `
+      UPDATE attribution_jobs
+      SET
+        status = $2,
+        available_at = CASE
+          WHEN $2 = 'retry' THEN now() + ($3::int * interval '1 second')
+          ELSE now()
+        END,
+        locked_at = NULL,
+        locked_by = NULL,
+        last_error = $4,
+        completed_at = CASE WHEN $2 = 'completed' THEN now() ELSE NULL END,
+        updated_at = now()
+      WHERE id = $1
+    `,
+    [job.id, nextStatus, delaySeconds, serializedError.slice(0, 4000)]
+  );
+}
+
+async function claimAttributionJobs(limit: number, workerId: string): Promise<AttributionJobRow[]> {
+  return withTransaction(async (client) => {
+    const result = await client.query<AttributionJobRow>(
+      `
+        WITH candidate_jobs AS (
+          SELECT id
+          FROM attribution_jobs
+          WHERE job_type = 'order'
+            AND (
+              (status IN ('pending', 'retry') AND available_at <= now())
+              OR (
+                status = 'processing'
+                AND locked_at <= now() - ($2::int * interval '1 second')
+              )
+            )
+          ORDER BY available_at ASC, id ASC
+          LIMIT $1
+          FOR UPDATE SKIP LOCKED
+        )
+        UPDATE attribution_jobs jobs
+        SET
+          status = 'processing',
+          attempts = jobs.attempts + 1,
+          locked_at = now(),
+          locked_by = $3,
+          updated_at = now()
+        FROM candidate_jobs
+        WHERE jobs.id = candidate_jobs.id
+        RETURNING
+          jobs.id,
+          jobs.queue_key,
+          jobs.shopify_order_id,
+          jobs.requested_reason,
+          jobs.requested_model_version,
+          jobs.attempts
+      `,
+      [limit, env.ATTRIBUTION_JOB_LEASE_SECONDS, workerId]
+    );
+
+    return result.rows;
+  });
+}
+
+async function processAttributionJob(job: AttributionJobRow): Promise<void> {
   await withTransaction(async (client) => {
-    const metricDates = new Set<string>();
+    const order = await fetchPendingOrder(client, job.shopify_order_id);
 
-    for (const order of pendingOrders.rows) {
-      const orderOccurredAt = order.order_occurred_at ?? new Date();
-      const touchpoints = await resolveTouchpointChain(client, order);
-      const outputs = computeAttributionOutputs(touchpoints, {
-        orderOccurredAt,
-        orderRevenue: order.total_price
-      });
-
-      await persistAttributionCredits(client, order.shopify_order_id, outputs);
-      await upsertLegacyAttributionResult(client, order.shopify_order_id, outputs);
-
-      metricDates.add(orderOccurredAt.toISOString().slice(0, 10));
+    if (!order) {
+      await completeAttributionJob(client, job.id);
+      return;
     }
 
-    await refreshDailyAttributionCampaignMetrics(client, [...metricDates]);
+    const orderOccurredAt = order.order_occurred_at ?? new Date();
+    const touchpoints = await resolveTouchpointChain(client, order);
+    const outputs = computeAttributionOutputs(touchpoints, {
+      orderOccurredAt,
+      orderRevenue: order.total_price
+    });
+
+    await persistAttributionCredits(client, order.shopify_order_id, outputs);
+    await upsertLegacyAttributionResult(client, order.shopify_order_id, outputs);
+    await refreshDailyAttributionCampaignMetrics(client, [orderOccurredAt.toISOString().slice(0, 10)]);
+    await completeAttributionJob(client, job.id);
+  });
+}
+
+export async function enqueueAttributionForOrder(
+  shopifyOrderId: string,
+  requestedReason = DEFAULT_ATTRIBUTION_JOB_REASON,
+  client?: PoolClient
+): Promise<void> {
+  if (client) {
+    await enqueueAttributionJob(client, shopifyOrderId, requestedReason);
+    return;
+  }
+
+  await withTransaction(async (transactionClient) => {
+    await enqueueAttributionJob(transactionClient, shopifyOrderId, requestedReason);
+  });
+}
+
+export async function enqueueAttributionForTrackingTouchpoint(
+  client: PoolClient,
+  input: {
+    sessionId: string;
+    shopifyCheckoutToken: string | null;
+    shopifyCartToken: string | null;
+  }
+): Promise<number> {
+  const orderIds = await fetchImpactedOrderIdsForTouchpoint(client, input);
+
+  for (const shopifyOrderId of orderIds) {
+    await enqueueAttributionJob(client, shopifyOrderId, 'tracking_touchpoint_updated');
+  }
+
+  return orderIds.length;
+}
+
+export async function enqueueStaleAttributionJobs(limit = env.ATTRIBUTION_STALE_SCAN_BATCH_SIZE): Promise<number> {
+  const result = await query<{ inserted_count: string }>(
+    `
+      WITH stale_orders AS (
+        SELECT o.shopify_order_id
+        FROM shopify_orders o
+        LEFT JOIN attribution_results ar ON ar.shopify_order_id = o.shopify_order_id
+        WHERE ar.shopify_order_id IS NULL
+           OR ar.model_version < $1
+        ORDER BY COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) ASC, o.shopify_order_id ASC
+        LIMIT $2
+      ),
+      queued AS (
+        INSERT INTO attribution_jobs (
+          queue_key,
+          job_type,
+          shopify_order_id,
+          requested_reason,
+          requested_model_version,
+          status,
+          attempts,
+          available_at,
+          locked_at,
+          locked_by,
+          last_error,
+          completed_at,
+          created_at,
+          updated_at
+        )
+        SELECT
+          'order:' || shopify_order_id,
+          'order',
+          shopify_order_id,
+          'model_version_changed',
+          $1,
+          'pending',
+          0,
+          now(),
+          NULL,
+          NULL,
+          NULL,
+          NULL,
+          now(),
+          now()
+        FROM stale_orders
+        ON CONFLICT (queue_key)
+        DO UPDATE SET
+          requested_reason = EXCLUDED.requested_reason,
+          requested_model_version = GREATEST(
+            attribution_jobs.requested_model_version,
+            EXCLUDED.requested_model_version
+          ),
+          available_at = CASE
+            WHEN attribution_jobs.status = 'processing' THEN attribution_jobs.available_at
+            ELSE now()
+          END,
+          status = CASE
+            WHEN attribution_jobs.status = 'processing' THEN attribution_jobs.status
+            ELSE 'pending'
+          END,
+          locked_at = CASE
+            WHEN attribution_jobs.status = 'processing' THEN attribution_jobs.locked_at
+            ELSE NULL
+          END,
+          locked_by = CASE
+            WHEN attribution_jobs.status = 'processing' THEN attribution_jobs.locked_by
+            ELSE NULL
+          END,
+          last_error = NULL,
+          completed_at = CASE
+            WHEN attribution_jobs.status = 'processing' THEN attribution_jobs.completed_at
+            ELSE NULL
+          END,
+          updated_at = now()
+        RETURNING 1
+      )
+      SELECT COUNT(*)::text AS inserted_count
+      FROM queued
+    `,
+    [env.ATTRIBUTION_MODEL_VERSION, limit]
+  );
+
+  return Number(result.rows[0]?.inserted_count ?? 0);
+}
+
+export async function processAttributionQueue(
+  options: AttributionQueueProcessOptions = {}
+): Promise<AttributionQueueProcessResult> {
+  const startedAt = Date.now();
+  const workerId = options.workerId ?? `worker-${randomUUID()}`;
+  const staleJobsEnqueued = await enqueueStaleAttributionJobs(options.staleScanLimit ?? env.ATTRIBUTION_STALE_SCAN_BATCH_SIZE);
+  const jobs = await claimAttributionJobs(options.limit ?? env.ATTRIBUTION_JOB_BATCH_SIZE, workerId);
+
+  let succeededJobs = 0;
+  let failedJobs = 0;
+
+  for (const job of jobs) {
+    try {
+      await processAttributionJob(job);
+      succeededJobs += 1;
+    } catch (error) {
+      failedJobs += 1;
+
+      await withTransaction(async (client) => {
+        await retryAttributionJob(client, job, error);
+      });
+    }
+  }
+
+  const result: AttributionQueueProcessResult = {
+    workerId,
+    modelVersion: env.ATTRIBUTION_MODEL_VERSION,
+    staleJobsEnqueued,
+    claimedJobs: jobs.length,
+    succeededJobs,
+    failedJobs,
+    durationMs: Date.now() - startedAt
+  };
+
+  if (options.emitMetrics ?? true) {
+    process.stdout.write(`${buildProcessingMetricsLog(result)}\n`);
+  }
+
+  return result;
+}
+
+export async function processPendingAttribution(limit = env.ATTRIBUTION_JOB_BATCH_SIZE): Promise<number> {
+  const result = await processAttributionQueue({
+    limit,
+    staleScanLimit: limit,
+    emitMetrics: false
   });
 
-  return pendingOrders.rowCount;
+  return result.succeededJobs;
 }
+
+export const __attributionTestUtils = {
+  buildProcessingMetricsLog,
+  buildQueueKey,
+  computeRetryDelaySeconds
+};

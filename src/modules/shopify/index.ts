@@ -6,6 +6,7 @@ import { z } from 'zod';
 
 import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
+import { enqueueAttributionForOrder } from '../attribution/index.js';
 import { hashIdentityEmail, stitchKnownCustomerIdentity } from '../identity/index.js';
 
 const OAUTH_STATE_TTL_MINUTES = 10;
@@ -1060,6 +1061,8 @@ async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPay
       checkoutToken: payload.checkout_token ?? null,
       cartToken: payload.cart_token ?? null
     });
+
+    await enqueueAttributionForOrder(shopifyOrderId, 'shopify_order_upserted', client);
 
     await client.query(
       `
