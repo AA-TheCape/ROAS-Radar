@@ -4,7 +4,11 @@ import express from 'express';
 import { ZodError } from 'zod';
 
 import { createReportingRouter } from './modules/reporting/index.js';
-import { createShopifyRouter } from './modules/shopify/index.js';
+import {
+  createShopifyAdminRouter,
+  createShopifyPublicRouter,
+  createShopifyWebhookRouter
+} from './modules/shopify/index.js';
 import { createTrackingRouter } from './modules/tracking/index.js';
 
 type HttpErrorShape = {
@@ -44,11 +48,13 @@ export function createApp() {
     res.status(200).json({ ok: true });
   });
 
-  app.use('/webhooks/shopify', express.raw({ type: 'application/json', limit: '2mb' }), createShopifyRouter());
+  app.use('/shopify', createShopifyPublicRouter());
+  app.use('/webhooks/shopify', express.raw({ type: 'application/json', limit: '2mb' }), createShopifyWebhookRouter());
   app.use('/track', trackingBodyParser, createTrackingRouter());
   app.use('/api/track', trackingBodyParser, createTrackingRouter());
   app.use(express.json({ limit: '1mb' }));
   app.use('/api/reporting', createReportingRouter());
+  app.use('/api/shopify', createShopifyAdminRouter());
 
   app.use((error: unknown, req: express.Request, res: express.Response, _next: express.NextFunction) => {
     if (error instanceof ZodError) {

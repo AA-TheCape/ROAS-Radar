@@ -22,13 +22,20 @@ npm run dev
 Required environment variables:
 
 - `DATABASE_URL`
-- `SHOPIFY_WEBHOOK_SECRET`
 - `REPORTING_API_TOKEN`
 
 Optional environment variables:
 
 - `PORT`
 - `ATTRIBUTION_WINDOW_DAYS`
+- `SHOPIFY_WEBHOOK_SECRET`
+- `SHOPIFY_APP_API_KEY`
+- `SHOPIFY_APP_API_SECRET`
+- `SHOPIFY_APP_API_VERSION`
+- `SHOPIFY_APP_BASE_URL`
+- `SHOPIFY_APP_ENCRYPTION_KEY`
+- `SHOPIFY_APP_SCOPES`
+- `SHOPIFY_APP_POST_INSTALL_REDIRECT_URL`
 
 ## Existing Shopify storefront assets
 
@@ -43,3 +50,7 @@ The Shopify theme snippet and assets under `shopify/theme/` are the expected fro
 Visitor identity stitching is documented in [docs/visitor-identity-stitching.md](docs/visitor-identity-stitching.md).
 
 The backend now creates canonical customer identities from hashed email plus Shopify customer id, links historical tracked sessions when checkout evidence is present, and refuses automatic merges when those identifiers disagree with already-linked records.
+
+## Shopify OAuth Setup
+
+Shopify OAuth installation, encrypted Admin API credential storage, and automatic webhook provisioning are documented in [docs/shopify-app-setup.md](docs/shopify-app-setup.md).

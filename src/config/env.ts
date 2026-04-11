@@ -17,6 +17,15 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
   REPORTING_API_TOKEN: z.string().min(1).default('dev-reporting-token'),
+  SHOPIFY_APP_API_KEY: z.string().default(''),
+  SHOPIFY_APP_API_SECRET: z.string().default(''),
+  SHOPIFY_APP_API_VERSION: z.string().default(''),
+  SHOPIFY_APP_BASE_URL: z.string().default(''),
+  SHOPIFY_APP_ENCRYPTION_KEY: z.string().default(''),
+  SHOPIFY_APP_POST_INSTALL_REDIRECT_URL: z.string().default(''),
+  SHOPIFY_APP_SCOPES: z
+    .union([z.string().trim().min(1), z.undefined()])
+    .transform((value) => (value ? csvStringSchema.parse(value) : ['read_orders'])),
   SHOPIFY_WEBHOOK_SECRET: z.string().default(''),
   ATTRIBUTION_WINDOW_DAYS: z.coerce.number().int().positive().default(7),
   TRACKING_ALLOWED_ORIGINS: z
