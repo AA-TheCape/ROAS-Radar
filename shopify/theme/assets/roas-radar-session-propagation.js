@@ -3,9 +3,11 @@
 
   var DEFAULTS = {
     cookieName: "roas_radar_session_id",
+    trackingCookieName: "_hba_id",
     cartAttributeKey: "roas_radar_session_id",
     landingPathAttributeKey: "roas_radar_landing_path",
     sessionStorageKey: "roas_radar_session_id",
+    trackingSessionStorageKey: "_hba_id",
     syncEndpoint: "/cart/update.js",
     checkoutSelectors: [
       "form[action^='/cart'] [name='checkout']",
@@ -67,8 +69,12 @@
 
   function resolveSessionId() {
     var candidates = [
+      window.__ROAS_RADAR_TRACKING_SESSION_ID,
       window.__ROAS_RADAR_SESSION_ID,
+      readCookie(config.trackingCookieName),
       readCookie(config.cookieName),
+      readStorage(config.trackingSessionStorageKey, window.sessionStorage),
+      readStorage(config.trackingSessionStorageKey, window.localStorage),
       readStorage(config.sessionStorageKey, window.sessionStorage),
       readStorage(config.sessionStorageKey, window.localStorage)
     ];
@@ -89,8 +95,11 @@
     }
 
     window.__ROAS_RADAR_SESSION_ID = sessionId;
+    window.__ROAS_RADAR_TRACKING_SESSION_ID = sessionId;
     writeStorage(config.sessionStorageKey, sessionId, window.sessionStorage);
     writeStorage(config.sessionStorageKey, sessionId, window.localStorage);
+    writeStorage(config.trackingSessionStorageKey, sessionId, window.sessionStorage);
+    writeStorage(config.trackingSessionStorageKey, sessionId, window.localStorage);
   }
 
   function buildAttributeName(attributeKey) {

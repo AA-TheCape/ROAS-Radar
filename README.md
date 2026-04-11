@@ -32,4 +32,8 @@ Optional environment variables:
 
 ## Existing Shopify storefront assets
 
-The Shopify theme snippet and asset under `shopify/theme/` are still the expected frontend mechanism for propagating `roas_radar_session_id` into cart and checkout attributes.
+The Shopify theme snippet and assets under `shopify/theme/` are the expected frontend mechanism for:
+
+- creating and persisting the first-party `_hba_id` tracking cookie for 365 days,
+- sending a `page_view` payload to `/track` on page load with `sendBeacon` plus fetch/XMLHttpRequest fallback and retry queueing,
+- propagating the same UUID into `roas_radar_session_id` cart and checkout attributes for order attribution.
