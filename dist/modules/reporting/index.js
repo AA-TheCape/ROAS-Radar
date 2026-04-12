@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { env } from '../../config/env.js';
 import { query } from '../../db/pool.js';
 import { calculatePerformanceMetrics } from '../../shared/metrics.js';
+import { ATTRIBUTION_MODELS } from '../attribution/engine.js';
 import { fetchDataQualityReport, resolveRunDate } from '../data-quality/index.js';
 class ReportingHttpError extends Error {
     statusCode;
@@ -20,6 +21,7 @@ const dateStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const baseFiltersObjectSchema = z.object({
     startDate: dateStringSchema,
     endDate: dateStringSchema,
+    attributionModel: z.enum(ATTRIBUTION_MODELS).optional().default('last_touch'),
     source: z.string().trim().min(1).optional(),
     campaign: z.string().trim().min(1).optional()
 });
@@ -61,10 +63,10 @@ function parseInput(schema, input) {
         throw error;
     }
 }
-function buildMetricDimensionFilters(source, campaign, alias = '') {
-    const params = [];
+function buildMetricDimensionFilters(attributionModel, source, campaign, alias = '') {
+    const params = [attributionModel];
     const qualifiedAlias = alias ? `${alias}.` : '';
-    const filters = [];
+    const filters = [`${qualifiedAlias}attribution_model = $3`];
     if (source) {
         params.push(source);
         filters.push(`${qualifiedAlias}source = $${params.length + 2}`);
@@ -78,16 +80,16 @@ function buildMetricDimensionFilters(source, campaign, alias = '') {
         params
     };
 }
-function buildOrderAttributionFilters(source, campaign) {
-    const params = [];
+function buildOrderAttributionFilters(attributionModel, source, campaign) {
+    const params = [attributionModel];
     const filters = [];
     if (source) {
         params.push(source);
-        filters.push(`a.attributed_source = $${params.length + 3}`);
+        filters.push(`c.attributed_source = $${params.length + 2}`);
     }
     if (campaign) {
         params.push(campaign);
-        filters.push(`a.attributed_campaign = $${params.length + 3}`);
+        filters.push(`c.attributed_campaign = $${params.length + 2}`);
     }
     return {
         sql: filters.length > 0 ? ` AND ${filters.join(' AND ')}` : '',
@@ -116,13 +118,14 @@ export function createReportingRouter() {
     router.get('/summary', async (req, res, next) => {
         try {
             const input = parseInput(baseFiltersSchema, req.query);
-            const filters = buildMetricDimensionFilters(input.source, input.campaign);
+            const filters = buildMetricDimensionFilters(input.attributionModel, input.source, input.campaign);
             const result = await query(`
           SELECT
             COALESCE(SUM(visits), 0) AS visits,
-            COALESCE(SUM(orders), 0) AS orders,
-            COALESCE(SUM(revenue), 0) AS revenue
-          FROM daily_campaign_metrics
+            COALESCE(SUM(attributed_orders), 0) AS orders,
+            COALESCE(SUM(attributed_revenue), 0) AS revenue,
+            COALESCE(SUM(spend), 0) AS spend
+          FROM daily_reporting_metrics
           WHERE metric_date BETWEEN $1::date AND $2::date
           ${filters.sql}
         `, [input.startDate, input.endDate, ...filters.params]);
@@ -130,7 +133,8 @@ export function createReportingRouter() {
             const metrics = calculatePerformanceMetrics({
                 visits: row?.visits ?? 0,
                 orders: row?.orders ?? 0,
-                attributedRevenue: row?.revenue ?? 0
+                attributedRevenue: row?.revenue ?? 0,
+                spend: row?.spend ?? 0
             });
             res.json({
                 range: {
@@ -153,7 +157,7 @@ export function createReportingRouter() {
     router.get('/campaigns', async (req, res, next) => {
         try {
             const input = parseInput(campaignsQuerySchema, req.query);
-            const filters = buildMetricDimensionFilters(input.source, input.campaign);
+            const filters = buildMetricDimensionFilters(input.attributionModel, input.source, input.campaign);
             const result = await query(`
           SELECT
             source,
@@ -161,9 +165,9 @@ export function createReportingRouter() {
             campaign,
             NULLIF(content, '') AS content,
             COALESCE(SUM(visits), 0) AS visits,
-            COALESCE(SUM(orders), 0) AS orders,
-            COALESCE(SUM(revenue), 0) AS revenue
-          FROM daily_campaign_metrics
+            COALESCE(SUM(attributed_orders), 0) AS orders,
+            COALESCE(SUM(attributed_revenue), 0) AS revenue
+          FROM daily_reporting_metrics
           WHERE metric_date BETWEEN $1::date AND $2::date
           ${filters.sql}
           GROUP BY source, medium, campaign, content
@@ -196,15 +200,15 @@ export function createReportingRouter() {
     router.get('/timeseries', async (req, res, next) => {
         try {
             const input = parseInput(timeseriesQuerySchema, req.query);
-            const filters = buildMetricDimensionFilters(input.source, input.campaign);
+            const filters = buildMetricDimensionFilters(input.attributionModel, input.source, input.campaign);
             const groupExpr = input.groupBy === 'source' ? 'source' : input.groupBy === 'campaign' ? 'campaign' : 'metric_date::text';
             const result = await query(`
           SELECT
             ${groupExpr} AS bucket,
             COALESCE(SUM(visits), 0) AS visits,
-            COALESCE(SUM(orders), 0) AS orders,
-            COALESCE(SUM(revenue), 0) AS revenue
-          FROM daily_campaign_metrics
+            COALESCE(SUM(attributed_orders), 0) AS orders,
+            COALESCE(SUM(attributed_revenue), 0) AS revenue
+          FROM daily_reporting_metrics
           WHERE metric_date BETWEEN $1::date AND $2::date
           ${filters.sql}
           GROUP BY bucket
@@ -226,19 +230,30 @@ export function createReportingRouter() {
     router.get('/orders', async (req, res, next) => {
         try {
             const input = parseInput(ordersQuerySchema, req.query);
-            const filters = buildOrderAttributionFilters(input.source, input.campaign);
+            const filters = buildOrderAttributionFilters(input.attributionModel, input.source, input.campaign);
             const result = await query(`
           SELECT
             o.shopify_order_id,
             COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) AS processed_at,
             o.total_price,
-            a.attributed_source,
-            a.attributed_medium,
-            a.attributed_campaign,
-            a.attribution_reason
+            c.attributed_source,
+            c.attributed_medium,
+            c.attributed_campaign,
+            c.attribution_reason
           FROM shopify_orders o
-          LEFT JOIN attribution_results a
-            ON a.shopify_order_id = o.shopify_order_id
+          LEFT JOIN LATERAL (
+            SELECT
+              attributed_source,
+              attributed_medium,
+              attributed_campaign,
+              attribution_reason
+            FROM attribution_order_credits
+            WHERE shopify_order_id = o.shopify_order_id
+              AND attribution_model = $3
+            ORDER BY is_primary DESC, touchpoint_position ASC
+            LIMIT 1
+          ) c
+            ON TRUE
           WHERE COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) >= $1::date
             AND COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) < ($2::date + interval '1 day')
             ${filters.sql}

@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
+import { logError, logInfo, logWarning } from '../../observability/index.js';
 import { enqueueAttributionForTrackingTouchpoint } from '../attribution/index.js';
 import { buildCanonicalTouchpointDimensions } from '../marketing-dimensions/index.js';
 import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
@@ -487,7 +488,8 @@ async function ingestTrackingEvent(input, requestIp) {
             return {
                 eventId: existing.id,
                 ingestedAt: existing.ingested_at.toISOString(),
-                sessionId: existing.session_id
+                sessionId: existing.session_id,
+                deduplicated: true
             };
         }
     }
@@ -496,7 +498,8 @@ async function ingestTrackingEvent(input, requestIp) {
         return {
             eventId: duplicatePayload.id,
             ingestedAt: duplicatePayload.ingested_at.toISOString(),
-            sessionId: duplicatePayload.session_id
+            sessionId: duplicatePayload.session_id,
+            deduplicated: true
         };
     }
     const eventId = await withTransaction(async (client) => {
@@ -516,7 +519,8 @@ async function ingestTrackingEvent(input, requestIp) {
     return {
         eventId,
         ingestedAt: new Date().toISOString(),
-        sessionId: sanitizedInput.sessionId
+        sessionId: sanitizedInput.sessionId,
+        deduplicated: false
     };
 }
 export function createTrackingRouter() {
@@ -529,12 +533,32 @@ export function createTrackingRouter() {
             const body = parseTrackingRequestBody(req.body);
             const input = trackingEventSchema.parse(body);
             const result = await ingestTrackingEvent(input, resolveRequestIp(req));
+            logInfo(result.deduplicated ? 'tracking_ingest_duplicate' : 'tracking_ingest_accepted', {
+                sessionId: result.sessionId,
+                eventId: result.eventId,
+                eventType: input.eventType,
+                deduplicated: result.deduplicated
+            });
             res.status(200).json({
                 ok: true,
-                ...result
+                eventId: result.eventId,
+                ingestedAt: result.ingestedAt,
+                sessionId: result.sessionId
             });
         }
         catch (error) {
+            if (error instanceof TrackingHttpError) {
+                logWarning('tracking_ingest_rejected', {
+                    code: error.code,
+                    statusCode: error.statusCode,
+                    details: error.details
+                });
+            }
+            else {
+                logError('tracking_ingest_failed', error, {
+                    path: req.baseUrl ? `${req.baseUrl}${req.path}` : req.path
+                });
+            }
             next(error);
         }
     });

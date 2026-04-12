@@ -5,9 +5,12 @@ import { createMetaAdsAdminRouter, createMetaAdsPublicRouter } from './modules/m
 import { createReportingRouter } from './modules/reporting/index.js';
 import { createShopifyAdminRouter, createShopifyPublicRouter, createShopifyWebhookRouter } from './modules/shopify/index.js';
 import { createTrackingRouter } from './modules/tracking/index.js';
+import { createRequestLoggingMiddleware, logHttpError } from './observability/index.js';
 export function createApp() {
     const app = express();
+    const serviceName = process.env.K_SERVICE ?? 'roas-radar-api';
     app.disable('x-powered-by');
+    app.use(createRequestLoggingMiddleware(serviceName));
     app.get('/healthz', (_req, res) => {
         res.status(200).json({ ok: true });
     });
@@ -42,7 +45,9 @@ export function createApp() {
         const message = error instanceof Error ? error.message : 'Unexpected error';
         const details = typeof error === 'object' && error !== null && 'details' in error ? error.details : undefined;
         if (statusCode >= 500) {
-            process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
+            logHttpError('http_request_failed', error, _req, {
+                responseStatusCode: statusCode
+            });
         }
         res.status(statusCode).json({
             error: code,

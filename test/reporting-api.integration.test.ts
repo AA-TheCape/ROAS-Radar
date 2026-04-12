@@ -28,20 +28,29 @@ async function requestJson(server: ReturnType<typeof createServer>, path: string
 }
 
 test('reporting summary reads persisted daily aggregates from PostgreSQL', async () => {
-  await pool.query('TRUNCATE daily_campaign_metrics');
+  await pool.query('TRUNCATE daily_reporting_metrics');
   await pool.query(
-    `INSERT INTO daily_campaign_metrics (
+    `INSERT INTO daily_reporting_metrics (
       metric_date,
+      attribution_model,
       source,
       medium,
       campaign,
       content,
+      term,
       visits,
-      orders,
-      revenue,
+      attributed_orders,
+      attributed_revenue,
+      spend,
+      impressions,
+      clicks,
+      new_customer_orders,
+      returning_customer_orders,
+      new_customer_revenue,
+      returning_customer_revenue,
       last_computed_at
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())`,
-    ['2026-04-10', 'google', 'cpc', 'spring-sale', 'hero-ad-1', 42, 3, '390.00']
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, now())`,
+    ['2026-04-10', 'last_touch', 'google', 'cpc', 'spring-sale', 'hero-ad-1', 'widget', 42, 3, '390.00', '0.00', 0, 0, 1, 2, '120.00', '270.00']
   );
 
   const server = createServer();
@@ -68,7 +77,7 @@ test('reporting summary reads persisted daily aggregates from PostgreSQL', async
     });
   } finally {
     await closeServer(server);
-    await pool.query('TRUNCATE daily_campaign_metrics');
+    await pool.query('TRUNCATE daily_reporting_metrics');
   }
 });
 

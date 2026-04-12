@@ -1,5 +1,6 @@
 import { Pool } from 'pg';
 import { env } from '../config/env.js';
+import { logError } from '../observability/index.js';
 export const pool = new Pool({
     connectionString: env.DATABASE_URL,
     max: env.DATABASE_POOL_MAX,
@@ -13,7 +14,9 @@ export const pool = new Pool({
     ssl: env.DATABASE_SSL ? { rejectUnauthorized: false } : undefined
 });
 pool.on('error', (error) => {
-    process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
+    logError('database_pool_error', error, {
+        service: process.env.K_SERVICE ?? 'roas-radar-api'
+    });
 });
 export async function query(text, params) {
     return pool.query(text, params);

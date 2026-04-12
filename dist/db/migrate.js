@@ -8,6 +8,8 @@ const migrationsDir = path.resolve(__dirname, '../../db/migrations');
 async function migrate() {
     const client = await pool.connect();
     try {
+        await client.query('BEGIN');
+        await client.query('SELECT pg_advisory_xact_lock($1)', [7_204_202_6]);
         await client.query(`
       CREATE TABLE IF NOT EXISTS schema_migrations (
         filename text PRIMARY KEY,
@@ -27,6 +29,7 @@ async function migrate() {
             await client.query('INSERT INTO schema_migrations (filename) VALUES ($1)', [file]);
             process.stdout.write(`Applied migration ${file}\n`);
         }
+        await client.query('COMMIT');
     }
     catch (error) {
         await client.query('ROLLBACK').catch(() => undefined);

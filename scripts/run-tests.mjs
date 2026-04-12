@@ -9,9 +9,21 @@ const repoRoot = path.resolve(__dirname, '..');
 const testDir = path.join(repoRoot, 'test');
 const mode = process.argv[2] ?? 'all';
 
-const integrationTests = new Set(['reporting-api.integration.test.ts']);
+const integrationTests = new Set(['attribution-e2e.integration.test.ts', 'reporting-api.integration.test.ts']);
 const unitTests = [];
 const selectedTests = [];
+
+function runMigrations() {
+  const migrationResult = spawnSync('npx', ['tsx', 'src/db/migrate.ts'], {
+    cwd: repoRoot,
+    stdio: 'inherit',
+    env: process.env
+  });
+
+  if (migrationResult.status !== 0) {
+    process.exit(migrationResult.status ?? 1);
+  }
+}
 
 for (const file of readdirSync(testDir).sort()) {
   if (!file.endsWith('.test.ts') && !file.endsWith('.test.js')) {
@@ -40,6 +52,10 @@ if (mode === 'unit') {
 if (selectedTests.length === 0) {
   process.stderr.write(`No tests matched mode ${mode}\n`);
   process.exit(1);
+}
+
+if (mode === 'integration' || mode === 'all') {
+  runMigrations();
 }
 
 const result = spawnSync('npx', ['tsx', '--test', ...selectedTests], {

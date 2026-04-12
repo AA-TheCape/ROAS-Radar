@@ -1,4 +1,5 @@
 import { withTransaction } from '../../db/pool.js';
+import { logError } from '../../observability/index.js';
 import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
 import { ATTRIBUTION_MODELS, computeAttributionOutputs } from './engine.js';
 const ATTRIBUTION_MODEL_VERSION = 1;
@@ -18,8 +19,24 @@ export function computeRetryDelaySeconds(attempts) {
 }
 export function buildProcessingMetricsLog(result) {
     return JSON.stringify({
+        severity: 'INFO',
         event: 'attribution_queue_run',
+        message: 'attribution_queue_run',
+        timestamp: new Date().toISOString(),
+        service: process.env.K_SERVICE ?? 'roas-radar-attribution-worker',
         ...result
+    });
+}
+function buildQueueOutcomeLog(workerId, outcome, value) {
+    return JSON.stringify({
+        severity: 'INFO',
+        event: 'attribution_queue_outcome',
+        message: 'attribution_queue_outcome',
+        timestamp: new Date().toISOString(),
+        service: process.env.K_SERVICE ?? 'roas-radar-attribution-worker',
+        workerId,
+        outcome,
+        value
     });
 }
 async function execute(client, callback) {
@@ -459,9 +476,10 @@ async function persistAttribution(client, order, journey) {
         $8,
         $9,
         $10,
+        $11,
         now(),
         1,
-        $11
+        $12
       )
       ON CONFLICT (shopify_order_id)
       DO UPDATE SET
@@ -489,6 +507,7 @@ async function persistAttribution(client, order, journey) {
         normalizeNullableString(primaryCredit.clickIdType),
         normalizeNullableString(primaryCredit.clickIdValue),
         journey.confidenceScore,
+        primaryCredit.attributionReason,
         ATTRIBUTION_MODEL_VERSION
     ]);
 }
@@ -506,6 +525,15 @@ async function processClaimedJob(client, job, workerId) {
           updated_at = now()
         WHERE id = $1
       `, [job.id]);
+        process.stdout.write(`${JSON.stringify({
+            severity: 'WARNING',
+            event: 'attribution_job_skipped',
+            message: 'attribution_job_skipped',
+            timestamp: new Date().toISOString(),
+            workerId,
+            shopifyOrderId: job.shopify_order_id,
+            reason: 'order_not_found'
+        })}\n`);
         return;
     }
     const journey = await resolveAttributionJourney(client, order);
@@ -524,6 +552,21 @@ async function processClaimedJob(client, job, workerId) {
       WHERE id = $1
         AND locked_by = $2
     `, [job.id, workerId]);
+    process.stdout.write(`${JSON.stringify({
+        severity: 'INFO',
+        event: 'attribution_job_processed',
+        message: 'attribution_job_processed',
+        timestamp: new Date().toISOString(),
+        workerId,
+        shopifyOrderId: job.shopify_order_id,
+        confidenceScore: journey.confidenceScore,
+        touchpointCount: journey.touchpoints.length,
+        attributionReason: primaryCreditReason(journey)
+    })}\n`);
+}
+function primaryCreditReason(journey) {
+    const lastTouchpoint = journey.touchpoints[journey.touchpoints.length - 1];
+    return lastTouchpoint?.attributionReason ?? 'unattributed';
 }
 async function markJobForRetry(client, job, workerId, error) {
     await client.query(`
@@ -565,6 +608,11 @@ export async function processAttributionQueue(options) {
         }
         catch (error) {
             failedJobs += 1;
+            logError('attribution_job_failed', error, {
+                workerId: options.workerId,
+                shopifyOrderId: job.shopify_order_id,
+                attempts: job.attempts
+            });
             await withTransaction(async (client) => {
                 await markJobForRetry(client, job, options.workerId, error);
             });
@@ -581,6 +629,9 @@ export async function processAttributionQueue(options) {
     };
     if (options.emitMetrics) {
         process.stdout.write(`${buildProcessingMetricsLog(summary)}\n`);
+        process.stdout.write(`${buildQueueOutcomeLog(summary.workerId, 'claimed', summary.claimedJobs)}\n`);
+        process.stdout.write(`${buildQueueOutcomeLog(summary.workerId, 'succeeded', summary.succeededJobs)}\n`);
+        process.stdout.write(`${buildQueueOutcomeLog(summary.workerId, 'failed', summary.failedJobs)}\n`);
     }
     return summary;
 }

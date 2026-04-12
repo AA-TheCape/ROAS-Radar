@@ -1,6 +1,13 @@
 export type ReportingFilters = {
   startDate: string;
   endDate: string;
+  attributionModel?:
+    | 'first_touch'
+    | 'last_touch'
+    | 'linear'
+    | 'time_decay'
+    | 'position_based'
+    | 'rule_based_weighted';
   source?: string;
   campaign?: string;
 };
@@ -94,6 +101,10 @@ function buildSearchParams(filters: ReportingFilters, extras: Record<string, str
 
   if (filters.campaign?.trim()) {
     params.set('campaign', filters.campaign.trim());
+  }
+
+  if (filters.attributionModel?.trim()) {
+    params.set('attributionModel', filters.attributionModel.trim());
   }
 
   for (const [key, value] of Object.entries(extras)) {

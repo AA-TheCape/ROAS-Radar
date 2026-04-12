@@ -642,9 +642,10 @@ async function persistAttribution(
         $8,
         $9,
         $10,
+        $11,
         now(),
         1,
-        $11
+        $12
       )
       ON CONFLICT (shopify_order_id)
       DO UPDATE SET
@@ -673,6 +674,7 @@ async function persistAttribution(
       normalizeNullableString(primaryCredit.clickIdType),
       normalizeNullableString(primaryCredit.clickIdValue),
       journey.confidenceScore,
+      primaryCredit.attributionReason,
       ATTRIBUTION_MODEL_VERSION
     ]
   );

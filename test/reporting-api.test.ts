@@ -48,15 +48,16 @@ test('reporting routes require the configured bearer token', async () => {
 
 test('reporting summary returns headline metrics from daily campaign aggregates', async () => {
   pool.query = (async (text: string, params?: unknown[]) => {
-    assert.match(text, /FROM daily_campaign_metrics/);
-    assert.deepEqual(params, ['2026-04-01', '2026-04-10', 'google', 'spring-sale']);
+    assert.match(text, /FROM daily_reporting_metrics/);
+    assert.deepEqual(params, ['2026-04-01', '2026-04-10', 'last_touch', 'google', 'spring-sale']);
 
     return {
       rows: [
         {
           visits: '1240',
           orders: '48',
-          revenue: '5210.50'
+          revenue: '5210.50',
+          spend: '0.00'
         }
       ]
     };
@@ -93,7 +94,7 @@ test('reporting summary returns headline metrics from daily campaign aggregates'
 test('reporting campaigns returns campaign rows sorted for dashboard tables', async () => {
   pool.query = (async (text: string, params?: unknown[]) => {
     assert.match(text, /GROUP BY source, medium, campaign, content/);
-    assert.deepEqual(params, ['2026-04-01', '2026-04-10', 2]);
+    assert.deepEqual(params, ['2026-04-01', '2026-04-10', 'last_touch', 2]);
 
     return {
       rows: [
@@ -162,7 +163,7 @@ test('reporting campaigns returns campaign rows sorted for dashboard tables', as
 test('reporting timeseries returns grouped points for the requested dimension', async () => {
   pool.query = (async (text: string, params?: unknown[]) => {
     assert.match(text, /SELECT\s+source AS bucket/);
-    assert.deepEqual(params, ['2026-04-01', '2026-04-10']);
+    assert.deepEqual(params, ['2026-04-01', '2026-04-10', 'last_touch']);
 
     return {
       rows: [
@@ -215,8 +216,8 @@ test('reporting timeseries returns grouped points for the requested dimension', 
 
 test('reporting orders returns order-level attribution details for debugging', async () => {
   pool.query = (async (text: string, params?: unknown[]) => {
-    assert.match(text, /FROM shopify_orders o/);
-    assert.deepEqual(params, ['2026-04-01', '2026-04-10', 'facebook', 1]);
+    assert.match(text, /LEFT JOIN LATERAL/);
+    assert.deepEqual(params, ['2026-04-01', '2026-04-10', 'last_touch', 'facebook', 1]);
 
     return {
       rows: [

@@ -3,6 +3,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { env } from './config/env.js';
 import { pool } from './db/pool.js';
 import { processAttributionQueue } from './modules/attribution/index.js';
+import { logError, logInfo } from './observability/index.js';
 async function run() {
     const workerId = `attribution-worker-${randomUUID()}`;
     let shouldStop = false;
@@ -11,6 +12,10 @@ async function run() {
     };
     process.on('SIGINT', requestStop);
     process.on('SIGTERM', requestStop);
+    logInfo('attribution_worker_started', {
+        workerId,
+        mode: env.ATTRIBUTION_WORKER_LOOP ? 'daemon' : 'oneshot'
+    });
     do {
         const result = await processAttributionQueue({
             workerId,
@@ -31,7 +36,9 @@ async function run() {
     await pool.end();
 }
 run().catch(async (error) => {
-    process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
+    logError('attribution_worker_crashed', error, {
+        service: process.env.K_SERVICE ?? 'roas-radar-attribution-worker'
+    });
     await pool.end().catch(() => undefined);
     process.exit(1);
 });
