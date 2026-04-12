@@ -1,0 +1,31 @@
+{
+  "displayName": "ROAS Radar __ENVIRONMENT__ API Latency",
+  "documentation": {
+    "content": "P95 API latency is outside the interactive target. Check request logs and Cloud SQL latency before scaling the service. Runbook: __RUNBOOK_URL_API_LATENCY__",
+    "mimeType": "text/markdown"
+  },
+  "combiner": "OR",
+  "enabled": true,
+  "severity": "WARNING",
+  "notificationChannels": __ALERT_NOTIFICATION_CHANNELS__,
+  "conditions": [
+    {
+      "displayName": "P95 API latency exceeds 1500 ms for 10 minutes",
+      "conditionThreshold": {
+        "filter": "metric.type=\"logging.googleapis.com/user/roas_api_latency_ms\" resource.type=\"cloud_run_revision\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 1500,
+        "duration": "600s",
+        "aggregations": [
+          {
+            "alignmentPeriod": "600s",
+            "perSeriesAligner": "ALIGN_PERCENTILE_95"
+          }
+        ],
+        "trigger": {
+          "count": 1
+        }
+      }
+    }
+  ]
+}

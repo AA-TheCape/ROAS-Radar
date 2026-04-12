@@ -6,6 +6,7 @@ import { z } from 'zod';
 
 import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
+import { logError, logInfo, logWarning } from '../../observability/index.js';
 import { enqueueAttributionForOrder } from '../attribution/index.js';
 import { hashIdentityEmail, stitchKnownCustomerIdentity } from '../identity/index.js';
 
@@ -1088,16 +1089,34 @@ async function persistWebhook(input: PersistWebhookInput): Promise<{ duplicated:
   );
 
   if (receipt.status === 'processed') {
+    logInfo('shopify_webhook_duplicate', {
+      topic: input.topic,
+      shopDomain: input.shopDomain,
+      webhookId: input.webhookId
+    });
     return { duplicated: true };
   }
 
   if (!isEligibleOnlineStoreOrder(input.payload.source_name)) {
     await markWebhookReceiptStatus(receipt.id, 'ignored');
+    logInfo('shopify_webhook_ignored', {
+      topic: input.topic,
+      shopDomain: input.shopDomain,
+      webhookId: input.webhookId,
+      sourceName: input.payload.source_name ?? null
+    });
     return { duplicated: false };
   }
 
   try {
     await normalizeShopifyOrder(receipt.id, input.payload);
+    logInfo('shopify_webhook_processed', {
+      topic: input.topic,
+      shopDomain: input.shopDomain,
+      webhookId: input.webhookId,
+      duplicated: false,
+      shopifyOrderId: String(input.payload.id)
+    });
     return { duplicated: false };
   } catch (error) {
     await markWebhookReceiptStatus(receipt.id, 'failed');
@@ -1112,11 +1131,19 @@ function createOrderWebhookHandler(defaultTopic: string): RequestHandler {
       const signature = req.header('x-shopify-hmac-sha256') ?? undefined;
 
       if (!Buffer.isBuffer(rawBody)) {
+        logWarning('shopify_webhook_rejected', {
+          topic: defaultTopic,
+          reason: 'missing_raw_payload'
+        });
         res.status(400).json({ error: 'Expected a raw Shopify webhook payload.' });
         return;
       }
 
       if (!verifyWebhookSignature(rawBody, signature)) {
+        logWarning('shopify_webhook_rejected', {
+          topic: defaultTopic,
+          reason: 'invalid_signature'
+        });
         res.status(401).json({ error: 'Invalid Shopify webhook signature.' });
         return;
       }
@@ -1125,6 +1152,11 @@ function createOrderWebhookHandler(defaultTopic: string): RequestHandler {
       const activeShopDomain = await getActiveInstalledShopDomain();
 
       if (activeShopDomain && activeShopDomain !== shopDomain) {
+        logWarning('shopify_webhook_rejected', {
+          topic: defaultTopic,
+          reason: 'shop_domain_mismatch',
+          shopDomain
+        });
         res.status(403).json({ error: 'Webhook shop domain does not match the connected store.' });
         return;
       }
@@ -1140,6 +1172,10 @@ function createOrderWebhookHandler(defaultTopic: string): RequestHandler {
 
       res.status(200).json({ ok: true });
     } catch (error) {
+      logError('shopify_webhook_failed', error, {
+        topic: req.header('x-shopify-topic') ?? defaultTopic,
+        webhookId: req.header('x-shopify-webhook-id') ?? null
+      });
       next(error);
     }
   };
@@ -1152,20 +1188,34 @@ function createAppUninstalledWebhookHandler(): RequestHandler {
       const signature = req.header('x-shopify-hmac-sha256') ?? undefined;
 
       if (!Buffer.isBuffer(rawBody)) {
+        logWarning('shopify_webhook_rejected', {
+          topic: 'app/uninstalled',
+          reason: 'missing_raw_payload'
+        });
         res.status(400).json({ error: 'Expected a raw Shopify webhook payload.' });
         return;
       }
 
       if (!verifyWebhookSignature(rawBody, signature)) {
+        logWarning('shopify_webhook_rejected', {
+          topic: 'app/uninstalled',
+          reason: 'invalid_signature'
+        });
         res.status(401).json({ error: 'Invalid Shopify webhook signature.' });
         return;
       }
 
       const shopDomain = normalizeShopDomain(req.header('x-shopify-shop-domain') ?? 'unknown.myshopify.com');
       await markInstallationUninstalled(shopDomain);
+      logInfo('shopify_app_uninstalled', {
+        shopDomain
+      });
 
       res.status(200).json({ ok: true });
     } catch (error) {
+      logError('shopify_webhook_failed', error, {
+        topic: 'app/uninstalled'
+      });
       next(error);
     }
   };

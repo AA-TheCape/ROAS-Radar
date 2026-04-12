@@ -34,6 +34,6 @@ The deploy script expects the following Secret Manager secrets to exist for each
 3. Create the environment secrets in Secret Manager.
 4. Populate `infra/cloud-run/environments/ENVIRONMENT.env`.
 5. Deploy with `infra/cloud-run/deploy.sh ENVIRONMENT`.
+6. Apply monitoring with `infra/monitoring/apply.sh ENVIRONMENT`.
 
 ## Deployment
-

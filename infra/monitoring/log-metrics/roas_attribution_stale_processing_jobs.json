@@ -1,0 +1,28 @@
+{
+  "name": "roas_attribution_stale_processing_jobs",
+  "description": "Count of attribution jobs stuck in processing longer than the stale lock threshold.",
+  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"attribution_backlog_snapshot\"",
+  "valueExtractor": "EXTRACT(jsonPayload.staleProcessingJobs)",
+  "labelExtractors": {
+    "service": "EXTRACT(jsonPayload.service)",
+    "worker_id": "EXTRACT(jsonPayload.workerId)"
+  },
+  "metricDescriptor": {
+    "metricKind": "GAUGE",
+    "valueType": "INT64",
+    "unit": "1",
+    "displayName": "ROAS Radar Attribution Stale Processing Jobs",
+    "labels": [
+      {
+        "key": "service",
+        "valueType": "STRING",
+        "description": "Service name."
+      },
+      {
+        "key": "worker_id",
+        "valueType": "STRING",
+        "description": "Worker instance."
+      }
+    ]
+  }
+}

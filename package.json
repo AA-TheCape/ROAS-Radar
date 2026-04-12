@@ -15,6 +15,7 @@
     "dev": "tsx watch src/server.ts",
     "lint": "biome lint src scripts test",
     "lint:dashboard": "npm --prefix dashboard run lint",
+    "ops:monitoring:apply": "sh infra/monitoring/apply.sh",
     "start:api": "node dist/server.js",
     "start:worker": "node dist/worker.js",
     "start:worker-service": "node dist/worker-service.js",

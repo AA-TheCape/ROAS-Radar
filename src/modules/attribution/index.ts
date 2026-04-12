@@ -1,6 +1,7 @@
 import { type PoolClient } from 'pg';
 
 import { query, withTransaction } from '../../db/pool.js';
+import { logError } from '../../observability/index.js';
 import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
 import {
   ATTRIBUTION_MODELS,
@@ -95,8 +96,25 @@ export function computeRetryDelaySeconds(attempts: number): number {
 
 export function buildProcessingMetricsLog(result: AttributionQueueProcessResult): string {
   return JSON.stringify({
+    severity: 'INFO',
     event: 'attribution_queue_run',
+    message: 'attribution_queue_run',
+    timestamp: new Date().toISOString(),
+    service: process.env.K_SERVICE ?? 'roas-radar-attribution-worker',
     ...result
+  });
+}
+
+function buildQueueOutcomeLog(workerId: string, outcome: 'claimed' | 'succeeded' | 'failed', value: number): string {
+  return JSON.stringify({
+    severity: 'INFO',
+    event: 'attribution_queue_outcome',
+    message: 'attribution_queue_outcome',
+    timestamp: new Date().toISOString(),
+    service: process.env.K_SERVICE ?? 'roas-radar-attribution-worker',
+    workerId,
+    outcome,
+    value
   });
 }
 
@@ -678,6 +696,17 @@ async function processClaimedJob(client: PoolClient, job: AttributionJobRow, wor
       `,
       [job.id]
     );
+    process.stdout.write(
+      `${JSON.stringify({
+        severity: 'WARNING',
+        event: 'attribution_job_skipped',
+        message: 'attribution_job_skipped',
+        timestamp: new Date().toISOString(),
+        workerId,
+        shopifyOrderId: job.shopify_order_id,
+        reason: 'order_not_found'
+      })}\n`
+    );
     return;
   }
 
@@ -702,6 +731,25 @@ async function processClaimedJob(client: PoolClient, job: AttributionJobRow, wor
     `,
     [job.id, workerId]
   );
+
+  process.stdout.write(
+    `${JSON.stringify({
+      severity: 'INFO',
+      event: 'attribution_job_processed',
+      message: 'attribution_job_processed',
+      timestamp: new Date().toISOString(),
+      workerId,
+      shopifyOrderId: job.shopify_order_id,
+      confidenceScore: journey.confidenceScore,
+      touchpointCount: journey.touchpoints.length,
+      attributionReason: primaryCreditReason(journey)
+    })}\n`
+  );
+}
+
+function primaryCreditReason(journey: ResolvedJourney): string {
+  const lastTouchpoint = journey.touchpoints[journey.touchpoints.length - 1];
+  return lastTouchpoint?.attributionReason ?? 'unattributed';
 }
 
 async function markJobForRetry(client: PoolClient, job: AttributionJobRow, workerId: string, error: unknown): Promise<void> {
@@ -753,6 +801,11 @@ export async function processAttributionQueue(
       succeededJobs += 1;
     } catch (error) {
       failedJobs += 1;
+      logError('attribution_job_failed', error, {
+        workerId: options.workerId,
+        shopifyOrderId: job.shopify_order_id,
+        attempts: job.attempts
+      });
       await withTransaction(async (client) => {
         await markJobForRetry(client, job, options.workerId, error);
       });
@@ -771,6 +824,9 @@ export async function processAttributionQueue(
 
   if (options.emitMetrics) {
     process.stdout.write(`${buildProcessingMetricsLog(summary)}\n`);
+    process.stdout.write(`${buildQueueOutcomeLog(summary.workerId, 'claimed', summary.claimedJobs)}\n`);
+    process.stdout.write(`${buildQueueOutcomeLog(summary.workerId, 'succeeded', summary.succeededJobs)}\n`);
+    process.stdout.write(`${buildQueueOutcomeLog(summary.workerId, 'failed', summary.failedJobs)}\n`);
   }
 
   return summary;

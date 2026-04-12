@@ -1,6 +1,7 @@
 import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from 'pg';
 
 import { env } from '../config/env.js';
+import { logError } from '../observability/index.js';
 
 export const pool = new Pool({
   connectionString: env.DATABASE_URL,
@@ -16,7 +17,9 @@ export const pool = new Pool({
 });
 
 pool.on('error', (error) => {
-  process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
+  logError('database_pool_error', error, {
+    service: process.env.K_SERVICE ?? 'roas-radar-api'
+  });
 });
 
 export async function query<TResult extends QueryResultRow = QueryResultRow>(
