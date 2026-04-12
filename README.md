@@ -2,59 +2,48 @@
 
 ROAS Radar is a Shopify attribution and reporting product built around a Node.js API, PostgreSQL, and a React dashboard.
 
-## Backend scaffold
-
-This repository now includes an MVP backend foundation with:
-
-- an Express API service for `/track`, Shopify order webhooks, and authenticated reporting endpoints,
-- a PostgreSQL migration runner,
-- an attribution worker entrypoint for batch order attribution,
-- the MVP analytics schema under `db/migrations`.
-
-## Commands
+## Quick Start
 
 ```bash
 npm install
+npm --prefix dashboard install
+
+export DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/roas_radar
+export REPORTING_API_TOKEN=dev-reporting-token
+export TRACKING_ALLOWED_ORIGINS=http://localhost:5173,https://store.example.com
+
 npm run db:migrate
 npm run dev
 ```
 
-Required environment variables:
+Run the attribution worker in a second shell:
 
-- `DATABASE_URL`
-- `REPORTING_API_TOKEN`
+```bash
+npm run build
+npm run start:worker
+```
 
-Optional environment variables:
+Run the React dashboard in a third shell:
 
-- `PORT`
-- `ATTRIBUTION_WINDOW_DAYS`
-- `META_ADS_APP_ID`
-- `META_ADS_APP_SECRET`
-- `META_ADS_APP_BASE_URL`
-- `META_ADS_APP_SCOPES`
-- `META_ADS_API_VERSION`
-- `META_ADS_ENCRYPTION_KEY`
-- `META_ADS_AD_ACCOUNT_ID`
-- `META_ADS_SYNC_LOOKBACK_DAYS`
-- `META_ADS_SYNC_INITIAL_LOOKBACK_DAYS`
-- `META_ADS_SYNC_BATCH_SIZE`
-- `META_ADS_SYNC_MAX_RETRIES`
-- `META_ADS_WORKER_LOOP`
-- `GOOGLE_ADS_API_VERSION`
-- `GOOGLE_ADS_ENCRYPTION_KEY`
-- `GOOGLE_ADS_SYNC_LOOKBACK_DAYS`
-- `GOOGLE_ADS_SYNC_INITIAL_LOOKBACK_DAYS`
-- `GOOGLE_ADS_SYNC_BATCH_SIZE`
-- `GOOGLE_ADS_SYNC_MAX_RETRIES`
-- `GOOGLE_ADS_WORKER_LOOP`
-- `SHOPIFY_WEBHOOK_SECRET`
-- `SHOPIFY_APP_API_KEY`
-- `SHOPIFY_APP_API_SECRET`
-- `SHOPIFY_APP_API_VERSION`
-- `SHOPIFY_APP_BASE_URL`
-- `SHOPIFY_APP_ENCRYPTION_KEY`
-- `SHOPIFY_APP_SCOPES`
-- `SHOPIFY_APP_POST_INSTALL_REDIRECT_URL`
+```bash
+export VITE_API_BASE_URL=http://localhost:8080
+export VITE_REPORTING_API_TOKEN=dev-reporting-token
+npm --prefix dashboard run dev
+```
+
+The authoritative environment contract lives in `src/config/env.ts`.
+
+## Documentation
+
+- Engineer setup and validation: [docs/implementation-guide.md](docs/implementation-guide.md)
+- Identity stitching: [docs/visitor-identity-stitching.md](docs/visitor-identity-stitching.md)
+- Shopify app setup: [docs/shopify-app-setup.md](docs/shopify-app-setup.md)
+- Reporting metrics: [docs/reporting-metrics.md](docs/reporting-metrics.md)
+- Marketing dimensions: [docs/marketing-dimensions.md](docs/marketing-dimensions.md)
+- Database operations: [docs/database-operations.md](docs/database-operations.md)
+- Runbook: ingestion failures: [docs/runbooks/ingestion-failures.md](docs/runbooks/ingestion-failures.md)
+- Runbook: attribution backlog: [docs/runbooks/attribution-worker-backlog.md](docs/runbooks/attribution-worker-backlog.md)
+- Runbook: API latency: [docs/runbooks/api-latency.md](docs/runbooks/api-latency.md)
 
 ## Existing Shopify storefront assets
 
@@ -78,9 +67,9 @@ Shopify OAuth installation, encrypted Admin API credential storage, and automati
 
 The backend now includes a Meta Ads OAuth connection flow plus a retryable daily spend sync worker:
 
-- `GET /api/meta-ads/oauth/start` creates a short-lived OAuth state and returns the Meta authorization URL.
+- `GET /api/admin/meta-ads/oauth/start` creates a short-lived OAuth state and returns the Meta authorization URL.
 - `GET /meta-ads/oauth/callback` exchanges the authorization code for a long-lived token, stores it encrypted in PostgreSQL, and records account metadata.
-- `POST /api/meta-ads/sync` can enqueue a manual backfill date range.
+- `POST /api/admin/meta-ads/sync` can enqueue a manual backfill date range.
 - `npm run meta-ads:sync` processes the queue, refreshes tokens when nearing expiry, fetches daily spend at account/campaign/adset/ad level, enriches ad rows with creative metadata, and writes both raw and normalized spend tables.
 
 In production, run `npm run meta-ads:sync` from a Cloud Run Job or scheduled worker once per day. The worker will automatically enqueue the configured rolling lookback window and retry API failures with exponential backoff.
@@ -89,9 +78,9 @@ In production, run `npm run meta-ads:sync` from a Cloud Run Job or scheduled wor
 
 The backend now includes a Google Ads spend ingestion worker with encrypted credential storage and reconciliation:
 
-- `POST /api/google-ads/connections` validates a customer against the Google Ads API and stores the developer token, client secret, and refresh token encrypted in PostgreSQL.
-- `POST /api/google-ads/sync` can enqueue a manual backfill date range.
-- `POST /api/google-ads/reconcile` checks the rolling sync window for missing completed dates and re-enqueues gaps.
+- `POST /api/admin/google-ads/connections` validates a customer against the Google Ads API and stores the developer token, client secret, and refresh token encrypted in PostgreSQL.
+- `POST /api/admin/google-ads/sync` can enqueue a manual backfill date range.
+- `POST /api/admin/google-ads/reconcile` checks the rolling sync window for missing completed dates and re-enqueues gaps.
 - `npm run google-ads:sync` processes the queue, exchanges the refresh token for a short-lived access token, fetches daily spend from Google Ads at campaign and ad level, maps Google ad groups into the Meta-aligned `adset_*` fields, and writes both raw and normalized daily spend tables.
 
 In production, run `npm run google-ads:sync` from a Cloud Run Job or scheduled worker once per day. The worker keeps a rolling lookback window warm and writes reconciliation records so missing dates are visible and automatically requeued.
