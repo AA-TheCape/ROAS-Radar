@@ -2,30 +2,19 @@
 
 This directory contains PostgreSQL schema migrations for the ROAS Radar MVP backend.
 
-## Current schema
+## Current Schema
 
-`migrations/0001_create_roas_radar_core_schema.sql` creates the launch schema defined in the MVP architecture artifact:
+The `migrations/` directory contains the SQL migration history for the product schema. The migration runner records applied files in `schema_migrations` and executes pending `.sql` files in lexical order.
 
-- `tracking_sessions`
-- `tracking_events`
-- `shopify_customers`
-- `shopify_orders`
-- `attribution_results`
-- `shopify_webhook_receipts`
-- `daily_campaign_metrics`
+The `bootstrap/001_roles.sql` script applies the least-privilege grants expected by production:
 
-`migrations/0004_add_customer_identity_stitching.sql` extends the schema with:
+- `roas_migrator` owns the `public` schema and performs DDL.
+- `roas_app` can read and write application tables and sequences, but cannot create or alter schema objects.
+- `roas_readonly` has read-only access for support and debugging use cases.
 
-- `customer_identities`
-- canonical identity foreign keys on tracked sessions, events, Shopify customers, and Shopify orders
-- hashed email columns for deterministic identity stitching
+Run the bootstrap script once after provisioning the database and before deploying application services.
 
-## Applying migrations
+## Applying Migrations Locally
 
 Run the migration runner from the repository root after setting `DATABASE_URL`:
 
-```bash
-npm run db:migrate
-```
-
-The runner records applied files in `schema_migrations` and executes `.sql` files in lexical order.
