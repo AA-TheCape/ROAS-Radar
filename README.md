@@ -37,6 +37,7 @@ The authoritative environment contract lives in `src/config/env.ts`.
 
 - Engineer setup and validation: [docs/implementation-guide.md](docs/implementation-guide.md)
 - Analyst playbook: [docs/analytics-playbook.md](docs/analytics-playbook.md)
+- Operations and freshness: [docs/operations-and-freshness.md](docs/operations-and-freshness.md)
 - Identity stitching: [docs/visitor-identity-stitching.md](docs/visitor-identity-stitching.md)
 - Shopify app setup: [docs/shopify-app-setup.md](docs/shopify-app-setup.md)
 - Reporting metrics: [docs/reporting-metrics.md](docs/reporting-metrics.md)
