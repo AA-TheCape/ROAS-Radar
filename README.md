@@ -35,17 +35,27 @@ The authoritative environment contract lives in `src/config/env.ts`.
 
 ## Documentation
 
-- Engineer setup and validation: [docs/implementation-guide.md](docs/implementation-guide.md)
-- Analyst playbook: [docs/analytics-playbook.md](docs/analytics-playbook.md)
-- Operations and freshness: [docs/operations-and-freshness.md](docs/operations-and-freshness.md)
+Start with the docs index: [docs/README.md](docs/README.md)
+
+Recommended entrypoints:
+
+- Engineers: [docs/implementation-guide.md](docs/implementation-guide.md)
+- Analysts: [docs/analytics-playbook.md](docs/analytics-playbook.md)
+- Operators: [docs/operations-and-freshness.md](docs/operations-and-freshness.md)
+
+Reference documentation:
+
 - Identity stitching: [docs/visitor-identity-stitching.md](docs/visitor-identity-stitching.md)
 - Shopify app setup: [docs/shopify-app-setup.md](docs/shopify-app-setup.md)
 - Reporting metrics: [docs/reporting-metrics.md](docs/reporting-metrics.md)
 - Marketing dimensions: [docs/marketing-dimensions.md](docs/marketing-dimensions.md)
 - Database operations: [docs/database-operations.md](docs/database-operations.md)
-- Runbook: ingestion failures: [docs/runbooks/ingestion-failures.md](docs/runbooks/ingestion-failures.md)
-- Runbook: attribution backlog: [docs/runbooks/attribution-worker-backlog.md](docs/runbooks/attribution-worker-backlog.md)
-- Runbook: API latency: [docs/runbooks/api-latency.md](docs/runbooks/api-latency.md)
+
+Runbooks:
+
+- Ingestion failures: [docs/runbooks/ingestion-failures.md](docs/runbooks/ingestion-failures.md)
+- Attribution worker backlog: [docs/runbooks/attribution-worker-backlog.md](docs/runbooks/attribution-worker-backlog.md)
+- API latency: [docs/runbooks/api-latency.md](docs/runbooks/api-latency.md)
 
 ## Existing Shopify storefront assets
 
