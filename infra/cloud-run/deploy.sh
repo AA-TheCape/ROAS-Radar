@@ -34,27 +34,36 @@ for var in \
   CLOUD_SQL_CONNECTION_NAME \
   ARTIFACT_REGISTRY_REPOSITORY \
   IMAGE_NAME \
+  IMAGE_NAME_DASHBOARD \
   API_SERVICE_NAME \
+  DASHBOARD_SERVICE_NAME \
   WORKER_SERVICE_NAME \
   MIGRATOR_JOB_NAME \
   API_SERVICE_ACCOUNT_NAME \
+  DASHBOARD_SERVICE_ACCOUNT_NAME \
   WORKER_SERVICE_ACCOUNT_NAME \
   MIGRATOR_JOB_SERVICE_ACCOUNT_NAME \
   API_INGRESS \
+  DASHBOARD_INGRESS \
   API_MIN_INSTANCES \
   API_MAX_INSTANCES \
+  DASHBOARD_MIN_INSTANCES \
+  DASHBOARD_MAX_INSTANCES \
   WORKER_MIN_INSTANCES \
   WORKER_MAX_INSTANCES \
   DATABASE_POOL_MAX \
-  WORKER_DATABASE_POOL_MAX
+  WORKER_DATABASE_POOL_MAX \
+  DASHBOARD_API_BASE_URL
 do
   require_var "$var"
 done
 
 SHORT_SHA=${SHORT_SHA:-$(git -C "$REPO_ROOT" rev-parse --short HEAD)}
 IMAGE_URI="$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$ARTIFACT_REGISTRY_REPOSITORY/$IMAGE_NAME:$SHORT_SHA"
+DASHBOARD_IMAGE_URI="$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$ARTIFACT_REGISTRY_REPOSITORY/$IMAGE_NAME_DASHBOARD:$SHORT_SHA"
 
 API_SA="$API_SERVICE_ACCOUNT_NAME@$GCP_PROJECT_ID.iam.gserviceaccount.com"
+DASHBOARD_SA="$DASHBOARD_SERVICE_ACCOUNT_NAME@$GCP_PROJECT_ID.iam.gserviceaccount.com"
 WORKER_SA="$WORKER_SERVICE_ACCOUNT_NAME@$GCP_PROJECT_ID.iam.gserviceaccount.com"
 MIGRATOR_SA="$MIGRATOR_JOB_SERVICE_ACCOUNT_NAME@$GCP_PROJECT_ID.iam.gserviceaccount.com"
 
@@ -64,6 +73,11 @@ echo "Building image $IMAGE_URI"
 gcloud builds submit "$REPO_ROOT" \
   --project="$GCP_PROJECT_ID" \
   --tag="$IMAGE_URI"
+
+echo "Building dashboard image $DASHBOARD_IMAGE_URI"
+gcloud builds submit "$REPO_ROOT/dashboard" \
+  --project="$GCP_PROJECT_ID" \
+  --tag="$DASHBOARD_IMAGE_URI"
 
 echo "Deploying API service $API_SERVICE_NAME"
 gcloud run deploy "$API_SERVICE_NAME" \
@@ -104,6 +118,24 @@ gcloud run deploy "$WORKER_SERVICE_NAME" \
   --set-env-vars="NODE_ENV=production,DATABASE_POOL_MAX=$WORKER_DATABASE_POOL_MAX,DATABASE_POOL_MIN=0,DATABASE_SSL=false,ATTRIBUTION_WORKER_LOOP=true" \
   --set-secrets="$COMMON_SECRET_FLAGS" \
   --add-cloudsql-instances="$CLOUD_SQL_CONNECTION_NAME"
+
+echo "Deploying dashboard service $DASHBOARD_SERVICE_NAME"
+gcloud run deploy "$DASHBOARD_SERVICE_NAME" \
+  --project="$GCP_PROJECT_ID" \
+  --region="$GCP_REGION" \
+  --image="$DASHBOARD_IMAGE_URI" \
+  --service-account="$DASHBOARD_SA" \
+  --allow-unauthenticated \
+  --ingress="$DASHBOARD_INGRESS" \
+  --min-instances="$DASHBOARD_MIN_INSTANCES" \
+  --max-instances="$DASHBOARD_MAX_INSTANCES" \
+  --port=8080 \
+  --cpu=1 \
+  --memory=256Mi \
+  --concurrency=80 \
+  --timeout=300 \
+  --set-env-vars="NODE_ENV=production,DASHBOARD_API_BASE_URL=$DASHBOARD_API_BASE_URL,DASHBOARD_REPORTING_TENANT_ID=${DASHBOARD_REPORTING_TENANT_ID:-roas-radar}" \
+  --set-secrets="DASHBOARD_REPORTING_API_TOKEN=REPORTING_API_TOKEN:latest"
 
 echo "Deploying migration job $MIGRATOR_JOB_NAME"
 gcloud run jobs deploy "$MIGRATOR_JOB_NAME" \

@@ -31,6 +31,7 @@ require_var GCP_PROJECT_ID
 require_var GCP_REGION
 require_var ARTIFACT_REGISTRY_REPOSITORY
 require_var API_SERVICE_ACCOUNT_NAME
+require_var DASHBOARD_SERVICE_ACCOUNT_NAME
 require_var WORKER_SERVICE_ACCOUNT_NAME
 require_var MIGRATOR_JOB_SERVICE_ACCOUNT_NAME
 require_var DEPLOYER_SERVICE_ACCOUNT_NAME
@@ -85,13 +86,14 @@ ensure_repo() {
 }
 
 API_SA=$(create_service_account "$API_SERVICE_ACCOUNT_NAME" "ROAS Radar API ($ENVIRONMENT)")
+DASHBOARD_SA=$(create_service_account "$DASHBOARD_SERVICE_ACCOUNT_NAME" "ROAS Radar dashboard ($ENVIRONMENT)")
 WORKER_SA=$(create_service_account "$WORKER_SERVICE_ACCOUNT_NAME" "ROAS Radar worker ($ENVIRONMENT)")
 MIGRATOR_SA=$(create_service_account "$MIGRATOR_JOB_SERVICE_ACCOUNT_NAME" "ROAS Radar migrator ($ENVIRONMENT)")
 DEPLOYER_SA=$(create_service_account "$DEPLOYER_SERVICE_ACCOUNT_NAME" "ROAS Radar deployer ($ENVIRONMENT)")
 
 ensure_repo
 
-for SA in "$API_SA" "$WORKER_SA" "$MIGRATOR_SA"; do
+for SA in "$API_SA" "$DASHBOARD_SA" "$WORKER_SA" "$MIGRATOR_SA"; do
   grant_project_role "serviceAccount:$SA" "roles/cloudsql.client"
   grant_project_role "serviceAccount:$SA" "roles/logging.logWriter"
   grant_project_role "serviceAccount:$SA" "roles/monitoring.metricWriter"
@@ -124,10 +126,12 @@ do
   grant_secret_accessor "$WORKER_SA" "$SECRET"
 done
 
+grant_secret_accessor "$DASHBOARD_SA" "REPORTING_API_TOKEN"
 grant_secret_accessor "$MIGRATOR_SA" "MIGRATOR_DATABASE_URL"
 
 echo "Bootstrap complete for $ENVIRONMENT"
 echo "API service account: $API_SA"
+echo "Dashboard service account: $DASHBOARD_SA"
 echo "Worker service account: $WORKER_SA"
 echo "Migrator service account: $MIGRATOR_SA"
 echo "Deployer service account: $DEPLOYER_SA"

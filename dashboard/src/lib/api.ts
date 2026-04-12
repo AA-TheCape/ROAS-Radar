@@ -64,9 +64,23 @@ export type OrdersResponse = {
   rows: OrderRow[];
 };
 
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3000').replace(/\/$/, '');
-const REPORTING_TOKEN = import.meta.env.VITE_REPORTING_API_TOKEN ?? '';
-const TENANT_ID = import.meta.env.VITE_REPORTING_TENANT_ID ?? 'roas-radar';
+declare global {
+  interface Window {
+    __ROAS_RADAR_RUNTIME_CONFIG__?: {
+      apiBaseUrl?: string;
+      reportingToken?: string;
+      reportingTenantId?: string;
+    };
+  }
+}
+
+const runtimeConfig = window.__ROAS_RADAR_RUNTIME_CONFIG__;
+const API_BASE_URL = (runtimeConfig?.apiBaseUrl ?? import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3000').replace(
+  /\/$/,
+  ''
+);
+const REPORTING_TOKEN = runtimeConfig?.reportingToken ?? import.meta.env.VITE_REPORTING_API_TOKEN ?? '';
+const TENANT_ID = runtimeConfig?.reportingTenantId ?? import.meta.env.VITE_REPORTING_TENANT_ID ?? 'roas-radar';
 
 function buildSearchParams(filters: ReportingFilters, extras: Record<string, string> = {}): URLSearchParams {
   const params = new URLSearchParams({
