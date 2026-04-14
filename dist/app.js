@@ -1,0 +1,59 @@
+import express from 'express';
+import { checkDatabaseHealth } from './db/pool.js';
+import { createGoogleAdsAdminRouter } from './modules/google-ads/index.js';
+import { createMetaAdsAdminRouter, createMetaAdsPublicRouter } from './modules/meta-ads/index.js';
+import { createReportingRouter } from './modules/reporting/index.js';
+import { createShopifyAdminRouter, createShopifyPublicRouter, createShopifyWebhookRouter } from './modules/shopify/index.js';
+import { createTrackingRouter } from './modules/tracking/index.js';
+import { createRequestLoggingMiddleware, logHttpError } from './observability/index.js';
+export function createApp() {
+    const app = express();
+    const serviceName = process.env.K_SERVICE ?? 'roas-radar-api';
+    app.disable('x-powered-by');
+    app.use(createRequestLoggingMiddleware(serviceName));
+    app.get('/healthz', (_req, res) => {
+        res.status(200).json({ ok: true });
+    });
+    app.get('/readyz', async (_req, res) => {
+        try {
+            const status = await checkDatabaseHealth();
+            res.status(200).json(status);
+        }
+        catch (error) {
+            res.status(503).json({
+                ok: false,
+                error: error instanceof Error ? error.message : String(error)
+            });
+        }
+    });
+    app.use('/webhooks/shopify', express.raw({ type: '*/*', limit: '2mb' }), createShopifyWebhookRouter());
+    app.use(express.json({ limit: '1mb' }));
+    app.use('/track', createTrackingRouter());
+    app.use('/api/reporting', createReportingRouter());
+    app.use('/shopify', createShopifyPublicRouter());
+    app.use('/api/admin/shopify', createShopifyAdminRouter());
+    app.use('/meta-ads', createMetaAdsPublicRouter());
+    app.use('/api/admin/meta-ads', createMetaAdsAdminRouter());
+    app.use('/api/admin/google-ads', createGoogleAdsAdminRouter());
+    app.use((error, _req, res, _next) => {
+        const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error && typeof error.statusCode === 'number'
+            ? error.statusCode
+            : 500;
+        const code = typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
+            ? error.code
+            : 'internal_server_error';
+        const message = error instanceof Error ? error.message : 'Unexpected error';
+        const details = typeof error === 'object' && error !== null && 'details' in error ? error.details : undefined;
+        if (statusCode >= 500) {
+            logHttpError('http_request_failed', error, _req, {
+                responseStatusCode: statusCode
+            });
+        }
+        res.status(statusCode).json({
+            error: code,
+            message,
+            ...(details === undefined ? {} : { details })
+        });
+    });
+    return app;
+}

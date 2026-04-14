@@ -1,0 +1,28 @@
+{
+  "name": "roas_attribution_job_backlog",
+  "description": "Current count of pending attribution jobs waiting to be processed.",
+  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"attribution_backlog_snapshot\"",
+  "valueExtractor": "EXTRACT(jsonPayload.pendingJobs)",
+  "labelExtractors": {
+    "service": "EXTRACT(jsonPayload.service)",
+    "worker_id": "EXTRACT(jsonPayload.workerId)"
+  },
+  "metricDescriptor": {
+    "metricKind": "GAUGE",
+    "valueType": "INT64",
+    "unit": "1",
+    "displayName": "ROAS Radar Attribution Job Backlog",
+    "labels": [
+      {
+        "key": "service",
+        "valueType": "STRING",
+        "description": "Service name."
+      },
+      {
+        "key": "worker_id",
+        "valueType": "STRING",
+        "description": "Worker instance."
+      }
+    ]
+  }
+}
