@@ -1,0 +1,47 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_ARTIFACT_REGISTRY_REPOSITORY}/${_IMAGE_NAME}:$SHORT_SHA
+      - .
+
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_ARTIFACT_REGISTRY_REPOSITORY}/${_IMAGE_NAME_DASHBOARD}:$SHORT_SHA
+      - .
+    dir: dashboard
+
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_ARTIFACT_REGISTRY_REPOSITORY}/${_IMAGE_NAME}:$SHORT_SHA
+
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_ARTIFACT_REGISTRY_REPOSITORY}/${_IMAGE_NAME_DASHBOARD}:$SHORT_SHA
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        SHORT_SHA="$SHORT_SHA" \
+        SKIP_BUILDS=true \
+        RUN_MIGRATIONS_ON_DEPLOY="${_RUN_MIGRATIONS_ON_DEPLOY}" \
+        APPLY_MONITORING_ON_DEPLOY="${_APPLY_MONITORING_ON_DEPLOY}" \
+        ./infra/cloud-run/deploy.sh staging
+
+substitutions:
+  _REGION: us-central1
+  _ARTIFACT_REGISTRY_REPOSITORY: roas-radar
+  _IMAGE_NAME: roas-radar-app
+  _IMAGE_NAME_DASHBOARD: roas-radar-dashboard
+  _RUN_MIGRATIONS_ON_DEPLOY: "true"
+  _APPLY_MONITORING_ON_DEPLOY: "true"
+
+options:
+  logging: CLOUD_LOGGING_ONLY

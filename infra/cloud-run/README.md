@@ -47,3 +47,24 @@ The environment files also carry non-secret runtime settings that must be popula
 6. Apply monitoring with `infra/monitoring/apply.sh ENVIRONMENT`.
 
 ## Deployment
+
+For manual deployments, run `infra/cloud-run/deploy.sh staging` or `infra/cloud-run/deploy.sh production`.
+
+If you want Cloud Build to deploy staging automatically from `main`, use `cloudbuild.staging.yaml` as the trigger build config. The build config:
+
+- builds and pushes the API image,
+- builds and pushes the dashboard image,
+- reuses `infra/cloud-run/deploy.sh staging` with `SKIP_BUILDS=true`,
+- optionally runs migrations and monitoring apply during the triggered deploy.
+
+The Cloud Build trigger should run as the environment deployer service account created by `bootstrap-iam.sh`:
+
+- `roas-radar-deployer-staging@<project>.iam.gserviceaccount.com` for staging
+- `roas-radar-deployer-prod@<project>.iam.gserviceaccount.com` for production
+
+Recommended trigger settings:
+
+- event: push to branch
+- branch regex: `^main$`
+- region: the same region used by Cloud Run and Artifact Registry
+- build config: `cloudbuild.staging.yaml`

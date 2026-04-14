@@ -101,6 +101,7 @@ done
 
 grant_project_role "serviceAccount:$DEPLOYER_SA" "roles/artifactregistry.writer"
 grant_project_role "serviceAccount:$DEPLOYER_SA" "roles/cloudbuild.builds.editor"
+grant_project_role "serviceAccount:$DEPLOYER_SA" "roles/logging.logWriter"
 grant_project_role "serviceAccount:$DEPLOYER_SA" "roles/logging.configWriter"
 grant_project_role "serviceAccount:$DEPLOYER_SA" "roles/monitoring.editor"
 grant_project_role "serviceAccount:$DEPLOYER_SA" "roles/run.admin"
