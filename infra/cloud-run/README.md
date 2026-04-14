@@ -1,12 +1,13 @@
 # Cloud Run Deployment
 
-This directory contains the operational scripts and environment definitions for deploying the ROAS Radar API, attribution worker, and migration job to Google Cloud Run.
+This directory contains the operational scripts and environment definitions for deploying the ROAS Radar API, dashboard, attribution worker, and migration job to Google Cloud Run.
 
 ## Topology
 
-The deployment flow assumes three deployable workloads:
+The deployment flow assumes four deployable workloads:
 
 - `roas-radar-api`: public Cloud Run service for `/track`, Shopify webhooks, and authenticated reporting APIs.
+- `roas-radar-dashboard`: public Cloud Run service for the React reporting dashboard.
 - `roas-radar-attribution-worker`: internal Cloud Run service for attribution and asynchronous processing.
 - `roas-radar-migrate`: Cloud Run Job that runs `npm run db:migrate:start` with elevated database credentials.
 
@@ -26,6 +27,15 @@ The deploy script expects the following Secret Manager secrets to exist for each
 - `META_ADS_APP_SECRET`
 - `META_ADS_ENCRYPTION_KEY`
 - `GOOGLE_ADS_ENCRYPTION_KEY`
+
+The environment files also carry non-secret runtime settings that must be populated before deployment, including:
+
+- `TRACKING_ALLOWED_ORIGINS`
+- `SHOPIFY_APP_BASE_URL`
+- `SHOPIFY_APP_API_VERSION`
+- `SHOPIFY_APP_SCOPES`
+- `SHOPIFY_APP_POST_INSTALL_REDIRECT_URL`
+- `DASHBOARD_API_BASE_URL`
 
 ## First-Time Setup
 
