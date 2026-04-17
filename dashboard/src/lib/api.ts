@@ -218,7 +218,7 @@ declare global {
 }
 
 const runtimeConfig = window.__ROAS_RADAR_RUNTIME_CONFIG__;
-const API_BASE_URL = (runtimeConfig?.apiBaseUrl ?? import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3000').replace(
+const API_BASE_URL = (runtimeConfig?.apiBaseUrl ?? import.meta.env.VITE_API_BASE_URL ?? '').replace(
   /\/$/,
   ''
 );
