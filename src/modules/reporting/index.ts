@@ -1,10 +1,10 @@
 import { Router } from 'express';
 import { z } from 'zod';
 
-import { env } from '../../config/env.js';
 import { query } from '../../db/pool.js';
 import { calculatePerformanceMetrics } from '../../shared/metrics.js';
 import { ATTRIBUTION_MODELS } from '../attribution/engine.js';
+import { attachAuthContext, requireAuthenticated } from '../auth/index.js';
 import { fetchDataQualityReport, resolveRunDate } from '../data-quality/index.js';
 
 class ReportingHttpError extends Error {
@@ -95,10 +95,6 @@ type OrderAttributionRow = {
   attribution_reason: string | null;
 };
 
-function requireInternalAuth(authHeader: string | undefined): boolean {
-  return authHeader === `Bearer ${env.REPORTING_API_TOKEN}`;
-}
-
 function parseInput<TSchema extends z.ZodTypeAny>(schema: TSchema, input: unknown): z.infer<TSchema> {
   try {
     return schema.parse(input);
@@ -173,17 +169,8 @@ function normalizeContent(value: string | null): string | null {
 export function createReportingRouter(): Router {
   const router = Router();
 
-  router.use((req, res, next) => {
-    if (!requireInternalAuth(req.header('authorization') ?? undefined)) {
-      res.status(401).json({
-        error: 'unauthorized',
-        message: 'Unauthorized'
-      });
-      return;
-    }
-
-    next();
-  });
+  router.use(attachAuthContext);
+  router.use(requireAuthenticated);
 
   router.get('/summary', async (req, res, next) => {
     try {

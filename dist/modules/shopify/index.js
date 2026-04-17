@@ -5,6 +5,7 @@ import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
 import { logError, logInfo, logWarning } from '../../observability/index.js';
 import { enqueueAttributionForOrder } from '../attribution/index.js';
+import { attachAuthContext, requireAdmin } from '../auth/index.js';
 import { hashIdentityEmail, stitchKnownCustomerIdentity } from '../identity/index.js';
 const OAUTH_STATE_TTL_MINUTES = 10;
 const SHOPIFY_WEBHOOK_TOPICS = [
@@ -89,9 +90,6 @@ class ShopifyHttpError extends Error {
         this.code = code;
         this.details = details;
     }
-}
-function requireInternalAuth(authHeader) {
-    return authHeader === `Bearer ${env.REPORTING_API_TOKEN}`;
 }
 function getShopifySharedSecret() {
     return env.SHOPIFY_WEBHOOK_SECRET || env.SHOPIFY_APP_API_SECRET;
@@ -974,13 +972,8 @@ export function createShopifyWebhookRouter() {
 }
 export function createShopifyAdminRouter() {
     const router = Router();
-    router.use((req, res, next) => {
-        if (!requireInternalAuth(req.header('authorization') ?? undefined)) {
-            res.status(401).json({ error: 'Unauthorized' });
-            return;
-        }
-        next();
-    });
+    router.use(attachAuthContext);
+    router.use(requireAdmin);
     router.get('/connection', async (_req, res, next) => {
         try {
             const installation = await getShopifyInstallationSummary();

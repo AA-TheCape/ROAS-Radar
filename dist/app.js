@@ -1,5 +1,6 @@
 import express from 'express';
 import { checkDatabaseHealth } from './db/pool.js';
+import { createAuthRouter, createUserAdminRouter } from './modules/auth/index.js';
 import { createGoogleAdsAdminRouter } from './modules/google-ads/index.js';
 import { createMetaAdsAdminRouter, createMetaAdsPublicRouter } from './modules/meta-ads/index.js';
 import { createReportingRouter } from './modules/reporting/index.js';
@@ -29,7 +30,9 @@ export function createApp() {
     app.use('/webhooks/shopify', express.raw({ type: '*/*', limit: '2mb' }), createShopifyWebhookRouter());
     app.use(express.json({ limit: '1mb' }));
     app.use('/track', createTrackingRouter());
+    app.use('/api/auth', createAuthRouter());
     app.use('/api/reporting', createReportingRouter());
+    app.use('/api/admin/users', createUserAdminRouter());
     app.use('/shopify', createShopifyPublicRouter());
     app.use('/api/admin/shopify', createShopifyAdminRouter());
     app.use('/meta-ads', createMetaAdsPublicRouter());

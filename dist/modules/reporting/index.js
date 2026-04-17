@@ -1,9 +1,9 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { env } from '../../config/env.js';
 import { query } from '../../db/pool.js';
 import { calculatePerformanceMetrics } from '../../shared/metrics.js';
 import { ATTRIBUTION_MODELS } from '../attribution/engine.js';
+import { attachAuthContext, requireAuthenticated } from '../auth/index.js';
 import { fetchDataQualityReport, resolveRunDate } from '../data-quality/index.js';
 class ReportingHttpError extends Error {
     statusCode;
@@ -49,9 +49,6 @@ const ordersQuerySchema = withValidDateRange(baseFiltersObjectSchema.extend({
 const reconciliationQuerySchema = z.object({
     runDate: dateStringSchema.optional()
 });
-function requireInternalAuth(authHeader) {
-    return authHeader === `Bearer ${env.REPORTING_API_TOKEN}`;
-}
 function parseInput(schema, input) {
     try {
         return schema.parse(input);
@@ -105,16 +102,8 @@ function normalizeContent(value) {
 }
 export function createReportingRouter() {
     const router = Router();
-    router.use((req, res, next) => {
-        if (!requireInternalAuth(req.header('authorization') ?? undefined)) {
-            res.status(401).json({
-                error: 'unauthorized',
-                message: 'Unauthorized'
-            });
-            return;
-        }
-        next();
-    });
+    router.use(attachAuthContext);
+    router.use(requireAuthenticated);
     router.get('/summary', async (req, res, next) => {
         try {
             const input = parseInput(baseFiltersSchema, req.query);

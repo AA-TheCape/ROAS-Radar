@@ -4,6 +4,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
+import { attachAuthContext, requireAdmin } from '../auth/index.js';
 import { buildCanonicalSpendDimensions } from '../marketing-dimensions/index.js';
 import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
 const GOOGLE_OAUTH_TOKEN_URL = 'https://oauth2.googleapis.com/token';
@@ -43,9 +44,6 @@ class GoogleAdsApiError extends Error {
         this.statusCode = statusCode;
         this.details = details;
     }
-}
-function requireInternalAuth(authHeader) {
-    return authHeader === `Bearer ${env.REPORTING_API_TOKEN}`;
 }
 function assertGoogleAdsConfig() {
     if (!env.GOOGLE_ADS_ENCRYPTION_KEY) {
@@ -964,13 +962,8 @@ export async function processGoogleAdsSyncQueue(options = {}) {
 }
 export function createGoogleAdsAdminRouter() {
     const router = Router();
-    router.use((req, res, next) => {
-        if (!requireInternalAuth(req.header('authorization') ?? undefined)) {
-            res.status(401).json({ error: 'Unauthorized' });
-            return;
-        }
-        next();
-    });
+    router.use(attachAuthContext);
+    router.use(requireAdmin);
     router.post('/connections', async (req, res, next) => {
         try {
             assertGoogleAdsConfig();

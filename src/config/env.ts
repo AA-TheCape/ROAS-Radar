@@ -64,6 +64,7 @@ const envSchema = z.object({
   DATABASE_SSL: booleanString.default(false),
 
   REPORTING_API_TOKEN: z.string().default('dev-reporting-token'),
+  APP_SESSION_TTL_HOURS: integerString.default(24 * 7),
   TRACKING_ALLOWED_ORIGINS: stringList.default([]),
   TRACKING_MAX_EVENT_AGE_HOURS: integerString.default(24 * 14),
   TRACKING_MAX_FUTURE_SKEW_SECONDS: integerString.default(300),

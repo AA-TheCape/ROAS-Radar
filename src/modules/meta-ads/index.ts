@@ -7,6 +7,7 @@ import { z } from 'zod';
 
 import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
+import { attachAuthContext, requireAdmin } from '../auth/index.js';
 import { buildCanonicalSpendDimensions } from '../marketing-dimensions/index.js';
 import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
 
@@ -178,10 +179,6 @@ class MetaAdsApiError extends Error {
     this.statusCode = statusCode;
     this.details = details;
   }
-}
-
-function requireInternalAuth(authHeader: string | undefined): boolean {
-  return authHeader === `Bearer ${env.REPORTING_API_TOKEN}`;
 }
 
 function assertMetaAdsConfig(): void {
@@ -1241,14 +1238,8 @@ export function createMetaAdsPublicRouter(): Router {
 export function createMetaAdsAdminRouter(): Router {
   const router = Router();
 
-  router.use((req, res, next) => {
-    if (!requireInternalAuth(req.header('authorization') ?? undefined)) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
-
-    next();
-  });
+  router.use(attachAuthContext);
+  router.use(requireAdmin);
 
   router.get('/oauth/start', async (req, res, next) => {
     try {
