@@ -34,10 +34,13 @@ require_var GCP_PROJECT_ID
 
 ALERT_NOTIFICATION_CHANNELS_JSON="[]"
 if [ -n "${ALERT_NOTIFICATION_CHANNELS:-}" ]; then
-  ALERT_NOTIFICATION_CHANNELS_JSON=$(node -e "
-const raw = process.argv[1] ?? '';
-const items = raw.split(',').map((value) => value.trim()).filter(Boolean);
-process.stdout.write(JSON.stringify(items));
+  ALERT_NOTIFICATION_CHANNELS_JSON=$(python3 -c "
+import json
+import sys
+
+raw = sys.argv[1] if len(sys.argv) > 1 else ''
+items = [value.strip() for value in raw.split(',') if value.strip()]
+sys.stdout.write(json.dumps(items))
 " "$ALERT_NOTIFICATION_CHANNELS")
 fi
 
@@ -67,7 +70,14 @@ apply_log_metric() {
   TEMPLATE_PATH="$1"
   OUTPUT_PATH="$TMP_DIR/$(basename "$TEMPLATE_PATH")"
   render_template "$TEMPLATE_PATH" "$OUTPUT_PATH"
-  METRIC_NAME=$(node -e "process.stdout.write(JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8')).name)" "$OUTPUT_PATH")
+  METRIC_NAME=$(python3 -c "
+import json
+import sys
+
+with open(sys.argv[1], 'r', encoding='utf-8') as fh:
+    payload = json.load(fh)
+sys.stdout.write(payload['name'])
+" "$OUTPUT_PATH")
 
   if gcloud logging metrics describe "$METRIC_NAME" --project="$GCP_PROJECT_ID" >/dev/null 2>&1; then
     gcloud logging metrics update "$METRIC_NAME" \
@@ -92,13 +102,17 @@ delete_by_display_name() {
 
   curl -sS -H "Authorization: Bearer $ACCESS_TOKEN" "$LIST_URL" >"$RESPONSE_FILE"
 
-  MATCHING_NAME=$(node -e "
-const fs = require('node:fs');
-const payload = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
-const displayName = process.argv[2];
-const collection = payload[process.argv[3]] ?? [];
-const match = collection.find((entry) => entry.displayName === displayName);
-process.stdout.write(match?.name ?? '');
+  MATCHING_NAME=$(python3 -c "
+import json
+import sys
+
+with open(sys.argv[1], 'r', encoding='utf-8') as fh:
+    payload = json.load(fh)
+display_name = sys.argv[2]
+resource_kind = sys.argv[3]
+collection = payload.get(resource_kind, [])
+match = next((entry for entry in collection if entry.get('displayName') == display_name), None)
+sys.stdout.write(match.get('name', '') if match else '')
 " "$RESPONSE_FILE" "$DISPLAY_NAME" "$RESOURCE_KIND")
 
   if [ -n "$MATCHING_NAME" ]; then
@@ -113,7 +127,14 @@ create_monitoring_resource() {
 
   OUTPUT_PATH="$TMP_DIR/${RESOURCE_KIND}-$(basename "$TEMPLATE_PATH")"
   render_template "$TEMPLATE_PATH" "$OUTPUT_PATH"
-  DISPLAY_NAME=$(node -e "process.stdout.write(JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8')).displayName)" "$OUTPUT_PATH")
+  DISPLAY_NAME=$(python3 -c "
+import json
+import sys
+
+with open(sys.argv[1], 'r', encoding='utf-8') as fh:
+    payload = json.load(fh)
+sys.stdout.write(payload['displayName'])
+" "$OUTPUT_PATH")
 
   delete_by_display_name "$RESOURCE_KIND" "$DISPLAY_NAME" "$COLLECTION_URL"
 
