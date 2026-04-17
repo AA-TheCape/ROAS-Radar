@@ -158,7 +158,7 @@ gcloud run jobs deploy "$MIGRATOR_JOB_NAME" \
   --args=run,db:migrate:start \
   --set-env-vars="NODE_ENV=production,DATABASE_POOL_MAX=1,DATABASE_POOL_MIN=0,DATABASE_SSL=false" \
   --set-secrets="DATABASE_URL=MIGRATOR_DATABASE_URL:latest" \
-  --add-cloudsql-instances="$CLOUD_SQL_CONNECTION_NAME"
+  --set-cloudsql-instances="$CLOUD_SQL_CONNECTION_NAME"
 
 if [ "${RUN_MIGRATIONS_ON_DEPLOY:-true}" = "true" ]; then
   echo "Executing migration job $MIGRATOR_JOB_NAME"
