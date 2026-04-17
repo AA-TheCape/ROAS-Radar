@@ -15,6 +15,24 @@ export function createApp() {
 
   app.disable('x-powered-by');
   app.use(createRequestLoggingMiddleware(serviceName));
+  app.use((req, res, next) => {
+    const origin = req.header('origin');
+
+    res.setHeader('Access-Control-Allow-Origin', origin ?? '*');
+    if (origin) {
+      res.setHeader('Vary', 'Origin');
+    }
+
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'authorization,content-type,x-roas-radar-tenant-id');
+
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+
+    next();
+  });
 
   app.get('/healthz', (_req, res) => {
     res.status(200).json({ ok: true });
