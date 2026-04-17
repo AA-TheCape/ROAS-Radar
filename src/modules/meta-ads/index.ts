@@ -21,6 +21,14 @@ const oauthStartQuerySchema = z.object({
   redirectPath: z.string().optional()
 });
 
+const metaAdsConfigUpdateSchema = z.object({
+  appId: z.string().min(1),
+  appSecret: z.string().optional(),
+  appBaseUrl: z.string().url(),
+  appScopes: z.union([z.string(), z.array(z.string())]).optional(),
+  adAccountId: z.string().min(1)
+});
+
 const manualSyncSchema = z.object({
   startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
@@ -63,6 +71,26 @@ type MetaAdsConnectionSummaryRow = {
   status: string;
   account_name: string | null;
   account_currency: string | null;
+};
+
+type MetaAdsSettingsRow = {
+  id: number;
+  app_id: string;
+  app_secret: string | null;
+  app_base_url: string;
+  app_scopes: string[];
+  ad_account_id: string;
+  updated_at: Date;
+};
+
+type MetaAdsResolvedConfig = {
+  appId: string;
+  appSecret: string;
+  appBaseUrl: string;
+  appScopes: string[];
+  adAccountId: string;
+  encryptionKey: string;
+  source: 'database' | 'environment';
 };
 
 type MetaAdsSyncJobRow = {
@@ -181,20 +209,19 @@ class MetaAdsApiError extends Error {
   }
 }
 
-function assertMetaAdsConfig(): void {
-  const missing = [
-    ['META_ADS_APP_ID', env.META_ADS_APP_ID],
-    ['META_ADS_APP_SECRET', env.META_ADS_APP_SECRET],
-    ['META_ADS_APP_BASE_URL', env.META_ADS_APP_BASE_URL],
-    ['META_ADS_ENCRYPTION_KEY', env.META_ADS_ENCRYPTION_KEY],
-    ['META_ADS_AD_ACCOUNT_ID', env.META_ADS_AD_ACCOUNT_ID]
-  ]
-    .filter(([, value]) => !value)
-    .map(([key]) => key);
-
-  if (missing.length > 0) {
-    throw new MetaAdsHttpError(500, 'meta_ads_config_missing', `Missing Meta Ads configuration: ${missing.join(', ')}`);
+function normalizeMetaAdsScopes(rawValue: string | string[] | undefined): string[] {
+  if (Array.isArray(rawValue)) {
+    return rawValue.map((entry) => entry.trim()).filter(Boolean);
   }
+
+  if (typeof rawValue !== 'string') {
+    return [];
+  }
+
+  return rawValue
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
 }
 
 function normalizeMetaAdAccountId(value: string): string {
@@ -226,26 +253,167 @@ function normalizeRedirectPath(rawValue: string | undefined): string | null {
   return trimmed;
 }
 
-function getMetaAdsAppBaseUrl(): string {
-  return new URL(env.META_ADS_APP_BASE_URL).toString().replace(/\/$/, '');
+async function getStoredMetaAdsSettings(): Promise<MetaAdsSettingsRow | null> {
+  const result = await query<MetaAdsSettingsRow>(
+    `
+      SELECT
+        id,
+        app_id,
+        pgp_sym_decrypt(app_secret_encrypted, $1) AS app_secret,
+        app_base_url,
+        app_scopes,
+        ad_account_id,
+        updated_at
+      FROM meta_ads_settings
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `,
+    [env.META_ADS_ENCRYPTION_KEY]
+  );
+
+  return result.rows[0] ?? null;
 }
 
-function buildMetaAdsRedirectUri(): string {
-  return `${getMetaAdsAppBaseUrl()}/meta-ads/oauth/callback`;
+async function getResolvedMetaAdsConfig(): Promise<MetaAdsResolvedConfig> {
+  if (!env.META_ADS_ENCRYPTION_KEY) {
+    throw new MetaAdsHttpError(500, 'meta_ads_config_missing', 'Missing Meta Ads configuration: META_ADS_ENCRYPTION_KEY');
+  }
+
+  const stored = await getStoredMetaAdsSettings();
+  const appId = stored?.app_id?.trim() || env.META_ADS_APP_ID.trim();
+  const appSecret = stored?.app_secret?.trim() || env.META_ADS_APP_SECRET.trim();
+  const appBaseUrl = (stored?.app_base_url?.trim() || env.META_ADS_APP_BASE_URL.trim()).replace(/\/$/, '');
+  const appScopes = (stored?.app_scopes?.length ? stored.app_scopes : env.META_ADS_APP_SCOPES).map((entry) => entry.trim()).filter(Boolean);
+  const adAccountId = stored?.ad_account_id?.trim() || env.META_ADS_AD_ACCOUNT_ID.trim();
+  const missing = [
+    ['META_ADS_APP_ID', appId],
+    ['META_ADS_APP_SECRET', appSecret],
+    ['META_ADS_APP_BASE_URL', appBaseUrl],
+    ['META_ADS_AD_ACCOUNT_ID', adAccountId]
+  ]
+    .filter(([, value]) => !value)
+    .map(([key]) => key);
+
+  if (missing.length > 0) {
+    throw new MetaAdsHttpError(500, 'meta_ads_config_missing', `Missing Meta Ads configuration: ${missing.join(', ')}`);
+  }
+
+  return {
+    appId,
+    appSecret,
+    appBaseUrl,
+    appScopes,
+    adAccountId,
+    encryptionKey: env.META_ADS_ENCRYPTION_KEY,
+    source: stored ? 'database' : 'environment'
+  };
+}
+
+async function getMetaAdsConfigurationSummary(): Promise<{
+  source: 'database' | 'environment';
+  appId: string;
+  appBaseUrl: string;
+  appScopes: string[];
+  adAccountId: string;
+  appSecretConfigured: boolean;
+  missingFields: string[];
+}> {
+  const stored = env.META_ADS_ENCRYPTION_KEY ? await getStoredMetaAdsSettings() : null;
+  const appId = stored?.app_id?.trim() || env.META_ADS_APP_ID.trim();
+  const appSecretConfigured = Boolean(stored?.app_secret?.trim() || env.META_ADS_APP_SECRET.trim());
+  const appBaseUrl = (stored?.app_base_url?.trim() || env.META_ADS_APP_BASE_URL.trim()).replace(/\/$/, '');
+  const appScopes = (stored?.app_scopes?.length ? stored.app_scopes : env.META_ADS_APP_SCOPES).map((entry) => entry.trim()).filter(Boolean);
+  const adAccountId = stored?.ad_account_id?.trim() || env.META_ADS_AD_ACCOUNT_ID.trim();
+  const missingFields = [
+    ['appId', appId],
+    ['appSecret', appSecretConfigured ? 'configured' : ''],
+    ['appBaseUrl', appBaseUrl],
+    ['adAccountId', adAccountId],
+    ['encryptionKey', env.META_ADS_ENCRYPTION_KEY]
+  ]
+    .filter(([, value]) => !value)
+    .map(([key]) => key);
+
+  return {
+    source: stored ? 'database' : 'environment',
+    appId,
+    appBaseUrl,
+    appScopes,
+    adAccountId,
+    appSecretConfigured,
+    missingFields
+  };
+}
+
+async function upsertMetaAdsSettings(payload: z.infer<typeof metaAdsConfigUpdateSchema>): Promise<void> {
+  if (!env.META_ADS_ENCRYPTION_KEY) {
+    throw new MetaAdsHttpError(500, 'meta_ads_config_missing', 'Missing Meta Ads configuration: META_ADS_ENCRYPTION_KEY');
+  }
+
+  const secretProvided = typeof payload.appSecret === 'string' && payload.appSecret.trim().length > 0;
+  const normalizedScopes = normalizeMetaAdsScopes(payload.appScopes);
+  const existing = await getStoredMetaAdsSettings();
+  const nextSecret = secretProvided ? payload.appSecret!.trim() : existing?.app_secret ?? '';
+
+  await query(
+    `
+      DELETE FROM meta_ads_settings
+    `
+  );
+
+  await query(
+    `
+      INSERT INTO meta_ads_settings (
+        id,
+        app_id,
+        app_secret_encrypted,
+        app_base_url,
+        app_scopes,
+        ad_account_id,
+        updated_at
+      )
+      VALUES (
+        1,
+        $1,
+        CASE
+          WHEN $2::text = '' THEN NULL
+          ELSE pgp_sym_encrypt($2, $6, 'cipher-algo=aes256, compress-algo=0')
+        END,
+        $3,
+        $4::text[],
+        $5,
+        now()
+      )
+    `,
+    [
+      payload.appId.trim(),
+      nextSecret,
+      new URL(payload.appBaseUrl).toString().replace(/\/$/, ''),
+      normalizedScopes,
+      payload.adAccountId.trim(),
+      env.META_ADS_ENCRYPTION_KEY
+    ]
+  );
+}
+
+function getMetaAdsAppBaseUrl(config: MetaAdsResolvedConfig): string {
+  return new URL(config.appBaseUrl).toString().replace(/\/$/, '');
+}
+
+function buildMetaAdsRedirectUri(config: MetaAdsResolvedConfig): string {
+  return `${getMetaAdsAppBaseUrl(config)}/meta-ads/oauth/callback`;
 }
 
 function createOAuthStateDigest(state: string): string {
   return createHash('sha256').update(state).digest('hex');
 }
 
-function buildMetaAdsAuthorizationUrl(state: string): string {
-  assertMetaAdsConfig();
-
+function buildMetaAdsAuthorizationUrl(config: MetaAdsResolvedConfig, state: string): string {
   const url = new URL('https://www.facebook.com/dialog/oauth');
-  url.searchParams.set('client_id', env.META_ADS_APP_ID);
-  url.searchParams.set('redirect_uri', buildMetaAdsRedirectUri());
+  url.searchParams.set('client_id', config.appId);
+  url.searchParams.set('redirect_uri', buildMetaAdsRedirectUri(config));
   url.searchParams.set('state', state);
-  url.searchParams.set('scope', env.META_ADS_APP_SCOPES.join(','));
+  url.searchParams.set('scope', config.appScopes.join(','));
 
   return url.toString();
 }
@@ -474,21 +642,24 @@ async function metaFetchJson<T>(url: URL, retryCount = 2): Promise<T> {
   throw lastError;
 }
 
-async function exchangeCodeForAccessToken(code: string): Promise<MetaAdsTokenResponse> {
+async function exchangeCodeForAccessToken(config: MetaAdsResolvedConfig, code: string): Promise<MetaAdsTokenResponse> {
   const url = new URL(`${META_GRAPH_BASE_URL}/${env.META_ADS_API_VERSION}/oauth/access_token`);
-  url.searchParams.set('client_id', env.META_ADS_APP_ID);
-  url.searchParams.set('client_secret', env.META_ADS_APP_SECRET);
-  url.searchParams.set('redirect_uri', buildMetaAdsRedirectUri());
+  url.searchParams.set('client_id', config.appId);
+  url.searchParams.set('client_secret', config.appSecret);
+  url.searchParams.set('redirect_uri', buildMetaAdsRedirectUri(config));
   url.searchParams.set('code', code);
 
   return metaFetchJson<MetaAdsTokenResponse>(url);
 }
 
-async function exchangeLongLivedAccessToken(accessToken: string): Promise<MetaAdsTokenResponse> {
+async function exchangeLongLivedAccessToken(
+  config: MetaAdsResolvedConfig,
+  accessToken: string
+): Promise<MetaAdsTokenResponse> {
   const url = new URL(`${META_GRAPH_BASE_URL}/${env.META_ADS_API_VERSION}/oauth/access_token`);
   url.searchParams.set('grant_type', 'fb_exchange_token');
-  url.searchParams.set('client_id', env.META_ADS_APP_ID);
-  url.searchParams.set('client_secret', env.META_ADS_APP_SECRET);
+  url.searchParams.set('client_id', config.appId);
+  url.searchParams.set('client_secret', config.appSecret);
   url.searchParams.set('fb_exchange_token', accessToken);
 
   return metaFetchJson<MetaAdsTokenResponse>(url);
@@ -544,6 +715,7 @@ async function upsertMetaAdsConnection(params: {
   grantedScopes: string[];
   tokenExpiresAt: Date | null;
   account: MetaAdsAccountResponse;
+  encryptionKey: string;
 }): Promise<void> {
   await query(
     `
@@ -589,7 +761,7 @@ async function upsertMetaAdsConnection(params: {
     [
       params.adAccountId,
       params.accessToken,
-      env.META_ADS_ENCRYPTION_KEY,
+      params.encryptionKey,
       params.tokenType,
       params.grantedScopes,
       params.tokenExpiresAt,
@@ -601,6 +773,7 @@ async function upsertMetaAdsConnection(params: {
 }
 
 async function getActiveMetaAdsConnection(): Promise<MetaAdsConnectionRow | null> {
+  const config = await getResolvedMetaAdsConfig();
   const result = await query<MetaAdsConnectionRow>(
     `
       SELECT
@@ -620,14 +793,15 @@ async function getActiveMetaAdsConnection(): Promise<MetaAdsConnectionRow | null
       ORDER BY updated_at DESC
       LIMIT 1
     `,
-    [env.META_ADS_ENCRYPTION_KEY]
+    [config.encryptionKey]
   );
 
   return result.rows[0] ?? null;
 }
 
 async function refreshMetaAdsConnectionToken(connection: MetaAdsConnectionRow): Promise<MetaAdsConnectionRow> {
-  const refreshed = await exchangeLongLivedAccessToken(connection.access_token);
+  const config = await getResolvedMetaAdsConfig();
+  const refreshed = await exchangeLongLivedAccessToken(config, connection.access_token);
   const expiresAt = calculateTokenExpiresAt(refreshed.expires_in);
   const accessToken = refreshed.access_token;
 
@@ -642,7 +816,7 @@ async function refreshMetaAdsConnectionToken(connection: MetaAdsConnectionRow): 
         updated_at = now()
       WHERE id = $1
     `,
-    [connection.id, accessToken, env.META_ADS_ENCRYPTION_KEY, refreshed.token_type ?? connection.token_type, expiresAt]
+    [connection.id, accessToken, config.encryptionKey, refreshed.token_type ?? connection.token_type, expiresAt]
   );
 
   return {
@@ -1183,7 +1357,7 @@ export function createMetaAdsPublicRouter(): Router {
 
   router.get('/oauth/callback', async (req, res, next) => {
     try {
-      assertMetaAdsConfig();
+      const config = await getResolvedMetaAdsConfig();
       const payload = oauthCallbackSchema.parse(req.query);
 
       if (payload.error) {
@@ -1199,18 +1373,19 @@ export function createMetaAdsPublicRouter(): Router {
       }
 
       const redirectPath = await consumeOAuthState(payload.state);
-      const shortLivedToken = await exchangeCodeForAccessToken(payload.code);
-      const longLivedToken = await exchangeLongLivedAccessToken(shortLivedToken.access_token);
-      const adAccountId = normalizeMetaAdAccountId(env.META_ADS_AD_ACCOUNT_ID);
+      const shortLivedToken = await exchangeCodeForAccessToken(config, payload.code);
+      const longLivedToken = await exchangeLongLivedAccessToken(config, shortLivedToken.access_token);
+      const adAccountId = normalizeMetaAdAccountId(config.adAccountId);
       const account = await fetchMetaAdsAccount(longLivedToken.access_token, adAccountId);
 
       await upsertMetaAdsConnection({
         adAccountId,
         accessToken: longLivedToken.access_token,
         tokenType: longLivedToken.token_type ?? shortLivedToken.token_type ?? 'Bearer',
-        grantedScopes: env.META_ADS_APP_SCOPES,
+        grantedScopes: config.appScopes,
         tokenExpiresAt: calculateTokenExpiresAt(longLivedToken.expires_in),
-        account
+        account,
+        encryptionKey: config.encryptionKey
       });
 
       const initialDates = buildPlanningDates(new Date(), null);
@@ -1243,14 +1418,14 @@ export function createMetaAdsAdminRouter(): Router {
 
   router.get('/oauth/start', async (req, res, next) => {
     try {
-      assertMetaAdsConfig();
+      const config = await getResolvedMetaAdsConfig();
       const payload = oauthStartQuerySchema.parse(req.query);
       const redirectPath = normalizeRedirectPath(payload.redirectPath);
       const state = await insertOAuthState(redirectPath);
 
       res.status(200).json({
-        authorizationUrl: buildMetaAdsAuthorizationUrl(state),
-        redirectUri: buildMetaAdsRedirectUri(),
+        authorizationUrl: buildMetaAdsAuthorizationUrl(config, state),
+        redirectUri: buildMetaAdsRedirectUri(config),
         state
       });
     } catch (error) {
@@ -1260,6 +1435,7 @@ export function createMetaAdsAdminRouter(): Router {
 
   router.get('/status', async (_req, res, next) => {
     try {
+      const config = await getMetaAdsConfigurationSummary();
       const result = await query<MetaAdsConnectionSummaryRow>(
         `
           SELECT
@@ -1282,7 +1458,22 @@ export function createMetaAdsAdminRouter(): Router {
       );
 
       res.status(200).json({
+        config,
         connection: result.rows[0] ?? null
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.put('/config', async (req, res, next) => {
+    try {
+      const payload = metaAdsConfigUpdateSchema.parse(req.body);
+      await upsertMetaAdsSettings(payload);
+
+      res.status(200).json({
+        ok: true,
+        config: await getMetaAdsConfigurationSummary()
       });
     } catch (error) {
       next(error);

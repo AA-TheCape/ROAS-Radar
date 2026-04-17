@@ -120,8 +120,32 @@ export type MetaAdsConnection = {
   account_currency: string | null;
 };
 
+export type MetaAdsConfigSummary = {
+  source: 'database' | 'environment';
+  appId: string;
+  appBaseUrl: string;
+  appScopes: string[];
+  adAccountId: string;
+  appSecretConfigured: boolean;
+  missingFields: string[];
+};
+
 export type MetaAdsStatusResponse = {
+  config: MetaAdsConfigSummary;
   connection: MetaAdsConnection | null;
+};
+
+export type MetaAdsConfigPayload = {
+  appId: string;
+  appSecret?: string;
+  appBaseUrl: string;
+  appScopes: string | string[];
+  adAccountId: string;
+};
+
+export type MetaAdsConfigResponse = {
+  ok: true;
+  config: MetaAdsConfigSummary;
 };
 
 export type MetaAdsOAuthStartResponse = {
@@ -296,7 +320,7 @@ async function requestJson<T>(
   path: string,
   options: {
     searchParams?: URLSearchParams;
-    method?: 'GET' | 'POST';
+    method?: 'GET' | 'POST' | 'PUT';
     body?: unknown;
   } = {}
 ): Promise<T> {
@@ -382,6 +406,13 @@ export function startMetaAdsOauth(redirectPath?: string) {
   }
 
   return requestJson<MetaAdsOAuthStartResponse>('/api/admin/meta-ads/oauth/start', { searchParams });
+}
+
+export function updateMetaAdsConfig(payload: MetaAdsConfigPayload) {
+  return requestJson<MetaAdsConfigResponse>('/api/admin/meta-ads/config', {
+    method: 'PUT',
+    body: payload
+  });
 }
 
 export function syncMetaAds(startDate: string, endDate: string) {

@@ -22,12 +22,14 @@ import {
   startMetaAdsOauth,
   syncGoogleAds,
   syncMetaAds,
+  updateMetaAdsConfig,
   type AuthUser,
   type CampaignRow,
   type CreateUserPayload,
   type GoogleAdsConnectionPayload,
   type GoogleAdsStatusResponse,
   type MetaAdsConnection,
+  type MetaAdsConfigSummary,
   type OrderRow,
   type ReportingFilters,
   type ShopifyConnectionResponse,
@@ -66,6 +68,19 @@ type AuthState = {
   checking: boolean;
   user: AuthUser | null;
   error: string | null;
+};
+
+type MetaConnectionState = {
+  config: MetaAdsConfigSummary;
+  connection: MetaAdsConnection | null;
+};
+
+type MetaConfigForm = {
+  appId: string;
+  appSecret: string;
+  appBaseUrl: string;
+  appScopes: string;
+  adAccountId: string;
 };
 
 const PRESETS = [
@@ -369,7 +384,14 @@ function App() {
   });
   const [groupBy, setGroupBy] = useState<TimeseriesGroupBy>('day');
   const [shopifyConnection, setShopifyConnection] = useState<AsyncSection<ShopifyConnectionResponse>>(createLoadingSection());
-  const [metaConnection, setMetaConnection] = useState<AsyncSection<MetaAdsConnection | null>>(createLoadingSection());
+  const [metaConnection, setMetaConnection] = useState<AsyncSection<MetaConnectionState>>(createLoadingSection());
+  const [metaConfigForm, setMetaConfigForm] = useState<MetaConfigForm>({
+    appId: '',
+    appSecret: '',
+    appBaseUrl: '',
+    appScopes: 'ads_read',
+    adAccountId: ''
+  });
   const [googleConnection, setGoogleConnection] = useState<AsyncSection<GoogleAdsStatusResponse>>(createLoadingSection());
   const [googleForm, setGoogleForm] = useState<GoogleAdsConnectionPayload>({
     customerId: '',
@@ -412,7 +434,14 @@ function App() {
         fetchGoogleAdsStatus()
       ]);
       setShopifyConnection(createResolvedSection(shopifyStatus));
-      setMetaConnection(createResolvedSection(metaStatus.connection));
+      setMetaConnection(createResolvedSection(metaStatus));
+      setMetaConfigForm((current) => ({
+        appId: metaStatus.config.appId || current.appId,
+        appSecret: '',
+        appBaseUrl: metaStatus.config.appBaseUrl || current.appBaseUrl,
+        appScopes: metaStatus.config.appScopes.length ? metaStatus.config.appScopes.join(', ') : current.appScopes,
+        adAccountId: metaStatus.config.adAccountId || current.adAccountId
+      }));
       setGoogleConnection(createResolvedSection(googleStatus));
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to load ad connection state';
@@ -629,6 +658,10 @@ function App() {
     });
 
     try {
+      if ((metaConnection.data?.config.missingFields.length ?? 0) > 0) {
+        throw new Error('Save the Meta Ads configuration first. Some required fields are still missing.');
+      }
+
       const response = await startMetaAdsOauth(window.location.pathname);
       setActionFeedback({
         loading: null,
@@ -640,6 +673,42 @@ function App() {
       setActionFeedback({
         loading: null,
         error: error instanceof Error ? error.message : 'Failed to start Meta Ads OAuth',
+        message: null
+      });
+    }
+  }
+
+  async function handleMetaConfigSave(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setActionFeedback({
+      loading: 'meta-config-save',
+      error: null,
+      message: null
+    });
+
+    try {
+      const response = await updateMetaAdsConfig({
+        appId: metaConfigForm.appId.trim(),
+        appSecret: metaConfigForm.appSecret.trim() || undefined,
+        appBaseUrl: metaConfigForm.appBaseUrl.trim(),
+        appScopes: metaConfigForm.appScopes,
+        adAccountId: metaConfigForm.adAccountId.trim()
+      });
+      await loadConnections();
+      setMetaConfigForm((current) => ({
+        ...current,
+        appSecret: '',
+        appScopes: response.config.appScopes.join(', ')
+      }));
+      setActionFeedback({
+        loading: null,
+        error: null,
+        message: 'Saved Meta Ads configuration.'
+      });
+    } catch (error) {
+      setActionFeedback({
+        loading: null,
+        error: error instanceof Error ? error.message : 'Failed to save Meta Ads configuration',
         message: null
       });
     }
@@ -1055,41 +1124,119 @@ function App() {
               <div className="connection-card-header">
                 <div>
                   <h3>Meta Ads</h3>
-                  <p>Uses the backend OAuth start route and then redirects into Meta consent.</p>
+                  <p>Save your Meta app settings here, then start OAuth to attach the ad account.</p>
                 </div>
                 <span className="status-pill">
-                  {metaConnection.data?.status ?? (metaConnection.loading ? 'Loading' : 'Not connected')}
+                  {metaConnection.data?.connection?.status ??
+                    (metaConnection.data?.config.missingFields.length ? 'Needs config' : metaConnection.loading ? 'Loading' : 'Not connected')}
                 </span>
               </div>
               <ConnectionState loading={metaConnection.loading} error={metaConnection.error}>
                 <div className="connection-card-body">
                   <dl className="detail-list">
                     <div>
-                      <dt>Account</dt>
-                      <dd>{metaConnection.data?.account_name ?? metaConnection.data?.ad_account_id ?? 'Not connected'}</dd>
+                      <dt>Config source</dt>
+                      <dd>{metaConnection.data?.config.source ?? 'Not available'}</dd>
                     </div>
                     <div>
-                      <dt>Currency</dt>
-                      <dd>{metaConnection.data?.account_currency ?? 'Not available'}</dd>
+                      <dt>Ad account</dt>
+                      <dd>
+                        {metaConnection.data?.connection?.account_name ??
+                          metaConnection.data?.config.adAccountId ??
+                          'Not configured'}
+                      </dd>
                     </div>
                     <div>
                       <dt>Last sync</dt>
-                      <dd>{formatOptionalDateTime(metaConnection.data?.last_sync_completed_at)}</dd>
+                      <dd>{formatOptionalDateTime(metaConnection.data?.connection?.last_sync_completed_at)}</dd>
                     </div>
                     <div>
                       <dt>Sync status</dt>
-                      <dd>{metaConnection.data?.last_sync_status ?? 'Not started'}</dd>
+                      <dd>{metaConnection.data?.connection?.last_sync_status ?? 'Not started'}</dd>
                     </div>
                   </dl>
-                  {metaConnection.data?.last_sync_error ? (
-                    <div className="connection-note connection-note-error">{metaConnection.data.last_sync_error}</div>
+                  {metaConnection.data?.config.missingFields.length ? (
+                    <div className="connection-note connection-note-error">
+                      Missing Meta config: {metaConnection.data.config.missingFields.join(', ')}
+                    </div>
                   ) : null}
+                  {metaConnection.data?.connection?.last_sync_error ? (
+                    <div className="connection-note connection-note-error">{metaConnection.data.connection.last_sync_error}</div>
+                  ) : null}
+                  <form className="credentials-form" onSubmit={handleMetaConfigSave}>
+                    <div className="credentials-grid">
+                      <label className="credential-field">
+                        <span>Meta app ID</span>
+                        <input
+                          type="text"
+                          value={metaConfigForm.appId}
+                          onChange={(event) =>
+                            setMetaConfigForm((current) => ({ ...current, appId: event.target.value }))
+                          }
+                          placeholder="123456789012345"
+                        />
+                      </label>
+                      <label className="credential-field">
+                        <span>Ad account ID</span>
+                        <input
+                          type="text"
+                          value={metaConfigForm.adAccountId}
+                          onChange={(event) =>
+                            setMetaConfigForm((current) => ({ ...current, adAccountId: event.target.value }))
+                          }
+                          placeholder="act_123456789012345 or 123456789012345"
+                        />
+                      </label>
+                      <label className="credential-field credential-field-wide">
+                        <span>Meta app secret</span>
+                        <input
+                          type="password"
+                          value={metaConfigForm.appSecret}
+                          onChange={(event) =>
+                            setMetaConfigForm((current) => ({ ...current, appSecret: event.target.value }))
+                          }
+                          placeholder={
+                            metaConnection.data?.config.appSecretConfigured
+                              ? 'Leave blank to keep the saved secret'
+                              : 'Paste the Meta app secret'
+                          }
+                        />
+                      </label>
+                      <label className="credential-field credential-field-wide">
+                        <span>OAuth base URL</span>
+                        <input
+                          type="url"
+                          value={metaConfigForm.appBaseUrl}
+                          onChange={(event) =>
+                            setMetaConfigForm((current) => ({ ...current, appBaseUrl: event.target.value }))
+                          }
+                          placeholder="https://roas-radar.api.thecapemarine.com"
+                        />
+                      </label>
+                      <label className="credential-field credential-field-wide">
+                        <span>Scopes</span>
+                        <input
+                          type="text"
+                          value={metaConfigForm.appScopes}
+                          onChange={(event) =>
+                            setMetaConfigForm((current) => ({ ...current, appScopes: event.target.value }))
+                          }
+                          placeholder="ads_read"
+                        />
+                      </label>
+                    </div>
+                    <div className="button-row">
+                      <button type="submit" className="action-button" disabled={actionFeedback.loading !== null}>
+                        {actionFeedback.loading === 'meta-config-save' ? 'Saving…' : 'Save Meta config'}
+                      </button>
+                    </div>
+                  </form>
                   <div className="button-row">
                     <button
                       type="button"
                       className="action-button"
                       onClick={() => void handleMetaConnect()}
-                      disabled={actionFeedback.loading !== null}
+                      disabled={actionFeedback.loading !== null || Boolean(metaConnection.data?.config.missingFields.length)}
                     >
                       {actionFeedback.loading === 'meta-connect' ? 'Opening Meta…' : 'Connect Meta Ads'}
                     </button>
@@ -1097,7 +1244,7 @@ function App() {
                       type="button"
                       className="action-button action-button-secondary"
                       onClick={() => void handleMetaSync()}
-                      disabled={actionFeedback.loading !== null || metaConnection.data == null}
+                      disabled={actionFeedback.loading !== null || metaConnection.data?.connection == null}
                     >
                       {actionFeedback.loading === 'meta-sync' ? 'Queueing…' : `Sync ${filters.startDate} to ${filters.endDate}`}
                     </button>
