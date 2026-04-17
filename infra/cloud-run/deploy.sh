@@ -170,7 +170,7 @@ fi
 
 if [ "${APPLY_MONITORING_ON_DEPLOY:-true}" = "true" ]; then
   echo "Applying monitoring configuration for $ENVIRONMENT"
-  "$REPO_ROOT/infra/monitoring/apply.sh" "$ENVIRONMENT"
+  sh "$REPO_ROOT/infra/monitoring/apply.sh" "$ENVIRONMENT"
 fi
 
 echo "Deployment complete for $ENVIRONMENT"

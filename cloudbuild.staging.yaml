@@ -33,7 +33,7 @@ steps:
         SKIP_BUILDS=true \
         RUN_MIGRATIONS_ON_DEPLOY="${_RUN_MIGRATIONS_ON_DEPLOY}" \
         APPLY_MONITORING_ON_DEPLOY="${_APPLY_MONITORING_ON_DEPLOY}" \
-        ./infra/cloud-run/deploy.sh staging
+        bash ./infra/cloud-run/deploy.sh staging
 
 substitutions:
   _REGION: us-central1
