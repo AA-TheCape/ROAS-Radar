@@ -2,7 +2,6 @@
   "name": "roas_attribution_queue_runs",
   "description": "Tracks worker queue throughput for claimed, succeeded, and failed attribution jobs.",
   "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"attribution_queue_outcome\"",
-  "valueExtractor": "EXTRACT(jsonPayload.value)",
   "labelExtractors": {
     "service": "EXTRACT(jsonPayload.service)",
     "outcome": "EXTRACT(jsonPayload.outcome)"

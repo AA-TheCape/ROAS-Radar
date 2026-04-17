@@ -78,14 +78,14 @@
         "width": 3,
         "height": 4,
         "widget": {
-          "title": "Attribution Backlog",
+          "title": "Queue Throughput",
           "scorecard": {
             "timeSeriesQuery": {
               "timeSeriesFilter": {
-                "filter": "metric.type=\"logging.googleapis.com/user/roas_attribution_job_backlog\" resource.type=\"cloud_run_revision\"",
+                "filter": "metric.type=\"logging.googleapis.com/user/roas_attribution_queue_runs\" resource.type=\"cloud_run_revision\" metric.label.outcome=\"claimed\"",
                 "aggregation": {
-                  "alignmentPeriod": "300s",
-                  "perSeriesAligner": "ALIGN_NEXT_OLDER"
+                  "alignmentPeriod": "600s",
+                  "perSeriesAligner": "ALIGN_SUM"
                 }
               }
             },
@@ -226,50 +226,6 @@
             "timeshiftDuration": "0s",
             "yAxis": {
               "label": "jobs",
-              "scale": "LINEAR"
-            }
-          }
-        }
-      },
-      {
-        "xPos": 6,
-        "yPos": 8,
-        "width": 6,
-        "height": 4,
-        "widget": {
-          "title": "Backlog Age and Stale Processing Locks",
-          "xyChart": {
-            "dataSets": [
-              {
-                "plotType": "LINE",
-                "legendTemplate": "Oldest job age (s)",
-                "timeSeriesQuery": {
-                  "timeSeriesFilter": {
-                    "filter": "metric.type=\"logging.googleapis.com/user/roas_attribution_job_oldest_age_seconds\" resource.type=\"cloud_run_revision\"",
-                    "aggregation": {
-                      "alignmentPeriod": "300s",
-                      "perSeriesAligner": "ALIGN_MAX"
-                    }
-                  }
-                }
-              },
-              {
-                "plotType": "LINE",
-                "legendTemplate": "Stale processing jobs",
-                "timeSeriesQuery": {
-                  "timeSeriesFilter": {
-                    "filter": "metric.type=\"logging.googleapis.com/user/roas_attribution_stale_processing_jobs\" resource.type=\"cloud_run_revision\"",
-                    "aggregation": {
-                      "alignmentPeriod": "300s",
-                      "perSeriesAligner": "ALIGN_MAX"
-                    }
-                  }
-                }
-              }
-            ],
-            "timeshiftDuration": "0s",
-            "yAxis": {
-              "label": "seconds / jobs",
               "scale": "LINEAR"
             }
           }
