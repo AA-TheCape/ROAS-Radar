@@ -88,9 +88,11 @@ type MetaConfigForm = {
 type AppPage = 'dashboard' | 'settings';
 
 const PRESETS = [
-  { label: 'Last 7D', days: 7 },
-  { label: 'Last 30D', days: 30 },
-  { label: 'Last 90D', days: 90 }
+  { label: 'Today', value: () => buildRange(1) },
+  { label: 'Yesterday', value: () => buildSingleDayRange(-1) },
+  { label: 'Last 7D', value: () => buildRange(7) },
+  { label: 'Last 30D', value: () => buildRange(30) },
+  { label: 'Last 90D', value: () => buildRange(90) }
 ] as const;
 
 const GROUP_BY_OPTIONS: Array<{ value: TimeseriesGroupBy; label: string }> = [
@@ -111,6 +113,17 @@ function buildRange(days: number): Pick<ReportingFilters, 'startDate' | 'endDate
   return {
     startDate: formatDateInput(start),
     endDate: formatDateInput(end)
+  };
+}
+
+function buildSingleDayRange(offsetDays: number): Pick<ReportingFilters, 'startDate' | 'endDate'> {
+  const date = new Date();
+  date.setUTCDate(date.getUTCDate() + offsetDays);
+  const value = formatDateInput(date);
+
+  return {
+    startDate: value,
+    endDate: value
   };
 }
 
@@ -1084,14 +1097,14 @@ function App() {
           <div className="preset-row">
             {PRESETS.map((preset) => (
               <button
-                key={preset.days}
+                key={preset.label}
                 type="button"
                 className="preset-chip"
                 onClick={() =>
                   startTransition(() => {
                     setFilters((current) => ({
                       ...current,
-                      ...buildRange(preset.days)
+                      ...preset.value()
                     }));
                   })
                 }
