@@ -127,6 +127,26 @@ select {
   gap: 8px;
 }
 
+.hero-status-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.nav-link-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--teal);
+  cursor: pointer;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+
+.nav-link-button:hover {
+  color: var(--ink-strong);
+}
+
 .hero-status-card span,
 .metric-card span,
 .metric-card small,

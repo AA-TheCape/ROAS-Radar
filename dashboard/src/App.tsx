@@ -85,6 +85,8 @@ type MetaConfigForm = {
   adAccountId: string;
 };
 
+type AppPage = 'dashboard' | 'settings';
+
 const PRESETS = [
   { label: 'Last 7D', days: 7 },
   { label: 'Last 30D', days: 30 },
@@ -402,6 +404,7 @@ function App() {
     isAdmin: false
   });
   const [groupBy, setGroupBy] = useState<TimeseriesGroupBy>('day');
+  const [currentPage, setCurrentPage] = useState<AppPage>('dashboard');
   const [dashboardRefreshKey, setDashboardRefreshKey] = useState(0);
   const [shopifyConnection, setShopifyConnection] = useState<AsyncSection<ShopifyConnectionResponse>>(createLoadingSection());
   const [shopifyBackfillRange, setShopifyBackfillRange] = useState({
@@ -627,6 +630,7 @@ function App() {
       user: null,
       error: null
     });
+    setCurrentPage('dashboard');
     setUsersSection({
       data: null,
       loading: false,
@@ -970,11 +974,12 @@ function App() {
     <main className="app-shell">
       <section className="hero">
         <div className="hero-copy-block">
-          <p className="eyebrow">MVP reporting dashboard</p>
+          <p className="eyebrow">{currentPage === 'settings' ? 'Admin settings' : 'MVP reporting dashboard'}</p>
           <h1>ROAS Radar</h1>
           <p className="hero-copy">
-            Monitor paid acquisition performance for a single Shopify store across headline metrics, campaign rows,
-            time-based trends, and order-level attribution evidence.
+            {currentPage === 'settings'
+              ? 'Configure store integrations, ad platform connections, and dashboard user access from one place.'
+              : 'Monitor paid acquisition performance for a single Shopify store across headline metrics, campaign rows, time-based trends, and order-level attribution evidence.'}
           </p>
         </div>
         <div className="hero-status-card">
@@ -986,6 +991,15 @@ function App() {
               : 'All attributed traffic'}
           </small>
           <small>{`Signed in as ${authState.user.displayName} (${authState.user.email})`}</small>
+          <div className="hero-status-actions">
+            <button
+              type="button"
+              className="nav-link-button"
+              onClick={() => setCurrentPage(currentPage === 'settings' ? 'dashboard' : 'settings')}
+            >
+              {currentPage === 'settings' ? 'Back to dashboard' : 'Settings'}
+            </button>
+          </div>
           <div className="button-row">
             <button type="button" className="action-button action-button-secondary" onClick={() => void handleLogout()}>
               Logout
@@ -994,7 +1008,7 @@ function App() {
         </div>
       </section>
 
-      <section className="control-bar">
+      {currentPage === 'dashboard' ? <section className="control-bar">
         <div className="control-group">
           <label htmlFor="start-date">Start date</label>
           <input
@@ -1102,22 +1116,32 @@ function App() {
             </button>
           </div>
         </div>
-      </section>
+      </section> : null}
 
-      <section className="summary-grid">
+      {currentPage === 'dashboard' ? <section className="summary-grid">
         {summaryCards.map((card) => (
           <SummaryCard key={card.label} label={card.label} value={card.value} detail={card.detail} />
         ))}
-      </section>
+      </section> : null}
 
       <section className="dashboard-grid">
+        {currentPage === 'settings' ? (
+        <article className="panel panel-wide">
+          <div className="panel-header">
+            <h2>Settings</h2>
+            <p>Manage store connections, ad platform credentials, and dashboard access here.</p>
+          </div>
+          {actionFeedback.error ? <div className="action-banner action-banner-error">{actionFeedback.error}</div> : null}
+          {actionFeedback.message ? <div className="action-banner">{actionFeedback.message}</div> : null}
+        </article>
+        ) : null}
+
+        {currentPage === 'settings' ? (
         <article className="panel panel-wide">
           <div className="panel-header">
             <h2>Ad connections</h2>
             <p>Connect spend sources here so ROAS Radar can populate spend and ROAS, not just attributed revenue.</p>
           </div>
-          {actionFeedback.error ? <div className="action-banner action-banner-error">{actionFeedback.error}</div> : null}
-          {actionFeedback.message ? <div className="action-banner">{actionFeedback.message}</div> : null}
           <div className="connections-grid">
             <section className="connection-card">
               <div className="connection-card-header">
@@ -1486,8 +1510,9 @@ function App() {
             </section>
           </div>
         </article>
+        ) : null}
 
-        {authState.user.isAdmin ? (
+        {currentPage === 'settings' && authState.user.isAdmin ? (
           <article className="panel panel-wide">
             <div className="panel-header">
               <h2>User access</h2>
@@ -1583,7 +1608,7 @@ function App() {
           </article>
         ) : null}
 
-        <article className="panel panel-wide">
+        {currentPage === 'dashboard' ? <article className="panel panel-wide">
           <div className="panel-header">
             <h2>Revenue trend</h2>
             <p>Uses the reporting timeseries contract and switches grouping without changing the rest of the dashboard.</p>
@@ -1596,9 +1621,9 @@ function App() {
           >
             <TimeseriesChart points={dashboard.timeseries.data ?? []} groupBy={groupBy} />
           </SectionState>
-        </article>
+        </article> : null}
 
-        <article className="panel">
+        {currentPage === 'dashboard' ? <article className="panel">
           <div className="panel-header">
             <h2>Campaign performance</h2>
             <p>Top campaign rows ordered by revenue, matching the API’s table response.</p>
@@ -1641,9 +1666,9 @@ function App() {
               </table>
             </div>
           </SectionState>
-        </article>
+        </article> : null}
 
-        <article className="panel">
+        {currentPage === 'dashboard' ? <article className="panel">
           <div className="panel-header">
             <h2>Campaign mix</h2>
             <p>Revenue share makes it obvious which campaigns dominate the selected window.</p>
@@ -1673,9 +1698,9 @@ function App() {
               })}
             </div>
           </SectionState>
-        </article>
+        </article> : null}
 
-        <article className="panel panel-wide">
+        {currentPage === 'dashboard' ? <article className="panel panel-wide">
           <div className="panel-header">
             <h2>Attributed orders</h2>
             <p>Order-level attribution rows help debug why a sale was assigned to a source and campaign.</p>
@@ -1720,7 +1745,7 @@ function App() {
               </table>
             </div>
           </SectionState>
-        </article>
+        </article> : null}
       </section>
     </main>
   );
