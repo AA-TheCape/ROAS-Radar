@@ -554,14 +554,15 @@ async function backfillShopifyOrders(
 
   do {
     const searchParams = new URLSearchParams();
-    searchParams.set('status', 'any');
     searchParams.set('limit', '250');
-    searchParams.set('processed_at_min', formatShopifyDateBoundary(startDate, 'start'));
-    searchParams.set('processed_at_max', formatShopifyDateBoundary(endDate, 'end'));
-    searchParams.set('order', 'processed_at asc');
 
     if (pageInfo) {
       searchParams.set('page_info', pageInfo);
+    } else {
+      searchParams.set('status', 'any');
+      searchParams.set('processed_at_min', formatShopifyDateBoundary(startDate, 'start'));
+      searchParams.set('processed_at_max', formatShopifyDateBoundary(endDate, 'end'));
+      searchParams.set('order', 'processed_at asc');
     }
 
     const { data, linkHeader } = await callShopifyAdminRest<ShopifyOrdersRestResponse>(
