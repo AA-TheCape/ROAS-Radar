@@ -157,7 +157,7 @@ class ShopifyHttpError extends Error {
 }
 
 function getShopifySharedSecret(): string {
-  return env.SHOPIFY_WEBHOOK_SECRET || env.SHOPIFY_APP_API_SECRET;
+  return env.SHOPIFY_APP_API_SECRET || env.SHOPIFY_WEBHOOK_SECRET;
 }
 
 function normalizeShopDomain(rawShop: string): string {
