@@ -115,6 +115,7 @@ gcloud run deploy "$WORKER_SERVICE_NAME" \
   --max-instances="$WORKER_MAX_INSTANCES" \
   --port=8080 \
   --cpu=1 \
+  --no-cpu-throttling \
   --memory=512Mi \
   --concurrency=1 \
   --timeout=900 \
