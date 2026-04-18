@@ -22,6 +22,21 @@ const SHOPIFY_WEBHOOK_TOPICS = [
         deliveryPath: '/app-uninstalled'
     }
 ];
+const strictEmailSchema = z.string().email();
+function sanitizeNullableEmail(value) {
+    if (value == null) {
+        return value;
+    }
+    if (typeof value !== 'string') {
+        return null;
+    }
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) {
+        return null;
+    }
+    return strictEmailSchema.safeParse(normalized).success ? normalized : null;
+}
+const shopifyEmailSchema = z.preprocess(sanitizeNullableEmail, z.string().nullable().optional());
 const shopifyAttributeSchema = z.object({
     name: z.string().optional(),
     value: z.union([z.string(), z.number(), z.boolean()]).nullable().optional()
@@ -29,7 +44,7 @@ const shopifyAttributeSchema = z.object({
 const shopifyCustomerSchema = z
     .object({
     id: z.union([z.string(), z.number()]).optional(),
-    email: z.string().email().nullable().optional(),
+    email: shopifyEmailSchema,
     phone: z.string().nullable().optional()
 })
     .nullable()
@@ -53,7 +68,7 @@ const shopifyOrderPayloadSchema = z.object({
     id: z.union([z.string(), z.number()]),
     order_number: z.union([z.string(), z.number()]).optional(),
     customer: shopifyCustomerSchema,
-    email: z.string().email().nullable().optional(),
+    email: shopifyEmailSchema,
     currency: z.string().min(1).optional(),
     subtotal_price: z.union([z.string(), z.number()]).optional(),
     total_price: z.union([z.string(), z.number()]).optional(),
