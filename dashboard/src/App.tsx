@@ -1,6 +1,7 @@
 import { startTransition, useDeferredValue, useEffect, useMemo, useState, type FormEvent } from 'react';
 
 import {
+  backfillShopifyOrders,
   clearStoredAuthToken,
   connectGoogleAds,
   createUser,
@@ -33,6 +34,7 @@ import {
   type OrderRow,
   type ReportingFilters,
   type ShopifyConnectionResponse,
+  type ShopifyBackfillResponse,
   type SummaryTotals,
   type TimeseriesGroupBy,
   type TimeseriesPoint
@@ -110,6 +112,18 @@ function buildRange(days: number): Pick<ReportingFilters, 'startDate' | 'endDate
   };
 }
 
+function buildYesterdayDateInput(): string {
+  const date = new Date();
+  date.setUTCDate(date.getUTCDate() - 1);
+  return formatDateInput(date);
+}
+
+function buildAprilFirstDateInput(): string {
+  const date = new Date();
+  date.setUTCMonth(3, 1);
+  return formatDateInput(date);
+}
+
 function createLoadingSection<T>(): AsyncSection<T> {
   return {
     data: null,
@@ -150,7 +164,12 @@ function buildSeriesPath(points: TimeseriesPoint[]): string {
     .join(' ');
 }
 
-function useDashboardData(filters: ReportingFilters, groupBy: TimeseriesGroupBy, enabled: boolean) {
+function useDashboardData(
+  filters: ReportingFilters,
+  groupBy: TimeseriesGroupBy,
+  enabled: boolean,
+  refreshKey: number
+) {
   const [state, setState] = useState<DashboardState>({
     summary: createLoadingSection(),
     campaigns: createLoadingSection(),
@@ -257,7 +276,7 @@ function useDashboardData(filters: ReportingFilters, groupBy: TimeseriesGroupBy,
     return () => {
       cancelled = true;
     };
-  }, [enabled, filters, groupBy]);
+  }, [enabled, filters, groupBy, refreshKey]);
 
   return state;
 }
@@ -383,7 +402,12 @@ function App() {
     isAdmin: false
   });
   const [groupBy, setGroupBy] = useState<TimeseriesGroupBy>('day');
+  const [dashboardRefreshKey, setDashboardRefreshKey] = useState(0);
   const [shopifyConnection, setShopifyConnection] = useState<AsyncSection<ShopifyConnectionResponse>>(createLoadingSection());
+  const [shopifyBackfillRange, setShopifyBackfillRange] = useState({
+    startDate: buildAprilFirstDateInput(),
+    endDate: buildYesterdayDateInput()
+  });
   const [metaConnection, setMetaConnection] = useState<AsyncSection<MetaConnectionState>>(createLoadingSection());
   const [metaConfigForm, setMetaConfigForm] = useState<MetaConfigForm>({
     appId: '',
@@ -420,7 +444,7 @@ function App() {
     [deferredCampaign, deferredSource, filters.endDate, filters.startDate]
   );
 
-  const dashboard = useDashboardData(appliedFilters, groupBy, authState.user !== null);
+  const dashboard = useDashboardData(appliedFilters, groupBy, authState.user !== null, dashboardRefreshKey);
 
   async function loadConnections() {
     setShopifyConnection(createLoadingSection());
@@ -764,6 +788,37 @@ function App() {
     }
   }
 
+  async function handleShopifyBackfill(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setActionFeedback({
+      loading: 'shopify-backfill',
+      error: null,
+      message: null
+    });
+
+    try {
+      const response: ShopifyBackfillResponse = await backfillShopifyOrders(
+        shopifyBackfillRange.startDate,
+        shopifyBackfillRange.endDate
+      );
+      await loadConnections();
+      startTransition(() => {
+        setDashboardRefreshKey((current) => current + 1);
+      });
+      setActionFeedback({
+        loading: null,
+        error: null,
+        message: `Backfilled ${response.importedOrders} Shopify orders for ${response.startDate} to ${response.endDate} (${response.processedOrders} imported, ${response.duplicatedOrders} already present).`
+      });
+    } catch (error) {
+      setActionFeedback({
+        loading: null,
+        error: error instanceof Error ? error.message : 'Failed to backfill Shopify orders',
+        message: null
+      });
+    }
+  }
+
   async function handleMetaSync() {
     setActionFeedback({
       loading: 'meta-sync',
@@ -1095,12 +1150,49 @@ function App() {
                       <dd>{shopifyConnection.data?.webhookBaseUrl ?? 'Not available'}</dd>
                     </div>
                   </dl>
-                  {shopifyConnection.data?.reconnectUrl ? (
-                    <div className="connection-note">Reconnect URL is available if the store needs to be reauthorized.</div>
-                  ) : null}
-                  <div className="button-row">
-                    <button
-                      type="button"
+                    {shopifyConnection.data?.reconnectUrl ? (
+                      <div className="connection-note">Reconnect URL is available if the store needs to be reauthorized.</div>
+                    ) : null}
+                    <form className="credentials-form" onSubmit={handleShopifyBackfill}>
+                      <div className="credentials-grid">
+                        <label className="credential-field">
+                          <span>Backfill start</span>
+                          <input
+                            type="date"
+                            value={shopifyBackfillRange.startDate}
+                            onChange={(event) =>
+                              setShopifyBackfillRange((current) => ({ ...current, startDate: event.target.value }))
+                            }
+                            required
+                          />
+                        </label>
+                        <label className="credential-field">
+                          <span>Backfill end</span>
+                          <input
+                            type="date"
+                            value={shopifyBackfillRange.endDate}
+                            onChange={(event) =>
+                              setShopifyBackfillRange((current) => ({ ...current, endDate: event.target.value }))
+                            }
+                            required
+                          />
+                        </label>
+                      </div>
+                      <div className="button-row">
+                        <button
+                          type="submit"
+                          className="action-button action-button-secondary"
+                          disabled={actionFeedback.loading !== null || !shopifyConnection.data?.connected}
+                        >
+                          {actionFeedback.loading === 'shopify-backfill'
+                            ? 'Backfilling…'
+                            : `Backfill Shopify orders`}
+                        </button>
+                      </div>
+                    </form>
+                    <div className="button-row">
+                      <button
+                        type="button"
                       className="action-button"
                       onClick={() => void handleShopifyTest()}
                       disabled={actionFeedback.loading !== null}

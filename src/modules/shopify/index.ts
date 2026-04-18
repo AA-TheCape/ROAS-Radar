@@ -91,6 +91,21 @@ const callbackQuerySchema = z.object({
   state: z.string().min(1)
 });
 
+const shopifyBackfillRequestSchema = z
+  .object({
+    startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+  })
+  .superRefine((value, ctx) => {
+    if (value.startDate > value.endDate) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'startDate must be on or before endDate',
+        path: ['startDate']
+      });
+    }
+  });
+
 type ShopifyOrderPayload = z.infer<typeof shopifyOrderPayloadSchema>;
 type ShopifyLineItemPayload = z.infer<typeof shopifyLineItemSchema>;
 
@@ -140,6 +155,10 @@ type ShopifyWebhookSubscription = {
   topic: string;
   id: string;
   callbackUrl: string | null;
+};
+
+type ShopifyOrdersRestResponse = {
+  orders?: unknown[];
 };
 
 class ShopifyHttpError extends Error {
@@ -436,6 +455,129 @@ async function callShopifyAdminGraphql<TData>(
   }
 
   return payload.data;
+}
+
+async function callShopifyAdminRest<TData>(
+  shopDomain: string,
+  accessToken: string,
+  path: string,
+  searchParams?: URLSearchParams
+): Promise<{ data: TData; linkHeader: string | null }> {
+  const url = new URL(`https://${shopDomain}/admin/api/${env.SHOPIFY_APP_API_VERSION}/${path.replace(/^\//, '')}`);
+
+  if (searchParams) {
+    url.search = searchParams.toString();
+  }
+
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      accept: 'application/json',
+      'x-shopify-access-token': accessToken
+    }
+  });
+
+  const payload = (await response.json()) as TData & {
+    errors?: Array<{ message: string }>;
+    error?: string;
+  };
+
+  if (!response.ok || ('errors' in payload && Array.isArray(payload.errors) && payload.errors.length > 0)) {
+    throw new ShopifyHttpError(502, 'shopify_admin_api_failed', 'Shopify Admin API request failed', payload);
+  }
+
+  return {
+    data: payload,
+    linkHeader: response.headers.get('link')
+  };
+}
+
+function formatShopifyDateBoundary(dateString: string, kind: 'start' | 'end'): string {
+  const suffix = kind === 'start' ? 'T00:00:00.000Z' : 'T23:59:59.999Z';
+  return `${dateString}${suffix}`;
+}
+
+function extractShopifyNextPageInfo(linkHeader: string | null): string | null {
+  if (!linkHeader) {
+    return null;
+  }
+
+  const nextLink = linkHeader
+    .split(',')
+    .map((entry) => entry.trim())
+    .find((entry) => entry.includes('rel="next"'));
+
+  if (!nextLink) {
+    return null;
+  }
+
+  const match = nextLink.match(/<([^>]+)>/);
+  if (!match) {
+    return null;
+  }
+
+  const url = new URL(match[1]);
+  return url.searchParams.get('page_info');
+}
+
+async function backfillShopifyOrders(
+  shopDomain: string,
+  accessToken: string,
+  startDate: string,
+  endDate: string
+): Promise<{ importedOrders: number; processedOrders: number; duplicatedOrders: number }> {
+  let pageInfo: string | null = null;
+  let importedOrders = 0;
+  let processedOrders = 0;
+  let duplicatedOrders = 0;
+
+  do {
+    const searchParams = new URLSearchParams();
+    searchParams.set('status', 'any');
+    searchParams.set('limit', '250');
+    searchParams.set('processed_at_min', formatShopifyDateBoundary(startDate, 'start'));
+    searchParams.set('processed_at_max', formatShopifyDateBoundary(endDate, 'end'));
+    searchParams.set('order', 'processed_at asc');
+
+    if (pageInfo) {
+      searchParams.set('page_info', pageInfo);
+    }
+
+    const { data, linkHeader } = await callShopifyAdminRest<ShopifyOrdersRestResponse>(
+      shopDomain,
+      accessToken,
+      'orders.json',
+      searchParams
+    );
+
+    const rawOrders = Array.isArray(data.orders) ? data.orders : [];
+
+    for (const rawOrder of rawOrders) {
+      const payload = shopifyOrderPayloadSchema.parse(rawOrder);
+      const persisted = await persistWebhook({
+        payload,
+        rawBody: Buffer.from(JSON.stringify(rawOrder)),
+        shopDomain,
+        topic: 'orders/backfill',
+        webhookId: null
+      });
+
+      importedOrders += 1;
+      if (persisted.duplicated) {
+        duplicatedOrders += 1;
+      } else {
+        processedOrders += 1;
+      }
+    }
+
+    pageInfo = extractShopifyNextPageInfo(linkHeader);
+  } while (pageInfo);
+
+  return {
+    importedOrders,
+    processedOrders,
+    duplicatedOrders
+  };
 }
 
 async function fetchShopIdentity(shopDomain: string, accessToken: string): Promise<ShopifyShopIdentity> {
@@ -1408,6 +1550,37 @@ export function createShopifyAdminRouter(): Router {
         ok: true,
         shopDomain: installation.shop_domain,
         webhookSubscriptions
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/orders/backfill', async (req, res, next) => {
+    try {
+      assertShopifyAppConfig();
+
+      const input = shopifyBackfillRequestSchema.parse(req.body ?? {});
+      const installation = await getShopifyInstallationSummary();
+
+      if (!installation || installation.status !== 'active') {
+        throw new ShopifyHttpError(404, 'shopify_installation_not_found', 'No active Shopify installation was found');
+      }
+
+      const accessToken = await getActiveShopifyAccessToken(installation.shop_domain);
+      const result = await backfillShopifyOrders(
+        installation.shop_domain,
+        accessToken,
+        input.startDate,
+        input.endDate
+      );
+
+      res.status(200).json({
+        ok: true,
+        shopDomain: installation.shop_domain,
+        startDate: input.startDate,
+        endDate: input.endDate,
+        ...result
       });
     } catch (error) {
       next(error);

@@ -231,6 +231,16 @@ export type ShopifyWebhookSyncResponse = {
   webhookSubscriptions: unknown;
 };
 
+export type ShopifyBackfillResponse = {
+  ok: true;
+  shopDomain: string;
+  startDate: string;
+  endDate: string;
+  importedOrders: number;
+  processedOrders: number;
+  duplicatedOrders: number;
+};
+
 declare global {
   interface Window {
     __ROAS_RADAR_RUNTIME_CONFIG__?: {
@@ -453,6 +463,13 @@ export function fetchShopifyConnection() {
 export function syncShopifyWebhooks() {
   return requestJson<ShopifyWebhookSyncResponse>('/api/admin/shopify/webhooks/sync', {
     method: 'POST'
+  });
+}
+
+export function backfillShopifyOrders(startDate: string, endDate: string) {
+  return requestJson<ShopifyBackfillResponse>('/api/admin/shopify/orders/backfill', {
+    method: 'POST',
+    body: { startDate, endDate }
   });
 }
 
