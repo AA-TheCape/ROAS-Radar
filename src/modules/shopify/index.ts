@@ -746,12 +746,26 @@ async function resolveLandingSessionId(
   client: PoolClient,
   payload: ShopifyOrderPayload
 ): Promise<string | null> {
+  const sessionExists = async (sessionId: string): Promise<boolean> => {
+    const existingSession = await client.query<{ id: string }>(
+      `
+        SELECT s.id::text AS id
+        FROM tracking_sessions s
+        WHERE s.id = $1::uuid
+        LIMIT 1
+      `,
+      [sessionId]
+    );
+
+    return (existingSession.rowCount ?? 0) > 0;
+  };
+
   const explicitSessionId =
     getAttributeValue(payload.note_attributes, 'roas_radar_session_id') ??
     getAttributeValue(payload.attributes, 'roas_radar_session_id');
   const normalizedExplicitSessionId = toNullableUuid(explicitSessionId);
 
-  if (normalizedExplicitSessionId) {
+  if (normalizedExplicitSessionId && (await sessionExists(normalizedExplicitSessionId))) {
     return normalizedExplicitSessionId;
   }
 
@@ -760,6 +774,7 @@ async function resolveLandingSessionId(
       `
         SELECT e.session_id
         FROM tracking_events e
+        INNER JOIN tracking_sessions s ON s.id = e.session_id
         WHERE e.shopify_checkout_token = $1
         ORDER BY e.occurred_at DESC
         LIMIT 1
@@ -777,6 +792,7 @@ async function resolveLandingSessionId(
       `
         SELECT e.session_id
         FROM tracking_events e
+        INNER JOIN tracking_sessions s ON s.id = e.session_id
         WHERE e.shopify_cart_token = $1
         ORDER BY e.occurred_at DESC
         LIMIT 1

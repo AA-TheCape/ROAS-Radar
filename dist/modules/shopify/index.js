@@ -507,16 +507,26 @@ function normalizeLineItemText(value) {
     return normalizeNullableString(value);
 }
 async function resolveLandingSessionId(client, payload) {
+    const sessionExists = async (sessionId) => {
+        const existingSession = await client.query(`
+        SELECT s.id::text AS id
+        FROM tracking_sessions s
+        WHERE s.id = $1::uuid
+        LIMIT 1
+      `, [sessionId]);
+        return (existingSession.rowCount ?? 0) > 0;
+    };
     const explicitSessionId = getAttributeValue(payload.note_attributes, 'roas_radar_session_id') ??
         getAttributeValue(payload.attributes, 'roas_radar_session_id');
     const normalizedExplicitSessionId = toNullableUuid(explicitSessionId);
-    if (normalizedExplicitSessionId) {
+    if (normalizedExplicitSessionId && (await sessionExists(normalizedExplicitSessionId))) {
         return normalizedExplicitSessionId;
     }
     if (payload.checkout_token) {
         const checkoutMatch = await client.query(`
         SELECT e.session_id
         FROM tracking_events e
+        INNER JOIN tracking_sessions s ON s.id = e.session_id
         WHERE e.shopify_checkout_token = $1
         ORDER BY e.occurred_at DESC
         LIMIT 1
@@ -529,6 +539,7 @@ async function resolveLandingSessionId(client, payload) {
         const cartMatch = await client.query(`
         SELECT e.session_id
         FROM tracking_events e
+        INNER JOIN tracking_sessions s ON s.id = e.session_id
         WHERE e.shopify_cart_token = $1
         ORDER BY e.occurred_at DESC
         LIMIT 1
