@@ -7,6 +7,7 @@ import { logError, logInfo, logWarning } from '../../observability/index.js';
 import { enqueueAttributionForOrder } from '../attribution/index.js';
 import { attachAuthContext, requireAdmin } from '../auth/index.js';
 import { hashIdentityEmail, stitchKnownCustomerIdentity } from '../identity/index.js';
+import { getReportingTimezone } from '../settings/index.js';
 const OAUTH_STATE_TTL_MINUTES = 10;
 const SHOPIFY_WEBHOOK_TOPICS = [
     {
@@ -340,9 +341,64 @@ async function callShopifyAdminRest(shopDomain, accessToken, path, searchParams)
         linkHeader: response.headers.get('link')
     };
 }
-function formatShopifyDateBoundary(dateString, kind) {
-    const suffix = kind === 'start' ? 'T00:00:00.000Z' : 'T23:59:59.999Z';
-    return `${dateString}${suffix}`;
+function parseDateOnly(dateString) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateString);
+    if (!match) {
+        throw new ShopifyHttpError(400, 'invalid_date', 'Date must use YYYY-MM-DD format');
+    }
+    return {
+        year: Number(match[1]),
+        month: Number(match[2]),
+        day: Number(match[3])
+    };
+}
+function getTimeZoneLocalParts(date, timeZone) {
+    const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hourCycle: 'h23'
+    });
+    const parts = formatter.formatToParts(date);
+    const get = (type) => Number(parts.find((part) => part.type === type)?.value ?? '0');
+    return {
+        year: get('year'),
+        month: get('month'),
+        day: get('day'),
+        hour: get('hour'),
+        minute: get('minute'),
+        second: get('second')
+    };
+}
+function convertLocalDateTimeInTimeZoneToUtc(dateString, timeZone, kind) {
+    const { year, month, day } = parseDateOnly(dateString);
+    const target = {
+        year,
+        month,
+        day,
+        hour: kind === 'start' ? 0 : 23,
+        minute: kind === 'start' ? 0 : 59,
+        second: kind === 'start' ? 0 : 59
+    };
+    let utcMillis = Date.UTC(target.year, target.month - 1, target.day, target.hour, target.minute, target.second);
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+        const actual = getTimeZoneLocalParts(new Date(utcMillis), timeZone);
+        const actualMillis = Date.UTC(actual.year, actual.month - 1, actual.day, actual.hour, actual.minute, actual.second);
+        const targetMillis = Date.UTC(target.year, target.month - 1, target.day, target.hour, target.minute, target.second);
+        const deltaMs = actualMillis - targetMillis;
+        if (deltaMs === 0) {
+            break;
+        }
+        utcMillis -= deltaMs;
+    }
+    if (kind === 'end') {
+        utcMillis += 999;
+    }
+    return new Date(utcMillis).toISOString();
 }
 function extractShopifyNextPageInfo(linkHeader) {
     if (!linkHeader) {
@@ -362,7 +418,7 @@ function extractShopifyNextPageInfo(linkHeader) {
     const url = new URL(match[1]);
     return url.searchParams.get('page_info');
 }
-async function backfillShopifyOrders(shopDomain, accessToken, startDate, endDate) {
+async function backfillShopifyOrders(shopDomain, accessToken, reportingTimezone, startDate, endDate) {
     let pageInfo = null;
     let importedOrders = 0;
     let processedOrders = 0;
@@ -375,8 +431,8 @@ async function backfillShopifyOrders(shopDomain, accessToken, startDate, endDate
         }
         else {
             searchParams.set('status', 'any');
-            searchParams.set('processed_at_min', formatShopifyDateBoundary(startDate, 'start'));
-            searchParams.set('processed_at_max', formatShopifyDateBoundary(endDate, 'end'));
+            searchParams.set('processed_at_min', convertLocalDateTimeInTimeZoneToUtc(startDate, reportingTimezone, 'start'));
+            searchParams.set('processed_at_max', convertLocalDateTimeInTimeZoneToUtc(endDate, reportingTimezone, 'end'));
             searchParams.set('order', 'processed_at asc');
         }
         const { data, linkHeader } = await callShopifyAdminRest(shopDomain, accessToken, 'orders.json', searchParams);
@@ -1177,7 +1233,8 @@ export function createShopifyAdminRouter() {
                 throw new ShopifyHttpError(404, 'shopify_installation_not_found', 'No active Shopify installation was found');
             }
             const accessToken = await getActiveShopifyAccessToken(installation.shop_domain);
-            const result = await backfillShopifyOrders(installation.shop_domain, accessToken, input.startDate, input.endDate);
+            const reportingTimezone = await getReportingTimezone();
+            const result = await backfillShopifyOrders(installation.shop_domain, accessToken, reportingTimezone, input.startDate, input.endDate);
             res.status(200).json({
                 ok: true,
                 shopDomain: installation.shop_domain,
