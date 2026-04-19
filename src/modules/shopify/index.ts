@@ -7,9 +7,10 @@ import { z } from 'zod';
 import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
 import { logError, logInfo, logWarning } from '../../observability/index.js';
-import { enqueueAttributionForOrder } from '../attribution/index.js';
+import { applySyntheticAttributionForOrder, enqueueAttributionForOrder } from '../attribution/index.js';
 import { attachAuthContext, requireAdmin } from '../auth/index.js';
 import { hashIdentityEmail, stitchKnownCustomerIdentity } from '../identity/index.js';
+import { buildCanonicalTouchpointDimensions } from '../marketing-dimensions/index.js';
 import { getReportingTimezone } from '../settings/index.js';
 
 const OAUTH_STATE_TTL_MINUTES = 10;
@@ -95,6 +96,8 @@ const shopifyOrderPayloadSchema = z.object({
   updated_at: z.string().datetime({ offset: true }).nullable().optional(),
   checkout_token: z.string().nullable().optional(),
   cart_token: z.string().nullable().optional(),
+  landing_site: z.string().nullable().optional(),
+  referring_site: z.string().nullable().optional(),
   source_name: z.string().nullable().optional(),
   line_items: z.array(shopifyLineItemSchema).default([]),
   note_attributes: z.array(shopifyAttributeSchema).optional(),
@@ -187,6 +190,18 @@ type ShopifyAttributionRecoveryResponse = {
   rescannedOrders: number;
   relinkedOrders: number;
   requeuedOrders: number;
+  shopifyHintAttributedOrders: number;
+};
+
+type ShopifyHintAttribution = {
+  source: string | null;
+  medium: string | null;
+  campaign: string | null;
+  content: string | null;
+  term: string | null;
+  clickIdType: string | null;
+  clickIdValue: string | null;
+  confidenceScore: number;
 };
 
 class ShopifyHttpError extends Error {
@@ -747,6 +762,7 @@ async function recoverShopifyAttributionHints(
   let rescannedOrders = 0;
   let relinkedOrders = 0;
   let requeuedOrders = 0;
+  let shopifyHintAttributedOrders = 0;
 
   for (const row of result.rows) {
     const parsedPayload = shopifyOrderPayloadSchema.safeParse(row.raw_payload);
@@ -790,6 +806,22 @@ async function recoverShopifyAttributionHints(
         cartToken: parsedPayload.data.cart_token ?? null
       });
 
+      const shopifyHintAttribution =
+        resolvedLandingSessionId === null ? extractShopifyHintAttribution(parsedPayload.data) : null;
+
+      if (shopifyHintAttribution) {
+        await applySyntheticAttributionForOrder(
+          row.shopify_order_id,
+          {
+            ...shopifyHintAttribution,
+            attributionReason: 'shopify_hint_derived'
+          },
+          client
+        );
+        shopifyHintAttributedOrders += 1;
+        return;
+      }
+
       await enqueueAttributionForOrder(row.shopify_order_id, 'shopify_attribution_hint_recovery', client);
       requeuedOrders += 1;
     });
@@ -798,7 +830,8 @@ async function recoverShopifyAttributionHints(
   return {
     rescannedOrders,
     relinkedOrders,
-    requeuedOrders
+    requeuedOrders,
+    shopifyHintAttributedOrders
   };
 }
 
@@ -1066,6 +1099,20 @@ function getAttributeValue(
   return normalized ? normalized : null;
 }
 
+function getAttributeValueFromKeys(
+  attributes: Array<z.infer<typeof shopifyAttributeSchema>> | undefined,
+  keys: string[]
+): string | null {
+  for (const key of keys) {
+    const value = getAttributeValue(attributes, key);
+    if (value) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
 function toNumericString(value: string | number | undefined): string {
   if (value === undefined) {
     return '0';
@@ -1104,6 +1151,105 @@ function buildLineItemExternalId(orderId: string, lineItem: ShopifyLineItemPaylo
 
 function normalizeLineItemText(value: string | null | undefined): string | null {
   return normalizeNullableString(value);
+}
+
+function hasAttributionDimensions(value: {
+  source: string | null;
+  medium: string | null;
+  campaign: string | null;
+  content: string | null;
+  term: string | null;
+  clickIdType: string | null;
+  clickIdValue: string | null;
+}): boolean {
+  return Boolean(
+    value.source ||
+      value.medium ||
+      value.campaign ||
+      value.content ||
+      value.term ||
+      value.clickIdType ||
+      value.clickIdValue
+  );
+}
+
+function extractShopifyHintAttribution(payload: ShopifyOrderPayload): ShopifyHintAttribution | null {
+  const noteAttributes = payload.note_attributes;
+  const legacyAttributes = payload.attributes;
+  const rawDimensions: Record<string, string | null> = {
+    source:
+      getAttributeValueFromKeys(noteAttributes, ['utm_source', 'roas_radar_utm_source']) ??
+      getAttributeValueFromKeys(legacyAttributes, ['utm_source', 'roas_radar_utm_source']),
+    medium:
+      getAttributeValueFromKeys(noteAttributes, ['utm_medium', 'roas_radar_utm_medium']) ??
+      getAttributeValueFromKeys(legacyAttributes, ['utm_medium', 'roas_radar_utm_medium']),
+    campaign:
+      getAttributeValueFromKeys(noteAttributes, ['utm_campaign', 'roas_radar_utm_campaign']) ??
+      getAttributeValueFromKeys(legacyAttributes, ['utm_campaign', 'roas_radar_utm_campaign']),
+    content:
+      getAttributeValueFromKeys(noteAttributes, ['utm_content', 'roas_radar_utm_content']) ??
+      getAttributeValueFromKeys(legacyAttributes, ['utm_content', 'roas_radar_utm_content']),
+    term:
+      getAttributeValueFromKeys(noteAttributes, ['utm_term', 'roas_radar_utm_term']) ??
+      getAttributeValueFromKeys(legacyAttributes, ['utm_term', 'roas_radar_utm_term']),
+    gclid:
+      getAttributeValueFromKeys(noteAttributes, ['gclid', 'roas_radar_gclid']) ??
+      getAttributeValueFromKeys(legacyAttributes, ['gclid', 'roas_radar_gclid']),
+    fbclid:
+      getAttributeValueFromKeys(noteAttributes, ['fbclid', 'roas_radar_fbclid']) ??
+      getAttributeValueFromKeys(legacyAttributes, ['fbclid', 'roas_radar_fbclid']),
+    ttclid:
+      getAttributeValueFromKeys(noteAttributes, ['ttclid', 'roas_radar_ttclid']) ??
+      getAttributeValueFromKeys(legacyAttributes, ['ttclid', 'roas_radar_ttclid']),
+    msclkid:
+      getAttributeValueFromKeys(noteAttributes, ['msclkid', 'roas_radar_msclkid']) ??
+      getAttributeValueFromKeys(legacyAttributes, ['msclkid', 'roas_radar_msclkid'])
+  };
+
+  const hintCandidates = [
+    payload.landing_site,
+    payload.referring_site,
+    getAttributeValueFromKeys(noteAttributes, ['roas_radar_landing_path', 'landing_site', 'referring_site']),
+    getAttributeValueFromKeys(legacyAttributes, ['roas_radar_landing_path', 'landing_site', 'referring_site'])
+  ].filter((value): value is string => Boolean(value));
+
+  for (const candidate of hintCandidates) {
+    try {
+      const url = new URL(candidate, 'https://shopify-hint.local');
+      rawDimensions.source ??= normalizeNullableString(url.searchParams.get('utm_source'));
+      rawDimensions.medium ??= normalizeNullableString(url.searchParams.get('utm_medium'));
+      rawDimensions.campaign ??= normalizeNullableString(url.searchParams.get('utm_campaign'));
+      rawDimensions.content ??= normalizeNullableString(url.searchParams.get('utm_content'));
+      rawDimensions.term ??= normalizeNullableString(url.searchParams.get('utm_term'));
+      rawDimensions.gclid ??= normalizeNullableString(url.searchParams.get('gclid'));
+      rawDimensions.fbclid ??= normalizeNullableString(url.searchParams.get('fbclid'));
+      rawDimensions.ttclid ??= normalizeNullableString(url.searchParams.get('ttclid'));
+      rawDimensions.msclkid ??= normalizeNullableString(url.searchParams.get('msclkid'));
+    } catch {
+      continue;
+    }
+  }
+
+  const canonicalDimensions = buildCanonicalTouchpointDimensions({
+    source: rawDimensions.source,
+    medium: rawDimensions.medium,
+    campaign: rawDimensions.campaign,
+    content: rawDimensions.content,
+    term: rawDimensions.term,
+    gclid: rawDimensions.gclid,
+    fbclid: rawDimensions.fbclid,
+    ttclid: rawDimensions.ttclid,
+    msclkid: rawDimensions.msclkid
+  });
+
+  if (!hasAttributionDimensions(canonicalDimensions)) {
+    return null;
+  }
+
+  return {
+    ...canonicalDimensions,
+    confidenceScore: canonicalDimensions.clickIdValue ? 0.55 : 0.4
+  };
 }
 
 async function resolveLandingSessionId(

@@ -1076,7 +1076,7 @@ function App() {
       setActionFeedback({
         loading: null,
         error: null,
-        message: `Rescanned ${response.rescannedOrders} unknown Shopify web orders for ${response.startDate} to ${response.endDate}; relinked ${response.relinkedOrders} and requeued ${response.requeuedOrders} for attribution.`
+        message: `Rescanned ${response.rescannedOrders} unknown Shopify web orders for ${response.startDate} to ${response.endDate}; relinked ${response.relinkedOrders}, attributed ${response.shopifyHintAttributedOrders} from Shopify hints, and requeued ${response.requeuedOrders} for standard attribution.`
       });
     } catch (error) {
       setActionFeedback({

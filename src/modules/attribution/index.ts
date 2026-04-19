@@ -81,6 +81,19 @@ type ResolvedJourney = {
   confidenceScore: number;
 };
 
+export type SyntheticAttributionInput = {
+  occurredAt?: Date | null;
+  source?: string | null;
+  medium?: string | null;
+  campaign?: string | null;
+  content?: string | null;
+  term?: string | null;
+  clickIdType?: string | null;
+  clickIdValue?: string | null;
+  attributionReason: string;
+  confidenceScore?: number;
+};
+
 function normalizeNullableString(value: string | null | undefined): string | null {
   const normalized = value?.trim();
   return normalized ? normalized : null;
@@ -756,6 +769,50 @@ async function processClaimedJob(client: PoolClient, job: AttributionJobRow, wor
 function primaryCreditReason(journey: ResolvedJourney): string {
   const lastTouchpoint = journey.touchpoints[journey.touchpoints.length - 1];
   return lastTouchpoint?.attributionReason ?? 'unattributed';
+}
+
+export async function applySyntheticAttributionForOrder(
+  shopifyOrderId: string,
+  input: SyntheticAttributionInput,
+  client?: PoolClient
+): Promise<void> {
+  await execute(client, async (db) => {
+    const order = await fetchOrder(db, shopifyOrderId);
+
+    if (!order) {
+      throw new Error(`Shopify order ${shopifyOrderId} not found`);
+    }
+
+    const orderOccurredAt = order.processed_at ?? order.created_at_shopify ?? order.ingested_at;
+    const touchpoint: AttributionTouchpoint = {
+      sessionId: null,
+      occurredAt: input.occurredAt ?? orderOccurredAt,
+      source: normalizeNullableString(input.source),
+      medium: normalizeNullableString(input.medium),
+      campaign: normalizeNullableString(input.campaign),
+      content: normalizeNullableString(input.content),
+      term: normalizeNullableString(input.term),
+      clickIdType: normalizeNullableString(input.clickIdType),
+      clickIdValue: normalizeNullableString(input.clickIdValue),
+      attributionReason: input.attributionReason,
+      isDirect:
+        !input.source &&
+        !input.medium &&
+        !input.campaign &&
+        !input.content &&
+        !input.term &&
+        !input.clickIdValue,
+      isForced: true
+    };
+
+    await persistAttribution(db, order, {
+      touchpoints: [touchpoint],
+      confidenceScore: input.confidenceScore ?? 0.35
+    });
+
+    const metricDate = formatDateInTimezone(orderOccurredAt, await getReportingTimezone(db));
+    await refreshDailyReportingMetrics(db, [metricDate]);
+  });
 }
 
 async function markJobForRetry(client: PoolClient, job: AttributionJobRow, workerId: string, error: unknown): Promise<void> {

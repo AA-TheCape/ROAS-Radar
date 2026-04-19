@@ -329,6 +329,7 @@ export type ShopifyAttributionRecoveryResponse = {
   rescannedOrders: number;
   relinkedOrders: number;
   requeuedOrders: number;
+  shopifyHintAttributedOrders: number;
 };
 
 declare global {
