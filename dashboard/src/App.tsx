@@ -5,6 +5,7 @@ import {
   clearStoredAuthToken,
   connectGoogleAds,
   createUser,
+  fetchAppSettings,
   fetchCampaigns,
   fetchCurrentUser,
   fetchGoogleAdsStatus,
@@ -23,7 +24,9 @@ import {
   startMetaAdsOauth,
   syncGoogleAds,
   syncMetaAds,
+  updateAppSettings,
   updateMetaAdsConfig,
+  type AppSettings,
   type AuthUser,
   type CampaignRow,
   type CreateUserPayload,
@@ -85,14 +88,33 @@ type MetaConfigForm = {
   adAccountId: string;
 };
 
+type SettingsForm = {
+  reportingTimezone: string;
+};
+
 type AppPage = 'dashboard' | 'settings';
 
+const DEFAULT_REPORTING_TIMEZONE = 'America/Los_Angeles';
+const REPORTING_TIMEZONE_OPTIONS = [
+  'America/Los_Angeles',
+  'America/Denver',
+  'America/Chicago',
+  'America/New_York',
+  'America/Phoenix',
+  'America/Anchorage',
+  'Pacific/Honolulu',
+  'UTC',
+  'PST',
+  'PT'
+] as const;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
 const PRESETS = [
-  { label: 'Today', value: () => buildRange(1) },
-  { label: 'Yesterday', value: () => buildSingleDayRange(-1) },
-  { label: 'Last 7D', value: () => buildRange(7) },
-  { label: 'Last 30D', value: () => buildRange(30) },
-  { label: 'Last 90D', value: () => buildRange(90) }
+  { label: 'Today', value: (reportingTimezone: string) => buildRange(1, reportingTimezone) },
+  { label: 'Yesterday', value: (reportingTimezone: string) => buildSingleDayRange(-1, reportingTimezone) },
+  { label: 'Last 7D', value: (reportingTimezone: string) => buildRange(7, reportingTimezone) },
+  { label: 'Last 30D', value: (reportingTimezone: string) => buildRange(30, reportingTimezone) },
+  { label: 'Last 90D', value: (reportingTimezone: string) => buildRange(90, reportingTimezone) }
 ] as const;
 
 const GROUP_BY_OPTIONS: Array<{ value: TimeseriesGroupBy; label: string }> = [
@@ -101,25 +123,44 @@ const GROUP_BY_OPTIONS: Array<{ value: TimeseriesGroupBy; label: string }> = [
   { value: 'campaign', label: 'By campaign' }
 ];
 
-function formatDateInput(date: Date): string {
-  return date.toISOString().slice(0, 10);
+function formatDateInput(date: Date, reportingTimezone = DEFAULT_REPORTING_TIMEZONE): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: reportingTimezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(date);
+
+  const year = parts.find((part) => part.type === 'year')?.value;
+  const month = parts.find((part) => part.type === 'month')?.value;
+  const day = parts.find((part) => part.type === 'day')?.value;
+
+  if (!year || !month || !day) {
+    return date.toISOString().slice(0, 10);
+  }
+
+  return `${year}-${month}-${day}`;
 }
 
-function buildRange(days: number): Pick<ReportingFilters, 'startDate' | 'endDate'> {
+function buildRange(
+  days: number,
+  reportingTimezone = DEFAULT_REPORTING_TIMEZONE
+): Pick<ReportingFilters, 'startDate' | 'endDate'> {
   const end = new Date();
-  const start = new Date(end);
-  start.setUTCDate(end.getUTCDate() - (days - 1));
+  const start = new Date(end.getTime() - (days - 1) * MS_PER_DAY);
 
   return {
-    startDate: formatDateInput(start),
-    endDate: formatDateInput(end)
+    startDate: formatDateInput(start, reportingTimezone),
+    endDate: formatDateInput(end, reportingTimezone)
   };
 }
 
-function buildSingleDayRange(offsetDays: number): Pick<ReportingFilters, 'startDate' | 'endDate'> {
-  const date = new Date();
-  date.setUTCDate(date.getUTCDate() + offsetDays);
-  const value = formatDateInput(date);
+function buildSingleDayRange(
+  offsetDays: number,
+  reportingTimezone = DEFAULT_REPORTING_TIMEZONE
+): Pick<ReportingFilters, 'startDate' | 'endDate'> {
+  const date = new Date(Date.now() + offsetDays * MS_PER_DAY);
+  const value = formatDateInput(date, reportingTimezone);
 
   return {
     startDate: value,
@@ -127,16 +168,13 @@ function buildSingleDayRange(offsetDays: number): Pick<ReportingFilters, 'startD
   };
 }
 
-function buildYesterdayDateInput(): string {
-  const date = new Date();
-  date.setUTCDate(date.getUTCDate() - 1);
-  return formatDateInput(date);
+function buildYesterdayDateInput(reportingTimezone = DEFAULT_REPORTING_TIMEZONE): string {
+  return buildSingleDayRange(-1, reportingTimezone).startDate;
 }
 
-function buildAprilFirstDateInput(): string {
-  const date = new Date();
-  date.setUTCMonth(3, 1);
-  return formatDateInput(date);
+function buildAprilFirstDateInput(reportingTimezone = DEFAULT_REPORTING_TIMEZONE): string {
+  const currentYear = formatDateInput(new Date(), reportingTimezone).slice(0, 4);
+  return `${currentYear}-04-01`;
 }
 
 function createLoadingSection<T>(): AsyncSection<T> {
@@ -405,10 +443,14 @@ function App() {
   const [loginPassword, setLoginPassword] = useState('');
   const [loginSubmitting, setLoginSubmitting] = useState(false);
   const [filters, setFilters] = useState<ReportingFilters>(() => ({
-    ...buildRange(30),
+    ...buildRange(30, DEFAULT_REPORTING_TIMEZONE),
     source: '',
     campaign: ''
   }));
+  const [appSettings, setAppSettings] = useState<AsyncSection<AppSettings>>(createLoadingSection());
+  const [settingsForm, setSettingsForm] = useState<SettingsForm>({
+    reportingTimezone: DEFAULT_REPORTING_TIMEZONE
+  });
   const [usersSection, setUsersSection] = useState<AsyncSection<AuthUser[]>>(createLoadingSection());
   const [newUserForm, setNewUserForm] = useState<CreateUserPayload>({
     email: '',
@@ -421,8 +463,8 @@ function App() {
   const [dashboardRefreshKey, setDashboardRefreshKey] = useState(0);
   const [shopifyConnection, setShopifyConnection] = useState<AsyncSection<ShopifyConnectionResponse>>(createLoadingSection());
   const [shopifyBackfillRange, setShopifyBackfillRange] = useState({
-    startDate: buildAprilFirstDateInput(),
-    endDate: buildYesterdayDateInput()
+    startDate: buildAprilFirstDateInput(DEFAULT_REPORTING_TIMEZONE),
+    endDate: buildYesterdayDateInput(DEFAULT_REPORTING_TIMEZONE)
   });
   const [metaConnection, setMetaConnection] = useState<AsyncSection<MetaConnectionState>>(createLoadingSection());
   const [metaConfigForm, setMetaConfigForm] = useState<MetaConfigForm>({
@@ -461,6 +503,26 @@ function App() {
   );
 
   const dashboard = useDashboardData(appliedFilters, groupBy, authState.user !== null, dashboardRefreshKey);
+  const reportingTimezone = appSettings.data?.reportingTimezone ?? settingsForm.reportingTimezone ?? DEFAULT_REPORTING_TIMEZONE;
+
+  async function loadAppSettings() {
+    setAppSettings(createLoadingSection());
+
+    try {
+      const settings = await fetchAppSettings();
+      setAppSettings(createResolvedSection(settings));
+      setSettingsForm({
+        reportingTimezone: settings.reportingTimezone
+      });
+      setShopifyBackfillRange({
+        startDate: buildAprilFirstDateInput(settings.reportingTimezone),
+        endDate: buildYesterdayDateInput(settings.reportingTimezone)
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load dashboard settings';
+      setAppSettings(createErroredSection(message));
+    }
+  }
 
   async function loadConnections() {
     setShopifyConnection(createLoadingSection());
@@ -493,10 +555,12 @@ function App() {
 
   useEffect(() => {
     if (authState.user) {
+      void loadAppSettings();
       void loadConnections();
       return;
     }
 
+    setAppSettings(createLoadingSection());
     setShopifyConnection(createLoadingSection());
     setMetaConnection(createLoadingSection());
     setGoogleConnection(createLoadingSection());
@@ -644,6 +708,14 @@ function App() {
       error: null
     });
     setCurrentPage('dashboard');
+    setAppSettings({
+      data: null,
+      loading: false,
+      error: null
+    });
+    setSettingsForm({
+      reportingTimezone: DEFAULT_REPORTING_TIMEZONE
+    });
     setUsersSection({
       data: null,
       loading: false,
@@ -654,6 +726,49 @@ function App() {
       error: null,
       message: null
     });
+  }
+
+  async function handleSettingsSave(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setActionFeedback({
+      loading: 'settings-save',
+      error: null,
+      message: null
+    });
+
+    try {
+      const response = await updateAppSettings({
+        reportingTimezone: settingsForm.reportingTimezone.trim()
+      });
+      setAppSettings(createResolvedSection(response.settings));
+      setSettingsForm({
+        reportingTimezone: response.settings.reportingTimezone
+      });
+      setShopifyBackfillRange((current) => ({
+        startDate:
+          current.startDate === buildAprilFirstDateInput(reportingTimezone)
+            ? buildAprilFirstDateInput(response.settings.reportingTimezone)
+            : current.startDate,
+        endDate:
+          current.endDate === buildYesterdayDateInput(reportingTimezone)
+            ? buildYesterdayDateInput(response.settings.reportingTimezone)
+            : current.endDate
+      }));
+      startTransition(() => {
+        setDashboardRefreshKey((current) => current + 1);
+      });
+      setActionFeedback({
+        loading: null,
+        error: null,
+        message: `Saved reporting timezone as ${response.settings.reportingTimezone}.`
+      });
+    } catch (error) {
+      setActionFeedback({
+        loading: null,
+        error: error instanceof Error ? error.message : 'Failed to save dashboard settings',
+        message: null
+      });
+    }
   }
 
   async function handleCreateUser(event: FormEvent<HTMLFormElement>) {
@@ -1003,6 +1118,7 @@ function App() {
               ? `Filtered by ${[(filters.source ?? '').trim(), (filters.campaign ?? '').trim()].filter(Boolean).join(' / ')}`
               : 'All attributed traffic'}
           </small>
+          <small>{`Reporting timezone: ${reportingTimezone}`}</small>
           <small>{`Signed in as ${authState.user.displayName} (${authState.user.email})`}</small>
           <div className="hero-status-actions">
             <button
@@ -1104,10 +1220,10 @@ function App() {
                   startTransition(() => {
                     setFilters((current) => ({
                       ...current,
-                      ...preset.value()
-                    }));
-                  })
-                }
+                    ...preset.value(reportingTimezone)
+                  }));
+                })
+              }
               >
                 {preset.label}
               </button>
@@ -1142,10 +1258,69 @@ function App() {
         <article className="panel panel-wide">
           <div className="panel-header">
             <h2>Settings</h2>
-            <p>Manage store connections, ad platform credentials, and dashboard access here.</p>
+            <p>Manage reporting timezone, store connections, ad platform credentials, and dashboard access here.</p>
           </div>
           {actionFeedback.error ? <div className="action-banner action-banner-error">{actionFeedback.error}</div> : null}
           {actionFeedback.message ? <div className="action-banner">{actionFeedback.message}</div> : null}
+        </article>
+        ) : null}
+
+        {currentPage === 'settings' ? (
+        <article className="panel panel-wide">
+          <div className="panel-header">
+            <h2>Reporting timezone</h2>
+            <p>Dashboard date ranges, daily aggregation, and reporting rollups all use this timezone.</p>
+          </div>
+          <SectionState
+            loading={appSettings.loading}
+            error={appSettings.error}
+            empty={false}
+            emptyLabel=""
+          >
+            <div className="connection-card-body">
+              <form className="credential-form" onSubmit={(event) => void handleSettingsSave(event)}>
+                <div className="credential-grid">
+                  <label>
+                    <span>Timezone</span>
+                    <input
+                      type="text"
+                      list="reporting-timezone-options"
+                      value={settingsForm.reportingTimezone}
+                      onChange={(event) =>
+                        setSettingsForm((current) => ({ ...current, reportingTimezone: event.target.value }))
+                      }
+                      placeholder="America/Los_Angeles"
+                      required
+                    />
+                    <datalist id="reporting-timezone-options">
+                      {REPORTING_TIMEZONE_OPTIONS.map((option) => (
+                        <option key={option} value={option} />
+                      ))}
+                    </datalist>
+                  </label>
+                </div>
+                <div className="connection-note">
+                  Default is Pacific time. You can enter a valid IANA timezone such as <code>America/Los_Angeles</code>,
+                  or use the alias <code>PST</code>.
+                </div>
+                <div className="detail-list">
+                  <div>
+                    <dt>Active timezone</dt>
+                    <dd>{appSettings.data?.reportingTimezone ?? DEFAULT_REPORTING_TIMEZONE}</dd>
+                  </div>
+                  <div>
+                    <dt>Updated</dt>
+                    <dd>{formatOptionalDateTime(appSettings.data?.updatedAt)}</dd>
+                  </div>
+                </div>
+                <div className="button-row">
+                  <button type="submit" className="action-button" disabled={actionFeedback.loading !== null}>
+                    {actionFeedback.loading === 'settings-save' ? 'Saving…' : 'Save reporting timezone'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </SectionState>
         </article>
         ) : null}
 

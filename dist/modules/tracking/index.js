@@ -7,6 +7,7 @@ import { logError, logInfo, logWarning } from '../../observability/index.js';
 import { enqueueAttributionForTrackingTouchpoint } from '../attribution/index.js';
 import { buildCanonicalTouchpointDimensions } from '../marketing-dimensions/index.js';
 import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
+import { getReportingTimezone, formatDateInTimezone } from '../settings/index.js';
 const EVENT_TYPES = ['page_view', 'product_view', 'add_to_cart', 'checkout_started'];
 const MAX_URL_LENGTH = 2048;
 const MAX_TOKEN_LENGTH = 255;
@@ -505,7 +506,7 @@ async function ingestTrackingEvent(input, requestIp) {
     const eventId = await withTransaction(async (client) => {
         const occurredAt = new Date(sanitizedInput.occurredAt);
         const userAgent = sanitizedInput.context.userAgent ?? null;
-        const metricDate = occurredAt.toISOString().slice(0, 10);
+        const metricDate = formatDateInTimezone(occurredAt, await getReportingTimezone(client));
         await upsertTrackingSession(sanitizedInput, occurredAt, userAgent, ipHash, client);
         const insertedEventId = await insertTrackingEvent(client, sanitizedInput, ingestionFingerprint);
         await enqueueAttributionForTrackingTouchpoint(client, {

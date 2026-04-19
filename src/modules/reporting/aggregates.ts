@@ -1,6 +1,7 @@
 import { type PoolClient } from 'pg';
 
 import { ATTRIBUTION_MODELS } from '../attribution/engine.js';
+import { getReportingTimezone } from '../settings/index.js';
 
 function normalizeMetricDates(metricDates: string[]): string[] {
   return [...new Set(metricDates.map((value) => value.trim()).filter((value) => /^\d{4}-\d{2}-\d{2}$/.test(value)))].sort();
@@ -13,17 +14,19 @@ export async function refreshDailyReportingMetrics(client: PoolClient, metricDat
     return;
   }
 
+  const reportingTimezone = await getReportingTimezone(client);
+
   await client.query('SELECT pg_advisory_xact_lock($1)', [82134721]);
   await client.query('DELETE FROM daily_reporting_metrics WHERE metric_date = ANY($1::date[])', [normalizedMetricDates]);
 
   await client.query(
     `
       WITH attribution_models AS (
-        SELECT unnest($2::text[]) AS attribution_model
+        SELECT unnest($3::text[]) AS attribution_model
       ),
       visit_rows AS (
         SELECT
-          DATE(s.first_seen_at) AS metric_date,
+          DATE(timezone($2, s.first_seen_at)) AS metric_date,
           m.attribution_model,
           COALESCE(s.initial_utm_source, 'unknown') AS source,
           COALESCE(s.initial_utm_medium, 'unknown') AS medium,
@@ -42,7 +45,7 @@ export async function refreshDailyReportingMetrics(client: PoolClient, metricDat
           0::numeric(12, 2) AS returning_customer_revenue
         FROM tracking_sessions s
         CROSS JOIN attribution_models m
-        WHERE DATE(s.first_seen_at) = ANY($1::date[])
+        WHERE DATE(timezone($2, s.first_seen_at)) = ANY($1::date[])
         GROUP BY 1, 2, 3, 4, 5, 6, 7
       ),
       order_customer_rankings AS (
@@ -61,7 +64,7 @@ export async function refreshDailyReportingMetrics(client: PoolClient, metricDat
       ),
       attributed_order_rows AS (
         SELECT
-          DATE(COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at)) AS metric_date,
+          DATE(timezone($2, COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at))) AS metric_date,
           c.attribution_model,
           COALESCE(c.attributed_source, 'unknown') AS source,
           COALESCE(c.attributed_medium, 'unknown') AS medium,
@@ -83,7 +86,7 @@ export async function refreshDailyReportingMetrics(client: PoolClient, metricDat
           ON o.shopify_order_id = c.shopify_order_id
         INNER JOIN order_customer_rankings r
           ON r.shopify_order_id = o.shopify_order_id
-        WHERE DATE(COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at)) = ANY($1::date[])
+        WHERE DATE(timezone($2, COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at))) = ANY($1::date[])
         GROUP BY 1, 2, 3, 4, 5, 6, 7
       ),
       spend_source_rows AS (
@@ -188,6 +191,42 @@ export async function refreshDailyReportingMetrics(client: PoolClient, metricDat
       ) combined
       GROUP BY 1, 2, 3, 4, 5, 6, 7
     `,
-    [normalizedMetricDates, ATTRIBUTION_MODELS]
+    [normalizedMetricDates, reportingTimezone, ATTRIBUTION_MODELS]
+  );
+}
+
+export async function refreshAllDailyReportingMetrics(client: PoolClient): Promise<void> {
+  const reportingTimezone = await getReportingTimezone(client);
+  const result = await client.query<{ metric_date: string }>(
+    `
+      SELECT DISTINCT metric_date::text
+      FROM (
+        SELECT DATE(timezone($1, first_seen_at)) AS metric_date
+        FROM tracking_sessions
+
+        UNION
+
+        SELECT DATE(timezone($1, COALESCE(processed_at, created_at_shopify, ingested_at))) AS metric_date
+        FROM shopify_orders
+
+        UNION
+
+        SELECT report_date AS metric_date
+        FROM meta_ads_daily_spend
+
+        UNION
+
+        SELECT report_date AS metric_date
+        FROM google_ads_daily_spend
+      ) metric_dates
+      WHERE metric_date IS NOT NULL
+      ORDER BY metric_date ASC
+    `,
+    [reportingTimezone]
+  );
+
+  await refreshDailyReportingMetrics(
+    client,
+    result.rows.map((row) => row.metric_date)
   );
 }

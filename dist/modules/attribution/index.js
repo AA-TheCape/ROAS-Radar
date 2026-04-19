@@ -1,6 +1,7 @@
 import { withTransaction } from '../../db/pool.js';
 import { logError } from '../../observability/index.js';
 import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
+import { getReportingTimezone, formatDateInTimezone } from '../settings/index.js';
 import { ATTRIBUTION_MODELS, computeAttributionOutputs } from './engine.js';
 const ATTRIBUTION_MODEL_VERSION = 1;
 const ATTRIBUTION_WINDOW_DAYS = 7;
@@ -538,7 +539,7 @@ async function processClaimedJob(client, job, workerId) {
     }
     const journey = await resolveAttributionJourney(client, order);
     await persistAttribution(client, order, journey);
-    const metricDate = (order.processed_at ?? order.created_at_shopify ?? order.ingested_at).toISOString().slice(0, 10);
+    const metricDate = formatDateInTimezone(order.processed_at ?? order.created_at_shopify ?? order.ingested_at, await getReportingTimezone(client));
     await refreshDailyReportingMetrics(client, [metricDate]);
     await client.query(`
       UPDATE attribution_jobs

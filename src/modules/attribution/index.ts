@@ -3,6 +3,7 @@ import { type PoolClient } from 'pg';
 import { query, withTransaction } from '../../db/pool.js';
 import { logError } from '../../observability/index.js';
 import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
+import { getReportingTimezone, formatDateInTimezone } from '../settings/index.js';
 import {
   ATTRIBUTION_MODELS,
   computeAttributionOutputs,
@@ -715,7 +716,10 @@ async function processClaimedJob(client: PoolClient, job: AttributionJobRow, wor
   const journey = await resolveAttributionJourney(client, order);
   await persistAttribution(client, order, journey);
 
-  const metricDate = (order.processed_at ?? order.created_at_shopify ?? order.ingested_at).toISOString().slice(0, 10);
+  const metricDate = formatDateInTimezone(
+    order.processed_at ?? order.created_at_shopify ?? order.ingested_at,
+    await getReportingTimezone(client)
+  );
   await refreshDailyReportingMetrics(client, [metricDate]);
 
   await client.query(

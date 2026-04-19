@@ -5,6 +5,7 @@ import { calculatePerformanceMetrics } from '../../shared/metrics.js';
 import { ATTRIBUTION_MODELS } from '../attribution/engine.js';
 import { attachAuthContext, requireAuthenticated } from '../auth/index.js';
 import { fetchDataQualityReport, resolveRunDate } from '../data-quality/index.js';
+import { getReportingTimezone } from '../settings/index.js';
 class ReportingHttpError extends Error {
     statusCode;
     code;
@@ -220,6 +221,7 @@ export function createReportingRouter() {
         try {
             const input = parseInput(ordersQuerySchema, req.query);
             const filters = buildOrderAttributionFilters(input.attributionModel, input.source, input.campaign);
+            const reportingTimezone = await getReportingTimezone();
             const result = await query(`
           SELECT
             o.shopify_order_id,
@@ -243,12 +245,12 @@ export function createReportingRouter() {
             LIMIT 1
           ) c
             ON TRUE
-          WHERE COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) >= $1::date
-            AND COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) < ($2::date + interval '1 day')
+          WHERE timezone($${filters.params.length + 4}, COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at)) >= $1::date
+            AND timezone($${filters.params.length + 4}, COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at)) < ($2::date + interval '1 day')
             ${filters.sql}
           ORDER BY COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) DESC, o.shopify_order_id DESC
-          LIMIT $${filters.params.length + 3}
-        `, [input.startDate, input.endDate, ...filters.params, input.limit]);
+          LIMIT $${filters.params.length + 5}
+        `, [input.startDate, input.endDate, ...filters.params, reportingTimezone, input.limit]);
             res.json({
                 rows: result.rows.map((row) => ({
                     shopifyOrderId: row.shopify_order_id,

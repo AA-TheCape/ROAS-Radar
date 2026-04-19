@@ -105,6 +105,20 @@ export type CreateUserResponse = {
   user: AuthUser;
 };
 
+export type AppSettings = {
+  reportingTimezone: string;
+  updatedAt: string;
+};
+
+export type UpdateAppSettingsPayload = {
+  reportingTimezone: string;
+};
+
+export type UpdateAppSettingsResponse = {
+  ok: true;
+  settings: AppSettings;
+};
+
 export type MetaAdsConnection = {
   id: number;
   ad_account_id: string;
@@ -378,6 +392,17 @@ export function login(email: string, password: string) {
 
 export function fetchCurrentUser() {
   return requestJson<AuthMeResponse>('/api/auth/me');
+}
+
+export function fetchAppSettings() {
+  return requestJson<AppSettings>('/api/settings');
+}
+
+export function updateAppSettings(payload: UpdateAppSettingsPayload) {
+  return requestJson<UpdateAppSettingsResponse>('/api/settings', {
+    method: 'PUT',
+    body: payload
+  });
 }
 
 export function logout() {
