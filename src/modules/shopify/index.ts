@@ -726,13 +726,13 @@ async function recoverShopifyAttributionHints(
         o.raw_payload
       FROM shopify_orders o
       LEFT JOIN attribution_order_credits c
-        ON c.order_id = o.id
+        ON c.shopify_order_id = o.shopify_order_id
        AND c.attribution_model = 'last_touch'
       WHERE COALESCE(o.source_name, '') = 'web'
         AND o.processed_at >= $1::timestamptz
         AND o.processed_at <= $2::timestamptz
         AND (
-          c.order_id IS NULL
+          c.shopify_order_id IS NULL
           OR (
             c.attributed_source IS NULL
             AND c.attributed_medium IS NULL
