@@ -71,6 +71,73 @@ export type OrdersResponse = {
   rows: OrderRow[];
 };
 
+export type OrderDetailLineItem = {
+  shopifyLineItemId: string;
+  shopifyProductId: string | null;
+  shopifyVariantId: string | null;
+  sku: string | null;
+  title: string | null;
+  variantTitle: string | null;
+  vendor: string | null;
+  quantity: number;
+  price: number;
+  totalDiscount: number;
+  fulfillmentStatus: string | null;
+  requiresShipping: boolean | null;
+  taxable: boolean | null;
+  ingestedAt: string;
+  rawPayload: unknown;
+};
+
+export type OrderDetailAttributionCredit = {
+  attributionModel: string;
+  touchpointPosition: number;
+  sessionId: string | null;
+  touchpointOccurredAt: string | null;
+  source: string | null;
+  medium: string | null;
+  campaign: string | null;
+  content: string | null;
+  term: string | null;
+  clickIdType: string | null;
+  clickIdValue: string | null;
+  creditWeight: number;
+  revenueCredit: number;
+  isPrimary: boolean;
+  attributionReason: string;
+  createdAt: string;
+  modelVersion: number;
+};
+
+export type OrderDetail = {
+  shopifyOrderId: string;
+  shopifyOrderNumber: string | null;
+  shopifyCustomerId: string | null;
+  customerIdentityId: string | null;
+  email: string | null;
+  emailHash: string | null;
+  currencyCode: string;
+  subtotalPrice: number;
+  totalPrice: number;
+  financialStatus: string | null;
+  fulfillmentStatus: string | null;
+  processedAt: string | null;
+  createdAtShopify: string | null;
+  updatedAtShopify: string | null;
+  landingSessionId: string | null;
+  checkoutToken: string | null;
+  cartToken: string | null;
+  sourceName: string | null;
+  ingestedAt: string;
+  rawPayload: unknown;
+};
+
+export type OrderDetailsResponse = {
+  order: OrderDetail;
+  lineItems: OrderDetailLineItem[];
+  attributionCredits: OrderDetailAttributionCredit[];
+};
+
 export type AuthUser = {
   id: number;
   email: string;
@@ -436,6 +503,10 @@ export function fetchOrders(filters: ReportingFilters, limit = 10) {
   return requestJson<OrdersResponse>('/api/reporting/orders', {
     searchParams: buildSearchParams(filters, { limit: `${limit}` })
   });
+}
+
+export function fetchOrderDetails(shopifyOrderId: string) {
+  return requestJson<OrderDetailsResponse>(`/api/reporting/orders/${encodeURIComponent(shopifyOrderId)}`);
 }
 
 export function fetchMetaAdsStatus() {

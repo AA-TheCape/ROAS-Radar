@@ -47,6 +47,9 @@ const timeseriesQuerySchema = withValidDateRange(baseFiltersObjectSchema.extend(
 const ordersQuerySchema = withValidDateRange(baseFiltersObjectSchema.extend({
     limit: z.coerce.number().int().positive().max(200).optional().default(50)
 }));
+const orderDetailsParamsSchema = z.object({
+    shopifyOrderId: z.string().trim().min(1)
+});
 const reconciliationQuerySchema = z.object({
     runDate: dateStringSchema.optional()
 });
@@ -260,6 +263,148 @@ export function createReportingRouter() {
                     medium: row.attributed_medium,
                     campaign: row.attributed_campaign,
                     attributionReason: row.attribution_reason ?? 'unattributed'
+                }))
+            });
+        }
+        catch (error) {
+            next(error);
+        }
+    });
+    router.get('/orders/:shopifyOrderId', async (req, res, next) => {
+        try {
+            const { shopifyOrderId } = parseInput(orderDetailsParamsSchema, req.params);
+            const orderResult = await query(`
+          SELECT
+            o.shopify_order_id,
+            o.shopify_order_number,
+            o.shopify_customer_id,
+            o.customer_identity_id::text AS customer_identity_id,
+            o.email,
+            o.email_hash,
+            o.currency_code,
+            o.subtotal_price,
+            o.total_price,
+            o.financial_status,
+            o.fulfillment_status,
+            o.processed_at,
+            o.created_at_shopify,
+            o.updated_at_shopify,
+            o.landing_session_id::text AS landing_session_id,
+            o.checkout_token,
+            o.cart_token,
+            o.source_name,
+            o.ingested_at,
+            o.raw_payload
+          FROM shopify_orders o
+          WHERE o.shopify_order_id = $1
+          LIMIT 1
+        `, [shopifyOrderId]);
+            if (!orderResult.rowCount) {
+                throw new ReportingHttpError(404, 'order_not_found', `Shopify order ${shopifyOrderId} was not found`);
+            }
+            const lineItemsResult = await query(`
+          SELECT
+            li.shopify_line_item_id,
+            li.shopify_product_id,
+            li.shopify_variant_id,
+            li.sku,
+            li.title,
+            li.variant_title,
+            li.vendor,
+            li.quantity,
+            li.price,
+            li.total_discount,
+            li.fulfillment_status,
+            li.requires_shipping,
+            li.taxable,
+            li.ingested_at,
+            li.raw_payload
+          FROM shopify_order_line_items li
+          WHERE li.shopify_order_id = $1
+          ORDER BY li.id ASC
+        `, [shopifyOrderId]);
+            const creditsResult = await query(`
+          SELECT
+            c.attribution_model,
+            c.touchpoint_position,
+            c.session_id::text AS session_id,
+            c.touchpoint_occurred_at,
+            c.attributed_source,
+            c.attributed_medium,
+            c.attributed_campaign,
+            c.attributed_content,
+            c.attributed_term,
+            c.attributed_click_id_type,
+            c.attributed_click_id_value,
+            c.credit_weight,
+            c.revenue_credit,
+            c.is_primary,
+            c.attribution_reason,
+            c.created_at,
+            c.model_version
+          FROM attribution_order_credits c
+          WHERE c.shopify_order_id = $1
+          ORDER BY c.attribution_model ASC, c.touchpoint_position ASC
+        `, [shopifyOrderId]);
+            const order = orderResult.rows[0];
+            res.json({
+                order: {
+                    shopifyOrderId: order.shopify_order_id,
+                    shopifyOrderNumber: order.shopify_order_number,
+                    shopifyCustomerId: order.shopify_customer_id,
+                    customerIdentityId: order.customer_identity_id,
+                    email: order.email,
+                    emailHash: order.email_hash,
+                    currencyCode: order.currency_code,
+                    subtotalPrice: Number(order.subtotal_price),
+                    totalPrice: Number(order.total_price),
+                    financialStatus: order.financial_status,
+                    fulfillmentStatus: order.fulfillment_status,
+                    processedAt: order.processed_at?.toISOString() ?? null,
+                    createdAtShopify: order.created_at_shopify?.toISOString() ?? null,
+                    updatedAtShopify: order.updated_at_shopify?.toISOString() ?? null,
+                    landingSessionId: order.landing_session_id,
+                    checkoutToken: order.checkout_token,
+                    cartToken: order.cart_token,
+                    sourceName: order.source_name,
+                    ingestedAt: order.ingested_at.toISOString(),
+                    rawPayload: order.raw_payload
+                },
+                lineItems: lineItemsResult.rows.map((row) => ({
+                    shopifyLineItemId: row.shopify_line_item_id,
+                    shopifyProductId: row.shopify_product_id,
+                    shopifyVariantId: row.shopify_variant_id,
+                    sku: row.sku,
+                    title: row.title,
+                    variantTitle: row.variant_title,
+                    vendor: row.vendor,
+                    quantity: row.quantity,
+                    price: Number(row.price),
+                    totalDiscount: Number(row.total_discount),
+                    fulfillmentStatus: row.fulfillment_status,
+                    requiresShipping: row.requires_shipping,
+                    taxable: row.taxable,
+                    ingestedAt: row.ingested_at.toISOString(),
+                    rawPayload: row.raw_payload
+                })),
+                attributionCredits: creditsResult.rows.map((row) => ({
+                    attributionModel: row.attribution_model,
+                    touchpointPosition: row.touchpoint_position,
+                    sessionId: row.session_id,
+                    touchpointOccurredAt: row.touchpoint_occurred_at?.toISOString() ?? null,
+                    source: row.attributed_source,
+                    medium: row.attributed_medium,
+                    campaign: row.attributed_campaign,
+                    content: row.attributed_content,
+                    term: row.attributed_term,
+                    clickIdType: row.attributed_click_id_type,
+                    clickIdValue: row.attributed_click_id_value,
+                    creditWeight: Number(row.credit_weight),
+                    revenueCredit: Number(row.revenue_credit),
+                    isPrimary: row.is_primary,
+                    attributionReason: row.attribution_reason,
+                    createdAt: row.created_at.toISOString(),
+                    modelVersion: row.model_version
                 }))
             });
         }

@@ -342,6 +342,22 @@ select {
   display: block;
 }
 
+.table-link-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink-strong);
+  cursor: pointer;
+  font-weight: 700;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+
+.table-link-button:hover {
+  color: var(--teal);
+}
+
 .table-wrap {
   overflow-x: auto;
 }
@@ -410,6 +426,45 @@ th {
   background: var(--accent-soft);
   color: var(--accent);
   font-size: 0.86rem;
+}
+
+.detail-stack {
+  display: grid;
+  gap: 18px;
+}
+
+.detail-grid {
+  display: grid;
+  gap: 18px;
+}
+
+.detail-grid-two-column {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.detail-card {
+  padding: 18px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.64);
+  border: 1px solid rgba(25, 32, 42, 0.08);
+}
+
+.detail-card h3 {
+  margin: 0 0 14px;
+  font-size: 1rem;
+}
+
+.json-view {
+  margin: 0;
+  padding: 16px;
+  border-radius: 16px;
+  background: rgba(18, 28, 42, 0.94);
+  color: #d8e1ec;
+  overflow: auto;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .connections-grid {
@@ -596,7 +651,8 @@ th {
 
   .connections-grid,
   .credential-grid,
-  .detail-list {
+  .detail-list,
+  .detail-grid-two-column {
     grid-template-columns: 1fr;
   }
 }

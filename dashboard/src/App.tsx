@@ -10,6 +10,7 @@ import {
   fetchCurrentUser,
   fetchGoogleAdsStatus,
   fetchMetaAdsStatus,
+  fetchOrderDetails,
   fetchOrders,
   fetchShopifyConnection,
   fetchSummary,
@@ -35,6 +36,7 @@ import {
   type GoogleAdsStatusResponse,
   type MetaAdsConnection,
   type MetaAdsConfigSummary,
+  type OrderDetailsResponse,
   type OrderRow,
   type ReportingFilters,
   type ShopifyConnectionResponse,
@@ -94,7 +96,7 @@ type SettingsForm = {
   reportingTimezone: string;
 };
 
-type AppPage = 'dashboard' | 'settings';
+type AppPage = 'dashboard' | 'settings' | 'order-details';
 
 const DEFAULT_REPORTING_TIMEZONE = 'America/Los_Angeles';
 const REPORTING_TIMEZONE_OPTIONS = [
@@ -144,9 +146,11 @@ function formatDateInput(date: Date, reportingTimezone = DEFAULT_REPORTING_TIMEZ
   return `${year}-${month}-${day}`;
 }
 
-function formatTimeLabel(date: Date, reportingTimezone = DEFAULT_REPORTING_TIMEZONE): string {
+function formatDateTimeForClock(date: Date, reportingTimezone = DEFAULT_REPORTING_TIMEZONE): string {
   return new Intl.DateTimeFormat('en-US', {
     timeZone: reportingTimezone,
+    month: 'short',
+    day: 'numeric',
     hour: 'numeric',
     minute: '2-digit'
   }).format(date);
@@ -382,7 +386,15 @@ function SummaryCard({ label, value, detail }: { label: string; value: string; d
   );
 }
 
-function TimeseriesChart({ points, groupBy }: { points: TimeseriesPoint[]; groupBy: TimeseriesGroupBy }) {
+function TimeseriesChart({
+  points,
+  groupBy,
+  reportingTimezone
+}: {
+  points: TimeseriesPoint[];
+  groupBy: TimeseriesGroupBy;
+  reportingTimezone: string;
+}) {
   const path = buildSeriesPath(points);
   const maxRevenue = Math.max(...points.map((point) => point.revenue), 1);
 
@@ -410,7 +422,7 @@ function TimeseriesChart({ points, groupBy }: { points: TimeseriesPoint[]; group
       <div className="chart-labels">
         {points.map((point) => (
           <div key={point.date} className="chart-label">
-            <strong>{groupBy === 'day' ? formatDateLabel(point.date) : point.date}</strong>
+            <strong>{groupBy === 'day' ? formatDateLabel(point.date, reportingTimezone) : point.date}</strong>
             <span>{formatCurrency(point.revenue)}</span>
           </div>
         ))}
@@ -419,8 +431,28 @@ function TimeseriesChart({ points, groupBy }: { points: TimeseriesPoint[]; group
   );
 }
 
-function formatOptionalDateTime(value: string | null | undefined): string {
-  return value ? formatDateTimeLabel(value) : 'Not available';
+function formatOptionalDateTime(value: string | null | undefined, reportingTimezone: string): string {
+  return value ? formatDateTimeLabel(value, reportingTimezone) : 'Not available';
+}
+
+function formatOptionalValue(value: string | number | boolean | null | undefined): string {
+  if (value === null || value === undefined || value === '') {
+    return 'Not available';
+  }
+
+  if (typeof value === 'boolean') {
+    return value ? 'Yes' : 'No';
+  }
+
+  return String(value);
+}
+
+function formatJsonValue(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
 }
 
 function ConnectionState({
@@ -462,6 +494,12 @@ function App() {
     reportingTimezone: DEFAULT_REPORTING_TIMEZONE
   });
   const [usersSection, setUsersSection] = useState<AsyncSection<AuthUser[]>>(createLoadingSection());
+  const [orderDetailsSection, setOrderDetailsSection] = useState<AsyncSection<OrderDetailsResponse>>({
+    data: null,
+    loading: false,
+    error: null
+  });
+  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [newUserForm, setNewUserForm] = useState<CreateUserPayload>({
     email: '',
     password: '',
@@ -516,7 +554,7 @@ function App() {
   const reportingTimezone = appSettings.data?.reportingTimezone ?? settingsForm.reportingTimezone ?? DEFAULT_REPORTING_TIMEZONE;
   const [currentTime, setCurrentTime] = useState(() => new Date());
   const activeWindowTime = useMemo(
-    () => formatTimeLabel(currentTime, reportingTimezone),
+    () => formatDateTimeForClock(currentTime, reportingTimezone),
     [currentTime, reportingTimezone]
   );
 
@@ -605,6 +643,12 @@ function App() {
         loading: false,
         error: null
       });
+      setOrderDetailsSection({
+        data: null,
+        loading: false,
+        error: null
+      });
+      setSelectedOrderId(null);
       return;
     }
 
@@ -623,8 +667,39 @@ function App() {
           user: null,
           error: error.message
         });
+        setOrderDetailsSection({
+          data: null,
+          loading: false,
+          error: null
+        });
+        setSelectedOrderId(null);
       });
   }, []);
+
+  async function openOrderDetails(shopifyOrderId: string) {
+    setCurrentPage('order-details');
+    setSelectedOrderId(shopifyOrderId);
+    setOrderDetailsSection(createLoadingSection());
+
+    try {
+      const response = await fetchOrderDetails(shopifyOrderId);
+      setOrderDetailsSection(createResolvedSection(response));
+    } catch (error) {
+      setOrderDetailsSection(
+        createErroredSection(error instanceof Error ? error.message : 'Failed to load order details')
+      );
+    }
+  }
+
+  function closeOrderDetails() {
+    setCurrentPage('dashboard');
+    setSelectedOrderId(null);
+    setOrderDetailsSection({
+      data: null,
+      loading: false,
+      error: null
+    });
+  }
 
   async function loadUsers() {
     if (!authState.user?.isAdmin) {
@@ -662,7 +737,7 @@ function App() {
       {
         label: 'Visits',
         value: formatNumber(totals?.visits),
-        detail: `${formatDateLabel(filters.startDate)} to ${formatDateLabel(filters.endDate)}`
+        detail: `${formatDateLabel(filters.startDate, reportingTimezone)} to ${formatDateLabel(filters.endDate, reportingTimezone)}`
       },
       {
         label: 'Orders',
@@ -683,7 +758,7 @@ function App() {
         detail: `${formatNumber(totals?.orders)} attributed orders`
       }
     ];
-  }, [dashboard.summary.data, filters.endDate, filters.startDate]);
+  }, [dashboard.summary.data, filters.endDate, filters.startDate, reportingTimezone]);
 
   const totalCampaignRevenue = useMemo(
     () => (dashboard.campaigns.data ?? []).reduce((sum, row) => sum + row.revenue, 0),
@@ -746,6 +821,12 @@ function App() {
       loading: false,
       error: null
     });
+    setOrderDetailsSection({
+      data: null,
+      loading: false,
+      error: null
+    });
+    setSelectedOrderId(null);
     setActionFeedback({
       loading: null,
       error: null,
@@ -1157,17 +1238,25 @@ function App() {
     <main className="app-shell">
       <section className="hero">
         <div className="hero-copy-block">
-          <p className="eyebrow">{currentPage === 'settings' ? 'Admin settings' : 'MVP reporting dashboard'}</p>
+          <p className="eyebrow">
+            {currentPage === 'settings'
+              ? 'Admin settings'
+              : currentPage === 'order-details'
+                ? 'Order drill-in'
+                : 'MVP reporting dashboard'}
+          </p>
           <h1>ROAS Radar</h1>
           <p className="hero-copy">
             {currentPage === 'settings'
               ? 'Configure store integrations, ad platform connections, and dashboard user access from one place.'
-              : 'Monitor paid acquisition performance for a single Shopify store across headline metrics, campaign rows, time-based trends, and order-level attribution evidence.'}
+              : currentPage === 'order-details'
+                ? 'Inspect the full stored Shopify order record, attribution credits, line items, and raw payload for one order.'
+                : 'Monitor paid acquisition performance for a single Shopify store across headline metrics, campaign rows, time-based trends, and order-level attribution evidence.'}
           </p>
         </div>
         <div className="hero-status-card">
           <span>Active window</span>
-          <strong>{filters.endDate}</strong>
+          <strong>{currentPage === 'order-details' ? `Order #${selectedOrderId ?? '—'}` : filters.endDate}</strong>
           <small>{activeWindowTime}</small>
           <small>
             {(filters.source ?? '').trim() || (filters.campaign ?? '').trim()
@@ -1180,9 +1269,17 @@ function App() {
             <button
               type="button"
               className="nav-link-button"
-              onClick={() => setCurrentPage(currentPage === 'settings' ? 'dashboard' : 'settings')}
+              onClick={() => {
+                if (currentPage === 'settings' || currentPage === 'order-details') {
+                  closeOrderDetails();
+                  setCurrentPage('dashboard');
+                  return;
+                }
+
+                setCurrentPage('settings');
+              }}
             >
-              {currentPage === 'settings' ? 'Back to dashboard' : 'Settings'}
+              {currentPage === 'settings' || currentPage === 'order-details' ? 'Back to dashboard' : 'Settings'}
             </button>
           </div>
           <div className="button-row">
@@ -1200,11 +1297,9 @@ function App() {
             id="start-date"
             type="date"
             value={filters.startDate}
-            onChange={(event) =>
-              startTransition(() => {
-                setFilters((current) => ({ ...current, startDate: event.target.value }));
-              })
-            }
+            onChange={(event) => {
+              setFilters((current) => ({ ...current, startDate: event.target.value }));
+            }}
           />
         </div>
         <div className="control-group">
@@ -1213,11 +1308,9 @@ function App() {
             id="end-date"
             type="date"
             value={filters.endDate}
-            onChange={(event) =>
-              startTransition(() => {
-                setFilters((current) => ({ ...current, endDate: event.target.value }));
-              })
-            }
+            onChange={(event) => {
+              setFilters((current) => ({ ...current, endDate: event.target.value }));
+            }}
           />
         </div>
         <div className="control-group">
@@ -1227,11 +1320,9 @@ function App() {
             type="text"
             placeholder="google, meta, facebook"
             value={filters.source}
-            onChange={(event) =>
-              startTransition(() => {
-                setFilters((current) => ({ ...current, source: event.target.value }));
-              })
-            }
+            onChange={(event) => {
+              setFilters((current) => ({ ...current, source: event.target.value }));
+            }}
           />
         </div>
         <div className="control-group">
@@ -1241,11 +1332,9 @@ function App() {
             type="text"
             placeholder="spring-sale"
             value={filters.campaign}
-            onChange={(event) =>
-              startTransition(() => {
-                setFilters((current) => ({ ...current, campaign: event.target.value }));
-              })
-            }
+            onChange={(event) => {
+              setFilters((current) => ({ ...current, campaign: event.target.value }));
+            }}
           />
         </div>
         <div className="control-group control-group-wide">
@@ -1309,7 +1398,150 @@ function App() {
         ))}
       </section> : null}
 
-      <section className="dashboard-grid">
+      {currentPage === 'order-details' ? (
+        <section className="dashboard-grid">
+          <article className="panel panel-wide">
+            <div className="panel-header">
+              <h2>Order details</h2>
+              <p>Everything currently stored for this Shopify order, including line items, attribution credits, and raw payload.</p>
+            </div>
+            <SectionState
+              loading={orderDetailsSection.loading}
+              error={orderDetailsSection.error}
+              empty={!orderDetailsSection.data}
+              emptyLabel={selectedOrderId ? `No details were loaded for order ${selectedOrderId}.` : 'No order selected.'}
+            >
+              <div className="detail-stack">
+                <div className="detail-grid detail-grid-two-column">
+                  <div className="detail-card">
+                    <h3>Order overview</h3>
+                    <dl className="detail-list">
+                      <div><dt>Shopify order ID</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.shopifyOrderId)}</dd></div>
+                      <div><dt>Order number</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.shopifyOrderNumber)}</dd></div>
+                      <div><dt>Currency</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.currencyCode)}</dd></div>
+                      <div><dt>Subtotal</dt><dd>{formatCurrency(orderDetailsSection.data?.order.subtotalPrice)}</dd></div>
+                      <div><dt>Total</dt><dd>{formatCurrency(orderDetailsSection.data?.order.totalPrice)}</dd></div>
+                      <div><dt>Financial status</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.financialStatus)}</dd></div>
+                      <div><dt>Fulfillment status</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.fulfillmentStatus)}</dd></div>
+                      <div><dt>Source name</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.sourceName)}</dd></div>
+                    </dl>
+                  </div>
+                  <div className="detail-card">
+                    <h3>Customer and linkage</h3>
+                    <dl className="detail-list">
+                      <div><dt>Shopify customer ID</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.shopifyCustomerId)}</dd></div>
+                      <div><dt>Customer identity ID</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.customerIdentityId)}</dd></div>
+                      <div><dt>Email</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.email)}</dd></div>
+                      <div><dt>Email hash</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.emailHash)}</dd></div>
+                      <div><dt>Landing session ID</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.landingSessionId)}</dd></div>
+                      <div><dt>Checkout token</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.checkoutToken)}</dd></div>
+                      <div><dt>Cart token</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.cartToken)}</dd></div>
+                    </dl>
+                  </div>
+                  <div className="detail-card">
+                    <h3>Timestamps</h3>
+                    <dl className="detail-list">
+                      <div><dt>Processed</dt><dd>{formatOptionalDateTime(orderDetailsSection.data?.order.processedAt, reportingTimezone)}</dd></div>
+                      <div><dt>Created in Shopify</dt><dd>{formatOptionalDateTime(orderDetailsSection.data?.order.createdAtShopify, reportingTimezone)}</dd></div>
+                      <div><dt>Updated in Shopify</dt><dd>{formatOptionalDateTime(orderDetailsSection.data?.order.updatedAtShopify, reportingTimezone)}</dd></div>
+                      <div><dt>Ingested</dt><dd>{formatOptionalDateTime(orderDetailsSection.data?.order.ingestedAt, reportingTimezone)}</dd></div>
+                    </dl>
+                  </div>
+                </div>
+
+                <div className="detail-card">
+                  <h3>Line items</h3>
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Title</th>
+                          <th>SKU</th>
+                          <th>Qty</th>
+                          <th>Price</th>
+                          <th>Discount</th>
+                          <th>Vendor</th>
+                          <th>Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(orderDetailsSection.data?.lineItems ?? []).map((item) => (
+                          <tr key={item.shopifyLineItemId}>
+                            <td>
+                              <div className="primary-cell">
+                                <strong>{item.title ?? 'Untitled line item'}</strong>
+                                <span>{item.variantTitle ?? 'No variant title'}</span>
+                              </div>
+                            </td>
+                            <td>{formatOptionalValue(item.sku)}</td>
+                            <td>{formatNumber(item.quantity)}</td>
+                            <td>{formatCurrency(item.price)}</td>
+                            <td>{formatCurrency(item.totalDiscount)}</td>
+                            <td>{formatOptionalValue(item.vendor)}</td>
+                            <td>{formatOptionalValue(item.fulfillmentStatus)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div className="detail-card">
+                  <h3>Attribution credits</h3>
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Model</th>
+                          <th>Position</th>
+                          <th>Source / medium</th>
+                          <th>Campaign</th>
+                          <th>Touchpoint time</th>
+                          <th>Revenue credit</th>
+                          <th>Weight</th>
+                          <th>Reason</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(orderDetailsSection.data?.attributionCredits ?? []).map((credit) => (
+                          <tr key={`${credit.attributionModel}-${credit.touchpointPosition}`}>
+                            <td>
+                              <div className="primary-cell">
+                                <strong>{credit.attributionModel}</strong>
+                                <span>{credit.isPrimary ? 'Primary touchpoint' : 'Supporting touchpoint'}</span>
+                              </div>
+                            </td>
+                            <td>{formatNumber(credit.touchpointPosition)}</td>
+                            <td>{`${credit.source ?? 'Unknown'} / ${credit.medium ?? 'Unknown'}`}</td>
+                            <td>{credit.campaign ?? 'No campaign'}</td>
+                            <td>{formatOptionalDateTime(credit.touchpointOccurredAt, reportingTimezone)}</td>
+                            <td>{formatCurrency(credit.revenueCredit)}</td>
+                            <td>{formatNumber(credit.creditWeight)}</td>
+                            <td><span className="reason-pill">{credit.attributionReason}</span></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div className="detail-grid detail-grid-two-column">
+                  <div className="detail-card">
+                    <h3>Raw order payload</h3>
+                    <pre className="json-view">{formatJsonValue(orderDetailsSection.data?.order.rawPayload ?? {})}</pre>
+                  </div>
+                  <div className="detail-card">
+                    <h3>Raw line item payloads</h3>
+                    <pre className="json-view">{formatJsonValue(orderDetailsSection.data?.lineItems.map((item) => item.rawPayload) ?? [])}</pre>
+                  </div>
+                </div>
+              </div>
+            </SectionState>
+          </article>
+        </section>
+      ) : null}
+
+      {currentPage !== 'order-details' ? <section className="dashboard-grid">
         {currentPage === 'settings' ? (
         <article className="panel panel-wide">
           <div className="panel-header">
@@ -1366,7 +1598,7 @@ function App() {
                   </div>
                   <div>
                     <dt>Updated</dt>
-                    <dd>{formatOptionalDateTime(appSettings.data?.updatedAt)}</dd>
+                    <dd>{formatOptionalDateTime(appSettings.data?.updatedAt, reportingTimezone)}</dd>
                   </div>
                 </div>
                 <div className="button-row">
@@ -1411,7 +1643,7 @@ function App() {
                     </div>
                     <div>
                       <dt>Installed</dt>
-                      <dd>{formatOptionalDateTime(shopifyConnection.data?.installedAt)}</dd>
+                      <dd>{formatOptionalDateTime(shopifyConnection.data?.installedAt, reportingTimezone)}</dd>
                     </div>
                     <div>
                       <dt>Webhooks</dt>
@@ -1518,7 +1750,7 @@ function App() {
                     </div>
                     <div>
                       <dt>Last sync</dt>
-                      <dd>{formatOptionalDateTime(metaConnection.data?.connection?.last_sync_completed_at)}</dd>
+                      <dd>{formatOptionalDateTime(metaConnection.data?.connection?.last_sync_completed_at, reportingTimezone)}</dd>
                     </div>
                     <div>
                       <dt>Sync status</dt>
@@ -1650,7 +1882,7 @@ function App() {
                     </div>
                     <div>
                       <dt>Last sync</dt>
-                      <dd>{formatOptionalDateTime(googleConnection.data?.connection?.last_sync_completed_at)}</dd>
+                      <dd>{formatOptionalDateTime(googleConnection.data?.connection?.last_sync_completed_at, reportingTimezone)}</dd>
                     </div>
                     <div>
                       <dt>Reconciliation</dt>
@@ -1851,7 +2083,7 @@ function App() {
                           </td>
                           <td>{user.isAdmin ? 'Admin' : 'Viewer'}</td>
                           <td>{user.status}</td>
-                          <td>{formatOptionalDateTime(user.lastLoginAt)}</td>
+                          <td>{formatOptionalDateTime(user.lastLoginAt, reportingTimezone)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1873,7 +2105,11 @@ function App() {
             empty={!dashboard.timeseries.data?.length}
             emptyLabel="No timeseries data returned for this filter range."
           >
-            <TimeseriesChart points={dashboard.timeseries.data ?? []} groupBy={groupBy} />
+            <TimeseriesChart
+              points={dashboard.timeseries.data ?? []}
+              groupBy={groupBy}
+              reportingTimezone={reportingTimezone}
+            />
           </SectionState>
         </article> : null}
 
@@ -1982,11 +2218,17 @@ function App() {
                     <tr key={row.shopifyOrderId}>
                       <td>
                         <div className="primary-cell">
-                          <strong>#{row.shopifyOrderId}</strong>
+                          <button
+                            type="button"
+                            className="table-link-button"
+                            onClick={() => void openOrderDetails(row.shopifyOrderId)}
+                          >
+                            #{row.shopifyOrderId}
+                          </button>
                           <span>{row.medium ?? 'No medium'}</span>
                         </div>
                       </td>
-                      <td>{formatDateTimeLabel(row.processedAt)}</td>
+                      <td>{formatDateTimeLabel(row.processedAt, reportingTimezone)}</td>
                       <td>{row.source ?? 'Unattributed'}</td>
                       <td>{row.campaign ?? 'No campaign'}</td>
                       <td>{formatCurrency(row.totalPrice)}</td>
@@ -2000,7 +2242,7 @@ function App() {
             </div>
           </SectionState>
         </article> : null}
-      </section>
+      </section> : null}
     </main>
   );
 }

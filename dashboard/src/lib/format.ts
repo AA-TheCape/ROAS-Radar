@@ -41,16 +41,32 @@ export function formatPercent(value: number | null | undefined): string {
   return `${(value * 100).toFixed(value < 0.1 ? 2 : 1)}%`;
 }
 
-export function formatDateLabel(value: string): string {
-  const date = new Date(`${value}T00:00:00Z`);
+const DEFAULT_REPORTING_TIMEZONE = 'America/Los_Angeles';
+
+export function formatDateLabel(
+  value: string,
+  reportingTimezone = DEFAULT_REPORTING_TIMEZONE
+): string {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
+  if (!match) {
+    return value;
+  }
+
+  const [, year, month, day] = match;
+  const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), 12));
 
   return new Intl.DateTimeFormat('en-US', {
     month: 'short',
-    day: 'numeric'
+    day: 'numeric',
+    timeZone: reportingTimezone
   }).format(date);
 }
 
-export function formatDateTimeLabel(value: string | null | undefined): string {
+export function formatDateTimeLabel(
+  value: string | null | undefined,
+  reportingTimezone = DEFAULT_REPORTING_TIMEZONE
+): string {
   if (!value) {
     return 'N/A';
   }
@@ -66,6 +82,6 @@ export function formatDateTimeLabel(value: string | null | undefined): string {
     day: 'numeric',
     hour: 'numeric',
     minute: '2-digit',
-    timeZone: 'UTC'
+    timeZone: reportingTimezone
   }).format(date);
 }
