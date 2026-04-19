@@ -255,6 +255,15 @@ export type ShopifyBackfillResponse = {
   duplicatedOrders: number;
 };
 
+export type ShopifyAttributionRecoveryResponse = {
+  ok: true;
+  startDate: string;
+  endDate: string;
+  rescannedOrders: number;
+  relinkedOrders: number;
+  requeuedOrders: number;
+};
+
 declare global {
   interface Window {
     __ROAS_RADAR_RUNTIME_CONFIG__?: {
@@ -493,6 +502,13 @@ export function syncShopifyWebhooks() {
 
 export function backfillShopifyOrders(startDate: string, endDate: string) {
   return requestJson<ShopifyBackfillResponse>('/api/admin/shopify/orders/backfill', {
+    method: 'POST',
+    body: { startDate, endDate }
+  });
+}
+
+export function recoverShopifyAttributionHints(startDate: string, endDate: string) {
+  return requestJson<ShopifyAttributionRecoveryResponse>('/api/admin/shopify/orders/recover-attribution', {
     method: 'POST',
     body: { startDate, endDate }
   });

@@ -19,6 +19,7 @@ import {
   login,
   logout,
   reconcileGoogleAds,
+  recoverShopifyAttributionHints,
   storeAuthToken,
   syncShopifyWebhooks,
   startMetaAdsOauth,
@@ -38,6 +39,7 @@ import {
   type ReportingFilters,
   type ShopifyConnectionResponse,
   type ShopifyBackfillResponse,
+  type ShopifyAttributionRecoveryResponse,
   type SummaryTotals,
   type TimeseriesGroupBy,
   type TimeseriesPoint
@@ -974,6 +976,36 @@ function App() {
     }
   }
 
+  async function handleShopifyAttributionRecovery() {
+    setActionFeedback({
+      loading: 'shopify-attribution-recovery',
+      error: null,
+      message: null
+    });
+
+    try {
+      const response: ShopifyAttributionRecoveryResponse = await recoverShopifyAttributionHints(
+        shopifyBackfillRange.startDate,
+        shopifyBackfillRange.endDate
+      );
+      await loadConnections();
+      startTransition(() => {
+        setDashboardRefreshKey((current) => current + 1);
+      });
+      setActionFeedback({
+        loading: null,
+        error: null,
+        message: `Rescanned ${response.rescannedOrders} unknown Shopify web orders for ${response.startDate} to ${response.endDate}; relinked ${response.relinkedOrders} and requeued ${response.requeuedOrders} for attribution.`
+      });
+    } catch (error) {
+      setActionFeedback({
+        loading: null,
+        error: error instanceof Error ? error.message : 'Failed to recover Shopify attribution hints',
+        message: null
+      });
+    }
+  }
+
   async function handleMetaSync() {
     setActionFeedback({
       loading: 'meta-sync',
@@ -1423,6 +1455,16 @@ function App() {
                           {actionFeedback.loading === 'shopify-backfill'
                             ? 'Backfilling…'
                             : `Backfill Shopify orders`}
+                        </button>
+                        <button
+                          type="button"
+                          className="action-button action-button-secondary"
+                          onClick={() => void handleShopifyAttributionRecovery()}
+                          disabled={actionFeedback.loading !== null || !shopifyConnection.data?.connected}
+                        >
+                          {actionFeedback.loading === 'shopify-attribution-recovery'
+                            ? 'Recovering…'
+                            : 'Recover attribution hints'}
                         </button>
                       </div>
                     </form>

@@ -183,6 +183,12 @@ type ShopifyOrdersRestResponse = {
   orders?: unknown[];
 };
 
+type ShopifyAttributionRecoveryResponse = {
+  rescannedOrders: number;
+  relinkedOrders: number;
+  requeuedOrders: number;
+};
+
 class ShopifyHttpError extends Error {
   statusCode: number;
   code: string;
@@ -693,6 +699,106 @@ async function backfillShopifyOrders(
     importedOrders,
     processedOrders,
     duplicatedOrders
+  };
+}
+
+async function recoverShopifyAttributionHints(
+  reportingTimezone: string,
+  startDate: string,
+  endDate: string
+): Promise<ShopifyAttributionRecoveryResponse> {
+  const processedAtMin = convertLocalDateTimeInTimeZoneToUtc(startDate, reportingTimezone, 'start');
+  const processedAtMax = convertLocalDateTimeInTimeZoneToUtc(endDate, reportingTimezone, 'end');
+
+  const result = await query<{
+    shopify_order_id: string;
+    shopify_customer_id: string | null;
+    email: string | null;
+    landing_session_id: string | null;
+    raw_payload: unknown;
+  }>(
+    `
+      SELECT
+        o.shopify_order_id,
+        o.shopify_customer_id,
+        o.email,
+        o.landing_session_id::text AS landing_session_id,
+        o.raw_payload
+      FROM shopify_orders o
+      LEFT JOIN attribution_order_credits c
+        ON c.order_id = o.id
+       AND c.attribution_model = 'last_touch'
+      WHERE COALESCE(o.source_name, '') = 'web'
+        AND o.processed_at >= $1::timestamptz
+        AND o.processed_at <= $2::timestamptz
+        AND (
+          c.order_id IS NULL
+          OR (
+            c.attributed_source IS NULL
+            AND c.attributed_medium IS NULL
+            AND c.attributed_campaign IS NULL
+          )
+        )
+      ORDER BY o.processed_at ASC, o.shopify_order_id ASC
+    `,
+    [processedAtMin, processedAtMax]
+  );
+
+  let rescannedOrders = 0;
+  let relinkedOrders = 0;
+  let requeuedOrders = 0;
+
+  for (const row of result.rows) {
+    const parsedPayload = shopifyOrderPayloadSchema.safeParse(row.raw_payload);
+
+    if (!parsedPayload.success) {
+      logWarning('shopify_attribution_hint_recovery_skipped', {
+        shopifyOrderId: row.shopify_order_id,
+        reason: 'invalid_raw_payload',
+        issues: parsedPayload.error.issues
+      });
+      continue;
+    }
+
+    rescannedOrders += 1;
+
+    await withTransaction(async (client) => {
+      const resolvedLandingSessionId = await resolveLandingSessionId(client, parsedPayload.data);
+      const shouldUpdateLandingSessionId =
+        resolvedLandingSessionId !== null && resolvedLandingSessionId !== row.landing_session_id;
+
+      if (shouldUpdateLandingSessionId) {
+        await client.query(
+          `
+            UPDATE shopify_orders
+            SET
+              landing_session_id = $2::uuid,
+              ingested_at = now()
+            WHERE shopify_order_id = $1
+          `,
+          [row.shopify_order_id, resolvedLandingSessionId]
+        );
+        relinkedOrders += 1;
+      }
+
+      await stitchKnownCustomerIdentity(client, {
+        shopifyOrderId: row.shopify_order_id,
+        shopifyCustomerId: row.shopify_customer_id,
+        email: row.email,
+        landingSessionId: resolvedLandingSessionId ?? row.landing_session_id,
+        checkoutToken: parsedPayload.data.checkout_token ?? null,
+        cartToken: parsedPayload.data.cart_token ?? null
+      });
+
+      await enqueueAttributionForOrder(row.shopify_order_id, 'shopify_attribution_hint_recovery', client);
+      requeuedOrders += 1;
+    });
+  }
+
+  return {
+    rescannedOrders,
+    relinkedOrders,
+    requeuedOrders
   };
 }
 
@@ -1696,6 +1802,23 @@ export function createShopifyAdminRouter(): Router {
       res.status(200).json({
         ok: true,
         shopDomain: installation.shop_domain,
+        startDate: input.startDate,
+        endDate: input.endDate,
+        ...result
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/orders/recover-attribution', async (req, res, next) => {
+    try {
+      const input = shopifyBackfillRequestSchema.parse(req.body ?? {});
+      const reportingTimezone = await getReportingTimezone();
+      const result = await recoverShopifyAttributionHints(reportingTimezone, input.startDate, input.endDate);
+
+      res.status(200).json({
+        ok: true,
         startDate: input.startDate,
         endDate: input.endDate,
         ...result
