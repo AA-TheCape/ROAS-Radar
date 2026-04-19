@@ -444,6 +444,7 @@ async function backfillShopifyOrders(shopDomain, accessToken, reportingTimezone,
             const payload = shopifyOrderPayloadSchema.parse(rawOrder);
             const persisted = await persistWebhook({
                 payload,
+                rawPayload: rawOrder,
                 rawBody: Buffer.from(JSON.stringify(rawOrder)),
                 shopDomain,
                 topic: 'orders/backfill',
@@ -950,7 +951,7 @@ async function upsertShopifyOrderLineItems(client, shopifyOrderId, lineItems) {
         ]);
     }
 }
-async function createOrReuseWebhookReceipt(topic, shopDomain, webhookId, payloadHash, payload) {
+async function createOrReuseWebhookReceipt(topic, shopDomain, webhookId, payloadHash, rawPayload) {
     const insertResult = await query(`
       INSERT INTO shopify_webhook_receipts (
         topic,
@@ -964,7 +965,7 @@ async function createOrReuseWebhookReceipt(topic, shopDomain, webhookId, payload
       VALUES ($1, $2, $3, $4, now(), 'received', $5::jsonb)
       ON CONFLICT DO NOTHING
       RETURNING id, status, processed_at
-    `, [topic, shopDomain, webhookId, payloadHash, JSON.stringify(payload)]);
+    `, [topic, shopDomain, webhookId, payloadHash, JSON.stringify(rawPayload)]);
     if (insertResult.rowCount) {
         return insertResult.rows[0];
     }
@@ -999,7 +1000,7 @@ async function markWebhookReceiptStatus(receiptId, status) {
       WHERE id = $1
     `, [receiptId, status]);
 }
-async function normalizeShopifyOrder(receiptId, payload) {
+async function normalizeShopifyOrder(receiptId, payload, rawPayload) {
     const shopifyCustomerId = payload.customer?.id ? String(payload.customer.id) : null;
     const normalizedOrderEmail = payload.email ?? payload.customer?.email ?? null;
     const orderEmailHash = hashIdentityEmail(normalizedOrderEmail);
@@ -1106,7 +1107,7 @@ async function normalizeShopifyOrder(receiptId, payload) {
             payload.checkout_token ?? null,
             payload.cart_token ?? null,
             payload.source_name ?? null,
-            JSON.stringify(payload)
+            JSON.stringify(rawPayload)
         ]);
         await upsertShopifyOrderLineItems(client, shopifyOrderId, payload.line_items);
         await stitchKnownCustomerIdentity(client, {
@@ -1129,8 +1130,18 @@ async function normalizeShopifyOrder(receiptId, payload) {
 }
 async function persistWebhook(input) {
     const payloadHash = createHash('sha256').update(input.rawBody).digest('hex');
-    const receipt = await createOrReuseWebhookReceipt(input.topic, input.shopDomain, input.webhookId, payloadHash, input.payload);
+    const receipt = await createOrReuseWebhookReceipt(input.topic, input.shopDomain, input.webhookId, payloadHash, input.rawPayload);
     if (receipt.status === 'processed') {
+        if (input.topic === 'orders/backfill') {
+            await normalizeShopifyOrder(receipt.id, input.payload, input.rawPayload);
+            logInfo('shopify_webhook_reprocessed_from_backfill', {
+                topic: input.topic,
+                shopDomain: input.shopDomain,
+                webhookId: input.webhookId,
+                shopifyOrderId: String(input.payload.id)
+            });
+            return { duplicated: true };
+        }
         logInfo('shopify_webhook_duplicate', {
             topic: input.topic,
             shopDomain: input.shopDomain,
@@ -1149,7 +1160,7 @@ async function persistWebhook(input) {
         return { duplicated: false };
     }
     try {
-        await normalizeShopifyOrder(receipt.id, input.payload);
+        await normalizeShopifyOrder(receipt.id, input.payload, input.rawPayload);
         logInfo('shopify_webhook_processed', {
             topic: input.topic,
             shopDomain: input.shopDomain,
@@ -1196,9 +1207,11 @@ function createOrderWebhookHandler(defaultTopic) {
                 res.status(403).json({ error: 'Webhook shop domain does not match the connected store.' });
                 return;
             }
-            const payload = shopifyOrderPayloadSchema.parse(JSON.parse(rawBody.toString('utf8')));
+            const rawPayload = JSON.parse(rawBody.toString('utf8'));
+            const payload = shopifyOrderPayloadSchema.parse(rawPayload);
             await persistWebhook({
                 payload,
+                rawPayload,
                 rawBody,
                 topic: req.header('x-shopify-topic') ?? defaultTopic,
                 shopDomain,

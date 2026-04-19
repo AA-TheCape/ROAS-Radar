@@ -142,6 +142,7 @@ type WebhookReceiptRow = {
 
 type PersistWebhookInput = {
   payload: ShopifyOrderPayload;
+  rawPayload: unknown;
   rawBody: Buffer;
   shopDomain: string;
   topic: string;
@@ -693,6 +694,7 @@ async function backfillShopifyOrders(
       const payload = shopifyOrderPayloadSchema.parse(rawOrder);
       const persisted = await persistWebhook({
         payload,
+        rawPayload: rawOrder,
         rawBody: Buffer.from(JSON.stringify(rawOrder)),
         shopDomain,
         topic: 'orders/backfill',
@@ -1391,7 +1393,7 @@ async function createOrReuseWebhookReceipt(
   shopDomain: string,
   webhookId: string | null,
   payloadHash: string,
-  payload: ShopifyOrderPayload
+  rawPayload: unknown
 ): Promise<WebhookReceiptRow> {
   const insertResult = await query<WebhookReceiptRow>(
     `
@@ -1408,7 +1410,7 @@ async function createOrReuseWebhookReceipt(
       ON CONFLICT DO NOTHING
       RETURNING id, status, processed_at
     `,
-    [topic, shopDomain, webhookId, payloadHash, JSON.stringify(payload)]
+    [topic, shopDomain, webhookId, payloadHash, JSON.stringify(rawPayload)]
   );
 
   if (insertResult.rowCount) {
@@ -1456,7 +1458,7 @@ async function markWebhookReceiptStatus(receiptId: number, status: 'processed' |
   );
 }
 
-async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPayload): Promise<void> {
+async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPayload, rawPayload: unknown): Promise<void> {
   const shopifyCustomerId = payload.customer?.id ? String(payload.customer.id) : null;
   const normalizedOrderEmail = payload.email ?? payload.customer?.email ?? null;
   const orderEmailHash = hashIdentityEmail(normalizedOrderEmail);
@@ -1571,7 +1573,7 @@ async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPay
         payload.checkout_token ?? null,
         payload.cart_token ?? null,
         payload.source_name ?? null,
-        JSON.stringify(payload)
+        JSON.stringify(rawPayload)
       ]
     );
 
@@ -1608,10 +1610,21 @@ async function persistWebhook(input: PersistWebhookInput): Promise<{ duplicated:
     input.shopDomain,
     input.webhookId,
     payloadHash,
-    input.payload
+    input.rawPayload
   );
 
   if (receipt.status === 'processed') {
+    if (input.topic === 'orders/backfill') {
+      await normalizeShopifyOrder(receipt.id, input.payload, input.rawPayload);
+      logInfo('shopify_webhook_reprocessed_from_backfill', {
+        topic: input.topic,
+        shopDomain: input.shopDomain,
+        webhookId: input.webhookId,
+        shopifyOrderId: String(input.payload.id)
+      });
+      return { duplicated: true };
+    }
+
     logInfo('shopify_webhook_duplicate', {
       topic: input.topic,
       shopDomain: input.shopDomain,
@@ -1632,7 +1645,7 @@ async function persistWebhook(input: PersistWebhookInput): Promise<{ duplicated:
   }
 
   try {
-    await normalizeShopifyOrder(receipt.id, input.payload);
+    await normalizeShopifyOrder(receipt.id, input.payload, input.rawPayload);
     logInfo('shopify_webhook_processed', {
       topic: input.topic,
       shopDomain: input.shopDomain,
@@ -1684,9 +1697,11 @@ function createOrderWebhookHandler(defaultTopic: string): RequestHandler {
         return;
       }
 
-      const payload = shopifyOrderPayloadSchema.parse(JSON.parse(rawBody.toString('utf8')));
+      const rawPayload = JSON.parse(rawBody.toString('utf8'));
+      const payload = shopifyOrderPayloadSchema.parse(rawPayload);
       await persistWebhook({
         payload,
+        rawPayload,
         rawBody,
         topic: req.header('x-shopify-topic') ?? defaultTopic,
         shopDomain,
