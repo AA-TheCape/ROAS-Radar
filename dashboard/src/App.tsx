@@ -142,6 +142,14 @@ function formatDateInput(date: Date, reportingTimezone = DEFAULT_REPORTING_TIMEZ
   return `${year}-${month}-${day}`;
 }
 
+function formatTimeLabel(date: Date, reportingTimezone = DEFAULT_REPORTING_TIMEZONE): string {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: reportingTimezone,
+    hour: 'numeric',
+    minute: '2-digit'
+  }).format(date);
+}
+
 function buildRange(
   days: number,
   reportingTimezone = DEFAULT_REPORTING_TIMEZONE
@@ -504,6 +512,21 @@ function App() {
 
   const dashboard = useDashboardData(appliedFilters, groupBy, authState.user !== null, dashboardRefreshKey);
   const reportingTimezone = appSettings.data?.reportingTimezone ?? settingsForm.reportingTimezone ?? DEFAULT_REPORTING_TIMEZONE;
+  const [currentTime, setCurrentTime] = useState(() => new Date());
+  const activeWindowTime = useMemo(
+    () => formatTimeLabel(currentTime, reportingTimezone),
+    [currentTime, reportingTimezone]
+  );
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setCurrentTime(new Date());
+    }, 60_000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, []);
 
   async function loadAppSettings() {
     setAppSettings(createLoadingSection());
@@ -1113,6 +1136,7 @@ function App() {
         <div className="hero-status-card">
           <span>Active window</span>
           <strong>{filters.endDate}</strong>
+          <small>{activeWindowTime}</small>
           <small>
             {(filters.source ?? '').trim() || (filters.campaign ?? '').trim()
               ? `Filtered by ${[(filters.source ?? '').trim(), (filters.campaign ?? '').trim()].filter(Boolean).join(' / ')}`
