@@ -43,8 +43,8 @@ export function createApp() {
         }
     });
     app.use('/webhooks/shopify', express.raw({ type: '*/*', limit: '2mb' }), createShopifyWebhookRouter());
+    app.use('/track', express.text({ type: 'text/plain', limit: '1mb' }), express.json({ type: 'application/json', limit: '1mb' }), createTrackingRouter());
     app.use(express.json({ limit: '1mb' }));
-    app.use('/track', createTrackingRouter());
     app.use('/api/auth', createAuthRouter());
     app.use('/api/settings', createSettingsRouter());
     app.use('/api/reporting', createReportingRouter());
