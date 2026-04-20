@@ -57,6 +57,7 @@ import AuthenticatedAppShell, {
   type AppShellBreadcrumb,
   type AppShellNavItem
 } from './components/AuthenticatedAppShell';
+import ReportingDashboard from './components/ReportingDashboard';
 import {
   AuthGate,
   Banner,
@@ -158,12 +159,6 @@ const PRESETS = [
   { label: 'Last 90D', value: (reportingTimezone: string) => buildRange(90, reportingTimezone) }
 ] as const;
 
-const GROUP_BY_OPTIONS: Array<{ value: TimeseriesGroupBy; label: string }> = [
-  { value: 'day', label: 'Daily' },
-  { value: 'source', label: 'By source' },
-  { value: 'campaign', label: 'By campaign' }
-];
-
 function formatDateInput(date: Date, reportingTimezone = DEFAULT_REPORTING_TIMEZONE): string {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: reportingTimezone,
@@ -250,22 +245,6 @@ function createErroredSection<T>(message: string): AsyncSection<T> {
     loading: false,
     error: message
   };
-}
-
-function buildSeriesPath(points: TimeseriesPoint[]): string {
-  if (points.length === 0) {
-    return '';
-  }
-
-  const maxRevenue = Math.max(...points.map((point) => point.revenue), 1);
-
-  return points
-    .map((point, index) => {
-      const x = points.length === 1 ? 320 : (index / (points.length - 1)) * 320;
-      const y = 144 - (point.revenue / maxRevenue) * 120;
-      return `${index === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${y.toFixed(2)}`;
-    })
-    .join(' ');
 }
 
 function useDashboardData(
@@ -383,61 +362,6 @@ function useDashboardData(
   }, [enabled, filters, groupBy, refreshKey]);
 
   return state;
-}
-
-function SummaryCard({ label, value, detail }: { label: string; value: string; detail: string }) {
-  return (
-    <article className="metric-card">
-      <span>{label}</span>
-      <strong>{value}</strong>
-      <small>{detail}</small>
-    </article>
-  );
-}
-
-function TimeseriesChart({
-  points,
-  groupBy,
-  reportingTimezone
-}: {
-  points: TimeseriesPoint[];
-  groupBy: TimeseriesGroupBy;
-  reportingTimezone: string;
-}) {
-  const path = buildSeriesPath(points);
-  const maxRevenue = Math.max(...points.map((point) => point.revenue), 1);
-
-  return (
-    <div className="chart-card">
-      <div className="chart-svg-shell">
-        <svg viewBox="0 0 320 160" className="chart-svg" aria-label="Revenue timeseries">
-          <defs>
-            <linearGradient id="revenueFill" x1="0" x2="0" y1="0" y2="1">
-              <stop offset="0%" stopColor="rgba(186, 87, 32, 0.35)" />
-              <stop offset="100%" stopColor="rgba(186, 87, 32, 0.02)" />
-            </linearGradient>
-          </defs>
-          <path d="M 0 144 H 320" className="chart-axis" />
-          <path d={path} className="chart-line" />
-          {path ? <path d={`${path} L 320 144 L 0 144 Z`} className="chart-area" /> : null}
-          {points.map((point, index) => {
-            const x = points.length === 1 ? 320 : (index / (points.length - 1)) * 320;
-            const y = 144 - (point.revenue / maxRevenue) * 120;
-
-            return <circle key={`${point.date}-${index}`} cx={x} cy={y} r="4" className="chart-dot" />;
-          })}
-        </svg>
-      </div>
-      <div className="chart-labels">
-        {points.map((point) => (
-          <div key={point.date} className="chart-label">
-            <strong>{groupBy === 'day' ? formatDateLabel(point.date, reportingTimezone) : point.date}</strong>
-            <span>{formatCurrency(point.revenue)}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
 }
 
 function formatOptionalDateTime(value: string | null | undefined, reportingTimezone: string): string {
@@ -748,11 +672,6 @@ function App() {
       }
     ];
   }, [dashboard.summary.data, filters.endDate, filters.startDate, reportingTimezone]);
-
-  const totalCampaignRevenue = useMemo(
-    () => (dashboard.campaigns.data ?? []).reduce((sum, row) => sum + row.revenue, 0),
-    [dashboard.campaigns.data]
-  );
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1341,109 +1260,38 @@ function App() {
       headerActions={shellHeaderActions}
     >
       {currentPage === 'dashboard' ? (
-        <section className="ui-panel grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <Field label="Start date" htmlFor="start-date">
-            <Input
-              id="start-date"
-              type="date"
-              value={filters.startDate}
-              onChange={(event) => {
-                setFilters((current) => ({ ...current, startDate: event.target.value }));
-              }}
-            />
-          </Field>
-          <Field label="End date" htmlFor="end-date">
-            <Input
-              id="end-date"
-              type="date"
-              value={filters.endDate}
-              onChange={(event) => {
-                setFilters((current) => ({ ...current, endDate: event.target.value }));
-              }}
-            />
-          </Field>
-          <Field label="Source" htmlFor="source-filter">
-            <Input
-              id="source-filter"
-              type="text"
-              placeholder="google, meta, facebook"
-              value={filters.source}
-              onChange={(event) => {
-                setFilters((current) => ({ ...current, source: event.target.value }));
-              }}
-            />
-          </Field>
-          <Field label="Campaign" htmlFor="campaign-filter">
-            <Input
-              id="campaign-filter"
-              type="text"
-              placeholder="spring-sale"
-              value={filters.campaign}
-              onChange={(event) => {
-                setFilters((current) => ({ ...current, campaign: event.target.value }));
-              }}
-            />
-          </Field>
-          <Field label="Timeseries grouping" htmlFor="group-by" wide>
-            <Select
-              id="group-by"
-              value={groupBy}
-              onChange={(event) => {
-                setGroupBy(event.target.value as TimeseriesGroupBy);
-              }}
-            >
-              {GROUP_BY_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <div className="ui-field ui-field-grid-wide">
-            <span>Quick ranges</span>
-            <ButtonRow className="gap-2">
-              {PRESETS.map((preset) => (
-                <Button
-                  key={preset.label}
-                  type="button"
-                  tone="secondary"
-                  onClick={() =>
-                    startTransition(() => {
-                      setFilters((current) => ({
-                        ...current,
-                        ...preset.value(reportingTimezone)
-                      }));
-                    })
-                  }
-                >
-                  {preset.label}
-                </Button>
-              ))}
-              <Button
-                type="button"
-                tone="ghost"
-                onClick={() =>
-                  startTransition(() => {
-                    setFilters((current) => ({
-                      ...current,
-                      source: '',
-                      campaign: ''
-                    }));
-                  })
-                }
-              >
-                Clear filters
-              </Button>
-            </ButtonRow>
-          </div>
-        </section>
+        <ReportingDashboard
+          filters={filters}
+          onFiltersChange={setFilters}
+          groupBy={groupBy}
+          onGroupByChange={setGroupBy}
+          reportingTimezone={reportingTimezone}
+          quickRanges={PRESETS}
+          onApplyQuickRange={(range) =>
+            startTransition(() => {
+              setFilters((current) => ({
+                ...current,
+                ...range
+              }));
+            })
+          }
+          onClearFilters={() =>
+            startTransition(() => {
+              setFilters((current) => ({
+                ...current,
+                source: '',
+                campaign: ''
+              }));
+            })
+          }
+          summaryCards={summaryCards}
+          summarySection={dashboard.summary}
+          campaignsSection={dashboard.campaigns}
+          timeseriesSection={dashboard.timeseries}
+          ordersSection={dashboard.orders}
+          onOpenOrderDetails={(shopifyOrderId) => void openOrderDetails(shopifyOrderId)}
+        />
       ) : null}
-
-      {currentPage === 'dashboard' ? <section className="summary-grid">
-        {summaryCards.map((card) => (
-          <SummaryCard key={card.label} label={card.label} value={card.value} detail={card.detail} />
-        ))}
-      </section> : null}
 
       {currentPage === 'order-details' ? (
         <section className="dashboard-grid">
@@ -1588,7 +1436,7 @@ function App() {
         </section>
       ) : null}
 
-      {currentPage !== 'order-details' ? <section className="dashboard-grid">
+      {currentPage === 'settings' ? <section className="dashboard-grid">
         {currentPage === 'settings' ? (
         <Panel
           title="Settings"
@@ -2123,152 +1971,6 @@ function App() {
           </Panel>
         ) : null}
 
-        {currentPage === 'dashboard' ? <Panel
-          title="Revenue trend"
-          description="Uses the reporting timeseries contract and switches grouping without changing the rest of the dashboard."
-          wide
-        >
-          <SectionState
-            loading={dashboard.timeseries.loading}
-            error={dashboard.timeseries.error}
-            empty={!dashboard.timeseries.data?.length}
-            emptyLabel="No timeseries data returned for this filter range."
-          >
-            <TimeseriesChart
-              points={dashboard.timeseries.data ?? []}
-              groupBy={groupBy}
-              reportingTimezone={reportingTimezone}
-            />
-          </SectionState>
-        </Panel> : null}
-
-        {currentPage === 'dashboard' ? <Panel
-          title="Campaign performance"
-          description="Top campaign rows ordered by revenue, matching the API’s table response."
-        >
-          <SectionState
-            loading={dashboard.campaigns.loading}
-            error={dashboard.campaigns.error}
-            empty={!dashboard.campaigns.data?.length}
-            emptyLabel="No campaign rows matched the current filters."
-          >
-            <TableWrap>
-              <table className="ui-table">
-                <thead>
-                  <tr>
-                    <th>Campaign</th>
-                    <th>Source</th>
-                    <th>Visits</th>
-                    <th>Orders</th>
-                    <th>Revenue</th>
-                    <th>CVR</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(dashboard.campaigns.data ?? []).map((row) => (
-                    <tr key={`${row.source}-${row.medium}-${row.campaign}-${row.content ?? 'none'}`}>
-                      <td>
-                        <PrimaryCell>
-                          <strong>{row.campaign}</strong>
-                          <span>{row.content ?? 'No content tag'}</span>
-                        </PrimaryCell>
-                      </td>
-                      <td>{`${row.source} / ${row.medium}`}</td>
-                      <td>{formatNumber(row.visits)}</td>
-                      <td>{formatNumber(row.orders)}</td>
-                      <td>{formatCurrency(row.revenue)}</td>
-                      <td>{formatPercent(row.conversionRate)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </TableWrap>
-          </SectionState>
-        </Panel> : null}
-
-        {currentPage === 'dashboard' ? <Panel
-          title="Campaign mix"
-          description="Revenue share makes it obvious which campaigns dominate the selected window."
-        >
-          <SectionState
-            loading={dashboard.campaigns.loading}
-            error={dashboard.campaigns.error}
-            empty={!dashboard.campaigns.data?.length}
-            emptyLabel="No campaign mix available yet."
-          >
-            <div className="stack-list">
-              {(dashboard.campaigns.data ?? []).map((row) => {
-                const share = totalCampaignRevenue > 0 ? row.revenue / totalCampaignRevenue : 0;
-
-                return (
-                  <div key={`${row.source}-${row.campaign}`} className="stack-row">
-                    <div className="stack-copy">
-                      <strong>{row.campaign}</strong>
-                      <span>{`${row.source} / ${row.medium}`}</span>
-                    </div>
-                    <div className="stack-bar-shell">
-                      <div className="stack-bar" style={{ width: `${Math.max(share * 100, 2)}%` }} />
-                    </div>
-                    <div className="stack-value">{formatPercent(share)}</div>
-                  </div>
-                );
-              })}
-            </div>
-          </SectionState>
-        </Panel> : null}
-
-        {currentPage === 'dashboard' ? <Panel
-          title="Attributed orders"
-          description="Order-level attribution rows help debug why a sale was assigned to a source and campaign."
-          wide
-        >
-          <SectionState
-            loading={dashboard.orders.loading}
-            error={dashboard.orders.error}
-            empty={!dashboard.orders.data?.length}
-            emptyLabel="No attributed orders were returned for this range."
-          >
-            <TableWrap>
-              <table className="ui-table">
-                <thead>
-                  <tr>
-                    <th>Order</th>
-                    <th>Processed</th>
-                    <th>Source</th>
-                    <th>Campaign</th>
-                    <th>Total</th>
-                    <th>Reason</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(dashboard.orders.data ?? []).map((row) => (
-                    <tr key={row.shopifyOrderId}>
-                      <td>
-                        <PrimaryCell>
-                          <button
-                            type="button"
-                            className="table-link-button"
-                            onClick={() => void openOrderDetails(row.shopifyOrderId)}
-                          >
-                            #{row.shopifyOrderId}
-                          </button>
-                          <span>{row.medium ?? 'No medium'}</span>
-                        </PrimaryCell>
-                      </td>
-                      <td>{formatDateTimeLabel(row.processedAt, reportingTimezone)}</td>
-                      <td>{row.source ?? 'Unattributed'}</td>
-                      <td>{row.campaign ?? 'No campaign'}</td>
-                      <td>{formatCurrency(row.totalPrice)}</td>
-                      <td>
-                        <span className="reason-pill">{row.attributionReason}</span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </TableWrap>
-          </SectionState>
-        </Panel> : null}
       </section> : null}
     </AuthenticatedAppShell>
   );
