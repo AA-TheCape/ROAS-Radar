@@ -3,7 +3,6 @@ import { startTransition, useDeferredValue, useEffect, useMemo, useState, type F
 import {
   backfillShopifyOrders,
   clearStoredAuthToken,
-  connectGoogleAds,
   createUser,
   fetchAppSettings,
   fetchCampaigns,
@@ -23,16 +22,18 @@ import {
   recoverShopifyAttributionHints,
   storeAuthToken,
   syncShopifyWebhooks,
+  startGoogleAdsOauth,
   startMetaAdsOauth,
   syncGoogleAds,
   syncMetaAds,
   updateAppSettings,
+  updateGoogleAdsConfig,
   updateMetaAdsConfig,
   type AppSettings,
   type AuthUser,
   type CampaignRow,
   type CreateUserPayload,
-  type GoogleAdsConnectionPayload,
+  type GoogleAdsConfigSummary,
   type GoogleAdsStatusResponse,
   type MetaAdsConnection,
   type MetaAdsConfigSummary,
@@ -90,6 +91,25 @@ type MetaConfigForm = {
   appBaseUrl: string;
   appScopes: string;
   adAccountId: string;
+};
+
+type GoogleConfigForm = {
+  clientId: string;
+  clientSecret: string;
+  developerToken: string;
+  appBaseUrl: string;
+  appScopes: string;
+};
+
+type GoogleConnectForm = {
+  customerId: string;
+  loginCustomerId: string;
+};
+
+type GoogleConnectionState = {
+  config: GoogleAdsConfigSummary;
+  connection: GoogleAdsStatusResponse['connection'];
+  reconciliation: GoogleAdsStatusResponse['reconciliation'];
 };
 
 type SettingsForm = {
@@ -522,14 +542,17 @@ function App() {
     appScopes: 'ads_read',
     adAccountId: ''
   });
-  const [googleConnection, setGoogleConnection] = useState<AsyncSection<GoogleAdsStatusResponse>>(createLoadingSection());
-  const [googleForm, setGoogleForm] = useState<GoogleAdsConnectionPayload>({
-    customerId: '',
-    loginCustomerId: '',
-    developerToken: '',
+  const [googleConnection, setGoogleConnection] = useState<AsyncSection<GoogleConnectionState>>(createLoadingSection());
+  const [googleConfigForm, setGoogleConfigForm] = useState<GoogleConfigForm>({
     clientId: '',
     clientSecret: '',
-    refreshToken: ''
+    developerToken: '',
+    appBaseUrl: '',
+    appScopes: 'https://www.googleapis.com/auth/adwords'
+  });
+  const [googleForm, setGoogleForm] = useState<GoogleConnectForm>({
+    customerId: '',
+    loginCustomerId: ''
   });
   const [actionFeedback, setActionFeedback] = useState<ActionFeedback>({
     loading: null,
@@ -608,6 +631,13 @@ function App() {
         adAccountId: metaStatus.config.adAccountId || current.adAccountId
       }));
       setGoogleConnection(createResolvedSection(googleStatus));
+      setGoogleConfigForm((current) => ({
+        clientId: googleStatus.config.clientId || current.clientId,
+        clientSecret: '',
+        developerToken: '',
+        appBaseUrl: googleStatus.config.appBaseUrl || current.appBaseUrl,
+        appScopes: googleStatus.config.appScopes.length ? googleStatus.config.appScopes.join(', ') : current.appScopes
+      }));
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to load ad connection state';
       setShopifyConnection(createErroredSection(message));
@@ -1111,6 +1141,43 @@ function App() {
     }
   }
 
+  async function handleGoogleConfigSave(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setActionFeedback({
+      loading: 'google-config-save',
+      error: null,
+      message: null
+    });
+
+    try {
+      const response = await updateGoogleAdsConfig({
+        clientId: googleConfigForm.clientId.trim(),
+        clientSecret: googleConfigForm.clientSecret.trim() || undefined,
+        developerToken: googleConfigForm.developerToken.trim() || undefined,
+        appBaseUrl: googleConfigForm.appBaseUrl.trim(),
+        appScopes: googleConfigForm.appScopes
+      });
+      await loadConnections();
+      setGoogleConfigForm((current) => ({
+        ...current,
+        clientSecret: '',
+        developerToken: '',
+        appScopes: response.config.appScopes.join(', ')
+      }));
+      setActionFeedback({
+        loading: null,
+        error: null,
+        message: 'Saved Google Ads config.'
+      });
+    } catch (error) {
+      setActionFeedback({
+        loading: null,
+        error: error instanceof Error ? error.message : 'Failed to save Google Ads config',
+        message: null
+      });
+    }
+  }
+
   async function handleGoogleConnect(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setActionFeedback({
@@ -1120,20 +1187,27 @@ function App() {
     });
 
     try {
-      const response = await connectGoogleAds({
-        ...googleForm,
-        loginCustomerId: googleForm.loginCustomerId?.trim() ? googleForm.loginCustomerId.trim() : undefined
-      });
-      await loadConnections();
+      if ((googleConnection.data?.config.missingFields.length ?? 0) > 0) {
+        throw new Error('Save the Google Ads configuration first. Some required fields are still missing.');
+      }
+
+      const response = await startGoogleAdsOauth(
+        {
+          customerId: googleForm.customerId.trim(),
+          loginCustomerId: googleForm.loginCustomerId.trim() || undefined
+        },
+        window.location.pathname
+      );
       setActionFeedback({
         loading: null,
         error: null,
-        message: `Connected Google Ads customer ${response.customerId}${response.customerName ? ` (${response.customerName})` : ''}.`
+        message: 'Redirecting to Google Ads…'
       });
+      window.location.assign(response.authorizationUrl);
     } catch (error) {
       setActionFeedback({
         loading: null,
-        error: error instanceof Error ? error.message : 'Failed to connect Google Ads',
+        error: error instanceof Error ? error.message : 'Failed to start Google Ads OAuth',
         message: null
       });
     }
@@ -1859,15 +1933,20 @@ function App() {
               <div className="connection-card-header">
                 <div>
                   <h3>Google Ads</h3>
-                  <p>Creates the encrypted connection directly from Google Ads API credentials and refresh token.</p>
+                  <p>Save the Google OAuth app settings once, then connect each Google Ads account with Google sign-in.</p>
                 </div>
                 <span className="status-pill">
-                  {googleConnection.data?.connection?.status ?? (googleConnection.loading ? 'Loading' : 'Not connected')}
+                  {googleConnection.data?.connection?.status ??
+                    (googleConnection.data?.config.missingFields.length ? 'Needs config' : googleConnection.loading ? 'Loading' : 'Not connected')}
                 </span>
               </div>
               <ConnectionState loading={googleConnection.loading} error={googleConnection.error}>
                 <div className="connection-card-body">
                   <dl className="detail-list">
+                    <div>
+                      <dt>Config source</dt>
+                      <dd>{googleConnection.data?.config.source ?? 'Not available'}</dd>
+                    </div>
                     <div>
                       <dt>Customer</dt>
                       <dd>
@@ -1889,6 +1968,11 @@ function App() {
                       <dd>{googleConnection.data?.reconciliation?.status ?? 'Not run'}</dd>
                     </div>
                   </dl>
+                  {googleConnection.data?.config.missingFields.length ? (
+                    <div className="connection-note connection-note-error">
+                      Missing Google Ads config: {googleConnection.data.config.missingFields.join(', ')}
+                    </div>
+                  ) : null}
                   {googleConnection.data?.connection?.last_sync_error ? (
                     <div className="connection-note connection-note-error">
                       {googleConnection.data.connection.last_sync_error}
@@ -1899,6 +1983,78 @@ function App() {
                       Missing dates: {googleConnection.data.reconciliation.missing_dates.join(', ')}
                     </div>
                   ) : null}
+                  <form className="credentials-form" onSubmit={handleGoogleConfigSave}>
+                    <div className="credentials-grid">
+                      <label className="credential-field credential-field-wide">
+                        <span>OAuth client ID</span>
+                        <input
+                          type="text"
+                          value={googleConfigForm.clientId}
+                          onChange={(event) =>
+                            setGoogleConfigForm((current) => ({ ...current, clientId: event.target.value }))
+                          }
+                          placeholder="1234567890-abc123.apps.googleusercontent.com"
+                        />
+                      </label>
+                      <label className="credential-field credential-field-wide">
+                        <span>OAuth client secret</span>
+                        <input
+                          type="password"
+                          value={googleConfigForm.clientSecret}
+                          onChange={(event) =>
+                            setGoogleConfigForm((current) => ({ ...current, clientSecret: event.target.value }))
+                          }
+                          placeholder={
+                            googleConnection.data?.config.clientSecretConfigured
+                              ? 'Leave blank to keep the saved secret'
+                              : 'Paste the Google OAuth client secret'
+                          }
+                        />
+                      </label>
+                      <label className="credential-field credential-field-wide">
+                        <span>Developer token</span>
+                        <input
+                          type="password"
+                          value={googleConfigForm.developerToken}
+                          onChange={(event) =>
+                            setGoogleConfigForm((current) => ({ ...current, developerToken: event.target.value }))
+                          }
+                          placeholder={
+                            googleConnection.data?.config.developerTokenConfigured
+                              ? 'Leave blank to keep the saved token'
+                              : 'Paste the Google Ads developer token'
+                          }
+                        />
+                      </label>
+                      <label className="credential-field credential-field-wide">
+                        <span>OAuth base URL</span>
+                        <input
+                          type="url"
+                          value={googleConfigForm.appBaseUrl}
+                          onChange={(event) =>
+                            setGoogleConfigForm((current) => ({ ...current, appBaseUrl: event.target.value }))
+                          }
+                          placeholder="https://roas-radar.thecapemarine.com"
+                        />
+                      </label>
+                      <label className="credential-field credential-field-wide">
+                        <span>Scopes</span>
+                        <input
+                          type="text"
+                          value={googleConfigForm.appScopes}
+                          onChange={(event) =>
+                            setGoogleConfigForm((current) => ({ ...current, appScopes: event.target.value }))
+                          }
+                          placeholder="https://www.googleapis.com/auth/adwords"
+                        />
+                      </label>
+                    </div>
+                    <div className="button-row">
+                      <button type="submit" className="action-button" disabled={actionFeedback.loading !== null}>
+                        {actionFeedback.loading === 'google-config-save' ? 'Saving…' : 'Save Google Ads config'}
+                      </button>
+                    </div>
+                  </form>
                   <form className="credential-form" onSubmit={(event) => void handleGoogleConnect(event)}>
                     <div className="credential-grid">
                       <label>
@@ -1924,54 +2080,14 @@ function App() {
                           placeholder="Optional MCC login"
                         />
                       </label>
-                      <label>
-                        <span>Developer token</span>
-                        <input
-                          type="password"
-                          value={googleForm.developerToken}
-                          onChange={(event) =>
-                            setGoogleForm((current) => ({ ...current, developerToken: event.target.value }))
-                          }
-                          required
-                        />
-                      </label>
-                      <label>
-                        <span>Client ID</span>
-                        <input
-                          type="password"
-                          value={googleForm.clientId}
-                          onChange={(event) =>
-                            setGoogleForm((current) => ({ ...current, clientId: event.target.value }))
-                          }
-                          required
-                        />
-                      </label>
-                      <label>
-                        <span>Client secret</span>
-                        <input
-                          type="password"
-                          value={googleForm.clientSecret}
-                          onChange={(event) =>
-                            setGoogleForm((current) => ({ ...current, clientSecret: event.target.value }))
-                          }
-                          required
-                        />
-                      </label>
-                      <label>
-                        <span>Refresh token</span>
-                        <input
-                          type="password"
-                          value={googleForm.refreshToken}
-                          onChange={(event) =>
-                            setGoogleForm((current) => ({ ...current, refreshToken: event.target.value }))
-                          }
-                          required
-                        />
-                      </label>
                     </div>
                     <div className="button-row">
-                      <button type="submit" className="action-button" disabled={actionFeedback.loading !== null}>
-                        {actionFeedback.loading === 'google-connect' ? 'Saving…' : 'Connect Google Ads'}
+                      <button
+                        type="submit"
+                        className="action-button"
+                        disabled={actionFeedback.loading !== null || Boolean(googleConnection.data?.config.missingFields.length)}
+                      >
+                        {actionFeedback.loading === 'google-connect' ? 'Opening Google…' : 'Connect Google Ads'}
                       </button>
                       <button
                         type="button"
