@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 
 import App from './App';
+import StyleGuidePage from './StyleGuidePage';
 import './styles.css';
 
 declare global {
@@ -22,6 +23,23 @@ if (!(rootElement instanceof HTMLElement)) {
 
 const rootContainer = rootElement;
 
+function Root() {
+  const [hash, setHash] = useState(() => window.location.hash);
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      setHash(window.location.hash);
+    };
+
+    window.addEventListener('hashchange', handleHashChange);
+    return () => {
+      window.removeEventListener('hashchange', handleHashChange);
+    };
+  }, []);
+
+  return hash === '#style-guide' ? <StyleGuidePage /> : <App />;
+}
+
 async function bootstrap() {
   const response = await fetch('/config.json', {
     headers: {
@@ -35,7 +53,7 @@ async function bootstrap() {
 
   ReactDOM.createRoot(rootContainer).render(
     <React.StrictMode>
-      <App />
+      <Root />
     </React.StrictMode>
   );
 }

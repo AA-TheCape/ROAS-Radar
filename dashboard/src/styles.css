@@ -1,45 +1,56 @@
-:root {
-  color-scheme: light;
-  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
-  background:
-    radial-gradient(circle at top left, rgba(203, 117, 53, 0.2), transparent 28%),
-    radial-gradient(circle at top right, rgba(10, 112, 124, 0.18), transparent 24%),
-    linear-gradient(180deg, #f4efe7 0%, #fbfaf7 55%, #eef3f4 100%);
-  color: #19202a;
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  --surface: rgba(255, 255, 255, 0.82);
-  --surface-strong: rgba(255, 255, 255, 0.95);
-  --border: rgba(25, 32, 42, 0.1);
-  --text-muted: #617081;
-  --ink-strong: #1f3556;
-  --accent: #ba5720;
-  --accent-soft: #f1d7c9;
-  --teal: #0f7d8a;
-  --shadow: 0 24px 60px rgba(24, 37, 56, 0.1);
-}
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-* {
-  box-sizing: border-box;
-}
+@layer base {
+  :root {
+    color-scheme: light;
+    font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+    line-height: 1.5;
+    font-weight: 400;
+    background:
+      radial-gradient(circle at top left, rgba(203, 99, 50, 0.18), transparent 28%),
+      radial-gradient(circle at top right, rgba(31, 122, 116, 0.18), transparent 24%),
+      linear-gradient(180deg, #f7f9f6 0%, #f4f7f4 55%, #edf5f2 100%);
+    color: #17212b;
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    --surface: rgba(255, 255, 255, 0.84);
+    --surface-strong: rgba(255, 255, 255, 0.96);
+    --border: rgba(23, 33, 43, 0.1);
+    --text-muted: #627180;
+    --ink-strong: #314051;
+    --accent: #cb6332;
+    --accent-soft: #f6dfd3;
+    --teal: #1f7a74;
+    --shadow: 0 20px 45px rgba(23, 33, 43, 0.08);
+  }
 
-body {
-  margin: 0;
-  min-width: 320px;
-}
+  * {
+    box-sizing: border-box;
+  }
 
-button,
-input,
-select {
-  font: inherit;
-}
+  html {
+    min-height: 100%;
+  }
 
-#root {
-  min-height: 100vh;
+  body {
+    margin: 0;
+    min-width: 320px;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+
+  #root {
+    min-height: 100vh;
+  }
 }
 
 .auth-shell {
