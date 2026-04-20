@@ -59,25 +59,19 @@ import AuthenticatedAppShell, {
 } from './components/AuthenticatedAppShell';
 import OrderDetailsView from './components/OrderDetailsView';
 import ReportingDashboard from './components/ReportingDashboard';
+import SettingsAdminView from './components/SettingsAdminView';
 import {
   AuthGate,
   Banner,
   Button,
   ButtonRow,
-  CheckboxField,
-  ConnectionState,
-  DetailList,
   Field,
   FieldGrid,
   Form,
-  HelpText,
   Input,
   Panel,
-  PrimaryCell,
   SectionState,
-  Select,
-  StatusPill,
-  TableWrap
+  Select
 } from './components/AuthenticatedUi';
 
 type AsyncSection<T> = {
@@ -368,7 +362,6 @@ function useDashboardData(
 function formatOptionalDateTime(value: string | null | undefined, reportingTimezone: string): string {
   return value ? formatDateTimeLabel(value, reportingTimezone) : 'Not available';
 }
-
 function App() {
   const [authState, setAuthState] = useState<AuthState>({
     checking: true,
@@ -1290,542 +1283,43 @@ function App() {
         </section>
       ) : null}
 
-      {currentPage === 'settings' ? <section className="dashboard-grid">
-        {currentPage === 'settings' ? (
-        <Panel
-          title="Settings"
-          description="Manage reporting timezone, store connections, ad platform credentials, and dashboard access here."
-          wide
-        >
-          <div className="grid gap-3">
-            {actionFeedback.error ? <Banner tone="error">{actionFeedback.error}</Banner> : null}
-            {actionFeedback.message ? <Banner tone="success">{actionFeedback.message}</Banner> : null}
-          </div>
-        </Panel>
-        ) : null}
-
-        {currentPage === 'settings' ? (
-        <Panel
-          title="Reporting timezone"
-          description="Dashboard date ranges, daily aggregation, and reporting rollups all use this timezone."
-          wide
-        >
-          <SectionState
-            loading={appSettings.loading}
-            error={appSettings.error}
-            empty={false}
-            emptyLabel=""
-          >
-            <div className="grid gap-4">
-              <Form onSubmit={(event) => void handleSettingsSave(event)}>
-                <FieldGrid>
-                  <Field label="Timezone">
-                    <Input
-                      type="text"
-                      list="reporting-timezone-options"
-                      value={settingsForm.reportingTimezone}
-                      onChange={(event) =>
-                        setSettingsForm((current) => ({ ...current, reportingTimezone: event.target.value }))
-                      }
-                      placeholder="America/Los_Angeles"
-                      required
-                    />
-                    <datalist id="reporting-timezone-options">
-                      {REPORTING_TIMEZONE_OPTIONS.map((option) => (
-                        <option key={option} value={option} />
-                      ))}
-                    </datalist>
-                  </Field>
-                </FieldGrid>
-                <HelpText>
-                  Default is Pacific time. You can enter a valid IANA timezone such as <code>America/Los_Angeles</code>,
-                  or use the alias <code>PST</code>.
-                </HelpText>
-                <DetailList>
-                  <div>
-                    <dt>Active timezone</dt>
-                    <dd>{appSettings.data?.reportingTimezone ?? DEFAULT_REPORTING_TIMEZONE}</dd>
-                  </div>
-                  <div>
-                    <dt>Updated</dt>
-                    <dd>{formatOptionalDateTime(appSettings.data?.updatedAt, reportingTimezone)}</dd>
-                  </div>
-                </DetailList>
-                <ButtonRow>
-                  <Button type="submit" disabled={actionFeedback.loading !== null}>
-                    {actionFeedback.loading === 'settings-save' ? 'Saving…' : 'Save reporting timezone'}
-                  </Button>
-                </ButtonRow>
-              </Form>
-            </div>
-          </SectionState>
-        </Panel>
-        ) : null}
-
-        {currentPage === 'settings' ? (
-        <Panel
-          title="Ad connections"
-          description="Connect spend sources here so ROAS Radar can populate spend and ROAS, not just attributed revenue."
-          wide
-        >
-          <div className="connections-grid">
-            <section className="connection-card">
-              <div className="connection-card-header">
-                <div>
-                  <h3>Shopify</h3>
-                  <p>Checks the installed Shopify app connection and can re-provision webhooks if needed.</p>
-                </div>
-                <StatusPill>
-                  {shopifyConnection.data?.status ??
-                    (shopifyConnection.data?.connected ? 'active' : shopifyConnection.loading ? 'Loading' : 'Not connected')}
-                </StatusPill>
-              </div>
-              <ConnectionState loading={shopifyConnection.loading} error={shopifyConnection.error}>
-                <div className="connection-card-body">
-                  <DetailList>
-                    <div>
-                      <dt>Shop</dt>
-                      <dd>{shopifyConnection.data?.shop?.name ?? shopifyConnection.data?.shopDomain ?? 'Not connected'}</dd>
-                    </div>
-                    <div>
-                      <dt>Domain</dt>
-                      <dd>{shopifyConnection.data?.shopDomain ?? 'Not available'}</dd>
-                    </div>
-                    <div>
-                      <dt>Installed</dt>
-                      <dd>{formatOptionalDateTime(shopifyConnection.data?.installedAt, reportingTimezone)}</dd>
-                    </div>
-                    <div>
-                      <dt>Webhooks</dt>
-                      <dd>{shopifyConnection.data?.webhookBaseUrl ?? 'Not available'}</dd>
-                    </div>
-                  </DetailList>
-                    {shopifyConnection.data?.reconnectUrl ? (
-                      <HelpText>Reconnect URL is available if the store needs to be reauthorized.</HelpText>
-                    ) : null}
-                    <Form onSubmit={handleShopifyBackfill}>
-                      <FieldGrid>
-                        <Field label="Backfill start">
-                          <Input
-                            type="date"
-                            value={shopifyBackfillRange.startDate}
-                            onChange={(event) =>
-                              setShopifyBackfillRange((current) => ({ ...current, startDate: event.target.value }))
-                            }
-                            required
-                          />
-                        </Field>
-                        <Field label="Backfill end">
-                          <Input
-                            type="date"
-                            value={shopifyBackfillRange.endDate}
-                            onChange={(event) =>
-                              setShopifyBackfillRange((current) => ({ ...current, endDate: event.target.value }))
-                            }
-                            required
-                          />
-                        </Field>
-                      </FieldGrid>
-                      <ButtonRow>
-                        <Button
-                          type="submit"
-                          tone="secondary"
-                          disabled={actionFeedback.loading !== null || !shopifyConnection.data?.connected}
-                        >
-                          {actionFeedback.loading === 'shopify-backfill'
-                            ? 'Backfilling…'
-                            : `Backfill Shopify orders`}
-                        </Button>
-                        <Button
-                          type="button"
-                          tone="secondary"
-                          onClick={() => void handleShopifyAttributionRecovery()}
-                          disabled={actionFeedback.loading !== null || !shopifyConnection.data?.connected}
-                        >
-                          {actionFeedback.loading === 'shopify-attribution-recovery'
-                            ? 'Recovering…'
-                            : 'Recover attribution hints'}
-                        </Button>
-                      </ButtonRow>
-                    </Form>
-                    <ButtonRow>
-                      <Button
-                        type="button"
-                        onClick={() => void handleShopifyTest()}
-                        disabled={actionFeedback.loading !== null}
-                      >
-                        {actionFeedback.loading === 'shopify-test' ? 'Testing…' : 'Test Shopify connection'}
-                      </Button>
-                      <Button
-                        type="button"
-                        tone="secondary"
-                        onClick={() => void handleShopifyWebhookSync()}
-                        disabled={actionFeedback.loading !== null || !shopifyConnection.data?.connected}
-                      >
-                        {actionFeedback.loading === 'shopify-webhooks' ? 'Syncing…' : 'Sync Shopify webhooks'}
-                      </Button>
-                    </ButtonRow>
-                </div>
-              </ConnectionState>
-            </section>
-
-            <section className="connection-card">
-              <div className="connection-card-header">
-                <div>
-                  <h3>Meta Ads</h3>
-                  <p>Save your Meta app settings here, then start OAuth to attach the ad account.</p>
-                </div>
-                <StatusPill>
-                  {metaConnection.data?.connection?.status ??
-                    (metaConnection.data?.config.missingFields.length ? 'Needs config' : metaConnection.loading ? 'Loading' : 'Not connected')}
-                </StatusPill>
-              </div>
-              <ConnectionState loading={metaConnection.loading} error={metaConnection.error}>
-                <div className="connection-card-body">
-                  <DetailList>
-                    <div>
-                      <dt>Config source</dt>
-                      <dd>{metaConnection.data?.config.source ?? 'Not available'}</dd>
-                    </div>
-                    <div>
-                      <dt>Ad account</dt>
-                      <dd>
-                        {metaConnection.data?.connection?.account_name ??
-                          metaConnection.data?.config.adAccountId ??
-                          'Not configured'}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>Last sync</dt>
-                      <dd>{formatOptionalDateTime(metaConnection.data?.connection?.last_sync_completed_at, reportingTimezone)}</dd>
-                    </div>
-                    <div>
-                      <dt>Sync status</dt>
-                      <dd>{metaConnection.data?.connection?.last_sync_status ?? 'Not started'}</dd>
-                    </div>
-                  </DetailList>
-                  {metaConnection.data?.config.missingFields.length ? (
-                    <HelpText tone="error">
-                      Missing Meta config: {metaConnection.data.config.missingFields.join(', ')}
-                    </HelpText>
-                  ) : null}
-                  {metaConnection.data?.connection?.last_sync_error ? (
-                    <HelpText tone="error">{metaConnection.data.connection.last_sync_error}</HelpText>
-                  ) : null}
-                  <Form onSubmit={handleMetaConfigSave}>
-                    <FieldGrid>
-                      <Field label="Meta app ID">
-                        <Input
-                          type="text"
-                          value={metaConfigForm.appId}
-                          onChange={(event) =>
-                            setMetaConfigForm((current) => ({ ...current, appId: event.target.value }))
-                          }
-                          placeholder="123456789012345"
-                        />
-                      </Field>
-                      <Field label="Ad account ID">
-                        <Input
-                          type="text"
-                          value={metaConfigForm.adAccountId}
-                          onChange={(event) =>
-                            setMetaConfigForm((current) => ({ ...current, adAccountId: event.target.value }))
-                          }
-                          placeholder="act_123456789012345 or 123456789012345"
-                        />
-                      </Field>
-                      <Field label="Meta app secret" wide>
-                        <Input
-                          type="password"
-                          value={metaConfigForm.appSecret}
-                          onChange={(event) =>
-                            setMetaConfigForm((current) => ({ ...current, appSecret: event.target.value }))
-                          }
-                          placeholder={
-                            metaConnection.data?.config.appSecretConfigured
-                              ? 'Leave blank to keep the saved secret'
-                              : 'Paste the Meta app secret'
-                          }
-                        />
-                      </Field>
-                      <Field label="OAuth base URL" wide>
-                        <Input
-                          type="url"
-                          value={metaConfigForm.appBaseUrl}
-                          onChange={(event) =>
-                            setMetaConfigForm((current) => ({ ...current, appBaseUrl: event.target.value }))
-                          }
-                          placeholder="https://roas-radar.api.thecapemarine.com"
-                        />
-                      </Field>
-                      <Field label="Scopes" wide>
-                        <Input
-                          type="text"
-                          value={metaConfigForm.appScopes}
-                          onChange={(event) =>
-                            setMetaConfigForm((current) => ({ ...current, appScopes: event.target.value }))
-                          }
-                          placeholder="ads_read"
-                        />
-                      </Field>
-                    </FieldGrid>
-                    <ButtonRow>
-                      <Button type="submit" disabled={actionFeedback.loading !== null}>
-                        {actionFeedback.loading === 'meta-config-save' ? 'Saving…' : 'Save Meta config'}
-                      </Button>
-                    </ButtonRow>
-                  </Form>
-                  <ButtonRow>
-                    <Button
-                      type="button"
-                      onClick={() => void handleMetaConnect()}
-                      disabled={actionFeedback.loading !== null || Boolean(metaConnection.data?.config.missingFields.length)}
-                    >
-                      {actionFeedback.loading === 'meta-connect' ? 'Opening Meta…' : 'Connect Meta Ads'}
-                    </Button>
-                    <Button
-                      type="button"
-                      tone="secondary"
-                      onClick={() => void handleMetaSync()}
-                      disabled={actionFeedback.loading !== null || metaConnection.data?.connection == null}
-                    >
-                      {actionFeedback.loading === 'meta-sync' ? 'Queueing…' : `Sync ${filters.startDate} to ${filters.endDate}`}
-                    </Button>
-                  </ButtonRow>
-                </div>
-              </ConnectionState>
-            </section>
-
-            <section className="connection-card">
-              <div className="connection-card-header">
-                <div>
-                  <h3>Google Ads</h3>
-                  <p>Creates the encrypted connection directly from Google Ads API credentials and refresh token.</p>
-                </div>
-                <StatusPill>
-                  {googleConnection.data?.connection?.status ?? (googleConnection.loading ? 'Loading' : 'Not connected')}
-                </StatusPill>
-              </div>
-              <ConnectionState loading={googleConnection.loading} error={googleConnection.error}>
-                <div className="connection-card-body">
-                  <DetailList>
-                    <div>
-                      <dt>Customer</dt>
-                      <dd>
-                        {googleConnection.data?.connection?.customer_descriptive_name ??
-                          googleConnection.data?.connection?.customer_id ??
-                          'Not connected'}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>Currency</dt>
-                      <dd>{googleConnection.data?.connection?.currency_code ?? 'Not available'}</dd>
-                    </div>
-                    <div>
-                      <dt>Last sync</dt>
-                      <dd>{formatOptionalDateTime(googleConnection.data?.connection?.last_sync_completed_at, reportingTimezone)}</dd>
-                    </div>
-                    <div>
-                      <dt>Reconciliation</dt>
-                      <dd>{googleConnection.data?.reconciliation?.status ?? 'Not run'}</dd>
-                    </div>
-                  </DetailList>
-                  {googleConnection.data?.connection?.last_sync_error ? (
-                    <HelpText tone="error">
-                      {googleConnection.data.connection.last_sync_error}
-                    </HelpText>
-                  ) : null}
-                  {googleConnection.data?.reconciliation?.missing_dates?.length ? (
-                    <HelpText>
-                      Missing dates: {googleConnection.data.reconciliation.missing_dates.join(', ')}
-                    </HelpText>
-                  ) : null}
-                  <Form onSubmit={(event) => void handleGoogleConnect(event)}>
-                    <FieldGrid>
-                      <Field label="Customer ID">
-                        <Input
-                          type="text"
-                          value={googleForm.customerId}
-                          onChange={(event) =>
-                            setGoogleForm((current) => ({ ...current, customerId: event.target.value }))
-                          }
-                          placeholder="123-456-7890"
-                          required
-                        />
-                      </Field>
-                      <Field label="Login customer ID">
-                        <Input
-                          type="text"
-                          value={googleForm.loginCustomerId ?? ''}
-                          onChange={(event) =>
-                            setGoogleForm((current) => ({ ...current, loginCustomerId: event.target.value }))
-                          }
-                          placeholder="Optional MCC login"
-                        />
-                      </Field>
-                      <Field label="Developer token">
-                        <Input
-                          type="password"
-                          value={googleForm.developerToken}
-                          onChange={(event) =>
-                            setGoogleForm((current) => ({ ...current, developerToken: event.target.value }))
-                          }
-                          required
-                        />
-                      </Field>
-                      <Field label="Client ID">
-                        <Input
-                          type="password"
-                          value={googleForm.clientId}
-                          onChange={(event) =>
-                            setGoogleForm((current) => ({ ...current, clientId: event.target.value }))
-                          }
-                          required
-                        />
-                      </Field>
-                      <Field label="Client secret">
-                        <Input
-                          type="password"
-                          value={googleForm.clientSecret}
-                          onChange={(event) =>
-                            setGoogleForm((current) => ({ ...current, clientSecret: event.target.value }))
-                          }
-                          required
-                        />
-                      </Field>
-                      <Field label="Refresh token">
-                        <Input
-                          type="password"
-                          value={googleForm.refreshToken}
-                          onChange={(event) =>
-                            setGoogleForm((current) => ({ ...current, refreshToken: event.target.value }))
-                          }
-                          required
-                        />
-                      </Field>
-                    </FieldGrid>
-                    <ButtonRow>
-                      <Button type="submit" disabled={actionFeedback.loading !== null}>
-                        {actionFeedback.loading === 'google-connect' ? 'Saving…' : 'Connect Google Ads'}
-                      </Button>
-                      <Button
-                        type="button"
-                        tone="secondary"
-                        onClick={() => void handleGoogleSync()}
-                        disabled={actionFeedback.loading !== null || googleConnection.data?.connection == null}
-                      >
-                        {actionFeedback.loading === 'google-sync' ? 'Queueing…' : `Sync ${filters.startDate} to ${filters.endDate}`}
-                      </Button>
-                      <Button
-                        type="button"
-                        tone="secondary"
-                        onClick={() => void handleGoogleReconcile()}
-                        disabled={actionFeedback.loading !== null || googleConnection.data?.connection == null}
-                      >
-                        {actionFeedback.loading === 'google-reconcile' ? 'Running…' : 'Reconcile gaps'}
-                      </Button>
-                    </ButtonRow>
-                  </Form>
-                </div>
-              </ConnectionState>
-            </section>
-          </div>
-        </Panel>
-        ) : null}
-
-        {currentPage === 'settings' && authState.user.isAdmin ? (
-          <Panel
-            title="User access"
-            description="All dashboard reporting and admin tools are locked behind app-user authentication."
-            wide
-          >
-            <SectionState
-              loading={usersSection.loading}
-              error={usersSection.error}
-              empty={false}
-              emptyLabel=""
-            >
-              <div className="grid gap-4">
-                <Form onSubmit={(event) => void handleCreateUser(event)}>
-                  <FieldGrid>
-                    <Field label="Display name">
-                      <Input
-                        type="text"
-                        value={newUserForm.displayName}
-                        onChange={(event) =>
-                          setNewUserForm((current) => ({ ...current, displayName: event.target.value }))
-                        }
-                        required
-                      />
-                    </Field>
-                    <Field label="Email">
-                      <Input
-                        type="email"
-                        value={newUserForm.email}
-                        onChange={(event) => setNewUserForm((current) => ({ ...current, email: event.target.value }))}
-                        required
-                      />
-                    </Field>
-                    <Field label="Password">
-                      <Input
-                        type="password"
-                        value={newUserForm.password}
-                        onChange={(event) =>
-                          setNewUserForm((current) => ({ ...current, password: event.target.value }))
-                        }
-                        minLength={12}
-                        required
-                      />
-                    </Field>
-                    <CheckboxField label="Admin access">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(newUserForm.isAdmin)}
-                        onChange={(event) =>
-                          setNewUserForm((current) => ({ ...current, isAdmin: event.target.checked }))
-                        }
-                      />
-                    </CheckboxField>
-                  </FieldGrid>
-                  <ButtonRow>
-                    <Button type="submit" disabled={actionFeedback.loading !== null}>
-                      {actionFeedback.loading === 'user-create' ? 'Creating…' : 'Add user'}
-                    </Button>
-                  </ButtonRow>
-                </Form>
-                <TableWrap>
-                  <table className="ui-table">
-                    <thead>
-                      <tr>
-                        <th>User</th>
-                        <th>Role</th>
-                        <th>Status</th>
-                        <th>Last login</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(usersSection.data ?? []).map((user) => (
-                        <tr key={user.id}>
-                          <td>
-                            <PrimaryCell>
-                              <strong>{user.displayName}</strong>
-                              <span>{user.email}</span>
-                            </PrimaryCell>
-                          </td>
-                          <td>{user.isAdmin ? 'Admin' : 'Viewer'}</td>
-                          <td>{user.status}</td>
-                          <td>{formatOptionalDateTime(user.lastLoginAt, reportingTimezone)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </TableWrap>
-              </div>
-            </SectionState>
-          </Panel>
-        ) : null}
-
-      </section> : null}
+      {currentPage === 'settings' ? (
+        <SettingsAdminView
+          isAdmin={authState.user.isAdmin}
+          reportingTimezone={reportingTimezone}
+          defaultReportingTimezone={DEFAULT_REPORTING_TIMEZONE}
+          reportingTimezoneOptions={REPORTING_TIMEZONE_OPTIONS}
+          filters={filters}
+          appSettings={appSettings}
+          settingsForm={settingsForm}
+          setSettingsForm={(updater) => setSettingsForm((current) => updater(current))}
+          usersSection={usersSection}
+          newUserForm={newUserForm}
+          setNewUserForm={(updater) => setNewUserForm((current) => updater(current))}
+          shopifyConnection={shopifyConnection}
+          shopifyBackfillRange={shopifyBackfillRange}
+          setShopifyBackfillRange={(updater) => setShopifyBackfillRange((current) => updater(current))}
+          metaConnection={metaConnection}
+          metaConfigForm={metaConfigForm}
+          setMetaConfigForm={(updater) => setMetaConfigForm((current) => updater(current))}
+          googleConnection={googleConnection}
+          googleForm={googleForm}
+          setGoogleForm={(updater) => setGoogleForm((current) => updater(current))}
+          actionFeedback={actionFeedback}
+          onSettingsSave={handleSettingsSave}
+          onCreateUser={handleCreateUser}
+          onShopifyBackfill={handleShopifyBackfill}
+          onMetaConfigSave={handleMetaConfigSave}
+          onGoogleConnect={handleGoogleConnect}
+          onShopifyTest={handleShopifyTest}
+          onShopifyWebhookSync={handleShopifyWebhookSync}
+          onShopifyAttributionRecovery={handleShopifyAttributionRecovery}
+          onMetaConnect={handleMetaConnect}
+          onMetaSync={handleMetaSync}
+          onGoogleSync={handleGoogleSync}
+          onGoogleReconcile={handleGoogleReconcile}
+        />
+      ) : null}
     </AuthenticatedAppShell>
   );
 }
