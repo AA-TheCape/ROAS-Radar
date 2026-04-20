@@ -57,6 +57,7 @@ import AuthenticatedAppShell, {
   type AppShellBreadcrumb,
   type AppShellNavItem
 } from './components/AuthenticatedAppShell';
+import OrderDetailsView from './components/OrderDetailsView';
 import ReportingDashboard from './components/ReportingDashboard';
 import {
   AuthGate,
@@ -366,26 +367,6 @@ function useDashboardData(
 
 function formatOptionalDateTime(value: string | null | undefined, reportingTimezone: string): string {
   return value ? formatDateTimeLabel(value, reportingTimezone) : 'Not available';
-}
-
-function formatOptionalValue(value: string | number | boolean | null | undefined): string {
-  if (value === null || value === undefined || value === '') {
-    return 'Not available';
-  }
-
-  if (typeof value === 'boolean') {
-    return value ? 'Yes' : 'No';
-  }
-
-  return String(value);
-}
-
-function formatJsonValue(value: unknown): string {
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
 }
 
 function App() {
@@ -1300,138 +1281,11 @@ function App() {
             description="Everything currently stored for this Shopify order, including line items, attribution credits, and raw payload."
             wide
           >
-            <SectionState
-              loading={orderDetailsSection.loading}
-              error={orderDetailsSection.error}
-              empty={!orderDetailsSection.data}
-              emptyLabel={selectedOrderId ? `No details were loaded for order ${selectedOrderId}.` : 'No order selected.'}
-            >
-              <div className="detail-stack">
-                <div className="detail-grid detail-grid-two-column">
-                  <div className="detail-card">
-                    <h3>Order overview</h3>
-                    <DetailList>
-                      <div><dt>Shopify order ID</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.shopifyOrderId)}</dd></div>
-                      <div><dt>Order number</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.shopifyOrderNumber)}</dd></div>
-                      <div><dt>Currency</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.currencyCode)}</dd></div>
-                      <div><dt>Subtotal</dt><dd>{formatCurrency(orderDetailsSection.data?.order.subtotalPrice)}</dd></div>
-                      <div><dt>Total</dt><dd>{formatCurrency(orderDetailsSection.data?.order.totalPrice)}</dd></div>
-                      <div><dt>Financial status</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.financialStatus)}</dd></div>
-                      <div><dt>Fulfillment status</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.fulfillmentStatus)}</dd></div>
-                      <div><dt>Source name</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.sourceName)}</dd></div>
-                    </DetailList>
-                  </div>
-                  <div className="detail-card">
-                    <h3>Customer and linkage</h3>
-                    <DetailList>
-                      <div><dt>Shopify customer ID</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.shopifyCustomerId)}</dd></div>
-                      <div><dt>Customer identity ID</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.customerIdentityId)}</dd></div>
-                      <div><dt>Email</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.email)}</dd></div>
-                      <div><dt>Email hash</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.emailHash)}</dd></div>
-                      <div><dt>Landing session ID</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.landingSessionId)}</dd></div>
-                      <div><dt>Checkout token</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.checkoutToken)}</dd></div>
-                      <div><dt>Cart token</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.cartToken)}</dd></div>
-                    </DetailList>
-                  </div>
-                  <div className="detail-card">
-                    <h3>Timestamps</h3>
-                    <DetailList>
-                      <div><dt>Processed</dt><dd>{formatOptionalDateTime(orderDetailsSection.data?.order.processedAt, reportingTimezone)}</dd></div>
-                      <div><dt>Created in Shopify</dt><dd>{formatOptionalDateTime(orderDetailsSection.data?.order.createdAtShopify, reportingTimezone)}</dd></div>
-                      <div><dt>Updated in Shopify</dt><dd>{formatOptionalDateTime(orderDetailsSection.data?.order.updatedAtShopify, reportingTimezone)}</dd></div>
-                      <div><dt>Ingested</dt><dd>{formatOptionalDateTime(orderDetailsSection.data?.order.ingestedAt, reportingTimezone)}</dd></div>
-                    </DetailList>
-                  </div>
-                </div>
-
-                <div className="detail-card">
-                  <h3>Line items</h3>
-                  <TableWrap>
-                    <table className="ui-table">
-                      <thead>
-                        <tr>
-                          <th>Title</th>
-                          <th>SKU</th>
-                          <th>Qty</th>
-                          <th>Price</th>
-                          <th>Discount</th>
-                          <th>Vendor</th>
-                          <th>Status</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(orderDetailsSection.data?.lineItems ?? []).map((item) => (
-                          <tr key={item.shopifyLineItemId}>
-                            <td>
-                              <PrimaryCell>
-                                <strong>{item.title ?? 'Untitled line item'}</strong>
-                                <span>{item.variantTitle ?? 'No variant title'}</span>
-                              </PrimaryCell>
-                            </td>
-                            <td>{formatOptionalValue(item.sku)}</td>
-                            <td>{formatNumber(item.quantity)}</td>
-                            <td>{formatCurrency(item.price)}</td>
-                            <td>{formatCurrency(item.totalDiscount)}</td>
-                            <td>{formatOptionalValue(item.vendor)}</td>
-                            <td>{formatOptionalValue(item.fulfillmentStatus)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </TableWrap>
-                </div>
-
-                <div className="detail-card">
-                  <h3>Attribution credits</h3>
-                  <TableWrap>
-                    <table className="ui-table">
-                      <thead>
-                        <tr>
-                          <th>Model</th>
-                          <th>Position</th>
-                          <th>Source / medium</th>
-                          <th>Campaign</th>
-                          <th>Touchpoint time</th>
-                          <th>Revenue credit</th>
-                          <th>Weight</th>
-                          <th>Reason</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(orderDetailsSection.data?.attributionCredits ?? []).map((credit) => (
-                          <tr key={`${credit.attributionModel}-${credit.touchpointPosition}`}>
-                            <td>
-                              <PrimaryCell>
-                                <strong>{credit.attributionModel}</strong>
-                                <span>{credit.isPrimary ? 'Primary touchpoint' : 'Supporting touchpoint'}</span>
-                              </PrimaryCell>
-                            </td>
-                            <td>{formatNumber(credit.touchpointPosition)}</td>
-                            <td>{`${credit.source ?? 'Unknown'} / ${credit.medium ?? 'Unknown'}`}</td>
-                            <td>{credit.campaign ?? 'No campaign'}</td>
-                            <td>{formatOptionalDateTime(credit.touchpointOccurredAt, reportingTimezone)}</td>
-                            <td>{formatCurrency(credit.revenueCredit)}</td>
-                            <td>{formatNumber(credit.creditWeight)}</td>
-                            <td><span className="reason-pill">{credit.attributionReason}</span></td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </TableWrap>
-                </div>
-
-                <div className="detail-grid detail-grid-two-column">
-                  <div className="detail-card">
-                    <h3>Raw order payload</h3>
-                    <pre className="json-view">{formatJsonValue(orderDetailsSection.data?.order.rawPayload ?? {})}</pre>
-                  </div>
-                  <div className="detail-card">
-                    <h3>Raw line item payloads</h3>
-                    <pre className="json-view">{formatJsonValue(orderDetailsSection.data?.lineItems.map((item) => item.rawPayload) ?? [])}</pre>
-                  </div>
-                </div>
-              </div>
-            </SectionState>
+            <OrderDetailsView
+              selectedOrderId={selectedOrderId}
+              reportingTimezone={reportingTimezone}
+              orderDetailsSection={orderDetailsSection}
+            />
           </Panel>
         </section>
       ) : null}
