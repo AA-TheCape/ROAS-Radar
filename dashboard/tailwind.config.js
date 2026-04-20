@@ -12,6 +12,9 @@ export default {
       '3xl': '1680px'
     },
     extend: {
+      maxWidth: {
+        shell: '92rem'
+      },
       colors: {
         canvas: '#f4f7f4',
         'canvas-tint': '#edf5f2',
@@ -48,6 +51,11 @@ export default {
           soft: '#f6dddb'
         }
       },
+      backgroundImage: {
+        'shell-glow':
+          'radial-gradient(circle at top left, rgba(203, 99, 50, 0.18), transparent 28%), radial-gradient(circle at top right, rgba(31, 122, 116, 0.18), transparent 24%), linear-gradient(180deg, #f7f9f6 0%, #f4f7f4 55%, #edf5f2 100%)',
+        'panel-tint': 'linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(244, 233, 226, 0.8))'
+      },
       spacing: {
         gutter: '1rem',
         section: '1.5rem',
@@ -83,6 +91,15 @@ export default {
         lead: ['1.0625rem', { lineHeight: '1.7', letterSpacing: '-0.01em', fontWeight: '400' }],
         body: ['0.9375rem', { lineHeight: '1.65', letterSpacing: '-0.01em', fontWeight: '400' }],
         caption: ['0.75rem', { lineHeight: '1.25rem', letterSpacing: '0.14em', fontWeight: '600' }]
+      },
+      keyframes: {
+        'fade-up': {
+          '0%': { opacity: '0', transform: 'translateY(10px)' },
+          '100%': { opacity: '1', transform: 'translateY(0)' }
+        }
+      },
+      animation: {
+        'fade-up': 'fade-up 280ms ease-out'
       }
     }
   },

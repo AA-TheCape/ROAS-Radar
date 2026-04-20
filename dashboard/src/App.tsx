@@ -57,6 +57,26 @@ import AuthenticatedAppShell, {
   type AppShellBreadcrumb,
   type AppShellNavItem
 } from './components/AuthenticatedAppShell';
+import {
+  AuthGate,
+  Banner,
+  Button,
+  ButtonRow,
+  CheckboxField,
+  ConnectionState,
+  DetailList,
+  Field,
+  FieldGrid,
+  Form,
+  HelpText,
+  Input,
+  Panel,
+  PrimaryCell,
+  SectionState,
+  Select,
+  StatusPill,
+  TableWrap
+} from './components/AuthenticatedUi';
 
 type AsyncSection<T> = {
   data: T | null;
@@ -365,34 +385,6 @@ function useDashboardData(
   return state;
 }
 
-function SectionState({
-  loading,
-  error,
-  empty,
-  emptyLabel,
-  children
-}: {
-  loading: boolean;
-  error: string | null;
-  empty: boolean;
-  emptyLabel: string;
-  children: JSX.Element;
-}) {
-  if (loading) {
-    return <div className="panel-state">Loading data…</div>;
-  }
-
-  if (error) {
-    return <div className="panel-state panel-state-error">{error}</div>;
-  }
-
-  if (empty) {
-    return <div className="panel-state">{emptyLabel}</div>;
-  }
-
-  return children;
-}
-
 function SummaryCard({ label, value, detail }: { label: string; value: string; detail: string }) {
   return (
     <article className="metric-card">
@@ -470,26 +462,6 @@ function formatJsonValue(value: unknown): string {
   } catch {
     return String(value);
   }
-}
-
-function ConnectionState({
-  loading,
-  error,
-  children
-}: {
-  loading: boolean;
-  error: string | null;
-  children: JSX.Element;
-}) {
-  if (loading) {
-    return <div className="panel-state connection-state">Loading connection state…</div>;
-  }
-
-  if (error) {
-    return <div className="panel-state panel-state-error connection-state">{error}</div>;
-  }
-
-  return children;
 }
 
 function App() {
@@ -1279,68 +1251,55 @@ function App() {
   const shellHeaderActions = (
     <>
       {currentPage === 'order-details' ? (
-        <button
-          type="button"
-          className="inline-flex items-center rounded-pill border border-line/80 bg-surface-alt px-5 py-3 text-body font-semibold text-ink transition hover:-translate-y-0.5 hover:bg-surface"
-          onClick={closeOrderDetails}
-        >
+        <Button type="button" tone="ghost" onClick={closeOrderDetails}>
           Back to dashboard
-        </button>
+        </Button>
       ) : null}
-      <button
-        type="button"
-        className="inline-flex items-center rounded-pill bg-brand px-5 py-3 text-body font-semibold text-white shadow-panel transition hover:-translate-y-0.5 hover:bg-brand-strong"
-        onClick={() => void handleLogout()}
-      >
+      <Button type="button" onClick={() => void handleLogout()}>
         Logout
-      </button>
+      </Button>
     </>
   );
 
   if (authState.checking) {
     return (
-      <main className="auth-shell">
-        <section className="auth-card">
-          <p className="eyebrow">Secure dashboard</p>
-          <h1>Checking your session</h1>
-          <p className="hero-copy">The dashboard stays locked until an authenticated user is verified.</p>
-        </section>
-      </main>
+      <AuthGate
+        eyebrow="Secure dashboard"
+        title="Checking your session"
+        description="The dashboard stays locked until an authenticated user is verified."
+      />
     );
   }
 
   if (!authState.user) {
     return (
-      <main className="auth-shell">
-        <section className="auth-card">
-          <p className="eyebrow">Secure dashboard</p>
-          <h1>ROAS Radar Login</h1>
-          <p className="hero-copy">Sign in with an app user account before viewing any reporting or admin tools.</p>
-          <form className="credential-form" onSubmit={(event) => void handleLogin(event)}>
-            <div className="credential-grid auth-grid">
-              <label>
-                <span>Email</span>
-                <input type="email" value={loginEmail} onChange={(event) => setLoginEmail(event.target.value)} required />
-              </label>
-              <label>
-                <span>Password</span>
-                <input
-                  type="password"
-                  value={loginPassword}
-                  onChange={(event) => setLoginPassword(event.target.value)}
-                  required
-                />
-              </label>
-            </div>
-            {authState.error ? <div className="action-banner action-banner-error">{authState.error}</div> : null}
-            <div className="button-row">
-              <button type="submit" className="action-button" disabled={loginSubmitting}>
-                {loginSubmitting ? 'Signing in…' : 'Login'}
-              </button>
-            </div>
-          </form>
-        </section>
-      </main>
+      <AuthGate
+        eyebrow="Secure dashboard"
+        title="ROAS Radar Login"
+        description="Sign in with an app user account before viewing any reporting or admin tools."
+      >
+        <Form onSubmit={(event) => void handleLogin(event)}>
+          <FieldGrid>
+            <Field label="Email">
+              <Input type="email" value={loginEmail} onChange={(event) => setLoginEmail(event.target.value)} required />
+            </Field>
+            <Field label="Password">
+              <Input
+                type="password"
+                value={loginPassword}
+                onChange={(event) => setLoginPassword(event.target.value)}
+                required
+              />
+            </Field>
+          </FieldGrid>
+          {authState.error ? <Banner tone="error">{authState.error}</Banner> : null}
+          <ButtonRow>
+            <Button type="submit" disabled={loginSubmitting}>
+              {loginSubmitting ? 'Signing in…' : 'Login'}
+            </Button>
+          </ButtonRow>
+        </Form>
+      </AuthGate>
     );
   }
 
@@ -1381,107 +1340,104 @@ function App() {
       headerStatus={shellHeaderStatus}
       headerActions={shellHeaderActions}
     >
-      {currentPage === 'dashboard' ? <section className="control-bar">
-        <div className="control-group">
-          <label htmlFor="start-date">Start date</label>
-          <input
-            id="start-date"
-            type="date"
-            value={filters.startDate}
-            onChange={(event) => {
-              setFilters((current) => ({ ...current, startDate: event.target.value }));
-            }}
-          />
-        </div>
-        <div className="control-group">
-          <label htmlFor="end-date">End date</label>
-          <input
-            id="end-date"
-            type="date"
-            value={filters.endDate}
-            onChange={(event) => {
-              setFilters((current) => ({ ...current, endDate: event.target.value }));
-            }}
-          />
-        </div>
-        <div className="control-group">
-          <label htmlFor="source-filter">Source</label>
-          <input
-            id="source-filter"
-            type="text"
-            placeholder="google, meta, facebook"
-            value={filters.source}
-            onChange={(event) => {
-              setFilters((current) => ({ ...current, source: event.target.value }));
-            }}
-          />
-        </div>
-        <div className="control-group">
-          <label htmlFor="campaign-filter">Campaign</label>
-          <input
-            id="campaign-filter"
-            type="text"
-            placeholder="spring-sale"
-            value={filters.campaign}
-            onChange={(event) => {
-              setFilters((current) => ({ ...current, campaign: event.target.value }));
-            }}
-          />
-        </div>
-        <div className="control-group control-group-wide">
-          <label htmlFor="group-by">Timeseries grouping</label>
-          <select
-            id="group-by"
-            value={groupBy}
-            onChange={(event) => {
-              setGroupBy(event.target.value as TimeseriesGroupBy);
-            }}
-          >
-            {GROUP_BY_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="control-group control-group-wide">
-          <label>Quick ranges</label>
-          <div className="preset-row">
-            {PRESETS.map((preset) => (
-              <button
-                key={preset.label}
+      {currentPage === 'dashboard' ? (
+        <section className="ui-panel grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <Field label="Start date" htmlFor="start-date">
+            <Input
+              id="start-date"
+              type="date"
+              value={filters.startDate}
+              onChange={(event) => {
+                setFilters((current) => ({ ...current, startDate: event.target.value }));
+              }}
+            />
+          </Field>
+          <Field label="End date" htmlFor="end-date">
+            <Input
+              id="end-date"
+              type="date"
+              value={filters.endDate}
+              onChange={(event) => {
+                setFilters((current) => ({ ...current, endDate: event.target.value }));
+              }}
+            />
+          </Field>
+          <Field label="Source" htmlFor="source-filter">
+            <Input
+              id="source-filter"
+              type="text"
+              placeholder="google, meta, facebook"
+              value={filters.source}
+              onChange={(event) => {
+                setFilters((current) => ({ ...current, source: event.target.value }));
+              }}
+            />
+          </Field>
+          <Field label="Campaign" htmlFor="campaign-filter">
+            <Input
+              id="campaign-filter"
+              type="text"
+              placeholder="spring-sale"
+              value={filters.campaign}
+              onChange={(event) => {
+                setFilters((current) => ({ ...current, campaign: event.target.value }));
+              }}
+            />
+          </Field>
+          <Field label="Timeseries grouping" htmlFor="group-by" wide>
+            <Select
+              id="group-by"
+              value={groupBy}
+              onChange={(event) => {
+                setGroupBy(event.target.value as TimeseriesGroupBy);
+              }}
+            >
+              {GROUP_BY_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <div className="ui-field ui-field-grid-wide">
+            <span>Quick ranges</span>
+            <ButtonRow className="gap-2">
+              {PRESETS.map((preset) => (
+                <Button
+                  key={preset.label}
+                  type="button"
+                  tone="secondary"
+                  onClick={() =>
+                    startTransition(() => {
+                      setFilters((current) => ({
+                        ...current,
+                        ...preset.value(reportingTimezone)
+                      }));
+                    })
+                  }
+                >
+                  {preset.label}
+                </Button>
+              ))}
+              <Button
                 type="button"
-                className="preset-chip"
+                tone="ghost"
                 onClick={() =>
                   startTransition(() => {
                     setFilters((current) => ({
                       ...current,
-                    ...preset.value(reportingTimezone)
-                  }));
-                })
-              }
+                      source: '',
+                      campaign: ''
+                    }));
+                  })
+                }
               >
-                {preset.label}
-              </button>
-            ))}
-            <button
-              type="button"
-              className="preset-chip preset-chip-secondary"
-              onClick={() =>
-                startTransition(() => {
-                  setFilters((current) => ({
-                    ...current,
-                    source: '',
-                    campaign: ''
-                  }));
-                })
-              }
-            >
-              Clear filters
-            </button>
+                Clear filters
+              </Button>
+            </ButtonRow>
           </div>
-        </div>
-      </section> : null}
+        </section>
+      ) : null}
 
       {currentPage === 'dashboard' ? <section className="summary-grid">
         {summaryCards.map((card) => (
@@ -1491,11 +1447,11 @@ function App() {
 
       {currentPage === 'order-details' ? (
         <section className="dashboard-grid">
-          <article className="panel panel-wide">
-            <div className="panel-header">
-              <h2>Order details</h2>
-              <p>Everything currently stored for this Shopify order, including line items, attribution credits, and raw payload.</p>
-            </div>
+          <Panel
+            title="Order details"
+            description="Everything currently stored for this Shopify order, including line items, attribution credits, and raw payload."
+            wide
+          >
             <SectionState
               loading={orderDetailsSection.loading}
               error={orderDetailsSection.error}
@@ -1506,7 +1462,7 @@ function App() {
                 <div className="detail-grid detail-grid-two-column">
                   <div className="detail-card">
                     <h3>Order overview</h3>
-                    <dl className="detail-list">
+                    <DetailList>
                       <div><dt>Shopify order ID</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.shopifyOrderId)}</dd></div>
                       <div><dt>Order number</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.shopifyOrderNumber)}</dd></div>
                       <div><dt>Currency</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.currencyCode)}</dd></div>
@@ -1515,11 +1471,11 @@ function App() {
                       <div><dt>Financial status</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.financialStatus)}</dd></div>
                       <div><dt>Fulfillment status</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.fulfillmentStatus)}</dd></div>
                       <div><dt>Source name</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.sourceName)}</dd></div>
-                    </dl>
+                    </DetailList>
                   </div>
                   <div className="detail-card">
                     <h3>Customer and linkage</h3>
-                    <dl className="detail-list">
+                    <DetailList>
                       <div><dt>Shopify customer ID</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.shopifyCustomerId)}</dd></div>
                       <div><dt>Customer identity ID</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.customerIdentityId)}</dd></div>
                       <div><dt>Email</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.email)}</dd></div>
@@ -1527,23 +1483,23 @@ function App() {
                       <div><dt>Landing session ID</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.landingSessionId)}</dd></div>
                       <div><dt>Checkout token</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.checkoutToken)}</dd></div>
                       <div><dt>Cart token</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.cartToken)}</dd></div>
-                    </dl>
+                    </DetailList>
                   </div>
                   <div className="detail-card">
                     <h3>Timestamps</h3>
-                    <dl className="detail-list">
+                    <DetailList>
                       <div><dt>Processed</dt><dd>{formatOptionalDateTime(orderDetailsSection.data?.order.processedAt, reportingTimezone)}</dd></div>
                       <div><dt>Created in Shopify</dt><dd>{formatOptionalDateTime(orderDetailsSection.data?.order.createdAtShopify, reportingTimezone)}</dd></div>
                       <div><dt>Updated in Shopify</dt><dd>{formatOptionalDateTime(orderDetailsSection.data?.order.updatedAtShopify, reportingTimezone)}</dd></div>
                       <div><dt>Ingested</dt><dd>{formatOptionalDateTime(orderDetailsSection.data?.order.ingestedAt, reportingTimezone)}</dd></div>
-                    </dl>
+                    </DetailList>
                   </div>
                 </div>
 
                 <div className="detail-card">
                   <h3>Line items</h3>
-                  <div className="table-wrap">
-                    <table>
+                  <TableWrap>
+                    <table className="ui-table">
                       <thead>
                         <tr>
                           <th>Title</th>
@@ -1559,10 +1515,10 @@ function App() {
                         {(orderDetailsSection.data?.lineItems ?? []).map((item) => (
                           <tr key={item.shopifyLineItemId}>
                             <td>
-                              <div className="primary-cell">
+                              <PrimaryCell>
                                 <strong>{item.title ?? 'Untitled line item'}</strong>
                                 <span>{item.variantTitle ?? 'No variant title'}</span>
-                              </div>
+                              </PrimaryCell>
                             </td>
                             <td>{formatOptionalValue(item.sku)}</td>
                             <td>{formatNumber(item.quantity)}</td>
@@ -1574,13 +1530,13 @@ function App() {
                         ))}
                       </tbody>
                     </table>
-                  </div>
+                  </TableWrap>
                 </div>
 
                 <div className="detail-card">
                   <h3>Attribution credits</h3>
-                  <div className="table-wrap">
-                    <table>
+                  <TableWrap>
+                    <table className="ui-table">
                       <thead>
                         <tr>
                           <th>Model</th>
@@ -1597,10 +1553,10 @@ function App() {
                         {(orderDetailsSection.data?.attributionCredits ?? []).map((credit) => (
                           <tr key={`${credit.attributionModel}-${credit.touchpointPosition}`}>
                             <td>
-                              <div className="primary-cell">
+                              <PrimaryCell>
                                 <strong>{credit.attributionModel}</strong>
                                 <span>{credit.isPrimary ? 'Primary touchpoint' : 'Supporting touchpoint'}</span>
-                              </div>
+                              </PrimaryCell>
                             </td>
                             <td>{formatNumber(credit.touchpointPosition)}</td>
                             <td>{`${credit.source ?? 'Unknown'} / ${credit.medium ?? 'Unknown'}`}</td>
@@ -1613,7 +1569,7 @@ function App() {
                         ))}
                       </tbody>
                     </table>
-                  </div>
+                  </TableWrap>
                 </div>
 
                 <div className="detail-grid detail-grid-two-column">
@@ -1628,40 +1584,41 @@ function App() {
                 </div>
               </div>
             </SectionState>
-          </article>
+          </Panel>
         </section>
       ) : null}
 
       {currentPage !== 'order-details' ? <section className="dashboard-grid">
         {currentPage === 'settings' ? (
-        <article className="panel panel-wide">
-          <div className="panel-header">
-            <h2>Settings</h2>
-            <p>Manage reporting timezone, store connections, ad platform credentials, and dashboard access here.</p>
+        <Panel
+          title="Settings"
+          description="Manage reporting timezone, store connections, ad platform credentials, and dashboard access here."
+          wide
+        >
+          <div className="grid gap-3">
+            {actionFeedback.error ? <Banner tone="error">{actionFeedback.error}</Banner> : null}
+            {actionFeedback.message ? <Banner tone="success">{actionFeedback.message}</Banner> : null}
           </div>
-          {actionFeedback.error ? <div className="action-banner action-banner-error">{actionFeedback.error}</div> : null}
-          {actionFeedback.message ? <div className="action-banner">{actionFeedback.message}</div> : null}
-        </article>
+        </Panel>
         ) : null}
 
         {currentPage === 'settings' ? (
-        <article className="panel panel-wide">
-          <div className="panel-header">
-            <h2>Reporting timezone</h2>
-            <p>Dashboard date ranges, daily aggregation, and reporting rollups all use this timezone.</p>
-          </div>
+        <Panel
+          title="Reporting timezone"
+          description="Dashboard date ranges, daily aggregation, and reporting rollups all use this timezone."
+          wide
+        >
           <SectionState
             loading={appSettings.loading}
             error={appSettings.error}
             empty={false}
             emptyLabel=""
           >
-            <div className="connection-card-body">
-              <form className="credential-form" onSubmit={(event) => void handleSettingsSave(event)}>
-                <div className="credential-grid">
-                  <label>
-                    <span>Timezone</span>
-                    <input
+            <div className="grid gap-4">
+              <Form onSubmit={(event) => void handleSettingsSave(event)}>
+                <FieldGrid>
+                  <Field label="Timezone">
+                    <Input
                       type="text"
                       list="reporting-timezone-options"
                       value={settingsForm.reportingTimezone}
@@ -1676,13 +1633,13 @@ function App() {
                         <option key={option} value={option} />
                       ))}
                     </datalist>
-                  </label>
-                </div>
-                <div className="connection-note">
+                  </Field>
+                </FieldGrid>
+                <HelpText>
                   Default is Pacific time. You can enter a valid IANA timezone such as <code>America/Los_Angeles</code>,
                   or use the alias <code>PST</code>.
-                </div>
-                <div className="detail-list">
+                </HelpText>
+                <DetailList>
                   <div>
                     <dt>Active timezone</dt>
                     <dd>{appSettings.data?.reportingTimezone ?? DEFAULT_REPORTING_TIMEZONE}</dd>
@@ -1691,24 +1648,24 @@ function App() {
                     <dt>Updated</dt>
                     <dd>{formatOptionalDateTime(appSettings.data?.updatedAt, reportingTimezone)}</dd>
                   </div>
-                </div>
-                <div className="button-row">
-                  <button type="submit" className="action-button" disabled={actionFeedback.loading !== null}>
+                </DetailList>
+                <ButtonRow>
+                  <Button type="submit" disabled={actionFeedback.loading !== null}>
                     {actionFeedback.loading === 'settings-save' ? 'Saving…' : 'Save reporting timezone'}
-                  </button>
-                </div>
-              </form>
+                  </Button>
+                </ButtonRow>
+              </Form>
             </div>
           </SectionState>
-        </article>
+        </Panel>
         ) : null}
 
         {currentPage === 'settings' ? (
-        <article className="panel panel-wide">
-          <div className="panel-header">
-            <h2>Ad connections</h2>
-            <p>Connect spend sources here so ROAS Radar can populate spend and ROAS, not just attributed revenue.</p>
-          </div>
+        <Panel
+          title="Ad connections"
+          description="Connect spend sources here so ROAS Radar can populate spend and ROAS, not just attributed revenue."
+          wide
+        >
           <div className="connections-grid">
             <section className="connection-card">
               <div className="connection-card-header">
@@ -1716,14 +1673,14 @@ function App() {
                   <h3>Shopify</h3>
                   <p>Checks the installed Shopify app connection and can re-provision webhooks if needed.</p>
                 </div>
-                <span className="status-pill">
+                <StatusPill>
                   {shopifyConnection.data?.status ??
                     (shopifyConnection.data?.connected ? 'active' : shopifyConnection.loading ? 'Loading' : 'Not connected')}
-                </span>
+                </StatusPill>
               </div>
               <ConnectionState loading={shopifyConnection.loading} error={shopifyConnection.error}>
                 <div className="connection-card-body">
-                  <dl className="detail-list">
+                  <DetailList>
                     <div>
                       <dt>Shop</dt>
                       <dd>{shopifyConnection.data?.shop?.name ?? shopifyConnection.data?.shopDomain ?? 'Not connected'}</dd>
@@ -1740,15 +1697,14 @@ function App() {
                       <dt>Webhooks</dt>
                       <dd>{shopifyConnection.data?.webhookBaseUrl ?? 'Not available'}</dd>
                     </div>
-                  </dl>
+                  </DetailList>
                     {shopifyConnection.data?.reconnectUrl ? (
-                      <div className="connection-note">Reconnect URL is available if the store needs to be reauthorized.</div>
+                      <HelpText>Reconnect URL is available if the store needs to be reauthorized.</HelpText>
                     ) : null}
-                    <form className="credentials-form" onSubmit={handleShopifyBackfill}>
-                      <div className="credentials-grid">
-                        <label className="credential-field">
-                          <span>Backfill start</span>
-                          <input
+                    <Form onSubmit={handleShopifyBackfill}>
+                      <FieldGrid>
+                        <Field label="Backfill start">
+                          <Input
                             type="date"
                             value={shopifyBackfillRange.startDate}
                             onChange={(event) =>
@@ -1756,10 +1712,9 @@ function App() {
                             }
                             required
                           />
-                        </label>
-                        <label className="credential-field">
-                          <span>Backfill end</span>
-                          <input
+                        </Field>
+                        <Field label="Backfill end">
+                          <Input
                             type="date"
                             value={shopifyBackfillRange.endDate}
                             onChange={(event) =>
@@ -1767,48 +1722,47 @@ function App() {
                             }
                             required
                           />
-                        </label>
-                      </div>
-                      <div className="button-row">
-                        <button
+                        </Field>
+                      </FieldGrid>
+                      <ButtonRow>
+                        <Button
                           type="submit"
-                          className="action-button action-button-secondary"
+                          tone="secondary"
                           disabled={actionFeedback.loading !== null || !shopifyConnection.data?.connected}
                         >
                           {actionFeedback.loading === 'shopify-backfill'
                             ? 'Backfilling…'
                             : `Backfill Shopify orders`}
-                        </button>
-                        <button
+                        </Button>
+                        <Button
                           type="button"
-                          className="action-button action-button-secondary"
+                          tone="secondary"
                           onClick={() => void handleShopifyAttributionRecovery()}
                           disabled={actionFeedback.loading !== null || !shopifyConnection.data?.connected}
                         >
                           {actionFeedback.loading === 'shopify-attribution-recovery'
                             ? 'Recovering…'
                             : 'Recover attribution hints'}
-                        </button>
-                      </div>
-                    </form>
-                    <div className="button-row">
-                      <button
+                        </Button>
+                      </ButtonRow>
+                    </Form>
+                    <ButtonRow>
+                      <Button
                         type="button"
-                      className="action-button"
-                      onClick={() => void handleShopifyTest()}
-                      disabled={actionFeedback.loading !== null}
-                    >
-                      {actionFeedback.loading === 'shopify-test' ? 'Testing…' : 'Test Shopify connection'}
-                    </button>
-                    <button
-                      type="button"
-                      className="action-button action-button-secondary"
-                      onClick={() => void handleShopifyWebhookSync()}
-                      disabled={actionFeedback.loading !== null || !shopifyConnection.data?.connected}
-                    >
-                      {actionFeedback.loading === 'shopify-webhooks' ? 'Syncing…' : 'Sync Shopify webhooks'}
-                    </button>
-                  </div>
+                        onClick={() => void handleShopifyTest()}
+                        disabled={actionFeedback.loading !== null}
+                      >
+                        {actionFeedback.loading === 'shopify-test' ? 'Testing…' : 'Test Shopify connection'}
+                      </Button>
+                      <Button
+                        type="button"
+                        tone="secondary"
+                        onClick={() => void handleShopifyWebhookSync()}
+                        disabled={actionFeedback.loading !== null || !shopifyConnection.data?.connected}
+                      >
+                        {actionFeedback.loading === 'shopify-webhooks' ? 'Syncing…' : 'Sync Shopify webhooks'}
+                      </Button>
+                    </ButtonRow>
                 </div>
               </ConnectionState>
             </section>
@@ -1819,14 +1773,14 @@ function App() {
                   <h3>Meta Ads</h3>
                   <p>Save your Meta app settings here, then start OAuth to attach the ad account.</p>
                 </div>
-                <span className="status-pill">
+                <StatusPill>
                   {metaConnection.data?.connection?.status ??
                     (metaConnection.data?.config.missingFields.length ? 'Needs config' : metaConnection.loading ? 'Loading' : 'Not connected')}
-                </span>
+                </StatusPill>
               </div>
               <ConnectionState loading={metaConnection.loading} error={metaConnection.error}>
                 <div className="connection-card-body">
-                  <dl className="detail-list">
+                  <DetailList>
                     <div>
                       <dt>Config source</dt>
                       <dd>{metaConnection.data?.config.source ?? 'Not available'}</dd>
@@ -1847,20 +1801,19 @@ function App() {
                       <dt>Sync status</dt>
                       <dd>{metaConnection.data?.connection?.last_sync_status ?? 'Not started'}</dd>
                     </div>
-                  </dl>
+                  </DetailList>
                   {metaConnection.data?.config.missingFields.length ? (
-                    <div className="connection-note connection-note-error">
+                    <HelpText tone="error">
                       Missing Meta config: {metaConnection.data.config.missingFields.join(', ')}
-                    </div>
+                    </HelpText>
                   ) : null}
                   {metaConnection.data?.connection?.last_sync_error ? (
-                    <div className="connection-note connection-note-error">{metaConnection.data.connection.last_sync_error}</div>
+                    <HelpText tone="error">{metaConnection.data.connection.last_sync_error}</HelpText>
                   ) : null}
-                  <form className="credentials-form" onSubmit={handleMetaConfigSave}>
-                    <div className="credentials-grid">
-                      <label className="credential-field">
-                        <span>Meta app ID</span>
-                        <input
+                  <Form onSubmit={handleMetaConfigSave}>
+                    <FieldGrid>
+                      <Field label="Meta app ID">
+                        <Input
                           type="text"
                           value={metaConfigForm.appId}
                           onChange={(event) =>
@@ -1868,10 +1821,9 @@ function App() {
                           }
                           placeholder="123456789012345"
                         />
-                      </label>
-                      <label className="credential-field">
-                        <span>Ad account ID</span>
-                        <input
+                      </Field>
+                      <Field label="Ad account ID">
+                        <Input
                           type="text"
                           value={metaConfigForm.adAccountId}
                           onChange={(event) =>
@@ -1879,10 +1831,9 @@ function App() {
                           }
                           placeholder="act_123456789012345 or 123456789012345"
                         />
-                      </label>
-                      <label className="credential-field credential-field-wide">
-                        <span>Meta app secret</span>
-                        <input
+                      </Field>
+                      <Field label="Meta app secret" wide>
+                        <Input
                           type="password"
                           value={metaConfigForm.appSecret}
                           onChange={(event) =>
@@ -1894,10 +1845,9 @@ function App() {
                               : 'Paste the Meta app secret'
                           }
                         />
-                      </label>
-                      <label className="credential-field credential-field-wide">
-                        <span>OAuth base URL</span>
-                        <input
+                      </Field>
+                      <Field label="OAuth base URL" wide>
+                        <Input
                           type="url"
                           value={metaConfigForm.appBaseUrl}
                           onChange={(event) =>
@@ -1905,10 +1855,9 @@ function App() {
                           }
                           placeholder="https://roas-radar.api.thecapemarine.com"
                         />
-                      </label>
-                      <label className="credential-field credential-field-wide">
-                        <span>Scopes</span>
-                        <input
+                      </Field>
+                      <Field label="Scopes" wide>
+                        <Input
                           type="text"
                           value={metaConfigForm.appScopes}
                           onChange={(event) =>
@@ -1916,32 +1865,31 @@ function App() {
                           }
                           placeholder="ads_read"
                         />
-                      </label>
-                    </div>
-                    <div className="button-row">
-                      <button type="submit" className="action-button" disabled={actionFeedback.loading !== null}>
+                      </Field>
+                    </FieldGrid>
+                    <ButtonRow>
+                      <Button type="submit" disabled={actionFeedback.loading !== null}>
                         {actionFeedback.loading === 'meta-config-save' ? 'Saving…' : 'Save Meta config'}
-                      </button>
-                    </div>
-                  </form>
-                  <div className="button-row">
-                    <button
+                      </Button>
+                    </ButtonRow>
+                  </Form>
+                  <ButtonRow>
+                    <Button
                       type="button"
-                      className="action-button"
                       onClick={() => void handleMetaConnect()}
                       disabled={actionFeedback.loading !== null || Boolean(metaConnection.data?.config.missingFields.length)}
                     >
                       {actionFeedback.loading === 'meta-connect' ? 'Opening Meta…' : 'Connect Meta Ads'}
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                       type="button"
-                      className="action-button action-button-secondary"
+                      tone="secondary"
                       onClick={() => void handleMetaSync()}
                       disabled={actionFeedback.loading !== null || metaConnection.data?.connection == null}
                     >
                       {actionFeedback.loading === 'meta-sync' ? 'Queueing…' : `Sync ${filters.startDate} to ${filters.endDate}`}
-                    </button>
-                  </div>
+                    </Button>
+                  </ButtonRow>
                 </div>
               </ConnectionState>
             </section>
@@ -1952,13 +1900,13 @@ function App() {
                   <h3>Google Ads</h3>
                   <p>Creates the encrypted connection directly from Google Ads API credentials and refresh token.</p>
                 </div>
-                <span className="status-pill">
+                <StatusPill>
                   {googleConnection.data?.connection?.status ?? (googleConnection.loading ? 'Loading' : 'Not connected')}
-                </span>
+                </StatusPill>
               </div>
               <ConnectionState loading={googleConnection.loading} error={googleConnection.error}>
                 <div className="connection-card-body">
-                  <dl className="detail-list">
+                  <DetailList>
                     <div>
                       <dt>Customer</dt>
                       <dd>
@@ -1979,22 +1927,21 @@ function App() {
                       <dt>Reconciliation</dt>
                       <dd>{googleConnection.data?.reconciliation?.status ?? 'Not run'}</dd>
                     </div>
-                  </dl>
+                  </DetailList>
                   {googleConnection.data?.connection?.last_sync_error ? (
-                    <div className="connection-note connection-note-error">
+                    <HelpText tone="error">
                       {googleConnection.data.connection.last_sync_error}
-                    </div>
+                    </HelpText>
                   ) : null}
                   {googleConnection.data?.reconciliation?.missing_dates?.length ? (
-                    <div className="connection-note">
+                    <HelpText>
                       Missing dates: {googleConnection.data.reconciliation.missing_dates.join(', ')}
-                    </div>
+                    </HelpText>
                   ) : null}
-                  <form className="credential-form" onSubmit={(event) => void handleGoogleConnect(event)}>
-                    <div className="credential-grid">
-                      <label>
-                        <span>Customer ID</span>
-                        <input
+                  <Form onSubmit={(event) => void handleGoogleConnect(event)}>
+                    <FieldGrid>
+                      <Field label="Customer ID">
+                        <Input
                           type="text"
                           value={googleForm.customerId}
                           onChange={(event) =>
@@ -2003,10 +1950,9 @@ function App() {
                           placeholder="123-456-7890"
                           required
                         />
-                      </label>
-                      <label>
-                        <span>Login customer ID</span>
-                        <input
+                      </Field>
+                      <Field label="Login customer ID">
+                        <Input
                           type="text"
                           value={googleForm.loginCustomerId ?? ''}
                           onChange={(event) =>
@@ -2014,10 +1960,9 @@ function App() {
                           }
                           placeholder="Optional MCC login"
                         />
-                      </label>
-                      <label>
-                        <span>Developer token</span>
-                        <input
+                      </Field>
+                      <Field label="Developer token">
+                        <Input
                           type="password"
                           value={googleForm.developerToken}
                           onChange={(event) =>
@@ -2025,10 +1970,9 @@ function App() {
                           }
                           required
                         />
-                      </label>
-                      <label>
-                        <span>Client ID</span>
-                        <input
+                      </Field>
+                      <Field label="Client ID">
+                        <Input
                           type="password"
                           value={googleForm.clientId}
                           onChange={(event) =>
@@ -2036,10 +1980,9 @@ function App() {
                           }
                           required
                         />
-                      </label>
-                      <label>
-                        <span>Client secret</span>
-                        <input
+                      </Field>
+                      <Field label="Client secret">
+                        <Input
                           type="password"
                           value={googleForm.clientSecret}
                           onChange={(event) =>
@@ -2047,10 +1990,9 @@ function App() {
                           }
                           required
                         />
-                      </label>
-                      <label>
-                        <span>Refresh token</span>
-                        <input
+                      </Field>
+                      <Field label="Refresh token">
+                        <Input
                           type="password"
                           value={googleForm.refreshToken}
                           onChange={(event) =>
@@ -2058,55 +2000,54 @@ function App() {
                           }
                           required
                         />
-                      </label>
-                    </div>
-                    <div className="button-row">
-                      <button type="submit" className="action-button" disabled={actionFeedback.loading !== null}>
+                      </Field>
+                    </FieldGrid>
+                    <ButtonRow>
+                      <Button type="submit" disabled={actionFeedback.loading !== null}>
                         {actionFeedback.loading === 'google-connect' ? 'Saving…' : 'Connect Google Ads'}
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         type="button"
-                        className="action-button action-button-secondary"
+                        tone="secondary"
                         onClick={() => void handleGoogleSync()}
                         disabled={actionFeedback.loading !== null || googleConnection.data?.connection == null}
                       >
                         {actionFeedback.loading === 'google-sync' ? 'Queueing…' : `Sync ${filters.startDate} to ${filters.endDate}`}
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         type="button"
-                        className="action-button action-button-secondary"
+                        tone="secondary"
                         onClick={() => void handleGoogleReconcile()}
                         disabled={actionFeedback.loading !== null || googleConnection.data?.connection == null}
                       >
                         {actionFeedback.loading === 'google-reconcile' ? 'Running…' : 'Reconcile gaps'}
-                      </button>
-                    </div>
-                  </form>
+                      </Button>
+                    </ButtonRow>
+                  </Form>
                 </div>
               </ConnectionState>
             </section>
           </div>
-        </article>
+        </Panel>
         ) : null}
 
         {currentPage === 'settings' && authState.user.isAdmin ? (
-          <article className="panel panel-wide">
-            <div className="panel-header">
-              <h2>User access</h2>
-              <p>All dashboard reporting and admin tools are locked behind app-user authentication.</p>
-            </div>
+          <Panel
+            title="User access"
+            description="All dashboard reporting and admin tools are locked behind app-user authentication."
+            wide
+          >
             <SectionState
               loading={usersSection.loading}
               error={usersSection.error}
               empty={false}
               emptyLabel=""
             >
-              <div className="connection-card-body">
-                <form className="credential-form" onSubmit={(event) => void handleCreateUser(event)}>
-                  <div className="credential-grid">
-                    <label>
-                      <span>Display name</span>
-                      <input
+              <div className="grid gap-4">
+                <Form onSubmit={(event) => void handleCreateUser(event)}>
+                  <FieldGrid>
+                    <Field label="Display name">
+                      <Input
                         type="text"
                         value={newUserForm.displayName}
                         onChange={(event) =>
@@ -2114,19 +2055,17 @@ function App() {
                         }
                         required
                       />
-                    </label>
-                    <label>
-                      <span>Email</span>
-                      <input
+                    </Field>
+                    <Field label="Email">
+                      <Input
                         type="email"
                         value={newUserForm.email}
                         onChange={(event) => setNewUserForm((current) => ({ ...current, email: event.target.value }))}
                         required
                       />
-                    </label>
-                    <label>
-                      <span>Password</span>
-                      <input
+                    </Field>
+                    <Field label="Password">
+                      <Input
                         type="password"
                         value={newUserForm.password}
                         onChange={(event) =>
@@ -2135,9 +2074,8 @@ function App() {
                         minLength={12}
                         required
                       />
-                    </label>
-                    <label className="checkbox-label">
-                      <span>Admin access</span>
+                    </Field>
+                    <CheckboxField label="Admin access">
                       <input
                         type="checkbox"
                         checked={Boolean(newUserForm.isAdmin)}
@@ -2145,16 +2083,16 @@ function App() {
                           setNewUserForm((current) => ({ ...current, isAdmin: event.target.checked }))
                         }
                       />
-                    </label>
-                  </div>
-                  <div className="button-row">
-                    <button type="submit" className="action-button" disabled={actionFeedback.loading !== null}>
+                    </CheckboxField>
+                  </FieldGrid>
+                  <ButtonRow>
+                    <Button type="submit" disabled={actionFeedback.loading !== null}>
                       {actionFeedback.loading === 'user-create' ? 'Creating…' : 'Add user'}
-                    </button>
-                  </div>
-                </form>
-                <div className="table-wrap">
-                  <table>
+                    </Button>
+                  </ButtonRow>
+                </Form>
+                <TableWrap>
+                  <table className="ui-table">
                     <thead>
                       <tr>
                         <th>User</th>
@@ -2167,10 +2105,10 @@ function App() {
                       {(usersSection.data ?? []).map((user) => (
                         <tr key={user.id}>
                           <td>
-                            <div className="primary-cell">
+                            <PrimaryCell>
                               <strong>{user.displayName}</strong>
                               <span>{user.email}</span>
-                            </div>
+                            </PrimaryCell>
                           </td>
                           <td>{user.isAdmin ? 'Admin' : 'Viewer'}</td>
                           <td>{user.status}</td>
@@ -2179,17 +2117,17 @@ function App() {
                       ))}
                     </tbody>
                   </table>
-                </div>
+                </TableWrap>
               </div>
             </SectionState>
-          </article>
+          </Panel>
         ) : null}
 
-        {currentPage === 'dashboard' ? <article className="panel panel-wide">
-          <div className="panel-header">
-            <h2>Revenue trend</h2>
-            <p>Uses the reporting timeseries contract and switches grouping without changing the rest of the dashboard.</p>
-          </div>
+        {currentPage === 'dashboard' ? <Panel
+          title="Revenue trend"
+          description="Uses the reporting timeseries contract and switches grouping without changing the rest of the dashboard."
+          wide
+        >
           <SectionState
             loading={dashboard.timeseries.loading}
             error={dashboard.timeseries.error}
@@ -2202,21 +2140,20 @@ function App() {
               reportingTimezone={reportingTimezone}
             />
           </SectionState>
-        </article> : null}
+        </Panel> : null}
 
-        {currentPage === 'dashboard' ? <article className="panel">
-          <div className="panel-header">
-            <h2>Campaign performance</h2>
-            <p>Top campaign rows ordered by revenue, matching the API’s table response.</p>
-          </div>
+        {currentPage === 'dashboard' ? <Panel
+          title="Campaign performance"
+          description="Top campaign rows ordered by revenue, matching the API’s table response."
+        >
           <SectionState
             loading={dashboard.campaigns.loading}
             error={dashboard.campaigns.error}
             empty={!dashboard.campaigns.data?.length}
             emptyLabel="No campaign rows matched the current filters."
           >
-            <div className="table-wrap">
-              <table>
+            <TableWrap>
+              <table className="ui-table">
                 <thead>
                   <tr>
                     <th>Campaign</th>
@@ -2231,10 +2168,10 @@ function App() {
                   {(dashboard.campaigns.data ?? []).map((row) => (
                     <tr key={`${row.source}-${row.medium}-${row.campaign}-${row.content ?? 'none'}`}>
                       <td>
-                        <div className="primary-cell">
+                        <PrimaryCell>
                           <strong>{row.campaign}</strong>
                           <span>{row.content ?? 'No content tag'}</span>
-                        </div>
+                        </PrimaryCell>
                       </td>
                       <td>{`${row.source} / ${row.medium}`}</td>
                       <td>{formatNumber(row.visits)}</td>
@@ -2245,15 +2182,14 @@ function App() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TableWrap>
           </SectionState>
-        </article> : null}
+        </Panel> : null}
 
-        {currentPage === 'dashboard' ? <article className="panel">
-          <div className="panel-header">
-            <h2>Campaign mix</h2>
-            <p>Revenue share makes it obvious which campaigns dominate the selected window.</p>
-          </div>
+        {currentPage === 'dashboard' ? <Panel
+          title="Campaign mix"
+          description="Revenue share makes it obvious which campaigns dominate the selected window."
+        >
           <SectionState
             loading={dashboard.campaigns.loading}
             error={dashboard.campaigns.error}
@@ -2279,21 +2215,21 @@ function App() {
               })}
             </div>
           </SectionState>
-        </article> : null}
+        </Panel> : null}
 
-        {currentPage === 'dashboard' ? <article className="panel panel-wide">
-          <div className="panel-header">
-            <h2>Attributed orders</h2>
-            <p>Order-level attribution rows help debug why a sale was assigned to a source and campaign.</p>
-          </div>
+        {currentPage === 'dashboard' ? <Panel
+          title="Attributed orders"
+          description="Order-level attribution rows help debug why a sale was assigned to a source and campaign."
+          wide
+        >
           <SectionState
             loading={dashboard.orders.loading}
             error={dashboard.orders.error}
             empty={!dashboard.orders.data?.length}
             emptyLabel="No attributed orders were returned for this range."
           >
-            <div className="table-wrap">
-              <table>
+            <TableWrap>
+              <table className="ui-table">
                 <thead>
                   <tr>
                     <th>Order</th>
@@ -2308,7 +2244,7 @@ function App() {
                   {(dashboard.orders.data ?? []).map((row) => (
                     <tr key={row.shopifyOrderId}>
                       <td>
-                        <div className="primary-cell">
+                        <PrimaryCell>
                           <button
                             type="button"
                             className="table-link-button"
@@ -2317,7 +2253,7 @@ function App() {
                             #{row.shopifyOrderId}
                           </button>
                           <span>{row.medium ?? 'No medium'}</span>
-                        </div>
+                        </PrimaryCell>
                       </td>
                       <td>{formatDateTimeLabel(row.processedAt, reportingTimezone)}</td>
                       <td>{row.source ?? 'Unattributed'}</td>
@@ -2330,9 +2266,9 @@ function App() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TableWrap>
           </SectionState>
-        </article> : null}
+        </Panel> : null}
       </section> : null}
     </AuthenticatedAppShell>
   );
