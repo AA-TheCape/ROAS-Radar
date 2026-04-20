@@ -53,6 +53,10 @@ import {
   formatNumber,
   formatPercent
 } from './lib/format';
+import AuthenticatedAppShell, {
+  type AppShellBreadcrumb,
+  type AppShellNavItem
+} from './components/AuthenticatedAppShell';
 
 type AsyncSection<T> = {
   data: T | null;
@@ -97,6 +101,19 @@ type SettingsForm = {
 };
 
 type AppPage = 'dashboard' | 'settings' | 'order-details';
+
+const AUTHENTICATED_NAV_ITEMS: AppShellNavItem[] = [
+  {
+    key: 'dashboard',
+    label: 'Dashboard',
+    description: 'Summary metrics, campaign performance, time-based revenue trends, and attributed order rows.'
+  },
+  {
+    key: 'settings',
+    label: 'Settings',
+    description: 'Reporting timezone, platform connections, sync actions, and dashboard user access.'
+  }
+];
 
 const DEFAULT_REPORTING_TIMEZONE = 'America/Los_Angeles';
 const REPORTING_TIMEZONE_OPTIONS = [
@@ -1187,6 +1204,99 @@ function App() {
     }
   }
 
+  const pageEyebrow =
+    currentPage === 'settings'
+      ? 'Admin settings'
+      : currentPage === 'order-details'
+        ? 'Order drill-in'
+        : 'MVP reporting dashboard';
+  const pageTitle =
+    currentPage === 'settings'
+      ? 'Configure reporting settings and platform connections'
+      : currentPage === 'order-details'
+        ? `Inspect order #${selectedOrderId ?? 'Unknown'}`
+        : 'Monitor acquisition performance across revenue, campaigns, and orders';
+  const pageDescription =
+    currentPage === 'settings'
+      ? 'Configure store integrations, ad platform connections, and dashboard user access from one place.'
+      : currentPage === 'order-details'
+        ? 'Inspect the full stored Shopify order record, attribution credits, line items, and raw payload for one order.'
+        : 'Monitor paid acquisition performance for a single Shopify store across headline metrics, campaign rows, time-based trends, and order-level attribution evidence.';
+  const activeNavKey = currentPage;
+  const shellNavItems: AppShellNavItem[] =
+    currentPage === 'order-details'
+      ? [
+          ...AUTHENTICATED_NAV_ITEMS,
+          {
+            key: 'order-details',
+            label: 'Order details',
+            shortLabel: 'Order',
+            description: 'Contextual drill-in for a selected attributed Shopify order.'
+          }
+        ]
+      : AUTHENTICATED_NAV_ITEMS;
+  const breadcrumbs: AppShellBreadcrumb[] =
+    currentPage === 'dashboard'
+      ? [
+          { label: 'Authenticated app' },
+          { label: 'Dashboard', current: true }
+        ]
+      : currentPage === 'settings'
+        ? [
+            { label: 'Authenticated app' },
+            { label: 'Settings', current: true }
+          ]
+        : [
+            { label: 'Authenticated app' },
+            { label: 'Dashboard', onClick: closeOrderDetails },
+            { label: selectedOrderId ? `Order ${selectedOrderId}` : 'Order details', current: true }
+          ];
+  const shellHeaderStatus = (
+    <div className="grid gap-4">
+      <div>
+        <p className="text-caption uppercase tracking-[0.14em] text-ink-muted">Active window</p>
+        <p className="mt-2 font-display text-display text-ink">
+          {currentPage === 'order-details' ? `#${selectedOrderId ?? '—'}` : filters.endDate}
+        </p>
+        <p className="mt-2 text-body text-ink-soft">{activeWindowTime}</p>
+      </div>
+      <dl className="grid gap-3 text-body">
+        <div className="rounded-card border border-line/70 bg-canvas-tint p-4">
+          <dt className="text-caption uppercase tracking-[0.12em] text-ink-muted">Traffic scope</dt>
+          <dd className="mt-2 text-ink-soft">
+            {(filters.source ?? '').trim() || (filters.campaign ?? '').trim()
+              ? `Filtered by ${[(filters.source ?? '').trim(), (filters.campaign ?? '').trim()].filter(Boolean).join(' / ')}`
+              : 'All attributed traffic'}
+          </dd>
+        </div>
+        <div className="rounded-card border border-line/70 bg-canvas-tint p-4">
+          <dt className="text-caption uppercase tracking-[0.12em] text-ink-muted">Reporting timezone</dt>
+          <dd className="mt-2 text-ink-soft">{reportingTimezone}</dd>
+        </div>
+      </dl>
+    </div>
+  );
+  const shellHeaderActions = (
+    <>
+      {currentPage === 'order-details' ? (
+        <button
+          type="button"
+          className="inline-flex items-center rounded-pill border border-line/80 bg-surface-alt px-5 py-3 text-body font-semibold text-ink transition hover:-translate-y-0.5 hover:bg-surface"
+          onClick={closeOrderDetails}
+        >
+          Back to dashboard
+        </button>
+      ) : null}
+      <button
+        type="button"
+        className="inline-flex items-center rounded-pill bg-brand px-5 py-3 text-body font-semibold text-white shadow-panel transition hover:-translate-y-0.5 hover:bg-brand-strong"
+        onClick={() => void handleLogout()}
+      >
+        Logout
+      </button>
+    </>
+  );
+
   if (authState.checking) {
     return (
       <main className="auth-shell">
@@ -1234,62 +1344,43 @@ function App() {
     );
   }
 
+  const authenticatedUser = authState.user;
+
   return (
-    <main className="app-shell">
-      <section className="hero">
-        <div className="hero-copy-block">
-          <p className="eyebrow">
-            {currentPage === 'settings'
-              ? 'Admin settings'
-              : currentPage === 'order-details'
-                ? 'Order drill-in'
-                : 'MVP reporting dashboard'}
-          </p>
-          <h1>ROAS Radar</h1>
-          <p className="hero-copy">
-            {currentPage === 'settings'
-              ? 'Configure store integrations, ad platform connections, and dashboard user access from one place.'
-              : currentPage === 'order-details'
-                ? 'Inspect the full stored Shopify order record, attribution credits, line items, and raw payload for one order.'
-                : 'Monitor paid acquisition performance for a single Shopify store across headline metrics, campaign rows, time-based trends, and order-level attribution evidence.'}
-          </p>
-        </div>
-        <div className="hero-status-card">
-          <span>Active window</span>
-          <strong>{currentPage === 'order-details' ? `Order #${selectedOrderId ?? '—'}` : filters.endDate}</strong>
-          <small>{activeWindowTime}</small>
-          <small>
-            {(filters.source ?? '').trim() || (filters.campaign ?? '').trim()
-              ? `Filtered by ${[(filters.source ?? '').trim(), (filters.campaign ?? '').trim()].filter(Boolean).join(' / ')}`
-              : 'All attributed traffic'}
-          </small>
-          <small>{`Reporting timezone: ${reportingTimezone}`}</small>
-          <small>{`Signed in as ${authState.user.displayName} (${authState.user.email})`}</small>
-          <div className="hero-status-actions">
-            <button
-              type="button"
-              className="nav-link-button"
-              onClick={() => {
-                if (currentPage === 'settings' || currentPage === 'order-details') {
-                  closeOrderDetails();
-                  setCurrentPage('dashboard');
-                  return;
-                }
+    <AuthenticatedAppShell
+      navItems={shellNavItems}
+      activeNavKey={activeNavKey}
+      onNavigate={(key) => {
+        if (key === 'order-details') {
+          return;
+        }
 
-                setCurrentPage('settings');
-              }}
-            >
-              {currentPage === 'settings' || currentPage === 'order-details' ? 'Back to dashboard' : 'Settings'}
-            </button>
-          </div>
-          <div className="button-row">
-            <button type="button" className="action-button action-button-secondary" onClick={() => void handleLogout()}>
-              Logout
-            </button>
-          </div>
-        </div>
-      </section>
+        if (key === 'dashboard') {
+          closeOrderDetails();
+          return;
+        }
 
+        setSelectedOrderId(null);
+        setOrderDetailsSection({
+          data: null,
+          loading: false,
+          error: null
+        });
+        setCurrentPage(key as AppPage);
+      }}
+      breadcrumbs={breadcrumbs}
+      eyebrow={pageEyebrow}
+      title={pageTitle}
+      description={pageDescription}
+      topbarMeta={
+        <div className="space-y-1">
+          <p className="font-semibold text-ink">{authenticatedUser.displayName}</p>
+          <p>{authenticatedUser.email}</p>
+        </div>
+      }
+      headerStatus={shellHeaderStatus}
+      headerActions={shellHeaderActions}
+    >
       {currentPage === 'dashboard' ? <section className="control-bar">
         <div className="control-group">
           <label htmlFor="start-date">Start date</label>
@@ -2243,7 +2334,7 @@ function App() {
           </SectionState>
         </article> : null}
       </section> : null}
-    </main>
+    </AuthenticatedAppShell>
   );
 }
 
