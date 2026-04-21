@@ -148,6 +148,41 @@ function SummaryCard({ label, value, detail }: SummaryCardData) {
   );
 }
 
+function buildTrendSummary(points: TimeseriesPoint[], groupBy: TimeseriesGroupBy, reportingTimezone: string) {
+  if (points.length === 0) {
+    return 'No revenue buckets are available for the current reporting window.';
+  }
+
+  const strongestPoint = points.reduce<TimeseriesPoint>((current, point) => (point.revenue > current.revenue ? point : current), points[0]);
+  const strongestLabel = groupBy === 'day' ? formatDateLabel(strongestPoint.date, reportingTimezone) : strongestPoint.date;
+
+  return `${formatNumber(points.length)} buckets plotted. Strongest bucket ${strongestLabel} with ${formatCurrency(strongestPoint.revenue)} from ${formatNumber(strongestPoint.orders)} orders.`;
+}
+
+function buildCampaignMixSummary(data: Array<{ campaign: string; revenueShare: number; revenue: number }>) {
+  if (data.length === 0) {
+    return 'No campaign revenue share is available.';
+  }
+
+  return data
+    .slice(0, 5)
+    .map((row) => `${row.campaign}: ${row.revenueShare.toFixed(1)} percent share from ${formatCurrency(row.revenue)}.`)
+    .join(' ');
+}
+
+function buildSourceMixSummary(
+  data: Array<{ id: string; value: number; revenueLabel?: string }>
+) {
+  if (data.length === 0) {
+    return 'No source contribution data is available.';
+  }
+
+  return data
+    .slice(0, 5)
+    .map((row) => `${row.id}: ${row.revenueLabel ?? formatCurrency(row.value)}.`)
+    .join(' ');
+}
+
 function DashboardOverview({
   filters,
   groupBy,
@@ -246,22 +281,22 @@ function DashboardOverview({
         </Card>
 
         <Card padding="card" className="bg-[linear-gradient(180deg,rgba(23,33,43,0.98),rgba(49,64,81,0.96))] text-white">
-          <Eyebrow className="text-white/60">Operator notes</Eyebrow>
+          <Eyebrow className="text-white/85">Operator notes</Eyebrow>
           <div className="mt-5 grid gap-4">
             <div className="rounded-card border border-white/10 bg-white/5 px-4 py-4">
-              <p className="text-caption uppercase tracking-[0.14em] text-white/55">Revenue captured</p>
+              <p className="text-caption uppercase tracking-[0.14em] text-white/80">Revenue captured</p>
               <p className="mt-3 font-display text-display text-white">{formatCompactCurrency(totalRevenue)}</p>
-              <p className="mt-2 text-body text-white/72">
+              <p className="mt-2 text-body text-white/88">
                 {summary?.roas == null ? 'ROAS pending spend data' : `${formatNumber(summary.roas)} ROAS on attributed revenue`}
               </p>
             </div>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
               <div className="rounded-card border border-white/10 bg-white/5 px-4 py-4">
-                <p className="text-caption uppercase tracking-[0.14em] text-white/55">Conversion rate</p>
+                <p className="text-caption uppercase tracking-[0.14em] text-white/80">Conversion rate</p>
                 <p className="mt-2 font-display text-title text-white">{formatPercent(summary?.conversionRate)}</p>
               </div>
               <div className="rounded-card border border-white/10 bg-white/5 px-4 py-4">
-                <p className="text-caption uppercase tracking-[0.14em] text-white/55">Campaign rows</p>
+                <p className="text-caption uppercase tracking-[0.14em] text-white/80">Campaign rows</p>
                 <p className="mt-2 font-display text-title text-white">{formatNumber(campaigns.length)}</p>
               </div>
             </div>
@@ -449,6 +484,9 @@ function TimeseriesTrendPanel({
             error={error}
             empty={points.length === 0}
             emptyLabel="No timeseries data returned for this filter range."
+            label="Revenue trend chart"
+            description={`Revenue trend grouped by ${GROUP_BY_OPTIONS.find((option) => option.value === groupBy)?.label.toLowerCase() ?? groupBy}.`}
+            summary={buildTrendSummary(points, groupBy, reportingTimezone)}
             axisBottomLegend="Reporting bucket"
             axisLeftLegend="Revenue"
             yFormat={(value) => formatCompactCurrency(value)}
@@ -861,6 +899,9 @@ export default function ReportingDashboard({
               error={campaignsSection.error}
               empty={!campaignMixData.length}
               emptyLabel="No campaign mix available yet."
+              label="Campaign revenue share chart"
+              description="Horizontal bar chart showing the revenue share captured by each campaign."
+              summary={buildCampaignMixSummary(campaignMixData)}
               axisBottomLegend="Revenue share"
               valueFormat={(value) => `${value.toFixed(1)}%`}
               margin={{ left: 104, bottom: 52 }}
@@ -878,6 +919,9 @@ export default function ReportingDashboard({
               error={campaignsSection.error}
               empty={!sourceMixData.length}
               emptyLabel="No source contribution available yet."
+              label="Source contribution chart"
+              description="Pie chart showing attributed revenue distribution by traffic source."
+              summary={buildSourceMixSummary(sourceMixData)}
               valueFormat={(value) => formatCompactCurrency(value)}
               margin={{ bottom: 64 }}
             />
@@ -1000,8 +1044,9 @@ export default function ReportingDashboard({
                         <PrimaryCell>
                           <button
                             type="button"
-                            className="w-fit rounded-pill border border-line/80 bg-surface px-3 py-1.5 font-semibold text-brand transition hover:-translate-y-0.5 hover:border-brand/30 hover:bg-brand-soft"
+                            className="w-fit rounded-pill border border-line/80 bg-surface px-3 py-1.5 font-semibold text-brand transition hover:-translate-y-0.5 hover:border-brand/30 hover:bg-brand-soft focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-brand/20 focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
                             onClick={() => onOpenOrderDetails(row.shopifyOrderId)}
+                            aria-label={`Open order details for Shopify order ${row.shopifyOrderId}`}
                           >
                             #{row.shopifyOrderId}
                           </button>

@@ -47,13 +47,13 @@
 
   button,
   [role='button'] {
-    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 focus-visible:ring-offset-2 focus-visible:ring-offset-canvas;
+    @apply focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-brand/25 focus-visible:ring-offset-2 focus-visible:ring-offset-canvas;
   }
 
   input,
   select,
   textarea {
-    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal/30 focus-visible:ring-offset-2 focus-visible:ring-offset-surface;
+    @apply focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-teal/25 focus-visible:ring-offset-2 focus-visible:ring-offset-surface;
   }
 
   #root {

@@ -1,8 +1,23 @@
-import React, { useId, useState, type ComponentPropsWithoutRef, type ReactNode } from 'react';
+import React, {
+  cloneElement,
+  isValidElement,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentPropsWithoutRef,
+  type KeyboardEvent,
+  type ReactElement,
+  type ReactNode
+} from 'react';
 
 function cx(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(' ');
 }
+
+const FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
 
 type SurfaceTone = 'default' | 'error' | 'success' | 'warning';
 type ButtonTone = 'primary' | 'secondary' | 'ghost';
@@ -189,7 +204,11 @@ export function Alert({
   children: ReactNode;
 }) {
   return (
-    <div className={cx('rounded-card border px-4 py-3 text-body', alertToneClasses[tone], className)} role="status">
+    <div
+      className={cx('rounded-card border px-4 py-3 text-body', alertToneClasses[tone], className)}
+      role={tone === 'error' ? 'alert' : 'status'}
+      aria-live={tone === 'error' ? 'assertive' : 'polite'}
+    >
       {title ? <p className="font-semibold text-current">{title}</p> : null}
       <div className={title ? 'mt-1' : undefined}>{children}</div>
     </div>
@@ -363,10 +382,13 @@ export function Tooltip({
   className?: string;
   children: ReactNode;
 }) {
+  const tooltipId = useId();
+
   return (
-    <span className={cx('group relative inline-flex', className)} tabIndex={0} title={content}>
+    <span className={cx('group relative inline-flex', className)} tabIndex={0} aria-describedby={tooltipId}>
       {children}
       <span
+        id={tooltipId}
         role="tooltip"
         className="pointer-events-none absolute bottom-[calc(100%+0.5rem)] left-1/2 z-10 hidden w-max max-w-[16rem] -translate-x-1/2 rounded-card border border-line/70 bg-ink px-3 py-2 text-caption text-white shadow-panel group-hover:block group-focus-visible:block"
       >
@@ -393,6 +415,67 @@ export function Modal({
 }) {
   const titleId = useId();
   const descriptionId = useId();
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const lastFocusedElementRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!open || typeof document === 'undefined') {
+      return;
+    }
+
+    lastFocusedElementRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const dialog = dialogRef.current;
+    const focusableElements = dialog ? Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)) : [];
+    const initialFocusTarget = focusableElements[0] ?? dialog;
+    initialFocusTarget?.focus();
+
+    function handleKeyDown(event: globalThis.KeyboardEvent) {
+      if (!dialog) {
+        return;
+      }
+
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+
+      if (event.key !== 'Tab') {
+        return;
+      }
+
+      const currentFocusableElements = Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
+
+      if (currentFocusableElements.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+
+      const firstElement = currentFocusableElements[0];
+      const lastElement = currentFocusableElements[currentFocusableElements.length - 1];
+      const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+      if (event.shiftKey && activeElement === firstElement) {
+        event.preventDefault();
+        lastElement.focus();
+      } else if (!event.shiftKey && activeElement === lastElement) {
+        event.preventDefault();
+        firstElement.focus();
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+      lastFocusedElementRef.current?.focus();
+    };
+  }, [open, onClose]);
 
   if (!open) {
     return null;
@@ -401,11 +484,13 @@ export function Modal({
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-ink/30 px-4 backdrop-blur-sm" onClick={onClose}>
       <div
+        ref={dialogRef}
         className="w-full max-w-xl rounded-shell border border-line/80 bg-surface p-panel shadow-lift"
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={description ? descriptionId : undefined}
+        tabIndex={-1}
         onClick={(event) => event.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3">
@@ -446,6 +531,63 @@ export function Tabs({
 }) {
   const [value, setValue] = useState(defaultValue ?? items[0]?.value ?? '');
   const activeItem = items.find((item) => item.value === value) ?? items[0];
+  const tabsInstanceId = useId();
+  const tabIds = useMemo(
+    () =>
+      items.reduce<Record<string, string>>((accumulator, item) => {
+        accumulator[item.value] = `tab-${tabsInstanceId}-${item.value}`;
+        return accumulator;
+      }, {}),
+    [items, tabsInstanceId]
+  );
+  const panelIds = useMemo(
+    () =>
+      items.reduce<Record<string, string>>((accumulator, item) => {
+        accumulator[item.value] = `panel-${tabsInstanceId}-${item.value}`;
+        return accumulator;
+      }, {}),
+    [items, tabsInstanceId]
+  );
+
+  function focusTab(nextValue: string) {
+    const tabId = tabIds[nextValue];
+    if (typeof document === 'undefined' || !tabId) {
+      return;
+    }
+
+    document.getElementById(tabId)?.focus();
+  }
+
+  function handleKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number) {
+    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) {
+      return;
+    }
+
+    event.preventDefault();
+
+    if (items.length === 0) {
+      return;
+    }
+
+    let nextIndex = index;
+
+    if (event.key === 'Home') {
+      nextIndex = 0;
+    } else if (event.key === 'End') {
+      nextIndex = items.length - 1;
+    } else {
+      const delta = event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 1;
+      nextIndex = (index + delta + items.length) % items.length;
+    }
+
+    const nextValue = items[nextIndex]?.value;
+    if (!nextValue) {
+      return;
+    }
+
+    setValue(nextValue);
+    focusTab(nextValue);
+  }
 
   return (
     <div className="grid gap-4">
@@ -457,20 +599,30 @@ export function Tabs({
         {items.map((item) => (
           <button
             key={item.value}
+            id={tabIds[item.value]}
             type="button"
             role="tab"
             aria-selected={item.value === activeItem?.value}
+            aria-controls={panelIds[item.value]}
             className={cx(
               'rounded-pill px-4 py-2 text-body font-semibold transition',
               item.value === activeItem?.value ? 'bg-teal text-white shadow-panel' : 'text-ink-soft hover:bg-surface'
             )}
             onClick={() => setValue(item.value)}
+            onKeyDown={(event) => handleKeyDown(event, items.findIndex((entry) => entry.value === item.value))}
+            tabIndex={item.value === activeItem?.value ? 0 : -1}
           >
             {item.label}
           </button>
         ))}
       </div>
-      <div role="tabpanel">{activeItem?.panel}</div>
+      <div
+        id={activeItem ? panelIds[activeItem.value] : undefined}
+        role="tabpanel"
+        aria-labelledby={activeItem ? tabIds[activeItem.value] : undefined}
+      >
+        {activeItem?.panel}
+      </div>
     </div>
   );
 }
@@ -577,9 +729,29 @@ export function Field({
   wide?: boolean;
   children: ReactNode;
 }) {
+  const generatedId = useId();
+  const controlId = htmlFor ?? generatedId;
+  const descriptionId = description ? `${controlId}-description` : undefined;
+  const hintId = hint ? `${controlId}-hint` : undefined;
+  const errorId = error ? `${controlId}-error` : undefined;
+  const describedBy = [descriptionId, hintId, errorId].filter(Boolean).join(' ') || undefined;
+  let content = children;
+
+  if (isValidElement(children)) {
+    const child = children as ReactElement<Record<string, unknown>>;
+    const childProps = child.props ?? {};
+    const mergedDescribedBy = [childProps['aria-describedby'], describedBy].filter(Boolean).join(' ') || undefined;
+
+    content = cloneElement(child, {
+      id: (childProps.id as string | undefined) ?? controlId,
+      'aria-describedby': mergedDescribedBy,
+      'aria-invalid': error ? true : childProps['aria-invalid']
+    });
+  }
+
   return (
     <label
-      htmlFor={htmlFor}
+      htmlFor={controlId}
       className={cx(
         'grid gap-2 text-label font-semibold uppercase tracking-[0.08em] text-ink-soft',
         wide && 'md:col-[1/-1]'
@@ -590,10 +762,22 @@ export function Field({
         {required ? <span className="text-[0.7rem] tracking-[0.12em] text-brand">Required</span> : null}
         {optional ? <span className="text-[0.7rem] tracking-[0.12em] text-ink-muted">Optional</span> : null}
       </span>
-      {description ? <span className="text-body normal-case tracking-normal text-ink-muted">{description}</span> : null}
-      {children}
-      {hint ? <span className="text-body normal-case tracking-normal text-ink-muted">{hint}</span> : null}
-      {error ? <span className="text-body normal-case tracking-normal text-danger">{error}</span> : null}
+      {description ? (
+        <span id={descriptionId} className="text-body normal-case tracking-normal text-ink-muted">
+          {description}
+        </span>
+      ) : null}
+      {content}
+      {hint ? (
+        <span id={hintId} className="text-body normal-case tracking-normal text-ink-muted">
+          {hint}
+        </span>
+      ) : null}
+      {error ? (
+        <span id={errorId} className="text-body normal-case tracking-normal text-danger" role="alert">
+          {error}
+        </span>
+      ) : null}
     </label>
   );
 }
@@ -611,19 +795,45 @@ export function CheckboxField({
   error?: string;
   children: ReactNode;
 }) {
+  const generatedId = useId();
+  const controlId = htmlFor ?? generatedId;
+  const descriptionId = description ? `${controlId}-description` : undefined;
+  const errorId = error ? `${controlId}-error` : undefined;
+  let content = children;
+
+  if (isValidElement(children)) {
+    const child = children as ReactElement<Record<string, unknown>>;
+    const childProps = child.props ?? {};
+    const mergedDescribedBy = [childProps['aria-describedby'], descriptionId, errorId].filter(Boolean).join(' ') || undefined;
+
+    content = cloneElement(child, {
+      id: (childProps.id as string | undefined) ?? controlId,
+      'aria-describedby': mergedDescribedBy,
+      'aria-invalid': error ? true : childProps['aria-invalid']
+    });
+  }
+
   return (
     <label
-      htmlFor={htmlFor}
+      htmlFor={controlId}
       className={cx(
         'flex items-start gap-3 rounded-card border border-line/60 bg-surface-alt/60 px-4 py-3 text-label font-semibold uppercase tracking-[0.08em] text-ink-soft',
         error && 'border-danger/30 bg-danger-soft/40'
       )}
     >
-      {children}
+      {content}
       <span className="grid gap-1.5">
         <span>{label}</span>
-        {description ? <span className="text-body normal-case tracking-normal text-ink-muted">{description}</span> : null}
-        {error ? <span className="text-body normal-case tracking-normal text-danger">{error}</span> : null}
+        {description ? (
+          <span id={descriptionId} className="text-body normal-case tracking-normal text-ink-muted">
+            {description}
+          </span>
+        ) : null}
+        {error ? (
+          <span id={errorId} className="text-body normal-case tracking-normal text-danger" role="alert">
+            {error}
+          </span>
+        ) : null}
       </span>
     </label>
   );
@@ -746,12 +956,18 @@ export function TableRow({ children }: { children: ReactNode }) {
 
 export function TableHeaderCell({
   className,
+  scope = 'col',
   children
 }: {
   className?: string;
+  scope?: ComponentPropsWithoutRef<'th'>['scope'];
   children: ReactNode;
 }) {
-  return <th className={className}>{children}</th>;
+  return (
+    <th className={className} scope={scope}>
+      {children}
+    </th>
+  );
 }
 
 export function SortableTableHeaderCell({
@@ -768,7 +984,10 @@ export function SortableTableHeaderCell({
   onSort: () => void;
 }) {
   return (
-    <TableHeaderCell className={className}>
+    <TableHeaderCell
+      className={className}
+      aria-sort={sorted ? (direction === 'asc' ? 'ascending' : 'descending') : 'none'}
+    >
       <button
         type="button"
         onClick={onSort}
@@ -776,7 +995,7 @@ export function SortableTableHeaderCell({
           'inline-flex items-center gap-2 rounded-pill px-2 py-1 text-left transition hover:bg-canvas-tint/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30',
           sorted && 'bg-canvas-tint text-ink'
         )}
-        aria-sort={sorted ? (direction === 'asc' ? 'ascending' : 'descending') : 'none'}
+        aria-label={`Sort by ${typeof children === 'string' ? children : 'column'} ${sorted && direction === 'asc' ? 'descending' : 'ascending'}`}
       >
         <span>{children}</span>
         <span className={cx('text-[0.7rem] text-ink-muted', sorted && 'text-brand')}>

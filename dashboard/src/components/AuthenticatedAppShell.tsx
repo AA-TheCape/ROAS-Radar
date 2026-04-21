@@ -127,9 +127,12 @@ export function AppShellPageHeader({
         {actions ? <div className="mt-card flex flex-wrap gap-3">{actions}</div> : null}
       </article>
 
-      <aside className="rounded-shell border border-line/80 bg-surface/90 p-panel shadow-panel backdrop-blur">
+      <div
+        className="rounded-shell border border-line/80 bg-surface/90 p-panel shadow-panel backdrop-blur"
+        aria-label="Current workspace status"
+      >
         {statusPanel}
-      </aside>
+      </div>
     </section>
   );
 }
@@ -155,6 +158,12 @@ export default function AuthenticatedAppShell({
 
   return (
     <div className="relative min-h-screen bg-canvas text-ink">
+      <a
+        href="#app-shell-main"
+        className="absolute left-4 top-4 z-50 -translate-y-24 rounded-pill bg-ink px-4 py-2 text-body font-semibold text-white transition focus:translate-y-0 focus:outline-none focus:ring-4 focus:ring-brand/35"
+      >
+        Skip to main content
+      </a>
       <div className="absolute inset-x-0 top-0 -z-10 h-[34rem] bg-[radial-gradient(circle_at_top_left,rgba(203,99,50,0.18),transparent_28%),radial-gradient(circle_at_top_right,rgba(31,122,116,0.18),transparent_24%),linear-gradient(180deg,#f7f9f6_0%,#f4f7f4_55%,#edf5f2_100%)]" />
 
       <header className="sticky top-0 z-40 border-b border-line/70 bg-canvas/90 backdrop-blur">
@@ -176,7 +185,7 @@ export default function AuthenticatedAppShell({
             </div>
           </div>
 
-          <div className="hidden items-center gap-2 lg:flex">
+          <nav className="hidden items-center gap-2 lg:flex" aria-label="Primary">
             {navItems.map((item) => {
               const active = item.key === activeNavKey;
 
@@ -195,7 +204,7 @@ export default function AuthenticatedAppShell({
                 </button>
               );
             })}
-          </div>
+          </nav>
 
           <div className="hidden max-w-[28rem] text-right text-body text-ink-muted sm:block">{topbarMeta}</div>
         </div>
@@ -221,7 +230,7 @@ export default function AuthenticatedAppShell({
       ) : null}
 
       <div className="mx-auto flex w-full max-w-[92rem] gap-section px-gutter py-gutter sm:px-section sm:py-section lg:px-section-lg lg:py-section-lg">
-        <aside className="sticky top-24 hidden h-fit w-[17.5rem] shrink-0 lg:block">
+        <aside className="sticky top-24 hidden h-fit w-[17.5rem] shrink-0 lg:block" aria-label="Section navigation">
           <div className="rounded-shell border border-line/80 bg-surface/92 p-panel shadow-panel backdrop-blur">
             <p className="text-caption font-semibold uppercase tracking-[0.14em] text-teal">Workspace</p>
             <h2 className="mt-3 font-display text-title text-ink">Authenticated shell</h2>
@@ -234,7 +243,7 @@ export default function AuthenticatedAppShell({
           </div>
         </aside>
 
-        <main className="min-w-0 flex-1">
+        <main id="app-shell-main" className="min-w-0 flex-1" tabIndex={-1}>
           <div className="grid gap-section">
             <AppShellBreadcrumbs items={breadcrumbs} />
             <AppShellPageHeader

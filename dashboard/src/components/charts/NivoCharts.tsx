@@ -1,4 +1,4 @@
-import React, { useEffect, useState, type ReactNode } from 'react';
+import React, { useEffect, useId, useState, type ReactNode } from 'react';
 
 import { ResponsiveBar, type BarDatum, type BarSvgProps } from '@nivo/bar';
 import { type Margin } from '@nivo/core';
@@ -15,6 +15,9 @@ type ChartFrameProps = {
   emptyLabel?: string;
   height?: number;
   className?: string;
+  label: string;
+  description?: string;
+  summary?: ReactNode;
   children: ReactNode;
 };
 
@@ -31,6 +34,9 @@ type SharedChartProps = {
   emptyLabel?: string;
   height?: number;
   className?: string;
+  label: string;
+  description?: string;
+  summary?: ReactNode;
 };
 
 type SharedLineChartProps = SharedChartProps & {
@@ -224,8 +230,14 @@ function ChartFrame({
   emptyLabel = 'No chart data returned yet.',
   height = 320,
   className,
+  label,
+  description,
+  summary,
   children
 }: ChartFrameProps) {
+  const titleId = useId();
+  const descriptionId = description || summary ? `${titleId}-description` : undefined;
+
   if (loading) {
     return <Skeleton compact className="min-h-[220px]" />;
   }
@@ -239,9 +251,29 @@ function ChartFrame({
   }
 
   return (
-    <div className={cx('w-full', className)} style={{ height }}>
-      {children}
-    </div>
+    <figure
+      className={cx(
+        'w-full rounded-card focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-brand/20 focus-visible:ring-offset-2 focus-visible:ring-offset-surface',
+        className
+      )}
+      role="group"
+      aria-labelledby={titleId}
+      aria-describedby={descriptionId}
+      tabIndex={0}
+    >
+      <figcaption className="sr-only">
+        <span id={titleId}>{label}</span>
+        {description || summary ? (
+          <span id={descriptionId}>
+            {[description, typeof summary === 'string' ? summary : null].filter(Boolean).join(' ')}
+          </span>
+        ) : null}
+      </figcaption>
+      <div aria-hidden="true" style={{ height }}>
+        {children}
+      </div>
+      {summary && typeof summary !== 'string' ? <div className="sr-only">{summary}</div> : null}
+    </figure>
   );
 }
 
@@ -253,6 +285,9 @@ export function NivoLineChart({
   emptyLabel,
   height = 320,
   className,
+  label,
+  description,
+  summary,
   axisBottomLegend,
   axisLeftLegend,
   yFormat,
@@ -271,6 +306,9 @@ export function NivoLineChart({
       emptyLabel={emptyLabel}
       height={effectiveHeight}
       className={className}
+      label={label}
+      description={description}
+      summary={summary}
     >
       <ResponsiveLine
         data={data}
@@ -342,6 +380,9 @@ export function NivoAreaChart({
       emptyLabel={props.emptyLabel}
       height={effectiveHeight}
       className={props.className}
+      label={props.label}
+      description={props.description}
+      summary={props.summary}
     >
       <ResponsiveLine
         data={props.data}
@@ -418,6 +459,9 @@ export function NivoBarChart<Datum extends BarDatum>({
   emptyLabel,
   height = 320,
   className,
+  label,
+  description,
+  summary,
   axisBottomLegend,
   axisLeftLegend,
   layout = 'vertical',
@@ -437,6 +481,9 @@ export function NivoBarChart<Datum extends BarDatum>({
       emptyLabel={emptyLabel}
       height={effectiveHeight}
       className={className}
+      label={label}
+      description={description}
+      summary={summary}
     >
       <ResponsiveBar
         data={data}
@@ -512,6 +559,9 @@ export function NivoPieChart({
   emptyLabel,
   height = 320,
   className,
+  label,
+  description,
+  summary,
   valueFormat,
   legends = bottomLegend,
   margin
@@ -528,6 +578,9 @@ export function NivoPieChart({
       emptyLabel={emptyLabel}
       height={effectiveHeight}
       className={className}
+      label={label}
+      description={description}
+      summary={summary}
     >
       <ResponsivePie
         data={data}
