@@ -67,6 +67,13 @@ All authenticated surfaces now render through Tailwind-first components in `dash
 - Dashboard widgets collapse from multi-column layouts to single-column stacks through Tailwind breakpoint utilities in `ReportingDashboard`.
 - Order details cards and settings/admin cards use `md`, `xl`, and `2xl` grid breakpoints instead of legacy CSS media queries.
 
+## Typography And Spacing Verification
+
+- Authenticated page eyebrows, badges, table headers, and metric labels now use the shared `text-caption` hierarchy through `ui-eyebrow` or shared badge/table primitives.
+- Form labels use `text-label`, while helper copy, detail values, table cells, and supporting widget text use `text-body`.
+- KPI cards in dashboard, settings, and order details now use the shared `text-metric` scale through `MetricValue` and `MetricCopy`.
+- Shared `ui-panel-header`, `ui-form`, `ui-field-grid`, `ui-detail-list`, and table primitives now enforce consistent vertical rhythm instead of page-specific ad hoc spacing.
+
 ## Legacy CSS Retirement
 
 - Removed the dead post-Tailwind selector block from `dashboard/src/styles.css`.

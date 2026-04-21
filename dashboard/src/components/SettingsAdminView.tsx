@@ -23,11 +23,14 @@ import {
   CheckboxField,
   ConnectionState,
   DetailList,
+  Eyebrow,
   Field,
   FieldGrid,
   Form,
   HelpText,
   Input,
+  MetricCopy,
+  MetricValue,
   Panel,
   PrimaryCell,
   SectionState,
@@ -128,13 +131,11 @@ function SettingsMetric({
   detail: string;
 }) {
   return (
-    <Card padding="compact" className="border-line/70">
+    <Card padding="compact" className="ui-metric-card">
       <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-teal via-brand/65 to-brand/90" />
-      <p className="text-caption uppercase tracking-[0.16em] text-ink-muted">{label}</p>
-      <p className="mt-4 font-display text-[clamp(1.8rem,3.6vw,2.6rem)] leading-none tracking-[-0.05em] text-ink">
-        {value}
-      </p>
-      <p className="mt-3 text-body text-ink-soft">{detail}</p>
+      <Eyebrow>{label}</Eyebrow>
+      <MetricValue>{value}</MetricValue>
+      <MetricCopy>{detail}</MetricCopy>
     </Card>
   );
 }
@@ -167,7 +168,7 @@ function IntegrationCard({
       <div className="grid gap-6 p-panel">
         <CardHeader className="items-start gap-4">
           <div className="max-w-2xl">
-            <p className="text-caption uppercase tracking-[0.16em] text-ink-muted">{eyebrow}</p>
+            <Eyebrow>{eyebrow}</Eyebrow>
             <CardTitle className="mt-3">{title}</CardTitle>
             <CardDescription className="mt-3">{description}</CardDescription>
           </div>
@@ -387,7 +388,7 @@ export default function SettingsAdminView({
                   </FieldGrid>
 
                   <Card padding="compact" className="border-line/60 bg-canvas-tint/80 shadow-none">
-                    <p className="text-caption uppercase tracking-[0.14em] text-ink-muted">Recovery tools</p>
+                    <Eyebrow>Recovery tools</Eyebrow>
                     <p className="mt-2 text-body text-ink-soft">
                       Backfill imports historical orders. Attribution recovery rescans unattributed web orders in the same date window.
                     </p>
@@ -694,7 +695,7 @@ export default function SettingsAdminView({
           <SectionState loading={usersSection.loading} error={usersSection.error} empty={false} emptyLabel="">
             <div className="grid gap-6 xl:grid-cols-[minmax(0,0.78fr)_minmax(0,1.22fr)]">
               <div className="rounded-panel border border-line/60 bg-surface-alt/65 p-panel">
-                <p className="text-caption uppercase tracking-[0.16em] text-ink-muted">Provision user</p>
+                <Eyebrow>Provision user</Eyebrow>
                 <h3 className="mt-3 font-display text-title text-ink">Create app access</h3>
                 <p className="mt-3 text-body text-ink-soft">
                   New users can sign into both reporting and admin surfaces immediately after creation.

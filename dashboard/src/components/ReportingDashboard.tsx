@@ -22,8 +22,11 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
+  Eyebrow,
   Field,
   Input,
+  MetricCopy,
+  MetricValue,
   Panel,
   PrimaryCell,
   SectionState,
@@ -93,13 +96,11 @@ function buildSeriesPath(points: TimeseriesPoint[]): string {
 
 function SummaryCard({ label, value, detail }: SummaryCardData) {
   return (
-    <Card padding="compact" className="border-line/70">
+    <Card padding="compact" className="ui-metric-card">
       <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-brand via-brand/70 to-teal/70" />
-      <p className="text-caption uppercase tracking-[0.16em] text-ink-muted">{label}</p>
-      <p className="mt-4 font-display text-[clamp(2rem,4vw,2.9rem)] leading-none tracking-[-0.05em] text-ink">
-        {value}
-      </p>
-      <p className="mt-3 text-body text-ink-soft">{detail}</p>
+      <Eyebrow>{label}</Eyebrow>
+      <MetricValue>{value}</MetricValue>
+      <MetricCopy>{detail}</MetricCopy>
     </Card>
   );
 }
@@ -121,7 +122,7 @@ function TimeseriesChart({
       <Card tone="accent" padding="compact" className="shadow-inset-soft">
         <CardHeader className="items-center">
           <div>
-            <p className="text-caption uppercase tracking-[0.14em] text-ink-muted">Trend window</p>
+            <Eyebrow>Trend window</Eyebrow>
             <p className="mt-2 font-display text-title text-ink">{formatCurrency(maxRevenue)} max revenue</p>
           </div>
           <Badge tone="teal" className="px-3 py-2">
@@ -179,7 +180,7 @@ function TimeseriesChart({
           <Card key={point.date} padding="compact" className="border-line/60 bg-surface-alt/70">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <p className="font-semibold text-ink">
+                <p className="text-body font-semibold text-ink">
                   {groupBy === 'day' ? formatDateLabel(point.date, reportingTimezone) : point.date}
                 </p>
                 <p className="mt-1 text-body text-ink-muted">
@@ -269,7 +270,7 @@ export default function ReportingDashboard({
           </div>
 
           <Card padding="compact" className="border-line/60 bg-surface-alt/60">
-            <p className="text-caption uppercase tracking-[0.16em] text-ink-muted">Quick ranges</p>
+            <Eyebrow>Quick ranges</Eyebrow>
             <ButtonRow className="mt-4 gap-2">
               {quickRanges.map((preset) => (
                 <Button
@@ -285,7 +286,7 @@ export default function ReportingDashboard({
             </ButtonRow>
             <div className="mt-4 flex items-center justify-between gap-3 rounded-card border border-line/50 bg-white/70 px-4 py-3">
               <div>
-                <p className="text-[0.82rem] font-semibold uppercase tracking-[0.08em] text-ink-muted">Current scope</p>
+                <p className="text-label uppercase text-ink-muted">Current scope</p>
                 <p className="mt-1 text-body text-ink-soft">
                   {(filters.source ?? '').trim() || (filters.campaign ?? '').trim()
                     ? `Filtered by ${[(filters.source ?? '').trim(), (filters.campaign ?? '').trim()].filter(Boolean).join(' / ')}`
@@ -395,7 +396,7 @@ export default function ReportingDashboard({
                   <Card key={`${row.source}-${row.campaign}`} padding="compact" className="border-line/60 bg-surface-alt/55">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <p className="truncate font-semibold text-ink">{row.campaign}</p>
+                        <p className="truncate text-body font-semibold text-ink">{row.campaign}</p>
                         <p className="mt-1 text-body text-ink-muted">{`${row.source} / ${row.medium}`}</p>
                       </div>
                       <div className="shrink-0 text-right">

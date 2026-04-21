@@ -88,8 +88,10 @@ export default {
         hero: ['clamp(3rem, 7vw, 5.5rem)', { lineHeight: '0.92', letterSpacing: '-0.05em', fontWeight: '700' }],
         display: ['clamp(2rem, 4vw, 3rem)', { lineHeight: '1', letterSpacing: '-0.04em', fontWeight: '700' }],
         title: ['1.375rem', { lineHeight: '1.1', letterSpacing: '-0.03em', fontWeight: '700' }],
+        metric: ['clamp(1.9rem, 4vw, 2.8rem)', { lineHeight: '0.96', letterSpacing: '-0.05em', fontWeight: '700' }],
         lead: ['1.0625rem', { lineHeight: '1.7', letterSpacing: '-0.01em', fontWeight: '400' }],
         body: ['0.9375rem', { lineHeight: '1.65', letterSpacing: '-0.01em', fontWeight: '400' }],
+        label: ['0.8125rem', { lineHeight: '1.35rem', letterSpacing: '0.08em', fontWeight: '600' }],
         caption: ['0.75rem', { lineHeight: '1.25rem', letterSpacing: '0.14em', fontWeight: '600' }]
       },
       keyframes: {

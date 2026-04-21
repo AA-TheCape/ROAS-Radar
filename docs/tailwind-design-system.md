@@ -47,9 +47,19 @@ This token set establishes the light-only visual direction for authenticated das
 | `text-hero` | `clamp(3rem, 7vw, 5.5rem)` | App hero |
 | `text-display` | `clamp(2rem, 4vw, 3rem)` | Section headers |
 | `text-title` | `1.375rem` | Card and panel titles |
+| `text-metric` | `clamp(1.9rem, 4vw, 2.8rem)` | KPI values and numeric callouts |
 | `text-lead` | `1.0625rem` | Section intro copy |
 | `text-body` | `0.9375rem` | Default application text |
+| `text-label` | `0.8125rem` uppercase | Field labels and local utility headings |
 | `text-caption` | `0.75rem` uppercase | Eyebrows, badges, meta labels |
+
+### Rhythm Rules
+
+- Use `text-caption` for page eyebrows, metric labels, badges, and table headers.
+- Use `text-label` for form labels and lightweight in-card section labels.
+- Use `text-body` for default copy, row metadata, helper text, and definition-list values.
+- Use `text-metric` only for KPI values in summary cards and order/settings metrics.
+- Prefer semantic spacing tokens (`gutter`, `section`, `panel`, `card`, `section-lg`) or shared `ui-*` flow classes instead of one-off margin values when establishing vertical rhythm.
 
 ### Spacing
 

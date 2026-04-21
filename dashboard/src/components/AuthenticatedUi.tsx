@@ -60,7 +60,7 @@ export function AuthGate({
   return (
     <main className="grid min-h-screen place-items-center px-6 py-10">
       <section className="ui-surface w-full max-w-2xl p-7 sm:p-card">
-        <p className="text-caption uppercase tracking-[0.18em] text-teal">{eyebrow}</p>
+        <Eyebrow className="text-teal">{eyebrow}</Eyebrow>
         <h1 className="mt-3 font-display text-display text-ink">{title}</h1>
         <p className="mt-4 max-w-2xl text-lead text-ink-soft">{description}</p>
         {children ? <div className="mt-6 grid gap-4">{children}</div> : null}
@@ -118,6 +118,18 @@ export function CardDescription({
   return <p className={cx('mt-2 text-body text-ink-muted', className)}>{children}</p>;
 }
 
+export function Eyebrow({ className, children }: { className?: string; children: ReactNode }) {
+  return <p className={cx('ui-eyebrow', className)}>{children}</p>;
+}
+
+export function MetricValue({ className, children }: { className?: string; children: ReactNode }) {
+  return <p className={cx('ui-metric-value', className)}>{children}</p>;
+}
+
+export function MetricCopy({ className, children }: { className?: string; children: ReactNode }) {
+  return <p className={cx('ui-metric-copy', className)}>{children}</p>;
+}
+
 export function Panel({
   title,
   description,
@@ -133,7 +145,7 @@ export function Panel({
 }) {
   return (
     <Card className={cx(wide && 'col-[1/-1]', className)}>
-      <div className="mb-4">
+      <div className="ui-panel-header">
         <h2 className="font-display text-title text-ink">{title}</h2>
         {description ? <p className="mt-1 text-body text-ink-muted">{description}</p> : null}
       </div>
@@ -154,7 +166,7 @@ export function Badge({
   return (
     <span
       className={cx(
-        'inline-flex min-h-[30px] items-center justify-center rounded-pill border px-3 py-1 text-[0.82rem] font-semibold',
+        'inline-flex min-h-[30px] items-center justify-center rounded-pill border px-3 py-1 text-label uppercase',
         badgeToneClasses[tone],
         className
       )}
@@ -355,7 +367,7 @@ export function Tooltip({
       {children}
       <span
         role="tooltip"
-        className="pointer-events-none absolute bottom-[calc(100%+0.5rem)] left-1/2 z-10 hidden w-max max-w-[16rem] -translate-x-1/2 rounded-card border border-line/70 bg-ink px-3 py-2 text-[0.78rem] text-white shadow-panel group-hover:block group-focus-visible:block"
+        className="pointer-events-none absolute bottom-[calc(100%+0.5rem)] left-1/2 z-10 hidden w-max max-w-[16rem] -translate-x-1/2 rounded-card border border-line/70 bg-ink px-3 py-2 text-caption text-white shadow-panel group-hover:block group-focus-visible:block"
       >
         {content}
       </span>
@@ -528,7 +540,7 @@ export function Field({
     <label htmlFor={htmlFor} className={cx('ui-field', wide && 'ui-field-grid-wide')}>
       <span>{label}</span>
       {children}
-      {hint ? <span className="text-[0.78rem] font-normal text-ink-muted">{hint}</span> : null}
+      {hint ? <span className="text-body normal-case tracking-normal text-ink-muted">{hint}</span> : null}
     </label>
   );
 }

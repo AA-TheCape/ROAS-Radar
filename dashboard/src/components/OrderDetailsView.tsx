@@ -9,7 +9,10 @@ import {
   CardHeader,
   CardTitle,
   DetailList,
+  Eyebrow,
   EmptyState,
+  MetricCopy,
+  MetricValue,
   PrimaryCell,
   SectionState,
   StatusPill,
@@ -61,13 +64,11 @@ function formatJsonValue(value: unknown): string {
 
 function MetricCard({ label, value, detail }: { label: string; value: string; detail: string }) {
   return (
-    <Card padding="compact" className="border-line/70">
+    <Card padding="compact" className="ui-metric-card">
       <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-brand via-brand/75 to-teal/70" />
-      <p className="text-caption uppercase tracking-[0.16em] text-ink-muted">{label}</p>
-      <p className="mt-4 font-display text-[clamp(1.85rem,3vw,2.6rem)] leading-none tracking-[-0.05em] text-ink">
-        {value}
-      </p>
-      <p className="mt-3 text-body text-ink-soft">{detail}</p>
+      <Eyebrow>{label}</Eyebrow>
+      <MetricValue>{value}</MetricValue>
+      <MetricCopy>{detail}</MetricCopy>
     </Card>
   );
 }
@@ -360,7 +361,7 @@ export default function OrderDetailsView({
                   <div key={`${item.shopifyLineItemId}-raw`} className="grid gap-3">
                     <div className="flex flex-wrap items-center justify-between gap-3 rounded-card border border-line/60 bg-surface-alt/60 px-4 py-3">
                       <div>
-                        <p className="font-semibold text-ink">{item.title ?? `Line item ${index + 1}`}</p>
+                        <p className="text-body font-semibold text-ink">{item.title ?? `Line item ${index + 1}`}</p>
                         <p className="text-body text-ink-muted">
                           {formatOptionalValue(item.variantTitle)} · Qty {formatNumber(item.quantity)}
                         </p>

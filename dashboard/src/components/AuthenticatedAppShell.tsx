@@ -120,7 +120,7 @@ export function AppShellPageHeader({
   return (
     <section className="grid gap-panel lg:grid-cols-[minmax(0,1.5fr)_minmax(18rem,22rem)]">
       <article className="rounded-shell border border-line/80 bg-surface/90 p-card shadow-lift backdrop-blur">
-        <p className="text-caption uppercase tracking-[0.18em] text-teal">{eyebrow}</p>
+        <p className="ui-eyebrow text-teal">{eyebrow}</p>
         <h1 className="mt-4 font-display text-display text-ink sm:text-hero">ROAS Radar</h1>
         <h2 className="mt-4 max-w-[16ch] font-display text-title text-ink-soft sm:text-display">{title}</h2>
         <p className="mt-5 max-w-3xl text-lead text-ink-soft">{description}</p>
@@ -171,7 +171,7 @@ export default function AuthenticatedAppShell({
               <span className="text-lg font-semibold">{mobileNavOpen ? '×' : '≡'}</span>
             </button>
             <div>
-              <p className="text-caption uppercase tracking-[0.18em] text-teal">Authenticated UI</p>
+              <p className="ui-eyebrow text-teal">Authenticated UI</p>
               <p className="font-display text-title text-ink">ROAS Radar</p>
             </div>
           </div>
@@ -209,7 +209,7 @@ export default function AuthenticatedAppShell({
             onClick={(event) => event.stopPropagation()}
           >
             <div className="mb-6 rounded-shell border border-line/80 bg-surface p-panel shadow-panel">
-              <p className="text-caption uppercase tracking-[0.18em] text-teal">Navigation</p>
+              <p className="ui-eyebrow text-teal">Navigation</p>
               <p className="mt-3 font-display text-title text-ink">Authenticated routes</p>
               <p className="mt-2 text-body text-ink-soft">
                 Switch between reporting, settings, and drill-in surfaces without relying on the old page wrapper.
@@ -223,7 +223,7 @@ export default function AuthenticatedAppShell({
       <div className="mx-auto flex w-full max-w-[92rem] gap-section px-gutter py-gutter sm:px-section sm:py-section lg:px-section-lg lg:py-section-lg">
         <aside className="sticky top-24 hidden h-fit w-[17.5rem] shrink-0 lg:block">
           <div className="rounded-shell border border-line/80 bg-surface/92 p-panel shadow-panel backdrop-blur">
-            <p className="text-caption uppercase tracking-[0.18em] text-teal">Workspace</p>
+            <p className="ui-eyebrow text-teal">Workspace</p>
             <h2 className="mt-3 font-display text-title text-ink">Authenticated shell</h2>
             <p className="mt-3 text-body text-ink-soft">
               Shared nav, breadcrumbs, and header chrome for all post-login surfaces.
