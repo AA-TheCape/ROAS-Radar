@@ -1268,7 +1268,7 @@ function App() {
       ) : null}
 
       {currentPage === 'order-details' ? (
-        <section className="dashboard-grid">
+        <section className="grid gap-section">
           <Panel
             title="Order details"
             description="Everything currently stored for this Shopify order, including line items, attribution credits, and raw payload."
