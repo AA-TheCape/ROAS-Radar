@@ -1,4 +1,4 @@
-import React, { useEffect, useId, useState, type ReactNode } from 'react';
+import React, { memo, useId, useMemo, useSyncExternalStore, type ReactNode } from 'react';
 
 import { ResponsiveBar, type BarDatum, type BarSvgProps } from '@nivo/bar';
 import { type Margin } from '@nivo/core';
@@ -182,27 +182,61 @@ function formatMetric(value: number, formatter?: (value: number) => string) {
   return formatter ? formatter(value) : value.toLocaleString('en-US');
 }
 
-function useChartViewport() {
-  const [width, setWidth] = useState<number | null>(null);
+type ViewportSnapshot = {
+  isCompact: boolean;
+  isTablet: boolean;
+};
 
-  useEffect(() => {
-    function handleResize() {
-      setWidth(window.innerWidth);
-    }
+const desktopViewportSnapshot: ViewportSnapshot = {
+  isCompact: false,
+  isTablet: false
+};
 
-    handleResize();
-    window.addEventListener('resize', handleResize);
+let viewportListeners = new Set<() => void>();
+let viewportListening = false;
 
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
+function readViewportSnapshot(): ViewportSnapshot {
+  if (typeof window === 'undefined') {
+    return desktopViewportSnapshot;
+  }
+
+  const width = window.innerWidth;
 
   return {
-    isCompact: width !== null && width < 640,
-    isTablet: width !== null && width >= 640 && width < 1024
+    isCompact: width < 640,
+    isTablet: width >= 640 && width < 1024
   };
 }
 
-function ChartTooltip({ title, rows }: { title: string; rows: ChartTooltipRow[] }) {
+function emitViewportChange() {
+  for (const listener of viewportListeners) {
+    listener();
+  }
+}
+
+function subscribeToViewport(listener: () => void) {
+  viewportListeners.add(listener);
+
+  if (!viewportListening && typeof window !== 'undefined') {
+    window.addEventListener('resize', emitViewportChange, { passive: true });
+    viewportListening = true;
+  }
+
+  return () => {
+    viewportListeners.delete(listener);
+
+    if (viewportListening && viewportListeners.size === 0 && typeof window !== 'undefined') {
+      window.removeEventListener('resize', emitViewportChange);
+      viewportListening = false;
+    }
+  };
+}
+
+function useChartViewport() {
+  return useSyncExternalStore(subscribeToViewport, readViewportSnapshot, () => desktopViewportSnapshot);
+}
+
+const ChartTooltip = memo(function ChartTooltip({ title, rows }: { title: string; rows: ChartTooltipRow[] }) {
   return (
     <div className="min-w-[11rem] rounded-card border border-line/80 bg-surface/95 px-4 py-3 shadow-panel backdrop-blur">
       <p className="text-label uppercase text-ink-muted">{title}</p>
@@ -221,9 +255,9 @@ function ChartTooltip({ title, rows }: { title: string; rows: ChartTooltipRow[] 
       </div>
     </div>
   );
-}
+});
 
-function ChartFrame({
+const ChartFrame = memo(function ChartFrame({
   loading = false,
   error = null,
   empty = false,
@@ -275,9 +309,9 @@ function ChartFrame({
       {summary && typeof summary !== 'string' ? <div className="sr-only">{summary}</div> : null}
     </figure>
   );
-}
+});
 
-export function NivoLineChart({
+export const NivoLineChart = memo(function NivoLineChart({
   data,
   loading,
   error,
@@ -297,6 +331,14 @@ export function NivoLineChart({
   const { isCompact, isTablet } = useChartViewport();
   const effectiveLegends = isCompact ? [] : legends;
   const effectiveHeight = isCompact ? Math.max(260, height - 36) : height;
+  const effectiveMargin = useMemo(
+    () => ({
+      ...baseLineMargin,
+      ...(isCompact ? { left: 52, right: 12, bottom: 44, top: 16 } : isTablet ? { left: 60, right: 18, bottom: 50 } : {}),
+      ...margin
+    }),
+    [isCompact, isTablet, margin]
+  );
 
   return (
     <ChartFrame
@@ -314,11 +356,7 @@ export function NivoLineChart({
         data={data}
         theme={sharedTheme}
         colors={chartPalette}
-        margin={{
-          ...baseLineMargin,
-          ...(isCompact ? { left: 52, right: 12, bottom: 44, top: 16 } : isTablet ? { left: 60, right: 18, bottom: 50 } : {}),
-          ...margin
-        }}
+        margin={effectiveMargin}
         curve="monotoneX"
         enablePoints
         pointSize={isCompact ? 6 : 9}
@@ -362,15 +400,23 @@ export function NivoLineChart({
       />
     </ChartFrame>
   );
-}
+});
 
-export function NivoAreaChart({
+export const NivoAreaChart = memo(function NivoAreaChart({
   legends = [],
   ...props
 }: Omit<SharedLineChartProps, 'enableArea'>) {
   const { isCompact, isTablet } = useChartViewport();
   const effectiveLegends = isCompact ? [] : legends;
   const effectiveHeight = isCompact ? Math.max(260, (props.height ?? 320) - 36) : props.height;
+  const effectiveMargin = useMemo(
+    () => ({
+      ...baseLineMargin,
+      ...(isCompact ? { left: 52, right: 12, bottom: 44, top: 16 } : isTablet ? { left: 60, right: 18, bottom: 50 } : {}),
+      ...props.margin
+    }),
+    [isCompact, isTablet, props.margin]
+  );
 
   return (
     <ChartFrame
@@ -388,11 +434,7 @@ export function NivoAreaChart({
         data={props.data}
         theme={sharedTheme}
         colors={chartPalette}
-        margin={{
-          ...baseLineMargin,
-          ...(isCompact ? { left: 52, right: 12, bottom: 44, top: 16 } : isTablet ? { left: 60, right: 18, bottom: 50 } : {}),
-          ...props.margin
-        }}
+        margin={effectiveMargin}
         curve="monotoneX"
         enablePoints
         pointSize={isCompact ? 6 : 9}
@@ -447,9 +489,9 @@ export function NivoAreaChart({
       />
     </ChartFrame>
   );
-}
+});
 
-export function NivoBarChart<Datum extends BarDatum>({
+export const NivoBarChart = memo(function NivoBarChart<Datum extends BarDatum>({
   data,
   keys,
   indexBy,
@@ -472,6 +514,22 @@ export function NivoBarChart<Datum extends BarDatum>({
   const { isCompact, isTablet } = useChartViewport();
   const effectiveLegends = isCompact ? [] : legends;
   const effectiveHeight = isCompact ? Math.max(260, height - 24) : height;
+  const effectiveMargin = useMemo(
+    () => ({
+      ...baseBarMargin,
+      ...(isCompact
+        ? layout === 'horizontal'
+          ? { left: 96, right: 12, bottom: 40, top: 16 }
+          : { left: 52, right: 12, bottom: 44, top: 16 }
+        : isTablet
+          ? layout === 'horizontal'
+            ? { left: 112, right: 18, bottom: 48 }
+            : { left: 60, right: 18, bottom: 52 }
+          : {}),
+      ...margin
+    }),
+    [isCompact, isTablet, layout, margin]
+  );
 
   return (
     <ChartFrame
@@ -491,19 +549,7 @@ export function NivoBarChart<Datum extends BarDatum>({
         indexBy={indexBy}
         theme={sharedTheme}
         colors={chartPalette}
-        margin={{
-          ...baseBarMargin,
-          ...(isCompact
-            ? layout === 'horizontal'
-              ? { left: 96, right: 12, bottom: 40, top: 16 }
-              : { left: 52, right: 12, bottom: 44, top: 16 }
-            : isTablet
-              ? layout === 'horizontal'
-                ? { left: 112, right: 18, bottom: 48 }
-                : { left: 60, right: 18, bottom: 52 }
-              : {}),
-          ...margin
-        }}
+        margin={effectiveMargin}
         padding={0.28}
         innerPadding={4}
         borderRadius={10}
@@ -549,9 +595,9 @@ export function NivoBarChart<Datum extends BarDatum>({
       />
     </ChartFrame>
   );
-}
+});
 
-export function NivoPieChart({
+export const NivoPieChart = memo(function NivoPieChart({
   data,
   loading,
   error,
@@ -569,6 +615,14 @@ export function NivoPieChart({
   const { isCompact, isTablet } = useChartViewport();
   const effectiveLegends = isCompact ? [] : legends;
   const effectiveHeight = isCompact ? Math.max(260, height - 20) : height;
+  const effectiveMargin = useMemo(
+    () => ({
+      ...basePieMargin,
+      ...(isCompact ? { left: 8, right: 8, bottom: 18, top: 12 } : isTablet ? { left: 16, right: 16, bottom: 42 } : {}),
+      ...margin
+    }),
+    [isCompact, isTablet, margin]
+  );
 
   return (
     <ChartFrame
@@ -586,11 +640,7 @@ export function NivoPieChart({
         data={data}
         theme={sharedTheme}
         colors={chartPalette}
-        margin={{
-          ...basePieMargin,
-          ...(isCompact ? { left: 8, right: 8, bottom: 18, top: 12 } : isTablet ? { left: 16, right: 16, bottom: 42 } : {}),
-          ...margin
-        }}
+        margin={effectiveMargin}
         sortByValue
         innerRadius={isCompact ? 0.58 : 0.62}
         padAngle={0.8}
@@ -618,6 +668,6 @@ export function NivoPieChart({
       />
     </ChartFrame>
   );
-}
+});
 
 export { chartPalette };

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { Suspense, lazy, memo, useMemo, useState } from 'react';
 
 import {
   formatCompactCurrency,
@@ -48,8 +48,22 @@ import {
   TableRow,
   TableWrap
 } from './AuthenticatedUi';
-import { NivoAreaChart, NivoBarChart, NivoPieChart } from './charts';
 import { matchesQuery, paginateRows, sortRows, type SortState } from '../lib/dataTable';
+
+const NivoAreaChart = lazy(async () => {
+  const module = await import('./charts');
+  return { default: module.NivoAreaChart };
+});
+
+const NivoBarChart = lazy(async () => {
+  const module = await import('./charts');
+  return { default: module.NivoBarChart };
+});
+
+const NivoPieChart = lazy(async () => {
+  const module = await import('./charts');
+  return { default: module.NivoPieChart };
+});
 
 type DashboardSection<T> = {
   data: T | null;
@@ -125,7 +139,11 @@ const SUMMARY_CARD_DECOR: Record<
   }
 };
 
-function SummaryCard({ label, value, detail }: SummaryCardData) {
+const chartSuspenseFallback = (
+  <div className="min-h-[280px] animate-pulse rounded-card border border-line/60 bg-surface-alt/70" aria-hidden="true" />
+);
+
+const SummaryCard = memo(function SummaryCard({ label, value, detail }: SummaryCardData) {
   const decor = SUMMARY_CARD_DECOR[label] ?? SUMMARY_CARD_DECOR.Visits;
 
   return (
@@ -146,7 +164,7 @@ function SummaryCard({ label, value, detail }: SummaryCardData) {
       </div>
     </Card>
   );
-}
+});
 
 function buildTrendSummary(points: TimeseriesPoint[], groupBy: TimeseriesGroupBy, reportingTimezone: string) {
   if (points.length === 0) {
@@ -183,7 +201,7 @@ function buildSourceMixSummary(
     .join(' ');
 }
 
-function DashboardOverview({
+const DashboardOverview = memo(function DashboardOverview({
   filters,
   groupBy,
   reportingTimezone,
@@ -201,16 +219,19 @@ function DashboardOverview({
   orderCount: number;
 }) {
   const totalRevenue = summary?.revenue ?? 0;
-  const peakPoint = points.reduce<TimeseriesPoint | null>(
-    (current, point) => (!current || point.revenue > current.revenue ? point : current),
-    null
+  const peakPoint = useMemo(
+    () => points.reduce<TimeseriesPoint | null>((current, point) => (!current || point.revenue > current.revenue ? point : current), null),
+    [points]
   );
   const averageRevenue = points.length > 0 ? totalRevenue / points.length : 0;
-  const leadingCampaign = campaigns.reduce<CampaignRow | null>(
-    (current, row) => (!current || row.revenue > current.revenue ? row : current),
-    null
+  const leadingCampaign = useMemo(
+    () => campaigns.reduce<CampaignRow | null>((current, row) => (!current || row.revenue > current.revenue ? row : current), null),
+    [campaigns]
   );
-  const rangeLabel = `${formatDateLabel(filters.startDate, reportingTimezone)} to ${formatDateLabel(filters.endDate, reportingTimezone)}`;
+  const rangeLabel = useMemo(
+    () => `${formatDateLabel(filters.startDate, reportingTimezone)} to ${formatDateLabel(filters.endDate, reportingTimezone)}`,
+    [filters.endDate, filters.startDate, reportingTimezone]
+  );
 
   return (
     <Panel
@@ -305,9 +326,9 @@ function DashboardOverview({
       </div>
     </Panel>
   );
-}
+});
 
-function DashboardControlPanel({
+const DashboardControlPanel = memo(function DashboardControlPanel({
   filters,
   onFiltersChange,
   groupBy,
@@ -326,10 +347,13 @@ function DashboardControlPanel({
   onApplyQuickRange: (range: Pick<ReportingFilters, 'startDate' | 'endDate'>) => void;
   onClearFilters: () => void;
 }) {
-  const scopeLabel =
-    (filters.source ?? '').trim() || (filters.campaign ?? '').trim()
-      ? `Filtered by ${[(filters.source ?? '').trim(), (filters.campaign ?? '').trim()].filter(Boolean).join(' / ')}`
-      : 'All attributed traffic';
+  const scopeLabel = useMemo(
+    () =>
+      (filters.source ?? '').trim() || (filters.campaign ?? '').trim()
+        ? `Filtered by ${[(filters.source ?? '').trim(), (filters.campaign ?? '').trim()].filter(Boolean).join(' / ')}`
+        : 'All attributed traffic',
+    [filters.campaign, filters.source]
+  );
 
   return (
     <Panel
@@ -426,9 +450,9 @@ function DashboardControlPanel({
       </div>
     </Panel>
   );
-}
+});
 
-function TimeseriesTrendPanel({
+const TimeseriesTrendPanel = memo(function TimeseriesTrendPanel({
   points,
   groupBy,
   reportingTimezone,
@@ -441,22 +465,31 @@ function TimeseriesTrendPanel({
   loading: boolean;
   error: string | null;
 }) {
-  const sortedPoints = [...points].sort((left, right) => left.revenue - right.revenue).slice(-4).reverse();
-  const totalVisits = points.reduce((sum, point) => sum + point.visits, 0);
-  const totalOrders = points.reduce((sum, point) => sum + point.orders, 0);
-  const averageBucketRevenue = points.length > 0 ? points.reduce((sum, point) => sum + point.revenue, 0) / points.length : 0;
-  const chartData = [
-    {
-      id: 'Revenue',
-      data: points.map((point) => ({
-        x: groupBy === 'day' ? formatDateLabel(point.date, reportingTimezone) : point.date,
-        y: point.revenue,
-        orders: point.orders,
-        visits: point.visits,
-        bucketLabel: groupBy === 'day' ? formatDateLabel(point.date, reportingTimezone) : point.date
-      }))
-    }
-  ];
+  const sortedPoints = useMemo(() => [...points].sort((left, right) => left.revenue - right.revenue).slice(-4).reverse(), [points]);
+  const totalVisits = useMemo(() => points.reduce((sum, point) => sum + point.visits, 0), [points]);
+  const totalOrders = useMemo(() => points.reduce((sum, point) => sum + point.orders, 0), [points]);
+  const averageBucketRevenue = useMemo(
+    () => (points.length > 0 ? points.reduce((sum, point) => sum + point.revenue, 0) / points.length : 0),
+    [points]
+  );
+  const chartData = useMemo(
+    () => [
+      {
+        id: 'Revenue',
+        data: points.map((point) => {
+          const bucketLabel = groupBy === 'day' ? formatDateLabel(point.date, reportingTimezone) : point.date;
+          return {
+            x: bucketLabel,
+            y: point.revenue,
+            orders: point.orders,
+            visits: point.visits,
+            bucketLabel
+          };
+        })
+      }
+    ],
+    [groupBy, points, reportingTimezone]
+  );
 
   return (
     <Panel
@@ -477,21 +510,23 @@ function TimeseriesTrendPanel({
             <Badge tone="teal">{formatNumber(points.length)} buckets</Badge>
           </CardHeader>
 
-          <NivoAreaChart
-            data={chartData}
-            height={320}
-            loading={loading}
-            error={error}
-            empty={points.length === 0}
-            emptyLabel="No timeseries data returned for this filter range."
-            label="Revenue trend chart"
-            description={`Revenue trend grouped by ${GROUP_BY_OPTIONS.find((option) => option.value === groupBy)?.label.toLowerCase() ?? groupBy}.`}
-            summary={buildTrendSummary(points, groupBy, reportingTimezone)}
-            axisBottomLegend="Reporting bucket"
-            axisLeftLegend="Revenue"
-            yFormat={(value) => formatCompactCurrency(value)}
-            margin={{ bottom: 64, left: 88 }}
-          />
+          <Suspense fallback={chartSuspenseFallback}>
+            <NivoAreaChart
+              data={chartData}
+              height={320}
+              loading={loading}
+              error={error}
+              empty={points.length === 0}
+              emptyLabel="No timeseries data returned for this filter range."
+              label="Revenue trend chart"
+              description={`Revenue trend grouped by ${GROUP_BY_OPTIONS.find((option) => option.value === groupBy)?.label.toLowerCase() ?? groupBy}.`}
+              summary={buildTrendSummary(points, groupBy, reportingTimezone)}
+              axisBottomLegend="Reporting bucket"
+              axisLeftLegend="Revenue"
+              yFormat={(value) => formatCompactCurrency(value)}
+              margin={{ bottom: 64, left: 88 }}
+            />
+          </Suspense>
         </Card>
 
         <div className="grid gap-4">
@@ -544,9 +579,9 @@ function TimeseriesTrendPanel({
       </div>
     </Panel>
   );
-}
+});
 
-export default function ReportingDashboard({
+const ReportingDashboard = memo(function ReportingDashboard({
   filters,
   onFiltersChange,
   groupBy,
@@ -577,34 +612,43 @@ export default function ReportingDashboard({
     direction: 'desc'
   });
   const [orderPage, setOrderPage] = useState(1);
-  const totalCampaignRevenue = campaigns.reduce((sum, row) => sum + row.revenue, 0);
+  const totalCampaignRevenue = useMemo(() => campaigns.reduce((sum, row) => sum + row.revenue, 0), [campaigns]);
 
-  const campaignMixData = campaigns.map((row) => ({
-    campaign: row.campaign,
-    revenueShare: Number(((totalCampaignRevenue > 0 ? row.revenue / totalCampaignRevenue : 0) * 100).toFixed(2)),
-    revenue: row.revenue,
-    sourceMedium: `${row.source} / ${row.medium}`
-  }));
+  const campaignMixData = useMemo(
+    () =>
+      campaigns.map((row) => ({
+        campaign: row.campaign,
+        revenueShare: Number(((totalCampaignRevenue > 0 ? row.revenue / totalCampaignRevenue : 0) * 100).toFixed(2)),
+        revenue: row.revenue,
+        sourceMedium: `${row.source} / ${row.medium}`
+      })),
+    [campaigns, totalCampaignRevenue]
+  );
 
-  const sourceMixMap = campaigns.reduce<Record<string, { revenue: number; orders: number }>>((accumulator, row) => {
-    const key = row.source || 'Unknown';
-    const current = accumulator[key] ?? { revenue: 0, orders: 0 };
-    current.revenue += row.revenue;
-    current.orders += row.orders;
-    accumulator[key] = current;
-    return accumulator;
-  }, {});
+  const sourceMixData = useMemo(() => {
+    const sourceMixMap = campaigns.reduce<Record<string, { revenue: number; orders: number }>>((accumulator, row) => {
+      const key = row.source || 'Unknown';
+      const current = accumulator[key] ?? { revenue: 0, orders: 0 };
+      current.revenue += row.revenue;
+      current.orders += row.orders;
+      accumulator[key] = current;
+      return accumulator;
+    }, {});
 
-  const sourceMixData = Object.entries(sourceMixMap)
-    .map(([source, values]) => ({
-      id: source,
-      label: source,
-      value: values.revenue,
-      revenueLabel: `${formatCurrency(values.revenue)} from ${formatNumber(values.orders)} orders`
-    }))
-    .sort((left, right) => right.value - left.value);
+    return Object.entries(sourceMixMap)
+      .map(([source, values]) => ({
+        id: source,
+        label: source,
+        value: values.revenue,
+        revenueLabel: `${formatCurrency(values.revenue)} from ${formatNumber(values.orders)} orders`
+      }))
+      .sort((left, right) => right.value - left.value);
+  }, [campaigns]);
 
-  const campaignHighlights = [...campaigns].sort((left, right) => right.revenue - left.revenue).slice(0, 3);
+  const campaignHighlights = useMemo(
+    () => [...campaigns].sort((left, right) => right.revenue - left.revenue).slice(0, 3),
+    [campaigns]
+  );
   const filteredCampaigns = useMemo(
     () =>
       campaigns.filter((row) =>
@@ -889,42 +933,46 @@ export default function ReportingDashboard({
             title="Campaign mix"
             description="Revenue share by campaign keeps the largest demand drivers easy to compare."
           >
-            <NivoBarChart
-              data={campaignMixData}
-              keys={['revenueShare']}
-              indexBy="campaign"
-              layout="horizontal"
-              height={Math.max(campaignMixData.length * 52, 280)}
-              loading={campaignsSection.loading}
-              error={campaignsSection.error}
-              empty={!campaignMixData.length}
-              emptyLabel="No campaign mix available yet."
-              label="Campaign revenue share chart"
-              description="Horizontal bar chart showing the revenue share captured by each campaign."
-              summary={buildCampaignMixSummary(campaignMixData)}
-              axisBottomLegend="Revenue share"
-              valueFormat={(value) => `${value.toFixed(1)}%`}
-              margin={{ left: 104, bottom: 52 }}
-            />
+            <Suspense fallback={chartSuspenseFallback}>
+              <NivoBarChart
+                data={campaignMixData}
+                keys={['revenueShare']}
+                indexBy="campaign"
+                layout="horizontal"
+                height={Math.max(campaignMixData.length * 52, 280)}
+                loading={campaignsSection.loading}
+                error={campaignsSection.error}
+                empty={!campaignMixData.length}
+                emptyLabel="No campaign mix available yet."
+                label="Campaign revenue share chart"
+                description="Horizontal bar chart showing the revenue share captured by each campaign."
+                summary={buildCampaignMixSummary(campaignMixData)}
+                axisBottomLegend="Revenue share"
+                valueFormat={(value) => `${value.toFixed(1)}%`}
+                margin={{ left: 104, bottom: 52 }}
+              />
+            </Suspense>
           </Panel>
 
           <Panel
             title="Source contribution"
             description="Aggregated campaign rows rolled up by source to expose where attributed revenue is concentrating."
           >
-            <NivoPieChart
-              data={sourceMixData}
-              height={300}
-              loading={campaignsSection.loading}
-              error={campaignsSection.error}
-              empty={!sourceMixData.length}
-              emptyLabel="No source contribution available yet."
-              label="Source contribution chart"
-              description="Pie chart showing attributed revenue distribution by traffic source."
-              summary={buildSourceMixSummary(sourceMixData)}
-              valueFormat={(value) => formatCompactCurrency(value)}
-              margin={{ bottom: 64 }}
-            />
+            <Suspense fallback={chartSuspenseFallback}>
+              <NivoPieChart
+                data={sourceMixData}
+                height={300}
+                loading={campaignsSection.loading}
+                error={campaignsSection.error}
+                empty={!sourceMixData.length}
+                emptyLabel="No source contribution available yet."
+                label="Source contribution chart"
+                description="Pie chart showing attributed revenue distribution by traffic source."
+                summary={buildSourceMixSummary(sourceMixData)}
+                valueFormat={(value) => formatCompactCurrency(value)}
+                margin={{ bottom: 64 }}
+              />
+            </Suspense>
           </Panel>
         </div>
       </div>
@@ -1070,4 +1118,6 @@ export default function ReportingDashboard({
       </Panel>
     </section>
   );
-}
+});
+
+export default ReportingDashboard;

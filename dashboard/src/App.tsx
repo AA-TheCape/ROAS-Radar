@@ -1,4 +1,14 @@
-import { startTransition, useDeferredValue, useEffect, useMemo, useState, type FormEvent } from 'react';
+import {
+  Suspense,
+  lazy,
+  startTransition,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useState,
+  type FormEvent
+} from 'react';
 
 import {
   backfillShopifyOrders,
@@ -57,9 +67,6 @@ import AuthenticatedAppShell, {
   type AppShellBreadcrumb,
   type AppShellNavItem
 } from './components/AuthenticatedAppShell';
-import OrderDetailsView from './components/OrderDetailsView';
-import ReportingDashboard from './components/ReportingDashboard';
-import SettingsAdminView from './components/SettingsAdminView';
 import {
   AuthGate,
   Banner,
@@ -73,6 +80,10 @@ import {
   SectionState,
   Select
 } from './components/AuthenticatedUi';
+
+const ReportingDashboard = lazy(() => import('./components/ReportingDashboard'));
+const OrderDetailsView = lazy(() => import('./components/OrderDetailsView'));
+const SettingsAdminView = lazy(() => import('./components/SettingsAdminView'));
 
 type AsyncSection<T> = {
   data: T | null;
@@ -363,6 +374,17 @@ function useDashboardData(
 function formatOptionalDateTime(value: string | null | undefined, reportingTimezone: string): string {
   return value ? formatDateTimeLabel(value, reportingTimezone) : 'Not available';
 }
+
+function AuthenticatedViewFallback({ title, description }: { title: string; description: string }) {
+  return (
+    <Panel title={title} description={description} wide>
+      <SectionState loading empty={false} error={null} emptyLabel="">
+        <div />
+      </SectionState>
+    </Panel>
+  );
+}
+
 function App() {
   const [authState, setAuthState] = useState<AuthState>({
     checking: true,
@@ -565,7 +587,7 @@ function App() {
       });
   }, []);
 
-  async function openOrderDetails(shopifyOrderId: string) {
+  const openOrderDetails = useCallback(async (shopifyOrderId: string) => {
     setCurrentPage('order-details');
     setSelectedOrderId(shopifyOrderId);
     setOrderDetailsSection(createLoadingSection());
@@ -578,9 +600,9 @@ function App() {
         createErroredSection(error instanceof Error ? error.message : 'Failed to load order details')
       );
     }
-  }
+  }, []);
 
-  function closeOrderDetails() {
+  const closeOrderDetails = useCallback(() => {
     setCurrentPage('dashboard');
     setSelectedOrderId(null);
     setOrderDetailsSection({
@@ -588,7 +610,7 @@ function App() {
       loading: false,
       error: null
     });
-  }
+  }, []);
 
   async function loadUsers() {
     if (!authState.user?.isAdmin) {
@@ -1192,6 +1214,50 @@ function App() {
       </Button>
     </>
   );
+  const handleAppNavigation = useCallback(
+    (key: string) => {
+      if (key === 'order-details') {
+        return;
+      }
+
+      if (key === 'dashboard') {
+        closeOrderDetails();
+        return;
+      }
+
+      setSelectedOrderId(null);
+      setOrderDetailsSection({
+        data: null,
+        loading: false,
+        error: null
+      });
+      setCurrentPage(key as AppPage);
+    },
+    [closeOrderDetails]
+  );
+  const handleDashboardFiltersChange = useCallback((next: ReportingFilters) => {
+    setFilters(next);
+  }, []);
+  const handleDashboardGroupByChange = useCallback((value: TimeseriesGroupBy) => {
+    setGroupBy(value);
+  }, []);
+  const handleApplyQuickRange = useCallback((range: Pick<ReportingFilters, 'startDate' | 'endDate'>) => {
+    startTransition(() => {
+      setFilters((current) => ({
+        ...current,
+        ...range
+      }));
+    });
+  }, []);
+  const handleClearDashboardFilters = useCallback(() => {
+    startTransition(() => {
+      setFilters((current) => ({
+        ...current,
+        source: '',
+        campaign: ''
+      }));
+    });
+  }, []);
 
   if (authState.checking) {
     return (
@@ -1241,24 +1307,7 @@ function App() {
     <AuthenticatedAppShell
       navItems={shellNavItems}
       activeNavKey={activeNavKey}
-      onNavigate={(key) => {
-        if (key === 'order-details') {
-          return;
-        }
-
-        if (key === 'dashboard') {
-          closeOrderDetails();
-          return;
-        }
-
-        setSelectedOrderId(null);
-        setOrderDetailsSection({
-          data: null,
-          loading: false,
-          error: null
-        });
-        setCurrentPage(key as AppPage);
-      }}
+      onNavigate={handleAppNavigation}
       breadcrumbs={breadcrumbs}
       eyebrow={pageEyebrow}
       title={pageTitle}
@@ -1273,37 +1322,31 @@ function App() {
       headerActions={shellHeaderActions}
     >
       {currentPage === 'dashboard' ? (
-        <ReportingDashboard
-          filters={filters}
-          onFiltersChange={setFilters}
-          groupBy={groupBy}
-          onGroupByChange={setGroupBy}
-          reportingTimezone={reportingTimezone}
-          quickRanges={PRESETS}
-          onApplyQuickRange={(range) =>
-            startTransition(() => {
-              setFilters((current) => ({
-                ...current,
-                ...range
-              }));
-            })
+        <Suspense
+          fallback={
+            <AuthenticatedViewFallback
+              title="Dashboard"
+              description="Loading reporting controls, summary widgets, tables, and charts."
+            />
           }
-          onClearFilters={() =>
-            startTransition(() => {
-              setFilters((current) => ({
-                ...current,
-                source: '',
-                campaign: ''
-              }));
-            })
-          }
-          summaryCards={summaryCards}
-          summarySection={dashboard.summary}
-          campaignsSection={dashboard.campaigns}
-          timeseriesSection={dashboard.timeseries}
-          ordersSection={dashboard.orders}
-          onOpenOrderDetails={(shopifyOrderId) => void openOrderDetails(shopifyOrderId)}
-        />
+        >
+          <ReportingDashboard
+            filters={filters}
+            onFiltersChange={handleDashboardFiltersChange}
+            groupBy={groupBy}
+            onGroupByChange={handleDashboardGroupByChange}
+            reportingTimezone={reportingTimezone}
+            quickRanges={PRESETS}
+            onApplyQuickRange={handleApplyQuickRange}
+            onClearFilters={handleClearDashboardFilters}
+            summaryCards={summaryCards}
+            summarySection={dashboard.summary}
+            campaignsSection={dashboard.campaigns}
+            timeseriesSection={dashboard.timeseries}
+            ordersSection={dashboard.orders}
+            onOpenOrderDetails={(shopifyOrderId) => void openOrderDetails(shopifyOrderId)}
+          />
+        </Suspense>
       ) : null}
 
       {currentPage === 'order-details' ? (
@@ -1313,51 +1356,68 @@ function App() {
             description="Everything currently stored for this Shopify order, including line items, attribution credits, and raw payload."
             wide
           >
-            <OrderDetailsView
-              selectedOrderId={selectedOrderId}
-              reportingTimezone={reportingTimezone}
-              orderDetailsSection={orderDetailsSection}
-            />
+            <Suspense
+              fallback={
+                <SectionState loading empty={false} error={null} emptyLabel="">
+                  <div />
+                </SectionState>
+              }
+            >
+              <OrderDetailsView
+                selectedOrderId={selectedOrderId}
+                reportingTimezone={reportingTimezone}
+                orderDetailsSection={orderDetailsSection}
+              />
+            </Suspense>
           </Panel>
         </section>
       ) : null}
 
       {currentPage === 'settings' ? (
-        <SettingsAdminView
-          isAdmin={authState.user.isAdmin}
-          reportingTimezone={reportingTimezone}
-          defaultReportingTimezone={DEFAULT_REPORTING_TIMEZONE}
-          reportingTimezoneOptions={REPORTING_TIMEZONE_OPTIONS}
-          filters={filters}
-          appSettings={appSettings}
-          settingsForm={settingsForm}
-          setSettingsForm={(updater) => setSettingsForm((current) => updater(current))}
-          usersSection={usersSection}
-          newUserForm={newUserForm}
-          setNewUserForm={(updater) => setNewUserForm((current) => updater(current))}
-          shopifyConnection={shopifyConnection}
-          shopifyBackfillRange={shopifyBackfillRange}
-          setShopifyBackfillRange={(updater) => setShopifyBackfillRange((current) => updater(current))}
-          metaConnection={metaConnection}
-          metaConfigForm={metaConfigForm}
-          setMetaConfigForm={(updater) => setMetaConfigForm((current) => updater(current))}
-          googleConnection={googleConnection}
-          googleForm={googleForm}
-          setGoogleForm={(updater) => setGoogleForm((current) => updater(current))}
-          actionFeedback={actionFeedback}
-          onSettingsSave={handleSettingsSave}
-          onCreateUser={handleCreateUser}
-          onShopifyBackfill={handleShopifyBackfill}
-          onMetaConfigSave={handleMetaConfigSave}
-          onGoogleConnect={handleGoogleConnect}
-          onShopifyTest={handleShopifyTest}
-          onShopifyWebhookSync={handleShopifyWebhookSync}
-          onShopifyAttributionRecovery={handleShopifyAttributionRecovery}
-          onMetaConnect={handleMetaConnect}
-          onMetaSync={handleMetaSync}
-          onGoogleSync={handleGoogleSync}
-          onGoogleReconcile={handleGoogleReconcile}
-        />
+        <Suspense
+          fallback={
+            <AuthenticatedViewFallback
+              title="Settings"
+              description="Loading reporting settings, integration health, and access controls."
+            />
+          }
+        >
+          <SettingsAdminView
+            isAdmin={authState.user.isAdmin}
+            reportingTimezone={reportingTimezone}
+            defaultReportingTimezone={DEFAULT_REPORTING_TIMEZONE}
+            reportingTimezoneOptions={REPORTING_TIMEZONE_OPTIONS}
+            filters={filters}
+            appSettings={appSettings}
+            settingsForm={settingsForm}
+            setSettingsForm={(updater) => setSettingsForm((current) => updater(current))}
+            usersSection={usersSection}
+            newUserForm={newUserForm}
+            setNewUserForm={(updater) => setNewUserForm((current) => updater(current))}
+            shopifyConnection={shopifyConnection}
+            shopifyBackfillRange={shopifyBackfillRange}
+            setShopifyBackfillRange={(updater) => setShopifyBackfillRange((current) => updater(current))}
+            metaConnection={metaConnection}
+            metaConfigForm={metaConfigForm}
+            setMetaConfigForm={(updater) => setMetaConfigForm((current) => updater(current))}
+            googleConnection={googleConnection}
+            googleForm={googleForm}
+            setGoogleForm={(updater) => setGoogleForm((current) => updater(current))}
+            actionFeedback={actionFeedback}
+            onSettingsSave={handleSettingsSave}
+            onCreateUser={handleCreateUser}
+            onShopifyBackfill={handleShopifyBackfill}
+            onMetaConfigSave={handleMetaConfigSave}
+            onGoogleConnect={handleGoogleConnect}
+            onShopifyTest={handleShopifyTest}
+            onShopifyWebhookSync={handleShopifyWebhookSync}
+            onShopifyAttributionRecovery={handleShopifyAttributionRecovery}
+            onMetaConnect={handleMetaConnect}
+            onMetaSync={handleMetaSync}
+            onGoogleSync={handleGoogleSync}
+            onGoogleReconcile={handleGoogleReconcile}
+          />
+        </Suspense>
       ) : null}
     </AuthenticatedAppShell>
   );

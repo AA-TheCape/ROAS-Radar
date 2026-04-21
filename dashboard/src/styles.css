@@ -24,7 +24,7 @@
   }
 
   body {
-    @apply m-0 min-w-[320px] bg-shell-glow bg-fixed text-body text-ink;
+    @apply m-0 min-w-[320px] bg-shell-glow text-body text-ink;
     min-width: 320px;
   }
 
