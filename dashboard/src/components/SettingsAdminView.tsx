@@ -1,4 +1,4 @@
-import React, { type FormEvent } from 'react';
+import React, { useMemo, useState, type FormEvent } from 'react';
 
 import type {
   AppSettings,
@@ -21,6 +21,7 @@ import {
   CardHeader,
   CardTitle,
   CheckboxField,
+  DataTableToolbar,
   ConnectionState,
   DetailList,
   Eyebrow,
@@ -34,15 +35,22 @@ import {
   Panel,
   PrimaryCell,
   SectionState,
+  SortableTableHeaderCell,
   Table,
   TableBody,
   TableCell,
+  TableEmptyRow,
+  TableFilterBar,
   TableHead,
   TableHeaderCell,
+  TableMeta,
+  TablePagination,
+  TableSearchField,
   TableRow,
   StatusPill,
   TableWrap
 } from './AuthenticatedUi';
+import { matchesQuery, paginateRows, sortRows, type SortState } from '../lib/dataTable';
 
 type AsyncSection<T> = {
   data: T | null;
@@ -219,6 +227,12 @@ export default function SettingsAdminView({
   onGoogleSync,
   onGoogleReconcile
 }: SettingsAdminViewProps) {
+  const [userSearch, setUserSearch] = useState('');
+  const [userSort, setUserSort] = useState<SortState<'user' | 'role' | 'status' | 'lastLogin'>>({
+    key: 'user',
+    direction: 'asc'
+  });
+  const [userPage, setUserPage] = useState(1);
   const activeConnections = [
     shopifyConnection.data?.connected ? 1 : 0,
     metaConnection.data?.connection ? 1 : 0,
@@ -233,6 +247,29 @@ export default function SettingsAdminView({
   const timezoneUpdatedAt = appSettings.data?.updatedAt
     ? formatOptionalDateTime(appSettings.data.updatedAt, reportingTimezone)
     : 'Awaiting first save';
+  const users = usersSection.data ?? [];
+  const filteredUsers = useMemo(
+    () => users.filter((user) => matchesQuery([user.displayName, user.email, user.status, user.isAdmin ? 'Admin' : 'Viewer'], userSearch)),
+    [userSearch, users]
+  );
+  const sortedUsers = useMemo(
+    () =>
+      sortRows(filteredUsers, userSort, {
+        user: (user) => `${user.displayName} ${user.email}`,
+        role: (user) => (user.isAdmin ? 'Admin' : 'Viewer'),
+        status: (user) => user.status,
+        lastLogin: (user) => user.lastLoginAt ?? ''
+      }),
+    [filteredUsers, userSort]
+  );
+  const paginatedUsers = useMemo(() => paginateRows(sortedUsers, userPage, 6), [sortedUsers, userPage]);
+
+  function toggleUserSort(key: 'user' | 'role' | 'status' | 'lastLogin') {
+    setUserSort((current) => ({
+      key,
+      direction: current.key === key && current.direction === 'desc' ? 'asc' : 'desc'
+    }));
+  }
 
   return (
     <section className="grid gap-section">
@@ -764,18 +801,76 @@ export default function SettingsAdminView({
                   </Badge>
                 </div>
 
-                <TableWrap>
+                <DataTableToolbar
+                  title="Authenticated users"
+                  description="Shared controls keep user access review aligned with the reporting and order-detail tables."
+                  summary={
+                    <>
+                      <TableMeta currentCount={filteredUsers.length} totalCount={users.length} label="users" />
+                      <TablePagination
+                        page={paginatedUsers.currentPage}
+                        totalPages={paginatedUsers.totalPages}
+                        onPageChange={setUserPage}
+                      />
+                    </>
+                  }
+                >
+                  <TableFilterBar>
+                    <TableSearchField
+                      label="Search users"
+                      value={userSearch}
+                      onChange={(value) => {
+                        setUserSearch(value);
+                        setUserPage(1);
+                      }}
+                      placeholder="Name, email, role, status"
+                    />
+                  </TableFilterBar>
+                </DataTableToolbar>
+
+                <TableWrap className="max-h-[28rem]">
                   <Table caption="Authenticated users">
                     <TableHead>
                       <TableRow>
-                        <TableHeaderCell>User</TableHeaderCell>
-                        <TableHeaderCell>Role</TableHeaderCell>
-                        <TableHeaderCell>Status</TableHeaderCell>
-                        <TableHeaderCell>Last login</TableHeaderCell>
+                        <SortableTableHeaderCell
+                          sorted={userSort.key === 'user'}
+                          direction={userSort.direction}
+                          onSort={() => toggleUserSort('user')}
+                        >
+                          User
+                        </SortableTableHeaderCell>
+                        <SortableTableHeaderCell
+                          sorted={userSort.key === 'role'}
+                          direction={userSort.direction}
+                          onSort={() => toggleUserSort('role')}
+                        >
+                          Role
+                        </SortableTableHeaderCell>
+                        <SortableTableHeaderCell
+                          sorted={userSort.key === 'status'}
+                          direction={userSort.direction}
+                          onSort={() => toggleUserSort('status')}
+                        >
+                          Status
+                        </SortableTableHeaderCell>
+                        <SortableTableHeaderCell
+                          sorted={userSort.key === 'lastLogin'}
+                          direction={userSort.direction}
+                          onSort={() => toggleUserSort('lastLogin')}
+                        >
+                          Last login
+                        </SortableTableHeaderCell>
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {(usersSection.data ?? []).map((user) => (
+                      {paginatedUsers.rows.length === 0 ? (
+                        <TableEmptyRow
+                          colSpan={4}
+                          title="No users found"
+                          description="No authenticated users match the current search."
+                        />
+                      ) : null}
+                      {paginatedUsers.rows.map((user) => (
                         <TableRow key={user.id}>
                           <TableCell>
                             <PrimaryCell>

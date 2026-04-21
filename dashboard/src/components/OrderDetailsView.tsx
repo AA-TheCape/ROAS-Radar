@@ -1,4 +1,4 @@
-import React, { type ReactNode } from 'react';
+import React, { useMemo, useState, type ReactNode } from 'react';
 
 import type { OrderDetailsResponse } from '../lib/api';
 import { formatCurrency, formatDateTimeLabel, formatNumber } from '../lib/format';
@@ -8,6 +8,7 @@ import {
   CardDescription,
   CardHeader,
   CardTitle,
+  DataTableToolbar,
   DetailList,
   Eyebrow,
   EmptyState,
@@ -15,16 +16,23 @@ import {
   MetricValue,
   PrimaryCell,
   SectionState,
+  SortableTableHeaderCell,
   StatusPill,
   Table,
   TableBody,
   TableCell,
+  TableEmptyRow,
+  TableFilterBar,
   TableHead,
   TableHeaderCell,
+  TableMeta,
+  TablePagination,
+  TableSearchField,
   TableRow,
   TableWrap,
   Tooltip
 } from './AuthenticatedUi';
+import { matchesQuery, paginateRows, sortRows, type SortState } from '../lib/dataTable';
 
 type AsyncSection<T> = {
   data: T | null;
@@ -95,16 +103,6 @@ function DetailCard({
   );
 }
 
-function EmptyTableRow({ colSpan, label }: { colSpan: number; label: string }) {
-  return (
-    <TableRow>
-      <TableCell colSpan={colSpan} className="px-4 py-10 text-center text-body text-ink-muted">
-        {label}
-      </TableCell>
-    </TableRow>
-  );
-}
-
 function JsonViewer({ value }: { value: unknown }) {
   return (
     <pre className="max-h-[28rem] overflow-auto rounded-card border border-white/8 bg-[#132130] p-4 font-mono text-[0.78rem] leading-6 text-slate-200 shadow-inset-soft">
@@ -122,7 +120,91 @@ export default function OrderDetailsView({
   const order = data?.order;
   const lineItems = data?.lineItems ?? [];
   const attributionCredits = data?.attributionCredits ?? [];
+  const [lineItemSearch, setLineItemSearch] = useState('');
+  const [lineItemSort, setLineItemSort] = useState<
+    SortState<'title' | 'sku' | 'quantity' | 'price' | 'vendor'>
+  >({
+    key: 'title',
+    direction: 'asc'
+  });
+  const [lineItemPage, setLineItemPage] = useState(1);
+  const [creditSearch, setCreditSearch] = useState('');
+  const [creditSort, setCreditSort] = useState<
+    SortState<'model' | 'position' | 'source' | 'campaign' | 'time' | 'revenueCredit' | 'weight'>
+  >({
+    key: 'revenueCredit',
+    direction: 'desc'
+  });
+  const [creditPage, setCreditPage] = useState(1);
   const attributedRevenue = attributionCredits.reduce((sum, credit) => sum + credit.revenueCredit, 0);
+  const filteredLineItems = useMemo(
+    () =>
+      lineItems.filter((item) =>
+        matchesQuery(
+          [item.title, item.variantTitle, item.sku, item.vendor, item.fulfillmentStatus, item.quantity, item.price],
+          lineItemSearch
+        )
+      ),
+    [lineItemSearch, lineItems]
+  );
+  const sortedLineItems = useMemo(
+    () =>
+      sortRows(filteredLineItems, lineItemSort, {
+        title: (item) => item.title ?? '',
+        sku: (item) => item.sku ?? '',
+        quantity: (item) => item.quantity,
+        price: (item) => item.price,
+        vendor: (item) => item.vendor ?? ''
+      }),
+    [filteredLineItems, lineItemSort]
+  );
+  const paginatedLineItems = useMemo(() => paginateRows(sortedLineItems, lineItemPage, 6), [lineItemPage, sortedLineItems]);
+  const filteredCredits = useMemo(
+    () =>
+      attributionCredits.filter((credit) =>
+        matchesQuery(
+          [
+            credit.attributionModel,
+            credit.source,
+            credit.medium,
+            credit.campaign,
+            credit.attributionReason,
+            credit.clickIdType,
+            credit.clickIdValue
+          ],
+          creditSearch
+        )
+      ),
+    [attributionCredits, creditSearch]
+  );
+  const sortedCredits = useMemo(
+    () =>
+      sortRows(filteredCredits, creditSort, {
+        model: (credit) => credit.attributionModel,
+        position: (credit) => credit.touchpointPosition,
+        source: (credit) => `${credit.source ?? ''} ${credit.medium ?? ''}`,
+        campaign: (credit) => credit.campaign ?? '',
+        time: (credit) => credit.touchpointOccurredAt ?? '',
+        revenueCredit: (credit) => credit.revenueCredit,
+        weight: (credit) => credit.creditWeight
+      }),
+    [creditSort, filteredCredits]
+  );
+  const paginatedCredits = useMemo(() => paginateRows(sortedCredits, creditPage, 6), [creditPage, sortedCredits]);
+
+  function toggleLineItemSort(key: 'title' | 'sku' | 'quantity' | 'price' | 'vendor') {
+    setLineItemSort((current) => ({
+      key,
+      direction: current.key === key && current.direction === 'desc' ? 'asc' : 'desc'
+    }));
+  }
+
+  function toggleCreditSort(key: 'model' | 'position' | 'source' | 'campaign' | 'time' | 'revenueCredit' | 'weight') {
+    setCreditSort((current) => ({
+      key,
+      direction: current.key === key && current.direction === 'desc' ? 'asc' : 'desc'
+    }));
+  }
 
   return (
     <SectionState
@@ -249,22 +331,84 @@ export default function OrderDetailsView({
         </div>
 
         <DetailCard title="Line items" description="Commercial line-item detail from Shopify, including variant metadata and ingestion flags.">
-          <TableWrap>
+          <DataTableToolbar
+            title="Line item records"
+            description="Search and sort the Shopify line items without losing the existing order-detail content."
+            summary={
+              <>
+                <TableMeta currentCount={filteredLineItems.length} totalCount={lineItems.length} label="line items" />
+                <TablePagination
+                  page={paginatedLineItems.currentPage}
+                  totalPages={paginatedLineItems.totalPages}
+                  onPageChange={setLineItemPage}
+                />
+              </>
+            }
+          >
+            <TableFilterBar>
+              <TableSearchField
+                label="Search line items"
+                value={lineItemSearch}
+                onChange={(value) => {
+                  setLineItemSearch(value);
+                  setLineItemPage(1);
+                }}
+                placeholder="Title, SKU, vendor, variant"
+              />
+            </TableFilterBar>
+          </DataTableToolbar>
+          <TableWrap className="max-h-[30rem]">
             <Table caption="Order line items">
               <TableHead>
                 <TableRow>
-                  <TableHeaderCell>Title</TableHeaderCell>
-                  <TableHeaderCell>SKU</TableHeaderCell>
-                  <TableHeaderCell>Qty</TableHeaderCell>
-                  <TableHeaderCell>Price</TableHeaderCell>
+                  <SortableTableHeaderCell
+                    sorted={lineItemSort.key === 'title'}
+                    direction={lineItemSort.direction}
+                    onSort={() => toggleLineItemSort('title')}
+                  >
+                    Title
+                  </SortableTableHeaderCell>
+                  <SortableTableHeaderCell
+                    sorted={lineItemSort.key === 'sku'}
+                    direction={lineItemSort.direction}
+                    onSort={() => toggleLineItemSort('sku')}
+                  >
+                    SKU
+                  </SortableTableHeaderCell>
+                  <SortableTableHeaderCell
+                    sorted={lineItemSort.key === 'quantity'}
+                    direction={lineItemSort.direction}
+                    onSort={() => toggleLineItemSort('quantity')}
+                  >
+                    Qty
+                  </SortableTableHeaderCell>
+                  <SortableTableHeaderCell
+                    sorted={lineItemSort.key === 'price'}
+                    direction={lineItemSort.direction}
+                    onSort={() => toggleLineItemSort('price')}
+                  >
+                    Price
+                  </SortableTableHeaderCell>
                   <TableHeaderCell>Discount</TableHeaderCell>
-                  <TableHeaderCell>Vendor</TableHeaderCell>
+                  <SortableTableHeaderCell
+                    sorted={lineItemSort.key === 'vendor'}
+                    direction={lineItemSort.direction}
+                    onSort={() => toggleLineItemSort('vendor')}
+                  >
+                    Vendor
+                  </SortableTableHeaderCell>
                   <TableHeaderCell>Flags</TableHeaderCell>
                 </TableRow>
               </TableHead>
               <TableBody>
-                {lineItems.length === 0 ? <EmptyTableRow colSpan={7} label="No line items were recorded for this order." /> : null}
-                {lineItems.map((item) => (
+                {paginatedLineItems.rows.length === 0 ? (
+                  <TableEmptyRow
+                    colSpan={7}
+                    title="No line items found"
+                    description="No stored line items match the current search."
+                  />
+                ) : null}
+                {paginatedLineItems.rows.map((item) => (
                   <TableRow key={item.shopifyLineItemId}>
                     <TableCell>
                       <PrimaryCell>
@@ -293,25 +437,97 @@ export default function OrderDetailsView({
         </DetailCard>
 
         <DetailCard title="Attribution credits" description="Per-touchpoint revenue allocation stored for this order across attribution models.">
-          <TableWrap>
+          <DataTableToolbar
+            title="Attribution credit records"
+            description="The same shared list pattern is used here for touchpoint-level inspection."
+            summary={
+              <>
+                <TableMeta currentCount={filteredCredits.length} totalCount={attributionCredits.length} label="credits" />
+                <TablePagination
+                  page={paginatedCredits.currentPage}
+                  totalPages={paginatedCredits.totalPages}
+                  onPageChange={setCreditPage}
+                />
+              </>
+            }
+          >
+            <TableFilterBar>
+              <TableSearchField
+                label="Search attribution credits"
+                value={creditSearch}
+                onChange={(value) => {
+                  setCreditSearch(value);
+                  setCreditPage(1);
+                }}
+                placeholder="Model, source, campaign, reason"
+              />
+            </TableFilterBar>
+          </DataTableToolbar>
+          <TableWrap className="max-h-[32rem]">
             <Table caption="Attribution credits">
               <TableHead>
                 <TableRow>
-                  <TableHeaderCell>Model</TableHeaderCell>
-                  <TableHeaderCell>Position</TableHeaderCell>
-                  <TableHeaderCell>Source / medium</TableHeaderCell>
-                  <TableHeaderCell>Campaign</TableHeaderCell>
-                  <TableHeaderCell>Touchpoint time</TableHeaderCell>
-                  <TableHeaderCell>Revenue credit</TableHeaderCell>
-                  <TableHeaderCell>Weight</TableHeaderCell>
+                  <SortableTableHeaderCell
+                    sorted={creditSort.key === 'model'}
+                    direction={creditSort.direction}
+                    onSort={() => toggleCreditSort('model')}
+                  >
+                    Model
+                  </SortableTableHeaderCell>
+                  <SortableTableHeaderCell
+                    sorted={creditSort.key === 'position'}
+                    direction={creditSort.direction}
+                    onSort={() => toggleCreditSort('position')}
+                  >
+                    Position
+                  </SortableTableHeaderCell>
+                  <SortableTableHeaderCell
+                    sorted={creditSort.key === 'source'}
+                    direction={creditSort.direction}
+                    onSort={() => toggleCreditSort('source')}
+                  >
+                    Source / medium
+                  </SortableTableHeaderCell>
+                  <SortableTableHeaderCell
+                    sorted={creditSort.key === 'campaign'}
+                    direction={creditSort.direction}
+                    onSort={() => toggleCreditSort('campaign')}
+                  >
+                    Campaign
+                  </SortableTableHeaderCell>
+                  <SortableTableHeaderCell
+                    sorted={creditSort.key === 'time'}
+                    direction={creditSort.direction}
+                    onSort={() => toggleCreditSort('time')}
+                  >
+                    Touchpoint time
+                  </SortableTableHeaderCell>
+                  <SortableTableHeaderCell
+                    sorted={creditSort.key === 'revenueCredit'}
+                    direction={creditSort.direction}
+                    onSort={() => toggleCreditSort('revenueCredit')}
+                  >
+                    Revenue credit
+                  </SortableTableHeaderCell>
+                  <SortableTableHeaderCell
+                    sorted={creditSort.key === 'weight'}
+                    direction={creditSort.direction}
+                    onSort={() => toggleCreditSort('weight')}
+                  >
+                    Weight
+                  </SortableTableHeaderCell>
                   <TableHeaderCell>Reason</TableHeaderCell>
                 </TableRow>
               </TableHead>
               <TableBody>
-                {attributionCredits.length === 0 ? (
-                  <EmptyTableRow colSpan={8} label="No attribution credits are stored for this order yet." />
+                {paginatedCredits.rows.length === 0 ? (
+                  <TableEmptyRow
+                    colSpan={8}
+                    title="No attribution credits found"
+                    description="No stored credits match the current search."
+                  />
                 ) : null}
-                {attributionCredits.map((credit) => (
+                {paginatedCredits.rows.map((credit) => (
                   <TableRow key={`${credit.attributionModel}-${credit.touchpointPosition}-${credit.sessionId ?? 'none'}`}>
                     <TableCell>
                       <PrimaryCell>

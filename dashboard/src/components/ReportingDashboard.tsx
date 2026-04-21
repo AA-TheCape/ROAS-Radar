@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo, useState } from 'react';
 
 import {
   formatCompactCurrency,
@@ -21,6 +21,7 @@ import {
   Button,
   ButtonRow,
   Card,
+  DataTableToolbar,
   CardDescription,
   CardHeader,
   CardTitle,
@@ -32,16 +33,23 @@ import {
   Panel,
   PrimaryCell,
   SectionState,
+  SortableTableHeaderCell,
   Select,
   Table,
   TableBody,
   TableCell,
+  TableEmptyRow,
   TableHead,
   TableHeaderCell,
+  TableMeta,
+  TablePagination,
+  TableSearchField,
+  TableFilterBar,
   TableRow,
   TableWrap
 } from './AuthenticatedUi';
 import { NivoAreaChart, NivoBarChart, NivoPieChart } from './charts';
+import { matchesQuery, paginateRows, sortRows, type SortState } from '../lib/dataTable';
 
 type DashboardSection<T> = {
   data: T | null;
@@ -80,6 +88,12 @@ const GROUP_BY_OPTIONS: Array<{ value: TimeseriesGroupBy; label: string }> = [
   { value: 'source', label: 'By source' },
   { value: 'campaign', label: 'By campaign' }
 ];
+
+type CampaignSortKey = 'campaign' | 'source' | 'visits' | 'orders' | 'revenue' | 'conversionRate';
+type OrderSortKey = 'order' | 'processedAt' | 'source' | 'campaign' | 'totalPrice';
+
+const CAMPAIGN_PAGE_SIZE = 6;
+const ORDER_PAGE_SIZE = 8;
 
 const SUMMARY_CARD_DECOR: Record<
   string,
@@ -513,6 +527,18 @@ export default function ReportingDashboard({
   const campaigns = campaignsSection.data ?? [];
   const timeseriesPoints = timeseriesSection.data ?? [];
   const orders = ordersSection.data ?? [];
+  const [campaignSearch, setCampaignSearch] = useState('');
+  const [campaignSort, setCampaignSort] = useState<SortState<CampaignSortKey>>({
+    key: 'revenue',
+    direction: 'desc'
+  });
+  const [campaignPage, setCampaignPage] = useState(1);
+  const [orderSearch, setOrderSearch] = useState('');
+  const [orderSort, setOrderSort] = useState<SortState<OrderSortKey>>({
+    key: 'processedAt',
+    direction: 'desc'
+  });
+  const [orderPage, setOrderPage] = useState(1);
   const totalCampaignRevenue = campaigns.reduce((sum, row) => sum + row.revenue, 0);
 
   const campaignMixData = campaigns.map((row) => ({
@@ -541,6 +567,71 @@ export default function ReportingDashboard({
     .sort((left, right) => right.value - left.value);
 
   const campaignHighlights = [...campaigns].sort((left, right) => right.revenue - left.revenue).slice(0, 3);
+  const filteredCampaigns = useMemo(
+    () =>
+      campaigns.filter((row) =>
+        matchesQuery(
+          [row.campaign, row.source, row.medium, row.content, row.visits, row.orders, row.revenue],
+          campaignSearch
+        )
+      ),
+    [campaignSearch, campaigns]
+  );
+  const sortedCampaigns = useMemo(
+    () =>
+      sortRows(filteredCampaigns, campaignSort, {
+        campaign: (row) => row.campaign,
+        source: (row) => `${row.source} ${row.medium}`,
+        visits: (row) => row.visits,
+        orders: (row) => row.orders,
+        revenue: (row) => row.revenue,
+        conversionRate: (row) => row.conversionRate
+      }),
+    [campaignSort, filteredCampaigns]
+  );
+  const paginatedCampaigns = useMemo(
+    () => paginateRows(sortedCampaigns, campaignPage, CAMPAIGN_PAGE_SIZE),
+    [campaignPage, sortedCampaigns]
+  );
+  const filteredOrders = useMemo(
+    () =>
+      orders.filter((row) =>
+        matchesQuery(
+          [row.shopifyOrderId, row.source, row.medium, row.campaign, row.attributionReason, row.totalPrice],
+          orderSearch
+        )
+      ),
+    [orderSearch, orders]
+  );
+  const sortedOrders = useMemo(
+    () =>
+      sortRows(filteredOrders, orderSort, {
+        order: (row) => row.shopifyOrderId,
+        processedAt: (row) => row.processedAt ?? '',
+        source: (row) => `${row.source ?? ''} ${row.medium ?? ''}`,
+        campaign: (row) => row.campaign ?? '',
+        totalPrice: (row) => row.totalPrice
+      }),
+    [filteredOrders, orderSort]
+  );
+  const paginatedOrders = useMemo(
+    () => paginateRows(sortedOrders, orderPage, ORDER_PAGE_SIZE),
+    [orderPage, sortedOrders]
+  );
+
+  function toggleCampaignSort(key: CampaignSortKey) {
+    setCampaignSort((current) => ({
+      key,
+      direction: current.key === key && current.direction === 'desc' ? 'asc' : 'desc'
+    }));
+  }
+
+  function toggleOrderSort(key: OrderSortKey) {
+    setOrderSort((current) => ({
+      key,
+      direction: current.key === key && current.direction === 'desc' ? 'asc' : 'desc'
+    }));
+  }
 
   return (
     <section className="grid gap-section">
@@ -628,20 +719,112 @@ export default function ReportingDashboard({
                 ))}
               </div>
 
-              <TableWrap className="mt-6">
+              <DataTableToolbar
+                title="Campaign performance"
+                description="One shared table pattern now handles search, sticky headers, sort order, and paging for campaign rows."
+                summary={
+                  <>
+                    <TableMeta currentCount={filteredCampaigns.length} totalCount={campaigns.length} label="campaign rows" />
+                    <TablePagination
+                      page={paginatedCampaigns.currentPage}
+                      totalPages={paginatedCampaigns.totalPages}
+                      onPageChange={setCampaignPage}
+                    />
+                  </>
+                }
+              >
+                <TableFilterBar>
+                  <TableSearchField
+                    label="Search campaign rows"
+                    value={campaignSearch}
+                    onChange={(value) => {
+                      setCampaignSearch(value);
+                      setCampaignPage(1);
+                    }}
+                    placeholder="Campaign, source, medium, content"
+                  />
+                  <Field label="Sort by" htmlFor="campaign-table-sort">
+                    <Select
+                      id="campaign-table-sort"
+                      value={`${campaignSort.key}:${campaignSort.direction}`}
+                      onChange={(event) => {
+                        const [key, direction] = event.target.value.split(':') as [CampaignSortKey, 'asc' | 'desc'];
+                        setCampaignSort({ key, direction });
+                        setCampaignPage(1);
+                      }}
+                    >
+                      <option value="revenue:desc">Revenue ↓</option>
+                      <option value="revenue:asc">Revenue ↑</option>
+                      <option value="orders:desc">Orders ↓</option>
+                      <option value="orders:asc">Orders ↑</option>
+                      <option value="visits:desc">Visits ↓</option>
+                      <option value="visits:asc">Visits ↑</option>
+                      <option value="campaign:asc">Campaign A-Z</option>
+                      <option value="campaign:desc">Campaign Z-A</option>
+                      <option value="conversionRate:desc">CVR ↓</option>
+                      <option value="conversionRate:asc">CVR ↑</option>
+                    </Select>
+                  </Field>
+                </TableFilterBar>
+              </DataTableToolbar>
+
+              <TableWrap className="mt-6 max-h-[32rem]">
                 <Table caption="Campaign performance">
                   <TableHead>
                     <TableRow>
-                      <TableHeaderCell>Campaign</TableHeaderCell>
-                      <TableHeaderCell>Source</TableHeaderCell>
-                      <TableHeaderCell>Visits</TableHeaderCell>
-                      <TableHeaderCell>Orders</TableHeaderCell>
-                      <TableHeaderCell>Revenue</TableHeaderCell>
-                      <TableHeaderCell>CVR</TableHeaderCell>
+                      <SortableTableHeaderCell
+                        sorted={campaignSort.key === 'campaign'}
+                        direction={campaignSort.direction}
+                        onSort={() => toggleCampaignSort('campaign')}
+                      >
+                        Campaign
+                      </SortableTableHeaderCell>
+                      <SortableTableHeaderCell
+                        sorted={campaignSort.key === 'source'}
+                        direction={campaignSort.direction}
+                        onSort={() => toggleCampaignSort('source')}
+                      >
+                        Source
+                      </SortableTableHeaderCell>
+                      <SortableTableHeaderCell
+                        sorted={campaignSort.key === 'visits'}
+                        direction={campaignSort.direction}
+                        onSort={() => toggleCampaignSort('visits')}
+                      >
+                        Visits
+                      </SortableTableHeaderCell>
+                      <SortableTableHeaderCell
+                        sorted={campaignSort.key === 'orders'}
+                        direction={campaignSort.direction}
+                        onSort={() => toggleCampaignSort('orders')}
+                      >
+                        Orders
+                      </SortableTableHeaderCell>
+                      <SortableTableHeaderCell
+                        sorted={campaignSort.key === 'revenue'}
+                        direction={campaignSort.direction}
+                        onSort={() => toggleCampaignSort('revenue')}
+                      >
+                        Revenue
+                      </SortableTableHeaderCell>
+                      <SortableTableHeaderCell
+                        sorted={campaignSort.key === 'conversionRate'}
+                        direction={campaignSort.direction}
+                        onSort={() => toggleCampaignSort('conversionRate')}
+                      >
+                        CVR
+                      </SortableTableHeaderCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {campaigns.map((row) => (
+                    {paginatedCampaigns.rows.length === 0 ? (
+                      <TableEmptyRow
+                        colSpan={6}
+                        title="No campaign rows found"
+                        description="Try broadening the search or adjusting the dashboard filters."
+                      />
+                    ) : null}
+                    {paginatedCampaigns.rows.map((row) => (
                       <TableRow key={`${row.source}-${row.medium}-${row.campaign}-${row.content ?? 'none'}`}>
                         <TableCell>
                           <PrimaryCell>
@@ -713,45 +896,131 @@ export default function ReportingDashboard({
           empty={!orders.length}
           emptyLabel="No attributed orders were returned for this range."
         >
-          <TableWrap>
-            <Table caption="Attributed orders">
-              <TableHead>
-                <TableRow>
-                  <TableHeaderCell>Order</TableHeaderCell>
-                  <TableHeaderCell>Processed</TableHeaderCell>
-                  <TableHeaderCell>Source</TableHeaderCell>
-                  <TableHeaderCell>Campaign</TableHeaderCell>
-                  <TableHeaderCell>Total</TableHeaderCell>
-                  <TableHeaderCell>Reason</TableHeaderCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {orders.map((row) => (
-                  <TableRow key={row.shopifyOrderId}>
-                    <TableCell>
-                      <PrimaryCell>
-                        <button
-                          type="button"
-                          className="w-fit rounded-pill border border-line/80 bg-surface px-3 py-1.5 font-semibold text-brand transition hover:-translate-y-0.5 hover:border-brand/30 hover:bg-brand-soft"
-                          onClick={() => onOpenOrderDetails(row.shopifyOrderId)}
-                        >
-                          #{row.shopifyOrderId}
-                        </button>
-                        <span>{row.medium ?? 'No medium'}</span>
-                      </PrimaryCell>
-                    </TableCell>
-                    <TableCell>{formatDateTimeLabel(row.processedAt, reportingTimezone)}</TableCell>
-                    <TableCell>{row.source ?? 'Unattributed'}</TableCell>
-                    <TableCell>{row.campaign ?? 'No campaign'}</TableCell>
-                    <TableCell>{formatCurrency(row.totalPrice)}</TableCell>
-                    <TableCell>
-                      <Badge tone="teal">{row.attributionReason}</Badge>
-                    </TableCell>
+          <>
+            <DataTableToolbar
+              title="Attributed order list"
+              description="Shared list controls keep order lookup, sort, and pagination consistent with every other authenticated table."
+              summary={
+                <>
+                  <TableMeta currentCount={filteredOrders.length} totalCount={orders.length} label="orders" />
+                  <TablePagination
+                    page={paginatedOrders.currentPage}
+                    totalPages={paginatedOrders.totalPages}
+                    onPageChange={setOrderPage}
+                  />
+                </>
+              }
+            >
+              <TableFilterBar>
+                <TableSearchField
+                  label="Search orders"
+                  value={orderSearch}
+                  onChange={(value) => {
+                    setOrderSearch(value);
+                    setOrderPage(1);
+                  }}
+                  placeholder="Order ID, source, campaign, reason"
+                />
+                <Field label="Sort by" htmlFor="orders-table-sort">
+                  <Select
+                    id="orders-table-sort"
+                    value={`${orderSort.key}:${orderSort.direction}`}
+                    onChange={(event) => {
+                      const [key, direction] = event.target.value.split(':') as [OrderSortKey, 'asc' | 'desc'];
+                      setOrderSort({ key, direction });
+                      setOrderPage(1);
+                    }}
+                  >
+                    <option value="processedAt:desc">Processed ↓</option>
+                    <option value="processedAt:asc">Processed ↑</option>
+                    <option value="totalPrice:desc">Total ↓</option>
+                    <option value="totalPrice:asc">Total ↑</option>
+                    <option value="order:desc">Order ↓</option>
+                    <option value="order:asc">Order ↑</option>
+                    <option value="campaign:asc">Campaign A-Z</option>
+                    <option value="campaign:desc">Campaign Z-A</option>
+                  </Select>
+                </Field>
+              </TableFilterBar>
+            </DataTableToolbar>
+
+            <TableWrap className="max-h-[34rem]">
+              <Table caption="Attributed orders">
+                <TableHead>
+                  <TableRow>
+                    <SortableTableHeaderCell
+                      sorted={orderSort.key === 'order'}
+                      direction={orderSort.direction}
+                      onSort={() => toggleOrderSort('order')}
+                    >
+                      Order
+                    </SortableTableHeaderCell>
+                    <SortableTableHeaderCell
+                      sorted={orderSort.key === 'processedAt'}
+                      direction={orderSort.direction}
+                      onSort={() => toggleOrderSort('processedAt')}
+                    >
+                      Processed
+                    </SortableTableHeaderCell>
+                    <SortableTableHeaderCell
+                      sorted={orderSort.key === 'source'}
+                      direction={orderSort.direction}
+                      onSort={() => toggleOrderSort('source')}
+                    >
+                      Source
+                    </SortableTableHeaderCell>
+                    <SortableTableHeaderCell
+                      sorted={orderSort.key === 'campaign'}
+                      direction={orderSort.direction}
+                      onSort={() => toggleOrderSort('campaign')}
+                    >
+                      Campaign
+                    </SortableTableHeaderCell>
+                    <SortableTableHeaderCell
+                      sorted={orderSort.key === 'totalPrice'}
+                      direction={orderSort.direction}
+                      onSort={() => toggleOrderSort('totalPrice')}
+                    >
+                      Total
+                    </SortableTableHeaderCell>
+                    <TableHeaderCell>Reason</TableHeaderCell>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </TableWrap>
+                </TableHead>
+                <TableBody>
+                  {paginatedOrders.rows.length === 0 ? (
+                    <TableEmptyRow
+                      colSpan={6}
+                      title="No orders matched"
+                      description="Try another search term or widen the reporting window."
+                    />
+                  ) : null}
+                  {paginatedOrders.rows.map((row) => (
+                    <TableRow key={row.shopifyOrderId}>
+                      <TableCell>
+                        <PrimaryCell>
+                          <button
+                            type="button"
+                            className="w-fit rounded-pill border border-line/80 bg-surface px-3 py-1.5 font-semibold text-brand transition hover:-translate-y-0.5 hover:border-brand/30 hover:bg-brand-soft"
+                            onClick={() => onOpenOrderDetails(row.shopifyOrderId)}
+                          >
+                            #{row.shopifyOrderId}
+                          </button>
+                          <span>{row.medium ?? 'No medium'}</span>
+                        </PrimaryCell>
+                      </TableCell>
+                      <TableCell>{formatDateTimeLabel(row.processedAt, reportingTimezone)}</TableCell>
+                      <TableCell>{row.source ?? 'Unattributed'}</TableCell>
+                      <TableCell>{row.campaign ?? 'No campaign'}</TableCell>
+                      <TableCell>{formatCurrency(row.totalPrice)}</TableCell>
+                      <TableCell>
+                        <Badge tone="teal">{row.attributionReason}</Badge>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableWrap>
+          </>
         </SectionState>
       </Panel>
     </section>

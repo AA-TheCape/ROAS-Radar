@@ -10,6 +10,7 @@ type BadgeTone = 'default' | 'brand' | 'teal' | 'success' | 'warning' | 'danger'
 type CardTone = 'default' | 'accent' | 'teal';
 type CardPadding = 'panel' | 'card' | 'compact';
 type EmptyStateTone = 'default' | 'muted' | 'danger';
+export type SortDirection = 'asc' | 'desc';
 
 const badgeToneClasses: Record<BadgeTone, string> = {
   default: 'border-line/70 bg-surface-alt text-ink-soft',
@@ -632,7 +633,16 @@ export function DetailList({ className, children }: { className?: string; childr
 }
 
 export function TableWrap({ className, children }: { className?: string; children: ReactNode }) {
-  return <div className={cx('overflow-x-auto rounded-card border border-line/60 bg-surface/65', className)}>{children}</div>;
+  return (
+    <div
+      className={cx(
+        'overflow-auto rounded-card border border-line/60 bg-surface/65 supports-[backdrop-filter]:backdrop-blur [&_thead_th]:sticky [&_thead_th]:top-0 [&_thead_th]:z-[1] [&_thead_th]:bg-surface/95',
+        className
+      )}
+    >
+      {children}
+    </div>
+  );
 }
 
 export function Table({
@@ -679,6 +689,39 @@ export function TableHeaderCell({
   return <th className={className}>{children}</th>;
 }
 
+export function SortableTableHeaderCell({
+  className,
+  children,
+  sorted = false,
+  direction = 'asc',
+  onSort
+}: {
+  className?: string;
+  children: ReactNode;
+  sorted?: boolean;
+  direction?: SortDirection;
+  onSort: () => void;
+}) {
+  return (
+    <TableHeaderCell className={className}>
+      <button
+        type="button"
+        onClick={onSort}
+        className={cx(
+          'inline-flex items-center gap-2 rounded-pill px-2 py-1 text-left transition hover:bg-canvas-tint/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/30',
+          sorted && 'bg-canvas-tint text-ink'
+        )}
+        aria-sort={sorted ? (direction === 'asc' ? 'ascending' : 'descending') : 'none'}
+      >
+        <span>{children}</span>
+        <span className={cx('text-[0.7rem] text-ink-muted', sorted && 'text-brand')}>
+          {sorted ? (direction === 'asc' ? '↑' : '↓') : '↕'}
+        </span>
+      </button>
+    </TableHeaderCell>
+  );
+}
+
 export function TableCell({
   className,
   children,
@@ -692,6 +735,24 @@ export function TableCell({
     <td className={className} colSpan={colSpan}>
       {children}
     </td>
+  );
+}
+
+export function TableEmptyRow({
+  colSpan,
+  title,
+  description
+}: {
+  colSpan: number;
+  title: string;
+  description?: string;
+}) {
+  return (
+    <TableRow>
+      <TableCell colSpan={colSpan} className="px-4 py-10">
+        <EmptyState title={title} description={description} compact tone="muted" />
+      </TableCell>
+    </TableRow>
   );
 }
 
@@ -716,4 +777,102 @@ export function StatusPill({
   children: ReactNode;
 }) {
   return <Badge tone={tone}>{children}</Badge>;
+}
+
+export function DataTableToolbar({
+  title,
+  description,
+  summary,
+  children,
+  actions,
+  className
+}: {
+  title: string;
+  description?: string;
+  summary?: ReactNode;
+  children?: ReactNode;
+  actions?: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={cx('grid gap-4 rounded-card border border-line/60 bg-canvas-tint/70 p-4', className)}>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="max-w-2xl">
+          <p className="text-caption font-semibold uppercase tracking-[0.14em] text-ink-muted">{title}</p>
+          {description ? <p className="mt-2 text-body text-ink-soft">{description}</p> : null}
+        </div>
+        {actions ? <div className="flex flex-wrap gap-2">{actions}</div> : null}
+      </div>
+      {children ? <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">{children}</div> : null}
+      {summary ? <div className="flex flex-wrap items-center justify-between gap-3 text-body text-ink-muted">{summary}</div> : null}
+    </div>
+  );
+}
+
+export function TableFilterBar({ className, children }: { className?: string; children: ReactNode }) {
+  return <div className={cx('grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(10rem,12rem)]', className)}>{children}</div>;
+}
+
+export function TableSearchField({
+  label,
+  value,
+  onChange,
+  placeholder
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+}) {
+  const inputId = useId();
+
+  return (
+    <Field label={label} htmlFor={inputId}>
+      <Input id={inputId} type="search" value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
+    </Field>
+  );
+}
+
+export function TableMeta({
+  currentCount,
+  totalCount,
+  label
+}: {
+  currentCount: number;
+  totalCount: number;
+  label: string;
+}) {
+  return (
+    <span>
+      Showing <strong className="text-ink">{currentCount}</strong> of <strong className="text-ink">{totalCount}</strong> {label}
+    </span>
+  );
+}
+
+export function TablePagination({
+  page,
+  totalPages,
+  onPageChange
+}: {
+  page: number;
+  totalPages: number;
+  onPageChange: (page: number) => void;
+}) {
+  if (totalPages <= 1) {
+    return null;
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <Button type="button" tone="ghost" onClick={() => onPageChange(page - 1)} disabled={page <= 1}>
+        Previous
+      </Button>
+      <span className="min-w-[5.5rem] text-center text-body text-ink-muted">
+        Page {page} / {totalPages}
+      </span>
+      <Button type="button" tone="ghost" onClick={() => onPageChange(page + 1)} disabled={page >= totalPages}>
+        Next
+      </Button>
+    </div>
+  );
 }
