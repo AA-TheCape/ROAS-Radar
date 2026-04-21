@@ -1,4 +1,4 @@
-import { useId, useState, type ComponentPropsWithoutRef, type ReactNode } from 'react';
+import React, { useId, useState, type ComponentPropsWithoutRef, type ReactNode } from 'react';
 
 function cx(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(' ');
@@ -59,7 +59,7 @@ export function AuthGate({
 }) {
   return (
     <main className="grid min-h-screen place-items-center px-6 py-10">
-      <section className="ui-surface w-full max-w-2xl p-7 sm:p-card">
+      <section className="w-full max-w-2xl rounded-shell border border-line/80 bg-surface/90 p-7 shadow-panel backdrop-blur sm:p-card">
         <Eyebrow className="text-teal">{eyebrow}</Eyebrow>
         <h1 className="mt-3 font-display text-display text-ink">{title}</h1>
         <p className="mt-4 max-w-2xl text-lead text-ink-soft">{description}</p>
@@ -119,15 +119,15 @@ export function CardDescription({
 }
 
 export function Eyebrow({ className, children }: { className?: string; children: ReactNode }) {
-  return <p className={cx('ui-eyebrow', className)}>{children}</p>;
+  return <p className={cx('text-caption font-semibold uppercase tracking-[0.14em] text-ink-muted', className)}>{children}</p>;
 }
 
 export function MetricValue({ className, children }: { className?: string; children: ReactNode }) {
-  return <p className={cx('ui-metric-value', className)}>{children}</p>;
+  return <p className={cx('mt-4 font-display text-metric text-ink', className)}>{children}</p>;
 }
 
 export function MetricCopy({ className, children }: { className?: string; children: ReactNode }) {
-  return <p className={cx('ui-metric-copy', className)}>{children}</p>;
+  return <p className={cx('mt-3 text-body text-ink-soft', className)}>{children}</p>;
 }
 
 export function Panel({
@@ -145,7 +145,7 @@ export function Panel({
 }) {
   return (
     <Card className={cx(wide && 'col-[1/-1]', className)}>
-      <div className="ui-panel-header">
+      <div className="mb-5 grid gap-2">
         <h2 className="font-display text-title text-ink">{title}</h2>
         {description ? <p className="mt-1 text-body text-ink-muted">{description}</p> : null}
       </div>
@@ -483,9 +483,10 @@ export function Button({
   return (
     <button
       className={cx(
-        tone === 'primary' && 'ui-button-primary',
-        tone === 'secondary' && 'ui-button-secondary',
-        tone === 'ghost' && 'ui-button-ghost',
+        'inline-flex min-h-[42px] items-center justify-center rounded-pill px-4 py-2.5 text-body font-semibold transition duration-150 disabled:cursor-wait disabled:opacity-60',
+        tone === 'primary' && 'bg-brand text-white shadow-panel hover:-translate-y-0.5 hover:bg-brand-strong',
+        tone === 'secondary' && 'border border-teal/15 bg-teal/10 text-teal hover:-translate-y-0.5 hover:bg-teal/15',
+        tone === 'ghost' && 'border border-line/80 bg-surface-alt text-ink hover:-translate-y-0.5 hover:bg-surface',
         className
       )}
       {...props}
@@ -496,7 +497,7 @@ export function Button({
 }
 
 export function ButtonRow({ className, children }: { className?: string; children: ReactNode }) {
-  return <div className={cx('ui-button-row', className)}>{children}</div>;
+  return <div className={cx('flex flex-wrap gap-3', className)}>{children}</div>;
 }
 
 export function Form({
@@ -505,7 +506,7 @@ export function Form({
   ...props
 }: ComponentPropsWithoutRef<'form'>) {
   return (
-    <form className={cx('ui-form', className)} {...props}>
+    <form className={cx('grid gap-5', className)} {...props}>
       {children}
     </form>
   );
@@ -520,7 +521,7 @@ export function FieldGrid({
   className?: string;
   children: ReactNode;
 }) {
-  return <div className={cx(dense ? 'ui-field-grid-dense' : 'ui-field-grid', className)}>{children}</div>;
+  return <div className={cx(dense ? 'grid gap-4' : 'grid gap-4 md:grid-cols-2', className)}>{children}</div>;
 }
 
 export function Field({
@@ -537,7 +538,13 @@ export function Field({
   children: ReactNode;
 }) {
   return (
-    <label htmlFor={htmlFor} className={cx('ui-field', wide && 'ui-field-grid-wide')}>
+    <label
+      htmlFor={htmlFor}
+      className={cx(
+        'grid gap-2 text-label font-semibold uppercase tracking-[0.08em] text-ink-soft',
+        wide && 'md:col-[1/-1]'
+      )}
+    >
       <span>{label}</span>
       {children}
       {hint ? <span className="text-body normal-case tracking-normal text-ink-muted">{hint}</span> : null}
@@ -555,7 +562,10 @@ export function CheckboxField({
   children: ReactNode;
 }) {
   return (
-    <label htmlFor={htmlFor} className="ui-checkbox-field">
+    <label
+      htmlFor={htmlFor}
+      className="flex items-start gap-3 rounded-card border border-line/60 bg-surface-alt/60 px-4 py-3 text-label font-semibold uppercase tracking-[0.08em] text-ink-soft"
+    >
       {children}
       <span>{label}</span>
     </label>
@@ -563,15 +573,39 @@ export function CheckboxField({
 }
 
 export function Input(props: ComponentPropsWithoutRef<'input'>) {
-  return <input className={cx('ui-input', props.className)} {...props} />;
+  return (
+    <input
+      className={cx(
+        'min-h-[44px] w-full rounded-[14px] border border-line-strong/45 bg-white/95 px-4 py-3 text-body font-normal text-ink shadow-inset-soft transition placeholder:text-ink-muted/80',
+        props.className
+      )}
+      {...props}
+    />
+  );
 }
 
 export function Select(props: ComponentPropsWithoutRef<'select'>) {
-  return <select className={cx('ui-select', props.className)} {...props} />;
+  return (
+    <select
+      className={cx(
+        'min-h-[44px] w-full rounded-[14px] border border-line-strong/45 bg-white/95 px-4 py-3 text-body font-normal text-ink shadow-inset-soft transition placeholder:text-ink-muted/80',
+        props.className
+      )}
+      {...props}
+    />
+  );
 }
 
 export function Textarea(props: ComponentPropsWithoutRef<'textarea'>) {
-  return <textarea className={cx('ui-textarea', props.className)} {...props} />;
+  return (
+    <textarea
+      className={cx(
+        'min-h-[120px] w-full rounded-[14px] border border-line-strong/45 bg-white/95 px-4 py-3 text-body font-normal text-ink shadow-inset-soft transition placeholder:text-ink-muted/80',
+        props.className
+      )}
+      {...props}
+    />
+  );
 }
 
 export function HelpText({
@@ -582,18 +616,23 @@ export function HelpText({
   children: ReactNode;
 }) {
   return (
-    <div className={cx('ui-help', tone === 'error' && 'border-danger/20 bg-danger-soft/70 text-danger')}>
+    <div
+      className={cx(
+        'rounded-card border border-line/60 bg-surface-alt/70 px-4 py-3 text-body text-ink-muted',
+        tone === 'error' && 'border-danger/20 bg-danger-soft/70 text-danger'
+      )}
+    >
       {children}
     </div>
   );
 }
 
 export function DetailList({ className, children }: { className?: string; children: ReactNode }) {
-  return <dl className={cx('ui-detail-list', className)}>{children}</dl>;
+  return <dl className={cx('m-0 grid gap-4 md:grid-cols-2 [&>div]:rounded-card [&>div]:border [&>div]:border-line/50 [&>div]:bg-surface/80 [&>div]:p-4 [&_dd]:m-0 [&_dd]:text-body [&_dd]:font-semibold [&_dd]:text-ink [&_dt]:mb-2 [&_dt]:text-caption [&_dt]:font-semibold [&_dt]:uppercase [&_dt]:tracking-[0.14em] [&_dt]:text-ink-muted', className)}>{children}</dl>;
 }
 
 export function TableWrap({ className, children }: { className?: string; children: ReactNode }) {
-  return <div className={cx('ui-table-wrap', className)}>{children}</div>;
+  return <div className={cx('overflow-x-auto rounded-card border border-line/60 bg-surface/65', className)}>{children}</div>;
 }
 
 export function Table({
@@ -606,7 +645,12 @@ export function Table({
   children: ReactNode;
 }) {
   return (
-    <table className={cx('ui-table', className)}>
+    <table
+      className={cx(
+        'min-w-full border-collapse [&_td]:border-b [&_td]:border-line/50 [&_td]:px-4 [&_td]:py-4 [&_td]:text-left [&_td]:align-top [&_td]:text-body [&_th]:border-b [&_th]:border-line/50 [&_th]:px-4 [&_th]:py-4 [&_th]:text-left [&_th]:align-top [&_th]:text-caption [&_th]:font-semibold [&_th]:uppercase [&_th]:tracking-[0.14em] [&_th]:text-ink-muted [&_tbody_tr:last-child_td]:border-b-0',
+        className
+      )}
+    >
       {caption ? <caption className="sr-only">{caption}</caption> : null}
       {children}
     </table>
@@ -652,7 +696,16 @@ export function TableCell({
 }
 
 export function PrimaryCell({ className, children }: { className?: string; children: ReactNode }) {
-  return <div className={cx('ui-primary-cell', className)}>{children}</div>;
+  return (
+    <div
+      className={cx(
+        'grid gap-1.5 [&_strong]:block [&_strong]:text-body [&_strong]:font-semibold [&_strong]:text-ink [&_span]:text-body [&_span]:text-ink-muted',
+        className
+      )}
+    >
+      {children}
+    </div>
+  );
 }
 
 export function StatusPill({

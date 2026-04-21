@@ -1,4 +1,4 @@
-import type { FormEvent } from 'react';
+import React, { type FormEvent } from 'react';
 
 import type {
   AppSettings,
@@ -131,7 +131,7 @@ function SettingsMetric({
   detail: string;
 }) {
   return (
-    <Card padding="compact" className="ui-metric-card">
+    <Card padding="compact" className="border-line/70">
       <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-teal via-brand/65 to-brand/90" />
       <Eyebrow>{label}</Eyebrow>
       <MetricValue>{value}</MetricValue>
@@ -694,7 +694,7 @@ export default function SettingsAdminView({
         >
           <SectionState loading={usersSection.loading} error={usersSection.error} empty={false} emptyLabel="">
             <div className="grid gap-6 xl:grid-cols-[minmax(0,0.78fr)_minmax(0,1.22fr)]">
-              <div className="rounded-panel border border-line/60 bg-surface-alt/65 p-panel">
+              <div className="rounded-panel border border-line/60 bg-surface-alt/65 p-panel shadow-inset-soft">
                 <Eyebrow>Provision user</Eyebrow>
                 <h3 className="mt-3 font-display text-title text-ink">Create app access</h3>
                 <p className="mt-3 text-body text-ink-soft">

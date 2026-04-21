@@ -1,3 +1,5 @@
+import React from 'react';
+
 import {
   formatCompactCurrency,
   formatCurrency,
@@ -115,7 +117,7 @@ function SummaryCard({ label, value, detail }: SummaryCardData) {
   return (
     <Card
       padding="compact"
-      className="ui-metric-card min-h-[13rem] border-line/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(251,247,242,0.82))] shadow-panel"
+      className="min-h-[13rem] border-line/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(251,247,242,0.82))] shadow-panel"
     >
       <div className={`absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r ${decor.accent}`} />
       <div className="relative grid h-full gap-5">

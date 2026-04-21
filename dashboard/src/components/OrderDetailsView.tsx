@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import React, { type ReactNode } from 'react';
 
 import type { OrderDetailsResponse } from '../lib/api';
 import { formatCurrency, formatDateTimeLabel, formatNumber } from '../lib/format';
@@ -64,7 +64,7 @@ function formatJsonValue(value: unknown): string {
 
 function MetricCard({ label, value, detail }: { label: string; value: string; detail: string }) {
   return (
-    <Card padding="compact" className="ui-metric-card">
+    <Card padding="compact" className="border-line/70">
       <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-brand via-brand/75 to-teal/70" />
       <Eyebrow>{label}</Eyebrow>
       <MetricValue>{value}</MetricValue>

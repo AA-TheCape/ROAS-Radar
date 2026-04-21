@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import React, { type ReactNode } from 'react';
 
 import { ResponsiveBar, type BarDatum, type BarSvgProps } from '@nivo/bar';
 import { type Margin } from '@nivo/core';
