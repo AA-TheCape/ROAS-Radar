@@ -39,6 +39,7 @@ import {
   TableRow,
   TableWrap
 } from './AuthenticatedUi';
+import { NivoAreaChart, NivoBarChart } from './charts';
 
 type DashboardSection<T> = {
   data: T | null;
@@ -78,22 +79,6 @@ const GROUP_BY_OPTIONS: Array<{ value: TimeseriesGroupBy; label: string }> = [
   { value: 'campaign', label: 'By campaign' }
 ];
 
-function buildSeriesPath(points: TimeseriesPoint[]): string {
-  if (points.length === 0) {
-    return '';
-  }
-
-  const maxRevenue = Math.max(...points.map((point) => point.revenue), 1);
-
-  return points
-    .map((point, index) => {
-      const x = points.length === 1 ? 320 : (index / (points.length - 1)) * 320;
-      const y = 144 - (point.revenue / maxRevenue) * 120;
-      return `${index === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${y.toFixed(2)}`;
-    })
-    .join(' ');
-}
-
 function SummaryCard({ label, value, detail }: SummaryCardData) {
   return (
     <Card padding="compact" className="ui-metric-card">
@@ -114,65 +99,41 @@ function TimeseriesChart({
   groupBy: TimeseriesGroupBy;
   reportingTimezone: string;
 }) {
-  const path = buildSeriesPath(points);
-  const maxRevenue = Math.max(...points.map((point) => point.revenue), 1);
+  const chartData = [
+    {
+      id: 'Revenue',
+      data: points.map((point) => ({
+        x: groupBy === 'day' ? formatDateLabel(point.date, reportingTimezone) : point.date,
+        y: point.revenue,
+        orders: point.orders,
+        visits: point.visits,
+        bucketLabel: groupBy === 'day' ? formatDateLabel(point.date, reportingTimezone) : point.date
+      }))
+    }
+  ];
 
   return (
-    <div className="grid gap-6 xl:grid-cols-[minmax(0,1.4fr)_18rem]">
+    <div className="grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_18rem]">
       <Card tone="accent" padding="compact" className="shadow-inset-soft">
         <CardHeader className="items-center">
           <div>
             <Eyebrow>Trend window</Eyebrow>
-            <p className="mt-2 font-display text-title text-ink">{formatCurrency(maxRevenue)} max revenue</p>
+            <p className="mt-2 font-display text-title text-ink">
+              {formatCurrency(Math.max(...points.map((point) => point.revenue), 0))} max revenue
+            </p>
           </div>
           <Badge tone="teal" className="px-3 py-2">
             {GROUP_BY_OPTIONS.find((option) => option.value === groupBy)?.label ?? groupBy}
           </Badge>
         </CardHeader>
-        <svg viewBox="0 0 320 160" className="h-[17rem] w-full overflow-visible" aria-label="Revenue timeseries">
-          <defs>
-            <linearGradient id="revenueFill" x1="0" x2="0" y1="0" y2="1">
-              <stop offset="0%" stopColor="rgba(203, 99, 50, 0.32)" />
-              <stop offset="100%" stopColor="rgba(203, 99, 50, 0.03)" />
-            </linearGradient>
-          </defs>
-          {[0, 1, 2, 3].map((index) => {
-            const y = 24 + index * 30;
-            return (
-              <line
-                key={y}
-                x1="0"
-                x2="320"
-                y1={y}
-                y2={y}
-                stroke="rgba(23, 33, 43, 0.08)"
-                strokeDasharray="3 5"
-              />
-            );
-          })}
-          {path ? <path d={`${path} L 320 144 L 0 144 Z`} fill="url(#revenueFill)" /> : null}
-          {path ? (
-            <path
-              d={path}
-              fill="none"
-              stroke="#cb6332"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth="3"
-            />
-          ) : null}
-          {points.map((point, index) => {
-            const x = points.length === 1 ? 320 : (index / (points.length - 1)) * 320;
-            const y = 144 - (point.revenue / maxRevenue) * 120;
-
-            return (
-              <g key={`${point.date}-${index}`}>
-                <circle cx={x} cy={y} fill="#ffffff" r="6" stroke="#cb6332" strokeWidth="2" />
-                <circle cx={x} cy={y} fill="#cb6332" r="2.5" />
-              </g>
-            );
-          })}
-        </svg>
+        <NivoAreaChart
+          data={chartData}
+          height={272}
+          axisBottomLegend="Reporting bucket"
+          axisLeftLegend="Revenue"
+          yFormat={(value) => formatCompactCurrency(value)}
+          margin={{ bottom: 64, left: 88 }}
+        />
       </Card>
 
       <div className="grid content-start gap-3">
@@ -213,6 +174,12 @@ export default function ReportingDashboard({
   onOpenOrderDetails
 }: ReportingDashboardProps) {
   const totalCampaignRevenue = (campaignsSection.data ?? []).reduce((sum, row) => sum + row.revenue, 0);
+  const campaignMixData = (campaignsSection.data ?? []).map((row) => ({
+    campaign: row.campaign,
+    revenueShare: Number(((totalCampaignRevenue > 0 ? row.revenue / totalCampaignRevenue : 0) * 100).toFixed(2)),
+    revenue: row.revenue,
+    sourceMedium: `${row.source} / ${row.medium}`
+  }));
 
   return (
     <section className="grid gap-section">
@@ -382,39 +349,20 @@ export default function ReportingDashboard({
           title="Campaign mix"
           description="Revenue share highlights the campaigns carrying the selected reporting window."
         >
-          <SectionState
+          <NivoBarChart
+            data={campaignMixData}
+            keys={['revenueShare']}
+            indexBy="campaign"
+            layout="horizontal"
+            height={Math.max(campaignMixData.length * 52, 260)}
             loading={campaignsSection.loading}
             error={campaignsSection.error}
-            empty={!campaignsSection.data?.length}
+            empty={!campaignMixData.length}
             emptyLabel="No campaign mix available yet."
-          >
-            <div className="grid gap-3">
-              {(campaignsSection.data ?? []).map((row) => {
-                const share = totalCampaignRevenue > 0 ? row.revenue / totalCampaignRevenue : 0;
-
-                return (
-                  <Card key={`${row.source}-${row.campaign}`} padding="compact" className="border-line/60 bg-surface-alt/55">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-body font-semibold text-ink">{row.campaign}</p>
-                        <p className="mt-1 text-body text-ink-muted">{`${row.source} / ${row.medium}`}</p>
-                      </div>
-                      <div className="shrink-0 text-right">
-                        <p className="font-semibold text-ink">{formatPercent(share)}</p>
-                        <p className="mt-1 text-body text-ink-muted">{formatCompactCurrency(row.revenue)}</p>
-                      </div>
-                    </div>
-                    <div className="mt-4 h-3 overflow-hidden rounded-pill bg-canvas-tint">
-                      <div
-                        className="h-full rounded-pill bg-gradient-to-r from-brand to-teal"
-                        style={{ width: `${Math.max(share * 100, 2)}%` }}
-                      />
-                    </div>
-                  </Card>
-                );
-              })}
-            </div>
-          </SectionState>
+            axisBottomLegend="Revenue share"
+            valueFormat={(value) => `${value.toFixed(1)}%`}
+            margin={{ left: 116, bottom: 52 }}
+          />
         </Panel>
       </div>
 
