@@ -361,13 +361,13 @@ function DashboardControlPanel({
             <Badge tone="teal">{reportingTimezone}</Badge>
           </div>
 
-          <ButtonRow className="mt-5 gap-2">
+          <ButtonRow className="mt-5 grid-cols-2 gap-2">
             {quickRanges.map((preset) => (
               <Button
                 key={preset.label}
                 type="button"
                 tone="secondary"
-                className="min-w-[5.25rem] flex-1"
+                className="min-w-[5.25rem] w-full sm:flex-1"
                 onClick={() => onApplyQuickRange(preset.value(reportingTimezone))}
               >
                 {preset.label}
@@ -482,7 +482,7 @@ function TimeseriesTrendPanel({
                 sortedPoints.map((point) => (
                   <div
                     key={`${point.date}-${point.revenue}`}
-                    className="flex items-start justify-between gap-3 rounded-card border border-line/50 bg-white/80 px-4 py-3"
+                    className="flex flex-col gap-3 rounded-card border border-line/50 bg-white/80 px-4 py-3 sm:flex-row sm:items-start sm:justify-between"
                   >
                     <div>
                       <p className="text-body font-semibold text-ink">
@@ -703,7 +703,7 @@ export default function ReportingDashboard({
                       </div>
                       <Badge tone="brand">{formatPercent(row.conversionRate)}</Badge>
                     </div>
-                    <p className="mt-3 text-body text-ink-soft">{row.source} / {row.medium}</p>
+                    <p className="mt-3 break-words text-body text-ink-soft">{row.source} / {row.medium}</p>
                     <p className="mt-5 font-display text-metric text-brand">{formatCompactCurrency(row.revenue)}</p>
                     <div className="mt-4 grid grid-cols-2 gap-3 text-body text-ink-muted">
                       <div className="rounded-card border border-line/50 bg-white/75 px-3 py-3">
@@ -863,7 +863,7 @@ export default function ReportingDashboard({
               emptyLabel="No campaign mix available yet."
               axisBottomLegend="Revenue share"
               valueFormat={(value) => `${value.toFixed(1)}%`}
-              margin={{ left: 132, bottom: 52 }}
+              margin={{ left: 104, bottom: 52 }}
             />
           </Panel>
 
@@ -879,7 +879,7 @@ export default function ReportingDashboard({
               empty={!sourceMixData.length}
               emptyLabel="No source contribution available yet."
               valueFormat={(value) => formatCompactCurrency(value)}
-              margin={{ bottom: 84 }}
+              margin={{ bottom: 64 }}
             />
           </Panel>
         </div>

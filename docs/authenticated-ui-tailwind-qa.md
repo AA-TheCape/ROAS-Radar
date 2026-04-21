@@ -66,6 +66,9 @@ All authenticated surfaces now render through Tailwind-first components in `dash
 - The authenticated shell provides a mobile drawer at `lg` and persistent desktop navigation above `lg`.
 - Dashboard widgets collapse from multi-column layouts to single-column stacks through Tailwind breakpoint utilities in `ReportingDashboard`.
 - Order details cards and settings/admin cards use `md`, `xl`, and `2xl` grid breakpoints instead of legacy CSS media queries.
+- Shared authenticated table primitives now preserve column structure behind horizontal scrolling with stronger wrap behavior in dense cells, plus stacked mobile pagination and toolbar summaries.
+- Shared chart wrappers now trim legends, margins, and label density below `640px`, with intermediate spacing adjustments through tablet widths so Nivo charts stay inside their cards.
+- Responsive QA target breakpoints for authenticated flows are `375px`, `768px`, `1024px`, and `1440px`.
 
 ## Typography And Spacing Verification
 

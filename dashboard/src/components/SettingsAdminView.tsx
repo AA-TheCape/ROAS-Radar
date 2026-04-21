@@ -332,7 +332,7 @@ export default function SettingsAdminView({
 
   return (
     <section className="grid gap-section">
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <SettingsMetric
           label="Reporting timezone"
           value={appSettings.data?.reportingTimezone ?? defaultReportingTimezone}
@@ -737,8 +737,15 @@ export default function SettingsAdminView({
                     onClick={() => void onMetaSync()}
                     disabled={actionFeedback.loading !== null || metaConnection.data?.connection == null}
                   >
-                    {actionFeedback.loading === 'meta-sync' ? 'Queueing…' : `Sync ${filters.startDate} to ${filters.endDate}`}
-                  </Button>
+                        {actionFeedback.loading === 'meta-sync' ? (
+                          'Queueing…'
+                        ) : (
+                          <>
+                            <span className="sm:hidden">Sync range</span>
+                            <span className="hidden sm:inline">{`Sync ${filters.startDate} to ${filters.endDate}`}</span>
+                          </>
+                        )}
+                      </Button>
                 </ButtonRow>
               </div>
             </ConnectionState>
@@ -921,7 +928,14 @@ export default function SettingsAdminView({
                         onClick={() => void onGoogleSync()}
                         disabled={googleConnection.data?.connection == null}
                       >
-                        {actionFeedback.loading === 'google-sync' ? 'Queueing…' : `Sync ${filters.startDate} to ${filters.endDate}`}
+                        {actionFeedback.loading === 'google-sync' ? (
+                          'Queueing…'
+                        ) : (
+                          <>
+                            <span className="sm:hidden">Sync range</span>
+                            <span className="hidden sm:inline">{`Sync ${filters.startDate} to ${filters.endDate}`}</span>
+                          </>
+                        )}
                       </Button>
                       <Button
                         type="button"

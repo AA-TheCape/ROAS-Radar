@@ -118,7 +118,7 @@ export function AppShellPageHeader({
   actions
 }: PageHeaderProps) {
   return (
-    <section className="grid gap-panel lg:grid-cols-[minmax(0,1.5fr)_minmax(18rem,22rem)]">
+    <section className="grid gap-panel xl:grid-cols-[minmax(0,1.5fr)_minmax(18rem,22rem)]">
       <article className="rounded-shell border border-line/80 bg-surface/90 p-card shadow-lift backdrop-blur">
         <p className="text-caption font-semibold uppercase tracking-[0.14em] text-teal">{eyebrow}</p>
         <h1 className="mt-4 font-display text-display text-ink sm:text-hero">ROAS Radar</h1>
@@ -197,7 +197,7 @@ export default function AuthenticatedAppShell({
             })}
           </div>
 
-          <div className="max-w-[28rem] text-right text-body text-ink-muted">{topbarMeta}</div>
+          <div className="hidden max-w-[28rem] text-right text-body text-ink-muted sm:block">{topbarMeta}</div>
         </div>
       </header>
 

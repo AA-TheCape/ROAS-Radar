@@ -1,4 +1,4 @@
-import React, { type ReactNode } from 'react';
+import React, { useEffect, useState, type ReactNode } from 'react';
 
 import { ResponsiveBar, type BarDatum, type BarSvgProps } from '@nivo/bar';
 import { type Margin } from '@nivo/core';
@@ -176,6 +176,26 @@ function formatMetric(value: number, formatter?: (value: number) => string) {
   return formatter ? formatter(value) : value.toLocaleString('en-US');
 }
 
+function useChartViewport() {
+  const [width, setWidth] = useState<number | null>(null);
+
+  useEffect(() => {
+    function handleResize() {
+      setWidth(window.innerWidth);
+    }
+
+    handleResize();
+    window.addEventListener('resize', handleResize);
+
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  return {
+    isCompact: width !== null && width < 640,
+    isTablet: width !== null && width >= 640 && width < 1024
+  };
+}
+
 function ChartTooltip({ title, rows }: { title: string; rows: ChartTooltipRow[] }) {
   return (
     <div className="min-w-[11rem] rounded-card border border-line/80 bg-surface/95 px-4 py-3 shadow-panel backdrop-blur">
@@ -239,23 +259,31 @@ export function NivoLineChart({
   legends = bottomLegend,
   margin
 }: SharedLineChartProps) {
+  const { isCompact, isTablet } = useChartViewport();
+  const effectiveLegends = isCompact ? [] : legends;
+  const effectiveHeight = isCompact ? Math.max(260, height - 36) : height;
+
   return (
     <ChartFrame
       loading={loading}
       error={error}
       empty={empty}
       emptyLabel={emptyLabel}
-      height={height}
+      height={effectiveHeight}
       className={className}
     >
       <ResponsiveLine
         data={data}
         theme={sharedTheme}
         colors={chartPalette}
-        margin={{ ...baseLineMargin, ...margin }}
+        margin={{
+          ...baseLineMargin,
+          ...(isCompact ? { left: 52, right: 12, bottom: 44, top: 16 } : isTablet ? { left: 60, right: 18, bottom: 50 } : {}),
+          ...margin
+        }}
         curve="monotoneX"
         enablePoints
-        pointSize={9}
+        pointSize={isCompact ? 6 : 9}
         pointBorderWidth={2}
         pointColor="#ffffff"
         pointBorderColor={{ from: 'seriesColor' }}
@@ -266,21 +294,21 @@ export function NivoLineChart({
         lineWidth={3}
         axisBottom={{
           tickSize: 0,
-          tickPadding: 14,
-          legend: axisBottomLegend,
-          legendOffset: 42,
+          tickPadding: isCompact ? 10 : 14,
+          legend: isCompact ? undefined : axisBottomLegend,
+          legendOffset: isCompact ? 28 : 42,
           legendPosition: 'middle'
         }}
         axisLeft={{
           tickSize: 0,
-          tickPadding: 12,
-          tickValues: 5,
-          legend: axisLeftLegend,
-          legendOffset: -54,
+          tickPadding: isCompact ? 8 : 12,
+          tickValues: isCompact ? 4 : 5,
+          legend: isCompact ? undefined : axisLeftLegend,
+          legendOffset: isCompact ? -40 : -54,
           legendPosition: 'middle',
-          format: (value) => formatMetric(Number(value), yFormat)
+          format: (value: number | string) => formatMetric(Number(value), yFormat)
         }}
-        legends={legends}
+        legends={effectiveLegends}
         tooltip={({ point }: any) => (
           <ChartTooltip
             title={String(point.data.xFormatted ?? point.data.x)}
@@ -302,23 +330,31 @@ export function NivoAreaChart({
   legends = [],
   ...props
 }: Omit<SharedLineChartProps, 'enableArea'>) {
+  const { isCompact, isTablet } = useChartViewport();
+  const effectiveLegends = isCompact ? [] : legends;
+  const effectiveHeight = isCompact ? Math.max(260, (props.height ?? 320) - 36) : props.height;
+
   return (
     <ChartFrame
       loading={props.loading}
       error={props.error}
       empty={props.empty ?? (props.data.length === 0 || props.data.every((series) => series.data.length === 0))}
       emptyLabel={props.emptyLabel}
-      height={props.height}
+      height={effectiveHeight}
       className={props.className}
     >
       <ResponsiveLine
         data={props.data}
         theme={sharedTheme}
         colors={chartPalette}
-        margin={{ ...baseLineMargin, ...props.margin }}
+        margin={{
+          ...baseLineMargin,
+          ...(isCompact ? { left: 52, right: 12, bottom: 44, top: 16 } : isTablet ? { left: 60, right: 18, bottom: 50 } : {}),
+          ...props.margin
+        }}
         curve="monotoneX"
         enablePoints
-        pointSize={9}
+        pointSize={isCompact ? 6 : 9}
         pointBorderWidth={2}
         pointColor="#ffffff"
         pointBorderColor={{ from: 'seriesColor' }}
@@ -329,19 +365,19 @@ export function NivoAreaChart({
         lineWidth={3}
         axisBottom={{
           tickSize: 0,
-          tickPadding: 14,
-          legend: props.axisBottomLegend,
-          legendOffset: 42,
+          tickPadding: isCompact ? 10 : 14,
+          legend: isCompact ? undefined : props.axisBottomLegend,
+          legendOffset: isCompact ? 28 : 42,
           legendPosition: 'middle'
         }}
         axisLeft={{
           tickSize: 0,
-          tickPadding: 12,
-          tickValues: 5,
-          legend: props.axisLeftLegend,
-          legendOffset: -54,
+          tickPadding: isCompact ? 8 : 12,
+          tickValues: isCompact ? 4 : 5,
+          legend: isCompact ? undefined : props.axisLeftLegend,
+          legendOffset: isCompact ? -40 : -54,
           legendPosition: 'middle',
-          format: (value) => formatMetric(Number(value), props.yFormat)
+          format: (value: number | string) => formatMetric(Number(value), props.yFormat)
         }}
         defs={[
           {
@@ -354,7 +390,7 @@ export function NivoAreaChart({
           }
         ]}
         fill={[{ match: '*', id: 'areaGradient' }]}
-        legends={legends}
+        legends={effectiveLegends}
         tooltip={({ point }: any) => (
           <ChartTooltip
             title={String(point.data.xFormatted ?? point.data.x)}
@@ -389,13 +425,17 @@ export function NivoBarChart<Datum extends BarDatum>({
   legends = [],
   margin
 }: SharedBarChartProps<Datum>) {
+  const { isCompact, isTablet } = useChartViewport();
+  const effectiveLegends = isCompact ? [] : legends;
+  const effectiveHeight = isCompact ? Math.max(260, height - 24) : height;
+
   return (
     <ChartFrame
       loading={loading}
       error={error}
       empty={empty}
       emptyLabel={emptyLabel}
-      height={height}
+      height={effectiveHeight}
       className={className}
     >
       <ResponsiveBar
@@ -404,7 +444,19 @@ export function NivoBarChart<Datum extends BarDatum>({
         indexBy={indexBy}
         theme={sharedTheme}
         colors={chartPalette}
-        margin={{ ...baseBarMargin, ...margin }}
+        margin={{
+          ...baseBarMargin,
+          ...(isCompact
+            ? layout === 'horizontal'
+              ? { left: 96, right: 12, bottom: 40, top: 16 }
+              : { left: 52, right: 12, bottom: 44, top: 16 }
+            : isTablet
+              ? layout === 'horizontal'
+                ? { left: 112, right: 18, bottom: 48 }
+                : { left: 60, right: 18, bottom: 52 }
+              : {}),
+          ...margin
+        }}
         padding={0.28}
         innerPadding={4}
         borderRadius={10}
@@ -416,22 +468,22 @@ export function NivoBarChart<Datum extends BarDatum>({
         labelTextColor="#314051"
         axisBottom={{
           tickSize: 0,
-          tickPadding: 12,
+          tickPadding: isCompact ? 8 : 12,
           truncateTickAt: 0,
-          legend: axisBottomLegend,
-          legendOffset: 42,
+          legend: isCompact ? undefined : axisBottomLegend,
+          legendOffset: isCompact ? 28 : 42,
           legendPosition: 'middle',
-          format: (value) => String(value)
+          format: (value: string | number) => String(value)
         }}
         axisLeft={{
           tickSize: 0,
-          tickPadding: 12,
-          legend: axisLeftLegend,
-          legendOffset: -56,
+          tickPadding: isCompact ? 8 : 12,
+          legend: isCompact ? undefined : axisLeftLegend,
+          legendOffset: isCompact ? -40 : -56,
           legendPosition: 'middle'
         }}
-        valueFormat={(value) => formatMetric(Number(value), valueFormat)}
-        legends={legends}
+        valueFormat={(value: string | number) => formatMetric(Number(value), valueFormat)}
+        legends={effectiveLegends}
         tooltip={({ id, indexValue, value, color, data: datum }: any) => (
           <ChartTooltip
             title={String(indexValue)}
@@ -464,31 +516,39 @@ export function NivoPieChart({
   legends = bottomLegend,
   margin
 }: SharedPieChartProps) {
+  const { isCompact, isTablet } = useChartViewport();
+  const effectiveLegends = isCompact ? [] : legends;
+  const effectiveHeight = isCompact ? Math.max(260, height - 20) : height;
+
   return (
     <ChartFrame
       loading={loading}
       error={error}
       empty={empty}
       emptyLabel={emptyLabel}
-      height={height}
+      height={effectiveHeight}
       className={className}
     >
       <ResponsivePie
         data={data}
         theme={sharedTheme}
         colors={chartPalette}
-        margin={{ ...basePieMargin, ...margin }}
+        margin={{
+          ...basePieMargin,
+          ...(isCompact ? { left: 8, right: 8, bottom: 18, top: 12 } : isTablet ? { left: 16, right: 16, bottom: 42 } : {}),
+          ...margin
+        }}
         sortByValue
-        innerRadius={0.62}
+        innerRadius={isCompact ? 0.58 : 0.62}
         padAngle={0.8}
         cornerRadius={4}
         activeOuterRadiusOffset={8}
-        arcLinkLabelsSkipAngle={12}
+        arcLinkLabelsSkipAngle={isCompact ? 360 : 12}
         arcLinkLabelsThickness={1}
         arcLinkLabelsColor="#627180"
-        arcLabelsSkipAngle={12}
+        arcLabelsSkipAngle={isCompact ? 360 : 12}
         arcLabelsTextColor="#17212b"
-        legends={legends}
+        legends={effectiveLegends}
         tooltip={({ datum }: any) => (
           <ChartTooltip
             title={String(datum.label ?? datum.id)}

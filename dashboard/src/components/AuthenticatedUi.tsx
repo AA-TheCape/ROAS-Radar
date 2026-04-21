@@ -498,7 +498,7 @@ export function Button({
 }
 
 export function ButtonRow({ className, children }: { className?: string; children: ReactNode }) {
-  return <div className={cx('flex flex-wrap gap-3', className)}>{children}</div>;
+  return <div className={cx('grid gap-3 sm:flex sm:flex-wrap', className)}>{children}</div>;
 }
 
 export function Form({
@@ -675,7 +675,7 @@ export function HelpText({
   return (
     <div
       className={cx(
-        'rounded-card border border-line/60 bg-surface-alt/70 px-4 py-3 text-body text-ink-muted',
+        'rounded-card border border-line/60 bg-surface-alt/70 px-4 py-3 text-body text-ink-muted [overflow-wrap:anywhere]',
         tone === 'error' && 'border-danger/20 bg-danger-soft/70 text-danger'
       )}
     >
@@ -685,14 +685,23 @@ export function HelpText({
 }
 
 export function DetailList({ className, children }: { className?: string; children: ReactNode }) {
-  return <dl className={cx('m-0 grid gap-4 md:grid-cols-2 [&>div]:rounded-card [&>div]:border [&>div]:border-line/50 [&>div]:bg-surface/80 [&>div]:p-4 [&_dd]:m-0 [&_dd]:text-body [&_dd]:font-semibold [&_dd]:text-ink [&_dt]:mb-2 [&_dt]:text-caption [&_dt]:font-semibold [&_dt]:uppercase [&_dt]:tracking-[0.14em] [&_dt]:text-ink-muted', className)}>{children}</dl>;
+  return (
+    <dl
+      className={cx(
+        'm-0 grid gap-4 md:grid-cols-2 [&>div]:min-w-0 [&>div]:rounded-card [&>div]:border [&>div]:border-line/50 [&>div]:bg-surface/80 [&>div]:p-4 [&_dd]:m-0 [&_dd]:text-body [&_dd]:font-semibold [&_dd]:text-ink [&_dd]:[overflow-wrap:anywhere] [&_dt]:mb-2 [&_dt]:text-caption [&_dt]:font-semibold [&_dt]:uppercase [&_dt]:tracking-[0.14em] [&_dt]:text-ink-muted',
+        className
+      )}
+    >
+      {children}
+    </dl>
+  );
 }
 
 export function TableWrap({ className, children }: { className?: string; children: ReactNode }) {
   return (
     <div
       className={cx(
-        'overflow-auto rounded-card border border-line/60 bg-surface/65 supports-[backdrop-filter]:backdrop-blur [&_thead_th]:sticky [&_thead_th]:top-0 [&_thead_th]:z-[1] [&_thead_th]:bg-surface/95',
+        'min-w-0 overflow-auto overscroll-x-contain rounded-card border border-line/60 bg-surface/65 supports-[backdrop-filter]:backdrop-blur [&_thead_th]:sticky [&_thead_th]:top-0 [&_thead_th]:z-[1] [&_thead_th]:bg-surface/95',
         className
       )}
     >
@@ -713,7 +722,7 @@ export function Table({
   return (
     <table
       className={cx(
-        'min-w-full border-collapse [&_td]:border-b [&_td]:border-line/50 [&_td]:px-4 [&_td]:py-4 [&_td]:text-left [&_td]:align-top [&_td]:text-body [&_th]:border-b [&_th]:border-line/50 [&_th]:px-4 [&_th]:py-4 [&_th]:text-left [&_th]:align-top [&_th]:text-caption [&_th]:font-semibold [&_th]:uppercase [&_th]:tracking-[0.14em] [&_th]:text-ink-muted [&_tbody_tr:last-child_td]:border-b-0',
+        'min-w-[42rem] border-collapse sm:min-w-[48rem] [&_td]:border-b [&_td]:border-line/50 [&_td]:px-4 [&_td]:py-4 [&_td]:text-left [&_td]:align-top [&_td]:text-body [&_td]:[overflow-wrap:anywhere] [&_th]:border-b [&_th]:border-line/50 [&_th]:px-4 [&_th]:py-4 [&_th]:text-left [&_th]:align-top [&_th]:text-caption [&_th]:font-semibold [&_th]:uppercase [&_th]:tracking-[0.14em] [&_th]:text-ink-muted [&_tbody_tr:last-child_td]:border-b-0',
         className
       )}
     >
@@ -816,7 +825,7 @@ export function PrimaryCell({ className, children }: { className?: string; child
   return (
     <div
       className={cx(
-        'grid gap-1.5 [&_strong]:block [&_strong]:text-body [&_strong]:font-semibold [&_strong]:text-ink [&_span]:text-body [&_span]:text-ink-muted',
+        'grid min-w-0 gap-1.5 [&_strong]:block [&_strong]:text-body [&_strong]:font-semibold [&_strong]:text-ink [&_strong]:[overflow-wrap:anywhere] [&_span]:text-body [&_span]:text-ink-muted [&_span]:[overflow-wrap:anywhere]',
         className
       )}
     >
@@ -860,13 +869,13 @@ export function DataTableToolbar({
         {actions ? <div className="flex flex-wrap gap-2">{actions}</div> : null}
       </div>
       {children ? <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">{children}</div> : null}
-      {summary ? <div className="flex flex-wrap items-center justify-between gap-3 text-body text-ink-muted">{summary}</div> : null}
+      {summary ? <div className="grid gap-3 text-body text-ink-muted sm:flex sm:flex-wrap sm:items-center sm:justify-between">{summary}</div> : null}
     </div>
   );
 }
 
 export function TableFilterBar({ className, children }: { className?: string; children: ReactNode }) {
-  return <div className={cx('grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(10rem,12rem)]', className)}>{children}</div>;
+  return <div className={cx('grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(10rem,12rem)]', className)}>{children}</div>;
 }
 
 export function TableSearchField({
@@ -919,14 +928,14 @@ export function TablePagination({
   }
 
   return (
-    <div className="flex items-center gap-2">
-      <Button type="button" tone="ghost" onClick={() => onPageChange(page - 1)} disabled={page <= 1}>
+    <div className="grid gap-2 sm:flex sm:items-center">
+      <Button type="button" tone="ghost" className="w-full sm:w-auto" onClick={() => onPageChange(page - 1)} disabled={page <= 1}>
         Previous
       </Button>
       <span className="min-w-[5.5rem] text-center text-body text-ink-muted">
         Page {page} / {totalPages}
       </span>
-      <Button type="button" tone="ghost" onClick={() => onPageChange(page + 1)} disabled={page >= totalPages}>
+      <Button type="button" tone="ghost" className="w-full sm:w-auto" onClick={() => onPageChange(page + 1)} disabled={page >= totalPages}>
         Next
       </Button>
     </div>

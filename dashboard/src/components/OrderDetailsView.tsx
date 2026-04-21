@@ -214,7 +214,7 @@ export default function OrderDetailsView({
       emptyLabel={selectedOrderId ? `No details were loaded for order ${selectedOrderId}.` : 'No order selected.'}
     >
       <div className="grid gap-section">
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <MetricCard
             label="Shopify order"
             value={formatOptionalValue(order?.shopifyOrderNumber)}
@@ -237,7 +237,7 @@ export default function OrderDetailsView({
           />
         </div>
 
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1.2fr)_minmax(0,0.95fr)]">
+        <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1.2fr)_minmax(0,0.95fr)]">
           <DetailCard title="Order overview" description="Primary order identifiers, commercial totals, and fulfillment state.">
             <DetailList className="xl:grid-cols-2">
               <div>
@@ -547,7 +547,7 @@ export default function OrderDetailsView({
                     <TableCell>{formatCurrency(credit.revenueCredit)}</TableCell>
                     <TableCell>{formatNumber(credit.creditWeight)}</TableCell>
                     <TableCell>
-                      <Badge tone="brand">
+                      <Badge tone="brand" className="max-w-full whitespace-normal text-center">
                         {credit.attributionReason}
                       </Badge>
                     </TableCell>
@@ -575,7 +575,7 @@ export default function OrderDetailsView({
               <div className="grid gap-4">
                 {lineItems.map((item, index) => (
                   <div key={`${item.shopifyLineItemId}-raw`} className="grid gap-3">
-                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-card border border-line/60 bg-surface-alt/60 px-4 py-3">
+                    <div className="flex flex-col gap-3 rounded-card border border-line/60 bg-surface-alt/60 px-4 py-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
                       <div>
                         <p className="text-body font-semibold text-ink">{item.title ?? `Line item ${index + 1}`}</p>
                         <p className="text-body text-ink-muted">
