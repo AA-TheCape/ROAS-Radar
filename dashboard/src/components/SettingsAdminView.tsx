@@ -28,6 +28,8 @@ import {
   Field,
   FieldGrid,
   Form,
+  FormMessage,
+  FormSection,
   HelpText,
   Input,
   MetricCopy,
@@ -59,6 +61,7 @@ type AsyncSection<T> = {
 };
 
 type ActionFeedback = {
+  context: string | null;
   loading: string | null;
   error: string | null;
   message: string | null;
@@ -127,6 +130,14 @@ type SettingsAdminViewProps = {
 
 function formatOptionalDateTime(value: string | null | undefined, reportingTimezone: string): string {
   return value ? formatDateTimeLabel(value, reportingTimezone) : 'Not available';
+}
+
+function isValidEmail(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function hasMessageForAction(actionFeedback: ActionFeedback, keys: string[]): boolean {
+  return keys.includes(actionFeedback.context ?? '');
 }
 
 function SettingsMetric({
@@ -233,6 +244,54 @@ export default function SettingsAdminView({
     direction: 'asc'
   });
   const [userPage, setUserPage] = useState(1);
+  const trimmedTimezone = settingsForm.reportingTimezone.trim();
+  const timezoneError = trimmedTimezone ? null : 'Enter the reporting timezone used for dashboard rollups.';
+  const shopifyBackfillError =
+    shopifyBackfillRange.startDate && shopifyBackfillRange.endDate && shopifyBackfillRange.startDate > shopifyBackfillRange.endDate
+      ? 'Backfill end must be on or after the start date.'
+      : null;
+  const trimmedDisplayName = newUserForm.displayName.trim();
+  const trimmedEmail = newUserForm.email.trim();
+  const createUserErrors = {
+    displayName: trimmedDisplayName ? null : 'Enter the user’s display name.',
+    email: !trimmedEmail ? 'Enter the user email address.' : isValidEmail(trimmedEmail) ? null : 'Enter a valid email address.',
+    password:
+      !newUserForm.password
+        ? 'Enter a password for the new user.'
+        : newUserForm.password.length < 12
+          ? 'Password must be at least 12 characters.'
+          : null
+  };
+  const metaMissingFields = metaConnection.data?.config.missingFields ?? [];
+  const metaFieldErrors = {
+    appId: metaMissingFields.includes('appId') ? 'Meta app ID is required before OAuth can start.' : null,
+    appBaseUrl: metaMissingFields.includes('appBaseUrl') ? 'OAuth base URL is required before OAuth can start.' : null,
+    appScopes: metaMissingFields.includes('appScopes') ? 'Provide at least one Meta scope.' : null,
+    adAccountId: metaMissingFields.includes('adAccountId') ? 'Ad account ID is required before OAuth can start.' : null
+  };
+  const trimmedGoogleCustomerId = googleForm.customerId.trim();
+  const trimmedGoogleLoginCustomerId = googleForm.loginCustomerId?.trim() ?? '';
+  const googleErrors = {
+    customerId: trimmedGoogleCustomerId ? null : 'Enter the Google Ads customer ID.',
+    loginCustomerId:
+      trimmedGoogleLoginCustomerId && !/^[\d-]+$/.test(trimmedGoogleLoginCustomerId)
+        ? 'Use digits with optional hyphens for the login customer ID.'
+        : null,
+    developerToken: googleForm.developerToken ? null : 'Enter the developer token.',
+    clientId: googleForm.clientId ? null : 'Enter the OAuth client ID.',
+    clientSecret: googleForm.clientSecret ? null : 'Enter the OAuth client secret.',
+    refreshToken: googleForm.refreshToken ? null : 'Enter the OAuth refresh token.'
+  };
+  const isSettingsSaving = actionFeedback.loading === 'settings-save';
+  const isShopifyBusy =
+    actionFeedback.loading === 'shopify-backfill' || actionFeedback.loading === 'shopify-attribution-recovery';
+  const isMetaConfigSaving = actionFeedback.loading === 'meta-config-save';
+  const isMetaActionBusy = actionFeedback.loading === 'meta-connect' || actionFeedback.loading === 'meta-sync';
+  const isGoogleBusy =
+    actionFeedback.loading === 'google-connect' ||
+    actionFeedback.loading === 'google-sync' ||
+    actionFeedback.loading === 'google-reconcile';
+  const isUserCreateBusy = actionFeedback.loading === 'user-create';
   const activeConnections = [
     shopifyConnection.data?.connected ? 1 : 0,
     metaConnection.data?.connection ? 1 : 0,
@@ -319,44 +378,62 @@ export default function SettingsAdminView({
           <SectionState loading={appSettings.loading} error={appSettings.error} empty={false} emptyLabel="">
             <div className="grid gap-5">
               <Form onSubmit={onSettingsSave}>
-                <FieldGrid dense>
-                  <Field label="Timezone" htmlFor="reporting-timezone">
-                    <Input
-                      id="reporting-timezone"
-                      type="text"
-                      list="reporting-timezone-options"
-                      value={settingsForm.reportingTimezone}
-                      onChange={(event) =>
-                        setSettingsForm((current) => ({ ...current, reportingTimezone: event.target.value }))
-                      }
-                      placeholder="America/Los_Angeles"
+                <FormSection disabled={isSettingsSaving}>
+                  <FieldGrid dense>
+                    <Field
+                      label="Timezone"
+                      htmlFor="reporting-timezone"
                       required
-                    />
-                    <datalist id="reporting-timezone-options">
-                      {reportingTimezoneOptions.map((option) => (
-                        <option key={option} value={option} />
-                      ))}
-                    </datalist>
-                  </Field>
-                </FieldGrid>
-                <HelpText>
-                  Use a valid IANA timezone like <code>America/Los_Angeles</code>. Short aliases like <code>PST</code> and <code>UTC</code> also work here.
-                </HelpText>
-                <DetailGrid>
-                  <div>
-                    <dt>Active timezone</dt>
-                    <dd>{appSettings.data?.reportingTimezone ?? defaultReportingTimezone}</dd>
-                  </div>
-                  <div>
-                    <dt>Updated</dt>
-                    <dd>{timezoneUpdatedAt}</dd>
-                  </div>
-                </DetailGrid>
-                <ButtonRow>
-                  <Button type="submit" disabled={actionFeedback.loading !== null}>
-                    {actionFeedback.loading === 'settings-save' ? 'Saving…' : 'Save reporting timezone'}
-                  </Button>
-                </ButtonRow>
+                      description="This timezone drives dashboard date filters, daily aggregation, and settings defaults."
+                      error={timezoneError ?? undefined}
+                    >
+                      <Input
+                        id="reporting-timezone"
+                        type="text"
+                        list="reporting-timezone-options"
+                        value={settingsForm.reportingTimezone}
+                        onChange={(event) =>
+                          setSettingsForm((current) => ({ ...current, reportingTimezone: event.target.value }))
+                        }
+                        placeholder="America/Los_Angeles"
+                        aria-invalid={timezoneError ? 'true' : 'false'}
+                        required
+                      />
+                      <datalist id="reporting-timezone-options">
+                        {reportingTimezoneOptions.map((option) => (
+                          <option key={option} value={option} />
+                        ))}
+                      </datalist>
+                    </Field>
+                  </FieldGrid>
+                  <HelpText>
+                    Use a valid IANA timezone like <code>America/Los_Angeles</code>. Short aliases like <code>PST</code> and <code>UTC</code> also work here.
+                  </HelpText>
+                  {hasMessageForAction(actionFeedback, ['settings-save']) ? (
+                    <FormMessage tone={actionFeedback.error ? 'error' : isSettingsSaving ? 'warning' : 'success'}>
+                      {actionFeedback.error
+                        ? actionFeedback.error
+                        : isSettingsSaving
+                          ? 'Saving the reporting timezone and refreshing dashboard windows…'
+                          : actionFeedback.message}
+                    </FormMessage>
+                  ) : null}
+                  <DetailGrid>
+                    <div>
+                      <dt>Active timezone</dt>
+                      <dd>{appSettings.data?.reportingTimezone ?? defaultReportingTimezone}</dd>
+                    </div>
+                    <div>
+                      <dt>Updated</dt>
+                      <dd>{timezoneUpdatedAt}</dd>
+                    </div>
+                  </DetailGrid>
+                  <ButtonRow>
+                    <Button type="submit" disabled={Boolean(timezoneError)}>
+                      {isSettingsSaving ? 'Saving…' : 'Save reporting timezone'}
+                    </Button>
+                  </ButtonRow>
+                </FormSection>
               </Form>
             </div>
           </SectionState>
@@ -399,55 +476,79 @@ export default function SettingsAdminView({
                 ) : null}
 
                 <Form onSubmit={onShopifyBackfill}>
-                  <FieldGrid>
-                    <Field label="Backfill start" htmlFor="shopify-backfill-start">
-                      <Input
-                        id="shopify-backfill-start"
-                        type="date"
-                        value={shopifyBackfillRange.startDate}
-                        onChange={(event) =>
-                          setShopifyBackfillRange((current) => ({ ...current, startDate: event.target.value }))
-                        }
+                  <FormSection disabled={isShopifyBusy}>
+                    <FieldGrid>
+                      <Field
+                        label="Backfill start"
+                        htmlFor="shopify-backfill-start"
                         required
-                      />
-                    </Field>
-                    <Field label="Backfill end" htmlFor="shopify-backfill-end">
-                      <Input
-                        id="shopify-backfill-end"
-                        type="date"
-                        value={shopifyBackfillRange.endDate}
-                        onChange={(event) =>
-                          setShopifyBackfillRange((current) => ({ ...current, endDate: event.target.value }))
-                        }
+                        description="Import Shopify orders starting from this storefront date."
+                      >
+                        <Input
+                          id="shopify-backfill-start"
+                          type="date"
+                          value={shopifyBackfillRange.startDate}
+                          onChange={(event) =>
+                            setShopifyBackfillRange((current) => ({ ...current, startDate: event.target.value }))
+                          }
+                          required
+                        />
+                      </Field>
+                      <Field
+                        label="Backfill end"
+                        htmlFor="shopify-backfill-end"
                         required
-                      />
-                    </Field>
-                  </FieldGrid>
+                        description="Recovery and backfill actions will stop at this date."
+                        error={shopifyBackfillError ?? undefined}
+                      >
+                        <Input
+                          id="shopify-backfill-end"
+                          type="date"
+                          value={shopifyBackfillRange.endDate}
+                          onChange={(event) =>
+                            setShopifyBackfillRange((current) => ({ ...current, endDate: event.target.value }))
+                          }
+                          aria-invalid={shopifyBackfillError ? 'true' : 'false'}
+                          required
+                        />
+                      </Field>
+                    </FieldGrid>
 
-                  <Card padding="compact" className="border-line/60 bg-canvas-tint/80 shadow-none">
-                    <Eyebrow>Recovery tools</Eyebrow>
-                    <p className="mt-2 text-body text-ink-soft">
-                      Backfill imports historical orders. Attribution recovery rescans unattributed web orders in the same date window.
-                    </p>
-                  </Card>
+                    <Card padding="compact" className="border-line/60 bg-canvas-tint/80 shadow-none">
+                      <Eyebrow>Recovery tools</Eyebrow>
+                      <p className="mt-2 text-body text-ink-soft">
+                        Backfill imports historical orders. Attribution recovery rescans unattributed web orders in the same date window.
+                      </p>
+                    </Card>
 
-                  <ButtonRow>
-                    <Button
-                      type="submit"
-                      tone="secondary"
-                      disabled={actionFeedback.loading !== null || !shopifyConnection.data?.connected}
-                    >
-                      {actionFeedback.loading === 'shopify-backfill' ? 'Backfilling…' : 'Backfill Shopify orders'}
-                    </Button>
-                    <Button
-                      type="button"
-                      tone="secondary"
-                      onClick={() => void onShopifyAttributionRecovery()}
-                      disabled={actionFeedback.loading !== null || !shopifyConnection.data?.connected}
-                    >
-                      {actionFeedback.loading === 'shopify-attribution-recovery' ? 'Recovering…' : 'Recover attribution hints'}
-                    </Button>
-                  </ButtonRow>
+                    {hasMessageForAction(actionFeedback, ['shopify-backfill', 'shopify-attribution-recovery']) ? (
+                      <FormMessage tone={actionFeedback.error ? 'error' : isShopifyBusy ? 'warning' : 'success'}>
+                        {actionFeedback.error
+                          ? actionFeedback.error
+                          : isShopifyBusy
+                            ? 'Running the selected Shopify recovery workflow for the current date window…'
+                            : actionFeedback.message}
+                      </FormMessage>
+                    ) : null}
+
+                    <ButtonRow>
+                      <Button
+                        type="submit"
+                        tone="secondary"
+                        disabled={Boolean(shopifyBackfillError) || !shopifyConnection.data?.connected}
+                      >
+                        {actionFeedback.loading === 'shopify-backfill' ? 'Backfilling…' : 'Backfill Shopify orders'}
+                      </Button>
+                      <Button
+                        type="button"
+                        tone="secondary"
+                        onClick={() => void onShopifyAttributionRecovery()}
+                        disabled={Boolean(shopifyBackfillError) || !shopifyConnection.data?.connected}
+                      >
+                        {actionFeedback.loading === 'shopify-attribution-recovery' ? 'Recovering…' : 'Recover attribution hints'}
+                      </Button>
+                    </ButtonRow>
+                  </FormSection>
                 </Form>
 
                 <ButtonRow>
@@ -505,69 +606,122 @@ export default function SettingsAdminView({
                 ) : null}
 
                 <Form onSubmit={onMetaConfigSave}>
-                  <FieldGrid>
-                    <Field label="Meta app ID" htmlFor="meta-app-id">
-                      <Input
-                        id="meta-app-id"
-                        type="text"
-                        value={metaConfigForm.appId}
-                        onChange={(event) => setMetaConfigForm((current) => ({ ...current, appId: event.target.value }))}
-                        placeholder="123456789012345"
-                      />
-                    </Field>
-                    <Field label="Ad account ID" htmlFor="meta-account-id">
-                      <Input
-                        id="meta-account-id"
-                        type="text"
-                        value={metaConfigForm.adAccountId}
-                        onChange={(event) =>
-                          setMetaConfigForm((current) => ({ ...current, adAccountId: event.target.value }))
-                        }
-                        placeholder="act_123456789012345 or 123456789012345"
-                      />
-                    </Field>
-                    <Field label="Meta app secret" htmlFor="meta-app-secret" wide>
-                      <Input
-                        id="meta-app-secret"
-                        type="password"
-                        value={metaConfigForm.appSecret}
-                        onChange={(event) =>
-                          setMetaConfigForm((current) => ({ ...current, appSecret: event.target.value }))
-                        }
-                        placeholder={
-                          metaConnection.data?.config.appSecretConfigured
-                            ? 'Leave blank to keep the saved secret'
-                            : 'Paste the Meta app secret'
-                        }
-                      />
-                    </Field>
-                    <Field label="OAuth base URL" htmlFor="meta-base-url" wide>
-                      <Input
-                        id="meta-base-url"
-                        type="url"
-                        value={metaConfigForm.appBaseUrl}
-                        onChange={(event) =>
-                          setMetaConfigForm((current) => ({ ...current, appBaseUrl: event.target.value }))
-                        }
-                        placeholder="https://roas-radar.api.thecapemarine.com"
-                      />
-                    </Field>
-                    <Field label="Scopes" htmlFor="meta-scopes" wide>
-                      <Input
-                        id="meta-scopes"
-                        type="text"
-                        value={metaConfigForm.appScopes}
-                        onChange={(event) => setMetaConfigForm((current) => ({ ...current, appScopes: event.target.value }))}
-                        placeholder="ads_read"
-                      />
-                    </Field>
-                  </FieldGrid>
-                  <ButtonRow>
-                    <Button type="submit" disabled={actionFeedback.loading !== null}>
-                      {actionFeedback.loading === 'meta-config-save' ? 'Saving…' : 'Save Meta config'}
-                    </Button>
-                  </ButtonRow>
+                  <FormSection disabled={isMetaConfigSaving}>
+                    <FieldGrid>
+                      <Field
+                        label="Meta app ID"
+                        htmlFor="meta-app-id"
+                        description="Stored for Meta OAuth and reused across sync jobs."
+                        error={metaFieldErrors.appId ?? undefined}
+                      >
+                        <Input
+                          id="meta-app-id"
+                          type="text"
+                          value={metaConfigForm.appId}
+                          onChange={(event) => setMetaConfigForm((current) => ({ ...current, appId: event.target.value }))}
+                          placeholder="123456789012345"
+                          aria-invalid={metaFieldErrors.appId ? 'true' : 'false'}
+                        />
+                      </Field>
+                      <Field
+                        label="Ad account ID"
+                        htmlFor="meta-account-id"
+                        description="Supports either the numeric account ID or the `act_` prefixed value."
+                        error={metaFieldErrors.adAccountId ?? undefined}
+                      >
+                        <Input
+                          id="meta-account-id"
+                          type="text"
+                          value={metaConfigForm.adAccountId}
+                          onChange={(event) =>
+                            setMetaConfigForm((current) => ({ ...current, adAccountId: event.target.value }))
+                          }
+                          placeholder="act_123456789012345 or 123456789012345"
+                          aria-invalid={metaFieldErrors.adAccountId ? 'true' : 'false'}
+                        />
+                      </Field>
+                      <Field
+                        label="Meta app secret"
+                        htmlFor="meta-app-secret"
+                        wide
+                        optional
+                        description="Leave blank to keep the existing stored secret."
+                      >
+                        <Input
+                          id="meta-app-secret"
+                          type="password"
+                          value={metaConfigForm.appSecret}
+                          onChange={(event) =>
+                            setMetaConfigForm((current) => ({ ...current, appSecret: event.target.value }))
+                          }
+                          placeholder={
+                            metaConnection.data?.config.appSecretConfigured
+                              ? 'Leave blank to keep the saved secret'
+                              : 'Paste the Meta app secret'
+                          }
+                        />
+                      </Field>
+                      <Field
+                        label="OAuth base URL"
+                        htmlFor="meta-base-url"
+                        wide
+                        description="Base application URL used to construct Meta OAuth callbacks."
+                        error={metaFieldErrors.appBaseUrl ?? undefined}
+                      >
+                        <Input
+                          id="meta-base-url"
+                          type="url"
+                          value={metaConfigForm.appBaseUrl}
+                          onChange={(event) =>
+                            setMetaConfigForm((current) => ({ ...current, appBaseUrl: event.target.value }))
+                          }
+                          placeholder="https://roas-radar.api.thecapemarine.com"
+                          aria-invalid={metaFieldErrors.appBaseUrl ? 'true' : 'false'}
+                        />
+                      </Field>
+                      <Field
+                        label="Scopes"
+                        htmlFor="meta-scopes"
+                        wide
+                        description="Comma-separated scopes requested when an operator connects Meta Ads."
+                        error={metaFieldErrors.appScopes ?? undefined}
+                      >
+                        <Input
+                          id="meta-scopes"
+                          type="text"
+                          value={metaConfigForm.appScopes}
+                          onChange={(event) => setMetaConfigForm((current) => ({ ...current, appScopes: event.target.value }))}
+                          placeholder="ads_read"
+                          aria-invalid={metaFieldErrors.appScopes ? 'true' : 'false'}
+                        />
+                      </Field>
+                    </FieldGrid>
+                    {hasMessageForAction(actionFeedback, ['meta-config-save']) ? (
+                      <FormMessage tone={actionFeedback.error ? 'error' : isMetaConfigSaving ? 'warning' : 'success'}>
+                        {actionFeedback.error
+                          ? actionFeedback.error
+                          : isMetaConfigSaving
+                            ? 'Saving Meta Ads configuration…'
+                            : actionFeedback.message}
+                      </FormMessage>
+                    ) : null}
+                    <ButtonRow>
+                      <Button type="submit">
+                        {actionFeedback.loading === 'meta-config-save' ? 'Saving…' : 'Save Meta config'}
+                      </Button>
+                    </ButtonRow>
+                  </FormSection>
                 </Form>
+
+                {hasMessageForAction(actionFeedback, ['meta-connect', 'meta-sync']) ? (
+                  <FormMessage tone={actionFeedback.error ? 'error' : isMetaActionBusy ? 'warning' : 'success'}>
+                    {actionFeedback.error
+                      ? actionFeedback.error
+                      : isMetaActionBusy
+                        ? 'Preparing the Meta Ads action you selected…'
+                        : actionFeedback.message}
+                  </FormMessage>
+                ) : null}
 
                 <ButtonRow>
                   <Button
@@ -630,92 +784,155 @@ export default function SettingsAdminView({
                 ) : null}
 
                 <Form onSubmit={onGoogleConnect}>
-                  <FieldGrid>
-                    <Field label="Customer ID" htmlFor="google-customer-id">
-                      <Input
-                        id="google-customer-id"
-                        type="text"
-                        value={googleForm.customerId}
-                        onChange={(event) => setGoogleForm((current) => ({ ...current, customerId: event.target.value }))}
-                        placeholder="123-456-7890"
+                  <FormSection disabled={isGoogleBusy}>
+                    <FieldGrid>
+                      <Field
+                        label="Customer ID"
+                        htmlFor="google-customer-id"
                         required
-                      />
-                    </Field>
-                    <Field label="Login customer ID" htmlFor="google-login-customer-id">
-                      <Input
-                        id="google-login-customer-id"
-                        type="text"
-                        value={googleForm.loginCustomerId ?? ''}
-                        onChange={(event) =>
-                          setGoogleForm((current) => ({ ...current, loginCustomerId: event.target.value }))
-                        }
-                        placeholder="Optional MCC login"
-                      />
-                    </Field>
-                    <Field label="Developer token" htmlFor="google-developer-token">
-                      <Input
-                        id="google-developer-token"
-                        type="password"
-                        value={googleForm.developerToken}
-                        onChange={(event) =>
-                          setGoogleForm((current) => ({ ...current, developerToken: event.target.value }))
-                        }
+                        description="Use the destination Google Ads customer in `123-456-7890` format."
+                        error={googleErrors.customerId ?? undefined}
+                      >
+                        <Input
+                          id="google-customer-id"
+                          type="text"
+                          value={googleForm.customerId}
+                          onChange={(event) => setGoogleForm((current) => ({ ...current, customerId: event.target.value }))}
+                          placeholder="123-456-7890"
+                          aria-invalid={googleErrors.customerId ? 'true' : 'false'}
+                          required
+                        />
+                      </Field>
+                      <Field
+                        label="Login customer ID"
+                        htmlFor="google-login-customer-id"
+                        optional
+                        description="Set this only when the OAuth credentials belong to an MCC."
+                        error={googleErrors.loginCustomerId ?? undefined}
+                      >
+                        <Input
+                          id="google-login-customer-id"
+                          type="text"
+                          value={googleForm.loginCustomerId ?? ''}
+                          onChange={(event) =>
+                            setGoogleForm((current) => ({ ...current, loginCustomerId: event.target.value }))
+                          }
+                          placeholder="Optional MCC login"
+                          aria-invalid={googleErrors.loginCustomerId ? 'true' : 'false'}
+                        />
+                      </Field>
+                      <Field
+                        label="Developer token"
+                        htmlFor="google-developer-token"
                         required
-                      />
-                    </Field>
-                    <Field label="Client ID" htmlFor="google-client-id">
-                      <Input
-                        id="google-client-id"
-                        type="password"
-                        value={googleForm.clientId}
-                        onChange={(event) => setGoogleForm((current) => ({ ...current, clientId: event.target.value }))}
+                        description="Stored encrypted and reused for sync and reconciliation jobs."
+                        error={googleErrors.developerToken ?? undefined}
+                      >
+                        <Input
+                          id="google-developer-token"
+                          type="password"
+                          value={googleForm.developerToken}
+                          onChange={(event) =>
+                            setGoogleForm((current) => ({ ...current, developerToken: event.target.value }))
+                          }
+                          aria-invalid={googleErrors.developerToken ? 'true' : 'false'}
+                          required
+                        />
+                      </Field>
+                      <Field
+                        label="Client ID"
+                        htmlFor="google-client-id"
                         required
-                      />
-                    </Field>
-                    <Field label="Client secret" htmlFor="google-client-secret">
-                      <Input
-                        id="google-client-secret"
-                        type="password"
-                        value={googleForm.clientSecret}
-                        onChange={(event) =>
-                          setGoogleForm((current) => ({ ...current, clientSecret: event.target.value }))
-                        }
+                        description="OAuth client ID from the Google Cloud project used for Ads access."
+                        error={googleErrors.clientId ?? undefined}
+                      >
+                        <Input
+                          id="google-client-id"
+                          type="password"
+                          value={googleForm.clientId}
+                          onChange={(event) => setGoogleForm((current) => ({ ...current, clientId: event.target.value }))}
+                          aria-invalid={googleErrors.clientId ? 'true' : 'false'}
+                          required
+                        />
+                      </Field>
+                      <Field
+                        label="Client secret"
+                        htmlFor="google-client-secret"
                         required
-                      />
-                    </Field>
-                    <Field label="Refresh token" htmlFor="google-refresh-token">
-                      <Input
-                        id="google-refresh-token"
-                        type="password"
-                        value={googleForm.refreshToken}
-                        onChange={(event) =>
-                          setGoogleForm((current) => ({ ...current, refreshToken: event.target.value }))
-                        }
+                        description="Pairs with the client ID above."
+                        error={googleErrors.clientSecret ?? undefined}
+                      >
+                        <Input
+                          id="google-client-secret"
+                          type="password"
+                          value={googleForm.clientSecret}
+                          onChange={(event) =>
+                            setGoogleForm((current) => ({ ...current, clientSecret: event.target.value }))
+                          }
+                          aria-invalid={googleErrors.clientSecret ? 'true' : 'false'}
+                          required
+                        />
+                      </Field>
+                      <Field
+                        label="Refresh token"
+                        htmlFor="google-refresh-token"
                         required
-                      />
-                    </Field>
-                  </FieldGrid>
-                  <ButtonRow>
-                    <Button type="submit" disabled={actionFeedback.loading !== null}>
-                      {actionFeedback.loading === 'google-connect' ? 'Saving…' : 'Connect Google Ads'}
-                    </Button>
-                    <Button
-                      type="button"
-                      tone="secondary"
-                      onClick={() => void onGoogleSync()}
-                      disabled={actionFeedback.loading !== null || googleConnection.data?.connection == null}
-                    >
-                      {actionFeedback.loading === 'google-sync' ? 'Queueing…' : `Sync ${filters.startDate} to ${filters.endDate}`}
-                    </Button>
-                    <Button
-                      type="button"
-                      tone="secondary"
-                      onClick={() => void onGoogleReconcile()}
-                      disabled={actionFeedback.loading !== null || googleConnection.data?.connection == null}
-                    >
-                      {actionFeedback.loading === 'google-reconcile' ? 'Running…' : 'Reconcile gaps'}
-                    </Button>
-                  </ButtonRow>
+                        description="Long-lived refresh token used to mint access tokens for spend sync."
+                        error={googleErrors.refreshToken ?? undefined}
+                      >
+                        <Input
+                          id="google-refresh-token"
+                          type="password"
+                          value={googleForm.refreshToken}
+                          onChange={(event) =>
+                            setGoogleForm((current) => ({ ...current, refreshToken: event.target.value }))
+                          }
+                          aria-invalid={googleErrors.refreshToken ? 'true' : 'false'}
+                          required
+                        />
+                      </Field>
+                    </FieldGrid>
+                    {hasMessageForAction(actionFeedback, ['google-connect', 'google-sync', 'google-reconcile']) ? (
+                      <FormMessage tone={actionFeedback.error ? 'error' : isGoogleBusy ? 'warning' : 'success'}>
+                        {actionFeedback.error
+                          ? actionFeedback.error
+                          : isGoogleBusy
+                            ? 'Submitting the Google Ads action and waiting for the API response…'
+                            : actionFeedback.message}
+                      </FormMessage>
+                    ) : null}
+                    <ButtonRow>
+                      <Button
+                        type="submit"
+                        disabled={Boolean(
+                          googleErrors.customerId ||
+                            googleErrors.loginCustomerId ||
+                            googleErrors.developerToken ||
+                            googleErrors.clientId ||
+                            googleErrors.clientSecret ||
+                            googleErrors.refreshToken
+                        )}
+                      >
+                        {actionFeedback.loading === 'google-connect' ? 'Saving…' : 'Connect Google Ads'}
+                      </Button>
+                      <Button
+                        type="button"
+                        tone="secondary"
+                        onClick={() => void onGoogleSync()}
+                        disabled={googleConnection.data?.connection == null}
+                      >
+                        {actionFeedback.loading === 'google-sync' ? 'Queueing…' : `Sync ${filters.startDate} to ${filters.endDate}`}
+                      </Button>
+                      <Button
+                        type="button"
+                        tone="secondary"
+                        onClick={() => void onGoogleReconcile()}
+                        disabled={googleConnection.data?.connection == null}
+                      >
+                        {actionFeedback.loading === 'google-reconcile' ? 'Running…' : 'Reconcile gaps'}
+                      </Button>
+                    </ButtonRow>
+                  </FormSection>
                 </Form>
               </div>
             </ConnectionState>
@@ -738,55 +955,96 @@ export default function SettingsAdminView({
                   New users can sign into both reporting and admin surfaces immediately after creation.
                 </p>
                 <Form className="mt-5" onSubmit={onCreateUser}>
-                  <FieldGrid dense>
-                    <Field label="Display name" htmlFor="new-user-display-name">
-                      <Input
-                        id="new-user-display-name"
-                        type="text"
-                        value={newUserForm.displayName}
-                        onChange={(event) =>
-                          setNewUserForm((current) => ({ ...current, displayName: event.target.value }))
-                        }
+                  <FormSection disabled={isUserCreateBusy}>
+                    <FieldGrid dense>
+                      <Field
+                        label="Display name"
+                        htmlFor="new-user-display-name"
                         required
-                      />
-                    </Field>
-                    <Field label="Email" htmlFor="new-user-email">
-                      <Input
-                        id="new-user-email"
-                        type="email"
-                        value={newUserForm.email}
-                        onChange={(event) => setNewUserForm((current) => ({ ...current, email: event.target.value }))}
+                        description="Shown across the dashboard shell and authenticated settings views."
+                        error={createUserErrors.displayName ?? undefined}
+                      >
+                        <Input
+                          id="new-user-display-name"
+                          type="text"
+                          value={newUserForm.displayName}
+                          onChange={(event) =>
+                            setNewUserForm((current) => ({ ...current, displayName: event.target.value }))
+                          }
+                          aria-invalid={createUserErrors.displayName ? 'true' : 'false'}
+                          required
+                        />
+                      </Field>
+                      <Field
+                        label="Email"
+                        htmlFor="new-user-email"
                         required
-                      />
-                    </Field>
-                    <Field label="Password" htmlFor="new-user-password">
-                      <Input
-                        id="new-user-password"
-                        type="password"
-                        value={newUserForm.password}
-                        onChange={(event) =>
-                          setNewUserForm((current) => ({ ...current, password: event.target.value }))
-                        }
-                        minLength={12}
+                        description="Used as the sign-in identifier for reporting and admin surfaces."
+                        error={createUserErrors.email ?? undefined}
+                      >
+                        <Input
+                          id="new-user-email"
+                          type="email"
+                          value={newUserForm.email}
+                          onChange={(event) => setNewUserForm((current) => ({ ...current, email: event.target.value }))}
+                          aria-invalid={createUserErrors.email ? 'true' : 'false'}
+                          required
+                        />
+                      </Field>
+                      <Field
+                        label="Password"
+                        htmlFor="new-user-password"
                         required
-                      />
-                    </Field>
-                    <CheckboxField label="Admin access" htmlFor="new-user-admin">
-                      <input
-                        id="new-user-admin"
-                        type="checkbox"
-                        checked={Boolean(newUserForm.isAdmin)}
-                        onChange={(event) =>
-                          setNewUserForm((current) => ({ ...current, isAdmin: event.target.checked }))
-                        }
-                      />
-                    </CheckboxField>
-                  </FieldGrid>
-                  <ButtonRow>
-                    <Button type="submit" disabled={actionFeedback.loading !== null}>
-                      {actionFeedback.loading === 'user-create' ? 'Creating…' : 'Add user'}
-                    </Button>
-                  </ButtonRow>
+                        description="Minimum 12 characters. The existing password policy is unchanged."
+                        error={createUserErrors.password ?? undefined}
+                      >
+                        <Input
+                          id="new-user-password"
+                          type="password"
+                          value={newUserForm.password}
+                          onChange={(event) =>
+                            setNewUserForm((current) => ({ ...current, password: event.target.value }))
+                          }
+                          minLength={12}
+                          aria-invalid={createUserErrors.password ? 'true' : 'false'}
+                          required
+                        />
+                      </Field>
+                      <CheckboxField
+                        label="Admin access"
+                        htmlFor="new-user-admin"
+                        description="Admins can edit settings, manage connections, and provision users."
+                      >
+                        <input
+                          id="new-user-admin"
+                          type="checkbox"
+                          checked={Boolean(newUserForm.isAdmin)}
+                          onChange={(event) =>
+                            setNewUserForm((current) => ({ ...current, isAdmin: event.target.checked }))
+                          }
+                        />
+                      </CheckboxField>
+                    </FieldGrid>
+                    {hasMessageForAction(actionFeedback, ['user-create']) ? (
+                      <FormMessage tone={actionFeedback.error ? 'error' : isUserCreateBusy ? 'warning' : 'success'}>
+                        {actionFeedback.error
+                          ? actionFeedback.error
+                          : isUserCreateBusy
+                            ? 'Creating the authenticated user account…'
+                            : actionFeedback.message}
+                      </FormMessage>
+                    ) : null}
+                    <ButtonRow>
+                      <Button
+                        type="submit"
+                        disabled={Boolean(
+                          createUserErrors.displayName || createUserErrors.email || createUserErrors.password
+                        )}
+                      >
+                        {actionFeedback.loading === 'user-create' ? 'Creating…' : 'Add user'}
+                      </Button>
+                    </ButtonRow>
+                  </FormSection>
                 </Form>
               </div>
 

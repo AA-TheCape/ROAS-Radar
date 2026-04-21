@@ -513,6 +513,37 @@ export function Form({
   );
 }
 
+export function FormSection({
+  className,
+  disabled = false,
+  children,
+  ...props
+}: ComponentPropsWithoutRef<'fieldset'>) {
+  return (
+    <fieldset className={cx('grid gap-5 disabled:cursor-wait disabled:opacity-80', className)} disabled={disabled} {...props}>
+      {children}
+    </fieldset>
+  );
+}
+
+export function FormMessage({
+  tone = 'default',
+  title,
+  children,
+  className
+}: {
+  tone?: SurfaceTone;
+  title?: string;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <Alert tone={tone} title={title} className={cx('rounded-[18px]', className)}>
+      {children}
+    </Alert>
+  );
+}
+
 export function FieldGrid({
   dense = false,
   className,
@@ -529,12 +560,20 @@ export function Field({
   label,
   htmlFor,
   hint,
+  error,
+  description,
+  required = false,
+  optional = false,
   wide = false,
   children
 }: {
   label: string;
   htmlFor?: string;
   hint?: string;
+  error?: string;
+  description?: string;
+  required?: boolean;
+  optional?: boolean;
   wide?: boolean;
   children: ReactNode;
 }) {
@@ -546,9 +585,15 @@ export function Field({
         wide && 'md:col-[1/-1]'
       )}
     >
-      <span>{label}</span>
+      <span className="flex flex-wrap items-center gap-2">
+        <span>{label}</span>
+        {required ? <span className="text-[0.7rem] tracking-[0.12em] text-brand">Required</span> : null}
+        {optional ? <span className="text-[0.7rem] tracking-[0.12em] text-ink-muted">Optional</span> : null}
+      </span>
+      {description ? <span className="text-body normal-case tracking-normal text-ink-muted">{description}</span> : null}
       {children}
       {hint ? <span className="text-body normal-case tracking-normal text-ink-muted">{hint}</span> : null}
+      {error ? <span className="text-body normal-case tracking-normal text-danger">{error}</span> : null}
     </label>
   );
 }
@@ -556,53 +601,64 @@ export function Field({
 export function CheckboxField({
   label,
   htmlFor,
+  description,
+  error,
   children
 }: {
   label: string;
   htmlFor?: string;
+  description?: string;
+  error?: string;
   children: ReactNode;
 }) {
   return (
     <label
       htmlFor={htmlFor}
-      className="flex items-start gap-3 rounded-card border border-line/60 bg-surface-alt/60 px-4 py-3 text-label font-semibold uppercase tracking-[0.08em] text-ink-soft"
+      className={cx(
+        'flex items-start gap-3 rounded-card border border-line/60 bg-surface-alt/60 px-4 py-3 text-label font-semibold uppercase tracking-[0.08em] text-ink-soft',
+        error && 'border-danger/30 bg-danger-soft/40'
+      )}
     >
       {children}
-      <span>{label}</span>
+      <span className="grid gap-1.5">
+        <span>{label}</span>
+        {description ? <span className="text-body normal-case tracking-normal text-ink-muted">{description}</span> : null}
+        {error ? <span className="text-body normal-case tracking-normal text-danger">{error}</span> : null}
+      </span>
     </label>
   );
 }
 
-export function Input(props: ComponentPropsWithoutRef<'input'>) {
+export function Input({ className, ...props }: ComponentPropsWithoutRef<'input'>) {
   return (
     <input
       className={cx(
-        'min-h-[44px] w-full rounded-[14px] border border-line-strong/45 bg-white/95 px-4 py-3 text-body font-normal text-ink shadow-inset-soft transition placeholder:text-ink-muted/80',
-        props.className
+        'min-h-[44px] w-full rounded-[14px] border border-line-strong/45 bg-white/95 px-4 py-3 text-body font-normal text-ink shadow-inset-soft transition placeholder:text-ink-muted/80 focus:border-brand/60 focus:outline-none focus:ring-4 focus:ring-brand/10 disabled:cursor-not-allowed disabled:border-line/40 disabled:bg-surface-alt disabled:text-ink-muted aria-[invalid=true]:border-danger/45 aria-[invalid=true]:bg-danger-soft/30 aria-[invalid=true]:text-ink',
+        className
       )}
       {...props}
     />
   );
 }
 
-export function Select(props: ComponentPropsWithoutRef<'select'>) {
+export function Select({ className, ...props }: ComponentPropsWithoutRef<'select'>) {
   return (
     <select
       className={cx(
-        'min-h-[44px] w-full rounded-[14px] border border-line-strong/45 bg-white/95 px-4 py-3 text-body font-normal text-ink shadow-inset-soft transition placeholder:text-ink-muted/80',
-        props.className
+        'min-h-[44px] w-full rounded-[14px] border border-line-strong/45 bg-white/95 px-4 py-3 text-body font-normal text-ink shadow-inset-soft transition placeholder:text-ink-muted/80 focus:border-brand/60 focus:outline-none focus:ring-4 focus:ring-brand/10 disabled:cursor-not-allowed disabled:border-line/40 disabled:bg-surface-alt disabled:text-ink-muted aria-[invalid=true]:border-danger/45 aria-[invalid=true]:bg-danger-soft/30 aria-[invalid=true]:text-ink',
+        className
       )}
       {...props}
     />
   );
 }
 
-export function Textarea(props: ComponentPropsWithoutRef<'textarea'>) {
+export function Textarea({ className, ...props }: ComponentPropsWithoutRef<'textarea'>) {
   return (
     <textarea
       className={cx(
-        'min-h-[120px] w-full rounded-[14px] border border-line-strong/45 bg-white/95 px-4 py-3 text-body font-normal text-ink shadow-inset-soft transition placeholder:text-ink-muted/80',
-        props.className
+        'min-h-[120px] w-full rounded-[14px] border border-line-strong/45 bg-white/95 px-4 py-3 text-body font-normal text-ink shadow-inset-soft transition placeholder:text-ink-muted/80 focus:border-brand/60 focus:outline-none focus:ring-4 focus:ring-brand/10 disabled:cursor-not-allowed disabled:border-line/40 disabled:bg-surface-alt disabled:text-ink-muted aria-[invalid=true]:border-danger/45 aria-[invalid=true]:bg-danger-soft/30 aria-[invalid=true]:text-ink',
+        className
       )}
       {...props}
     />

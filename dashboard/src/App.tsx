@@ -88,6 +88,7 @@ type DashboardState = {
 };
 
 type ActionFeedback = {
+  context: string | null;
   loading: string | null;
   error: string | null;
   message: string | null;
@@ -419,6 +420,7 @@ function App() {
     refreshToken: ''
   });
   const [actionFeedback, setActionFeedback] = useState<ActionFeedback>({
+    context: null,
     loading: null,
     error: null,
     message: null
@@ -710,6 +712,7 @@ function App() {
     });
     setSelectedOrderId(null);
     setActionFeedback({
+      context: null,
       loading: null,
       error: null,
       message: null
@@ -719,6 +722,7 @@ function App() {
   async function handleSettingsSave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setActionFeedback({
+      context: 'settings-save',
       loading: 'settings-save',
       error: null,
       message: null
@@ -746,12 +750,14 @@ function App() {
         setDashboardRefreshKey((current) => current + 1);
       });
       setActionFeedback({
+        context: 'settings-save',
         loading: null,
         error: null,
         message: `Saved reporting timezone as ${response.settings.reportingTimezone}.`
       });
     } catch (error) {
       setActionFeedback({
+        context: 'settings-save',
         loading: null,
         error: error instanceof Error ? error.message : 'Failed to save dashboard settings',
         message: null
@@ -762,6 +768,7 @@ function App() {
   async function handleCreateUser(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setActionFeedback({
+      context: 'user-create',
       loading: 'user-create',
       error: null,
       message: null
@@ -781,12 +788,14 @@ function App() {
         isAdmin: false
       });
       setActionFeedback({
+        context: 'user-create',
         loading: null,
         error: null,
         message: `Created user ${response.user.email}.`
       });
     } catch (error) {
       setActionFeedback({
+        context: 'user-create',
         loading: null,
         error: error instanceof Error ? error.message : 'Failed to create user',
         message: null
@@ -796,6 +805,7 @@ function App() {
 
   async function handleMetaConnect() {
     setActionFeedback({
+      context: 'meta-connect',
       loading: 'meta-connect',
       error: null,
       message: null
@@ -808,6 +818,7 @@ function App() {
 
       const response = await startMetaAdsOauth(window.location.pathname);
       setActionFeedback({
+        context: 'meta-connect',
         loading: null,
         error: null,
         message: 'Redirecting to Meta Ads…'
@@ -815,6 +826,7 @@ function App() {
       window.location.assign(response.authorizationUrl);
     } catch (error) {
       setActionFeedback({
+        context: 'meta-connect',
         loading: null,
         error: error instanceof Error ? error.message : 'Failed to start Meta Ads OAuth',
         message: null
@@ -825,6 +837,7 @@ function App() {
   async function handleMetaConfigSave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setActionFeedback({
+      context: 'meta-config-save',
       loading: 'meta-config-save',
       error: null,
       message: null
@@ -845,12 +858,14 @@ function App() {
         appScopes: response.config.appScopes.join(', ')
       }));
       setActionFeedback({
+        context: 'meta-config-save',
         loading: null,
         error: null,
         message: 'Saved Meta Ads configuration.'
       });
     } catch (error) {
       setActionFeedback({
+        context: 'meta-config-save',
         loading: null,
         error: error instanceof Error ? error.message : 'Failed to save Meta Ads configuration',
         message: null
@@ -860,6 +875,7 @@ function App() {
 
   async function handleShopifyTest() {
     setActionFeedback({
+      context: 'shopify-test',
       loading: 'shopify-test',
       error: null,
       message: null
@@ -869,6 +885,7 @@ function App() {
       const response = await fetchShopifyConnection();
       setShopifyConnection(createResolvedSection(response));
       setActionFeedback({
+        context: 'shopify-test',
         loading: null,
         error: null,
         message: response.connected
@@ -877,6 +894,7 @@ function App() {
       });
     } catch (error) {
       setActionFeedback({
+        context: 'shopify-test',
         loading: null,
         error: error instanceof Error ? error.message : 'Failed to verify Shopify connection',
         message: null
@@ -886,6 +904,7 @@ function App() {
 
   async function handleShopifyWebhookSync() {
     setActionFeedback({
+      context: 'shopify-webhooks',
       loading: 'shopify-webhooks',
       error: null,
       message: null
@@ -895,12 +914,14 @@ function App() {
       const response = await syncShopifyWebhooks();
       await loadConnections();
       setActionFeedback({
+        context: 'shopify-webhooks',
         loading: null,
         error: null,
         message: `Re-provisioned Shopify webhooks for ${response.shopDomain}.`
       });
     } catch (error) {
       setActionFeedback({
+        context: 'shopify-webhooks',
         loading: null,
         error: error instanceof Error ? error.message : 'Failed to sync Shopify webhooks',
         message: null
@@ -911,6 +932,7 @@ function App() {
   async function handleShopifyBackfill(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setActionFeedback({
+      context: 'shopify-backfill',
       loading: 'shopify-backfill',
       error: null,
       message: null
@@ -926,12 +948,14 @@ function App() {
         setDashboardRefreshKey((current) => current + 1);
       });
       setActionFeedback({
+        context: 'shopify-backfill',
         loading: null,
         error: null,
         message: `Backfilled ${response.importedOrders} Shopify orders for ${response.startDate} to ${response.endDate} (${response.processedOrders} imported, ${response.duplicatedOrders} already present).`
       });
     } catch (error) {
       setActionFeedback({
+        context: 'shopify-backfill',
         loading: null,
         error: error instanceof Error ? error.message : 'Failed to backfill Shopify orders',
         message: null
@@ -941,6 +965,7 @@ function App() {
 
   async function handleShopifyAttributionRecovery() {
     setActionFeedback({
+      context: 'shopify-attribution-recovery',
       loading: 'shopify-attribution-recovery',
       error: null,
       message: null
@@ -956,12 +981,14 @@ function App() {
         setDashboardRefreshKey((current) => current + 1);
       });
       setActionFeedback({
+        context: 'shopify-attribution-recovery',
         loading: null,
         error: null,
         message: `Rescanned ${response.rescannedOrders} unknown Shopify web orders for ${response.startDate} to ${response.endDate}; relinked ${response.relinkedOrders}, attributed ${response.shopifyHintAttributedOrders} from Shopify hints, and requeued ${response.requeuedOrders} for standard attribution.`
       });
     } catch (error) {
       setActionFeedback({
+        context: 'shopify-attribution-recovery',
         loading: null,
         error: error instanceof Error ? error.message : 'Failed to recover Shopify attribution hints',
         message: null
@@ -971,6 +998,7 @@ function App() {
 
   async function handleMetaSync() {
     setActionFeedback({
+      context: 'meta-sync',
       loading: 'meta-sync',
       error: null,
       message: null
@@ -980,12 +1008,14 @@ function App() {
       const response = await syncMetaAds(filters.startDate, filters.endDate);
       await loadConnections();
       setActionFeedback({
+        context: 'meta-sync',
         loading: null,
         error: null,
         message: `Queued ${response.enqueuedJobs} Meta Ads sync jobs for ${response.dates.length} dates.`
       });
     } catch (error) {
       setActionFeedback({
+        context: 'meta-sync',
         loading: null,
         error: error instanceof Error ? error.message : 'Failed to queue Meta Ads sync',
         message: null
@@ -996,6 +1026,7 @@ function App() {
   async function handleGoogleConnect(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setActionFeedback({
+      context: 'google-connect',
       loading: 'google-connect',
       error: null,
       message: null
@@ -1008,12 +1039,14 @@ function App() {
       });
       await loadConnections();
       setActionFeedback({
+        context: 'google-connect',
         loading: null,
         error: null,
         message: `Connected Google Ads customer ${response.customerId}${response.customerName ? ` (${response.customerName})` : ''}.`
       });
     } catch (error) {
       setActionFeedback({
+        context: 'google-connect',
         loading: null,
         error: error instanceof Error ? error.message : 'Failed to connect Google Ads',
         message: null
@@ -1023,6 +1056,7 @@ function App() {
 
   async function handleGoogleSync() {
     setActionFeedback({
+      context: 'google-sync',
       loading: 'google-sync',
       error: null,
       message: null
@@ -1032,12 +1066,14 @@ function App() {
       const response = await syncGoogleAds(filters.startDate, filters.endDate);
       await loadConnections();
       setActionFeedback({
+        context: 'google-sync',
         loading: null,
         error: null,
         message: `Queued ${response.enqueuedJobs} Google Ads sync jobs for ${response.dates.length} dates.`
       });
     } catch (error) {
       setActionFeedback({
+        context: 'google-sync',
         loading: null,
         error: error instanceof Error ? error.message : 'Failed to queue Google Ads sync',
         message: null
@@ -1047,6 +1083,7 @@ function App() {
 
   async function handleGoogleReconcile() {
     setActionFeedback({
+      context: 'google-reconcile',
       loading: 'google-reconcile',
       error: null,
       message: null
@@ -1056,12 +1093,14 @@ function App() {
       const response = await reconcileGoogleAds();
       await loadConnections();
       setActionFeedback({
+        context: 'google-reconcile',
         loading: null,
         error: null,
         message: `Queued ${response.enqueuedJobs} Google Ads reconciliation jobs.`
       });
     } catch (error) {
       setActionFeedback({
+        context: 'google-reconcile',
         loading: null,
         error: error instanceof Error ? error.message : 'Failed to reconcile Google Ads',
         message: null
