@@ -1,3 +1,35 @@
+import { useState } from 'react';
+
+import {
+  Alert,
+  Badge,
+  Button,
+  ButtonRow,
+  Card,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  EmptyState,
+  Field,
+  FieldGrid,
+  Form,
+  Input,
+  Modal,
+  Panel,
+  Select,
+  Skeleton,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeaderCell,
+  TableRow,
+  Tabs,
+  TableWrap,
+  Textarea,
+  Tooltip
+} from './components/AuthenticatedUi';
+
 const colorSections = [
   {
     title: 'Canvas',
@@ -18,156 +50,61 @@ const colorSections = [
       { name: 'brand-soft', value: '#f6dfd3', background: 'bg-brand-soft', text: 'text-brand-strong' },
       { name: 'teal', value: '#1f7a74', background: 'bg-teal', text: 'text-white' }
     ]
-  },
-  {
-    title: 'Utility',
-    description: 'Supportive states for messaging, health, and interactive feedback.',
-    tokens: [
-      { name: 'success', value: '#2f7d60', background: 'bg-success', text: 'text-white' },
-      { name: 'success-soft', value: '#dcefe6', background: 'bg-success-soft', text: 'text-success' },
-      { name: 'warning', value: '#b0711f', background: 'bg-warning', text: 'text-white' },
-      { name: 'danger', value: '#b64c46', background: 'bg-danger', text: 'text-white' }
-    ]
   }
 ] as const;
 
-const typeSamples = [
-  {
-    label: 'font-display / text-hero',
-    className: 'font-display text-hero leading-[0.92] tracking-tight',
-    preview: 'ROAS Radar'
-  },
-  {
-    label: 'font-display / text-display',
-    className: 'font-display text-display leading-tight tracking-tight',
-    preview: 'Metrics with intent'
-  },
-  {
-    label: 'font-display / text-title',
-    className: 'font-display text-title leading-tight',
-    preview: 'Panel and widget titles'
-  },
-  {
-    label: 'font-body / text-lead',
-    className: 'font-body text-lead text-ink-soft',
-    preview: 'Use the lead size for hero support copy and section intros.'
-  },
-  {
-    label: 'font-body / text-body',
-    className: 'font-body text-body text-ink-soft',
-    preview: 'Default application text balances density and readability for dashboard-heavy layouts.'
-  },
-  {
-    label: 'font-body / text-caption',
-    className: 'font-body text-caption uppercase tracking-[0.18em] text-teal',
-    preview: 'Secure dashboard'
-  }
-] as const;
-
-const spacingTokens = [
-  { name: 'gutter', value: '1rem', className: 'w-gutter' },
-  { name: 'section', value: '1.5rem', className: 'w-section' },
-  { name: 'panel', value: '1.75rem', className: 'w-panel' },
-  { name: 'card', value: '2.25rem', className: 'w-card' },
-  { name: 'section-lg', value: '3rem', className: 'w-section-lg' },
-  { name: 'hero', value: '4.5rem', className: 'w-hero' }
-] as const;
-
-const radiusTokens = [
-  { name: 'card', value: '1.5rem', className: 'rounded-card' },
-  { name: 'panel', value: '1.75rem', className: 'rounded-panel' },
-  { name: 'shell', value: '2rem', className: 'rounded-shell' },
-  { name: 'pill', value: '999px', className: 'rounded-pill' }
-] as const;
-
-const shadowTokens = [
-  { name: 'shadow-panel', value: '0 20px 45px rgba(23, 33, 43, 0.08)', className: 'shadow-panel' },
-  { name: 'shadow-lift', value: '0 28px 68px rgba(23, 33, 43, 0.14)', className: 'shadow-lift' },
-  { name: 'shadow-inset-soft', value: 'inset 0 1px 0 rgba(255,255,255,0.8)', className: 'shadow-inset-soft' }
-];
-
-const borderTokens = [
-  { name: 'border-thin', width: '1px', className: 'border border-line/80' },
-  { name: 'border-strong', width: '1.5px', className: 'border-strong border-line-strong/80' },
-  { name: 'border-heavy', width: '2px', className: 'border-heavy border-brand/25' }
-];
-
-const breakpointTokens = [
-  { name: 'xs', value: '480px' },
-  { name: 'sm', value: '640px' },
-  { name: 'md', value: '768px' },
-  { name: 'lg', value: '1040px' },
-  { name: 'xl', value: '1280px' },
-  { name: '2xl', value: '1440px' },
-  { name: '3xl', value: '1680px' }
+const componentUsage = [
+  'Dashboard uses buttons, inputs, selects, cards, badges, tables, alerts, empty states, and skeleton loaders.',
+  'Order details uses cards, badges, tooltips, tables, empty states, and skeleton-backed loading/error states.',
+  'Settings uses cards, badges, alerts, forms, tables, and empty/skeleton states for connection and user-access workflows.'
 ] as const;
 
 function StyleGuidePage() {
+  const [modalOpen, setModalOpen] = useState(false);
+
   return (
     <main className="min-h-screen bg-canvas text-ink">
       <div className="absolute inset-x-0 top-0 -z-10 h-[32rem] bg-[radial-gradient(circle_at_top_left,rgba(203,99,50,0.18),transparent_28%),radial-gradient(circle_at_top_right,rgba(31,122,116,0.18),transparent_24%),linear-gradient(180deg,#f7f9f6_0%,#f4f7f4_50%,#edf5f2_100%)]" />
 
       <div className="mx-auto flex min-h-screen w-full max-w-[92rem] flex-col gap-section-lg px-gutter py-card sm:px-section lg:px-section-lg">
         <section className="grid gap-panel lg:grid-cols-[minmax(0,1.6fr)_20rem]">
-          <article className="rounded-shell border border-line/80 bg-surface/90 p-card shadow-lift backdrop-blur">
-            <p className="font-body text-caption uppercase tracking-[0.18em] text-teal">Tailwind Foundations</p>
+          <Card tone="accent" padding="card" className="shadow-lift">
+            <p className="font-body text-caption uppercase tracking-[0.18em] text-teal">Tailwind Component Library</p>
             <h1 className="mt-4 max-w-[12ch] font-display text-hero leading-[0.92] tracking-tight text-ink">
-              Light-mode design system for authenticated UI surfaces
+              Reusable authenticated UI primitives
             </h1>
             <p className="mt-5 max-w-3xl text-lead text-ink-soft">
-              This page previews the approved Tailwind tokens for canvas, type, spacing, radii, shadows, borders,
-              and responsive breakpoints. It is available at <span className="font-mono text-caption">/#style-guide</span>.
+              This page documents the standardized Tailwind components used across authenticated reporting, order
+              drill-in, and settings surfaces.
             </p>
-            <div className="mt-card flex flex-wrap gap-3">
-              <span className="inline-flex rounded-pill border border-line/80 bg-brand-soft px-4 py-2 text-caption font-semibold uppercase tracking-[0.12em] text-brand-strong">
-                Modern light-only
-              </span>
-              <span className="inline-flex rounded-pill border border-line/80 bg-teal-soft px-4 py-2 text-caption font-semibold uppercase tracking-[0.12em] text-teal-strong">
-                Dashboard-first density
-              </span>
-              <span className="inline-flex rounded-pill border border-line/80 bg-surface-alt px-4 py-2 text-caption font-semibold uppercase tracking-[0.12em] text-ink-soft">
-                React + Tailwind
-              </span>
-            </div>
-          </article>
+            <ButtonRow className="mt-card">
+              <Badge tone="brand">Dashboard, Order details, Settings</Badge>
+              <Badge tone="teal">Accessibility basics covered</Badge>
+              <Badge tone="neutral">Variants documented below</Badge>
+            </ButtonRow>
+          </Card>
 
-          <aside className="rounded-shell border border-line/80 bg-surface/90 p-panel shadow-panel backdrop-blur">
-            <p className="text-caption uppercase tracking-[0.14em] text-ink-muted">Foundation summary</p>
-            <dl className="mt-5 grid gap-4">
-              <div className="rounded-card border border-line/70 bg-canvas-tint p-4">
-                <dt className="text-caption uppercase tracking-[0.12em] text-ink-muted">Primary fonts</dt>
-                <dd className="mt-2 font-display text-title text-ink">Space Grotesk / IBM Plex Sans</dd>
-              </div>
-              <div className="rounded-card border border-line/70 bg-canvas-tint p-4">
-                <dt className="text-caption uppercase tracking-[0.12em] text-ink-muted">Panel recipe</dt>
-                <dd className="mt-2 text-body text-ink-soft">`rounded-panel border border-line bg-surface shadow-panel`</dd>
-              </div>
-              <div className="rounded-card border border-line/70 bg-canvas-tint p-4">
-                <dt className="text-caption uppercase tracking-[0.12em] text-ink-muted">Responsive range</dt>
-                <dd className="mt-2 text-body text-ink-soft">xs 480px through 3xl 1680px</dd>
-              </div>
-            </dl>
-          </aside>
+          <Panel title="Coverage" description="Required adoption and accessibility notes for the component library.">
+            <div className="grid gap-3">
+              {componentUsage.map((item) => (
+                <Alert key={item}>{item}</Alert>
+              ))}
+            </div>
+            <div className="mt-4 rounded-card border border-line/60 bg-canvas-tint/80 p-4 text-body text-ink-soft">
+              Focus styling is applied globally to buttons, inputs, selects, textareas, tabs, and tooltip triggers.
+              Tables support screen-reader captions, and modals use `role="dialog"` with labelled content.
+            </div>
+          </Panel>
         </section>
 
         <section className="grid gap-panel">
-          <div className="max-w-3xl">
-            <p className="text-caption uppercase tracking-[0.18em] text-teal">Color</p>
-            <h2 className="mt-3 font-display text-display tracking-tight text-ink">Palette tokens</h2>
-            <p className="mt-3 text-body text-ink-soft">
-              Color pairs are tuned for bright analytic surfaces with warm brand energy and cool operational accents.
-            </p>
+          <div>
+            <p className="text-caption uppercase tracking-[0.18em] text-teal">Palette</p>
+            <h2 className="mt-3 font-display text-display tracking-tight text-ink">Foundation tokens</h2>
           </div>
-
           <div className="grid gap-panel">
             {colorSections.map((section) => (
-              <article key={section.title} className="rounded-shell border border-line/80 bg-surface p-panel shadow-panel">
-                <div className="mb-panel flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
-                  <div>
-                    <h3 className="font-display text-title text-ink">{section.title}</h3>
-                    <p className="mt-2 max-w-2xl text-body text-ink-soft">{section.description}</p>
-                  </div>
-                </div>
+              <Panel key={section.title} title={section.title} description={section.description} wide>
                 <div className="grid gap-4 xs:grid-cols-2 xl:grid-cols-4">
                   {section.tokens.map((token) => (
                     <div key={token.name} className="rounded-card border border-line/70 bg-canvas-tint p-3">
@@ -181,120 +118,168 @@ function StyleGuidePage() {
                     </div>
                   ))}
                 </div>
-              </article>
+              </Panel>
             ))}
           </div>
         </section>
 
-        <section className="grid gap-panel xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
-          <article className="rounded-shell border border-line/80 bg-surface p-panel shadow-panel">
-            <p className="text-caption uppercase tracking-[0.18em] text-teal">Typography</p>
-            <h2 className="mt-3 font-display text-display tracking-tight text-ink">Display and body scale</h2>
-            <div className="mt-panel grid gap-5">
-              {typeSamples.map((sample) => (
-                <div key={sample.label} className="rounded-card border border-line/70 bg-canvas-tint p-5">
-                  <p className="font-mono text-caption tracking-normal text-ink-muted">{sample.label}</p>
-                  <p className={`mt-3 ${sample.className}`}>{sample.preview}</p>
-                </div>
-              ))}
-            </div>
-          </article>
-
-          <article className="rounded-shell border border-line/80 bg-surface p-panel shadow-panel">
-            <p className="text-caption uppercase tracking-[0.18em] text-teal">Spacing</p>
-            <h2 className="mt-3 font-display text-display tracking-tight text-ink">Semantic layout rhythm</h2>
-            <div className="mt-panel space-y-4">
-              {spacingTokens.map((token) => (
-                <div key={token.name} className="rounded-card border border-line/70 bg-canvas-tint p-4">
-                  <div className="flex items-center justify-between gap-4">
-                    <div>
-                      <p className="text-body font-semibold text-ink">{token.name}</p>
-                      <p className="font-mono text-caption tracking-normal text-ink-muted">{token.value}</p>
-                    </div>
-                    <div className="flex-1">
-                      <div className={`${token.className} h-4 rounded-pill bg-gradient-to-r from-teal to-brand`} />
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </article>
-        </section>
-
-        <section className="grid gap-panel lg:grid-cols-3">
-          <article className="rounded-shell border border-line/80 bg-surface p-panel shadow-panel">
-            <p className="text-caption uppercase tracking-[0.18em] text-teal">Radii</p>
-            <h2 className="mt-3 font-display text-title text-ink">Surface curvature</h2>
-            <div className="mt-panel grid gap-4">
-              {radiusTokens.map((token) => (
-                <div key={token.name} className="rounded-card border border-line/70 bg-canvas-tint p-4">
-                  <div className={`${token.className} h-20 border border-line/80 bg-surface-alt`} />
-                  <div className="mt-3">
-                    <p className="text-body font-semibold text-ink">{token.name}</p>
-                    <p className="font-mono text-caption tracking-normal text-ink-muted">{token.value}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </article>
-
-          <article className="rounded-shell border border-line/80 bg-surface p-panel shadow-panel">
-            <p className="text-caption uppercase tracking-[0.18em] text-teal">Elevation</p>
-            <h2 className="mt-3 font-display text-title text-ink">Shadow recipes</h2>
-            <div className="mt-panel grid gap-4">
-              {shadowTokens.map((token) => (
-                <div key={token.name} className="rounded-card border border-line/70 bg-canvas-tint p-4">
-                  <div className={`${token.className} h-20 rounded-card border border-line/70 bg-surface`} />
-                  <div className="mt-3">
-                    <p className="text-body font-semibold text-ink">{token.name}</p>
-                    <p className="font-mono text-caption tracking-normal text-ink-muted">{token.value}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </article>
-
-          <article className="rounded-shell border border-line/80 bg-surface p-panel shadow-panel">
-            <p className="text-caption uppercase tracking-[0.18em] text-teal">Borders</p>
-            <h2 className="mt-3 font-display text-title text-ink">Stroke hierarchy</h2>
-            <div className="mt-panel grid gap-4">
-              {borderTokens.map((token) => (
-                <div key={token.name} className="rounded-card border border-line/70 bg-canvas-tint p-4">
-                  <div className={`${token.className} h-20 rounded-card bg-surface`} />
-                  <div className="mt-3">
-                    <p className="text-body font-semibold text-ink">{token.name}</p>
-                    <p className="font-mono text-caption tracking-normal text-ink-muted">{token.width}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </article>
-        </section>
-
-        <section className="rounded-shell border border-line/80 bg-surface p-panel shadow-panel">
-          <p className="text-caption uppercase tracking-[0.18em] text-teal">Breakpoints</p>
-          <h2 className="mt-3 font-display text-display tracking-tight text-ink">Responsive thresholds</h2>
-          <p className="mt-3 max-w-3xl text-body text-ink-soft">
-            The system keeps dense reporting layouts readable by widening progressively from mobile stacks to full
-            multi-panel desktop compositions.
-          </p>
-          <div className="mt-panel grid gap-4 xs:grid-cols-2 lg:grid-cols-4">
-            {breakpointTokens.map((token) => (
-              <div key={token.name} className="rounded-card border border-line/70 bg-canvas-tint p-4">
-                <p className="text-caption uppercase tracking-[0.12em] text-ink-muted">{token.name}</p>
-                <p className="mt-2 font-display text-title text-ink">{token.value}</p>
+        <section className="grid gap-panel xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+          <Panel title="Buttons, Badges, Alerts" description="Primary action, secondary action, neutral actions, and semantic messaging.">
+            <div className="grid gap-5">
+              <div className="flex flex-wrap gap-3">
+                <Button>Primary action</Button>
+                <Button tone="secondary">Secondary action</Button>
+                <Button tone="ghost">Ghost action</Button>
               </div>
-            ))}
+              <div className="flex flex-wrap gap-3">
+                <Badge tone="brand">Brand</Badge>
+                <Badge tone="teal">Teal</Badge>
+                <Badge tone="success">Success</Badge>
+                <Badge tone="warning">Warning</Badge>
+                <Badge tone="danger">Danger</Badge>
+                <Badge tone="neutral">Neutral</Badge>
+              </div>
+              <div className="grid gap-3">
+                <Alert tone="default" title="Default alert">
+                  Use for operational hints and non-blocking feedback.
+                </Alert>
+                <Alert tone="success" title="Success alert">
+                  Use after saves, sync actions, and completed workflows.
+                </Alert>
+                <Alert tone="error" title="Error alert">
+                  Use for failed fetches, invalid credentials, and blocked actions.
+                </Alert>
+              </div>
+            </div>
+          </Panel>
+
+          <Panel title="Forms" description="Standardized input, select, and textarea controls with labels and hints.">
+            <Form>
+              <FieldGrid>
+                <Field label="Campaign name" htmlFor="style-guide-campaign" hint="Use human-readable names for marketing teams.">
+                  <Input id="style-guide-campaign" type="text" placeholder="spring-sale" />
+                </Field>
+                <Field label="Grouping" htmlFor="style-guide-grouping">
+                  <Select id="style-guide-grouping" defaultValue="day">
+                    <option value="day">Daily</option>
+                    <option value="source">By source</option>
+                    <option value="campaign">By campaign</option>
+                  </Select>
+                </Field>
+                <Field label="Admin note" htmlFor="style-guide-note" wide>
+                  <Textarea id="style-guide-note" placeholder="Explain what changed and why." />
+                </Field>
+              </FieldGrid>
+            </Form>
+          </Panel>
+        </section>
+
+        <section className="grid gap-panel xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
+          <Panel title="Cards, Tables, and States" description="The same primitives used across the three authenticated pages.">
+            <div className="grid gap-4">
+              <Card padding="compact">
+                <CardHeader>
+                  <div>
+                    <CardTitle>Performance card</CardTitle>
+                    <CardDescription>Metric summaries and connection cards share this surface recipe.</CardDescription>
+                  </div>
+                  <Badge tone="teal">Healthy</Badge>
+                </CardHeader>
+                <p className="font-display text-display text-ink">$42.8k</p>
+                <p className="mt-2 text-body text-ink-soft">Attributed revenue in the selected range.</p>
+              </Card>
+
+              <TableWrap>
+                <Table caption="Example component table">
+                  <TableHead>
+                    <TableRow>
+                      <TableHeaderCell>Component</TableHeaderCell>
+                      <TableHeaderCell>Variants</TableHeaderCell>
+                      <TableHeaderCell>Used on</TableHeaderCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    <TableRow>
+                      <TableCell>Button</TableCell>
+                      <TableCell>Primary, secondary, ghost</TableCell>
+                      <TableCell>Dashboard, Settings</TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell>Badge</TableCell>
+                      <TableCell>Brand, teal, success, warning, danger, neutral</TableCell>
+                      <TableCell>Dashboard, Order details, Settings</TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell>EmptyState / Skeleton</TableCell>
+                      <TableCell>Default, muted, danger / compact + regular</TableCell>
+                      <TableCell>Dashboard, Order details, Settings</TableCell>
+                    </TableRow>
+                  </TableBody>
+                </Table>
+              </TableWrap>
+            </div>
+          </Panel>
+
+          <div className="grid gap-panel">
+            <Panel title="Empty State" description="Use when no records or payloads are available.">
+              <EmptyState title="No rows matched" description="Try broadening the date range or clearing source filters." compact />
+            </Panel>
+            <Panel title="Skeleton Loader" description="Shown during loading states via `SectionState`.">
+              <Skeleton compact lines={4} />
+            </Panel>
           </div>
-          <div className="mt-panel rounded-panel border border-brand/20 bg-brand-soft/60 p-5">
-            <p className="text-body text-brand-strong">
-              Resize the viewport to see layout density change at <span className="font-semibold">xs</span>,
-              <span className="font-semibold"> sm</span>, <span className="font-semibold">lg</span>, and
-              <span className="font-semibold"> xl</span> grid transitions on this page.
-            </p>
-          </div>
+        </section>
+
+        <section className="grid gap-panel lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+          <Panel title="Tabs" description="For sectioned admin flows when a full page split is too heavy.">
+            <Tabs
+              ariaLabel="Style guide tabs"
+              items={[
+                {
+                  value: 'reporting',
+                  label: 'Reporting',
+                  panel: <Alert>Use for page-level mode switches with a small number of stable sections.</Alert>
+                },
+                {
+                  value: 'admin',
+                  label: 'Admin',
+                  panel: <Alert tone="warning">Avoid tabs for long, heavily interdependent forms.</Alert>
+                }
+              ]}
+            />
+          </Panel>
+
+          <Panel title="Tooltip and Modal" description="Supplemental primitives for compact explanations and blocking workflows.">
+            <div className="flex flex-wrap items-center gap-4">
+              <Tooltip content="Explain compact technical labels without adding permanent visual noise.">
+                <Badge tone="neutral">Hover or focus me</Badge>
+              </Tooltip>
+              <Button type="button" onClick={() => setModalOpen(true)}>
+                Open modal preview
+              </Button>
+            </div>
+          </Panel>
         </section>
       </div>
+
+      <Modal
+        open={modalOpen}
+        title="Modal preview"
+        description="Use modals for destructive confirmation or focused multi-step input, not for routine reading."
+        onClose={() => setModalOpen(false)}
+        footer={
+          <>
+            <Button tone="ghost" type="button" onClick={() => setModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="button" onClick={() => setModalOpen(false)}>
+              Confirm
+            </Button>
+          </>
+        }
+      >
+        <Alert tone="default">This preview documents the component behavior without wiring application state.</Alert>
+      </Modal>
     </main>
   );
 }

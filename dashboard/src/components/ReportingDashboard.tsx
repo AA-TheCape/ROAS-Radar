@@ -15,14 +15,25 @@ import type {
   TimeseriesPoint
 } from '../lib/api';
 import {
+  Badge,
   Button,
   ButtonRow,
+  Card,
+  CardDescription,
+  CardHeader,
+  CardTitle,
   Field,
   Input,
   Panel,
   PrimaryCell,
   SectionState,
   Select,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeaderCell,
+  TableRow,
   TableWrap
 } from './AuthenticatedUi';
 
@@ -82,14 +93,14 @@ function buildSeriesPath(points: TimeseriesPoint[]): string {
 
 function SummaryCard({ label, value, detail }: SummaryCardData) {
   return (
-    <article className="relative overflow-hidden rounded-panel border border-line/70 bg-surface/90 p-5 shadow-panel backdrop-blur">
+    <Card padding="compact" className="border-line/70">
       <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-brand via-brand/70 to-teal/70" />
       <p className="text-caption uppercase tracking-[0.16em] text-ink-muted">{label}</p>
       <p className="mt-4 font-display text-[clamp(2rem,4vw,2.9rem)] leading-none tracking-[-0.05em] text-ink">
         {value}
       </p>
       <p className="mt-3 text-body text-ink-soft">{detail}</p>
-    </article>
+    </Card>
   );
 }
 
@@ -107,16 +118,16 @@ function TimeseriesChart({
 
   return (
     <div className="grid gap-6 xl:grid-cols-[minmax(0,1.4fr)_18rem]">
-      <div className="rounded-card border border-line/60 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(246,223,211,0.45))] p-4 shadow-inset-soft">
-        <div className="mb-4 flex items-center justify-between gap-3">
+      <Card tone="accent" padding="compact" className="shadow-inset-soft">
+        <CardHeader className="items-center">
           <div>
             <p className="text-caption uppercase tracking-[0.14em] text-ink-muted">Trend window</p>
             <p className="mt-2 font-display text-title text-ink">{formatCurrency(maxRevenue)} max revenue</p>
           </div>
-          <div className="rounded-pill border border-teal/15 bg-teal-soft px-3 py-2 text-[0.82rem] font-semibold text-teal">
+          <Badge tone="teal" className="px-3 py-2">
             {GROUP_BY_OPTIONS.find((option) => option.value === groupBy)?.label ?? groupBy}
-          </div>
-        </div>
+          </Badge>
+        </CardHeader>
         <svg viewBox="0 0 320 160" className="h-[17rem] w-full overflow-visible" aria-label="Revenue timeseries">
           <defs>
             <linearGradient id="revenueFill" x1="0" x2="0" y1="0" y2="1">
@@ -161,11 +172,11 @@ function TimeseriesChart({
             );
           })}
         </svg>
-      </div>
+      </Card>
 
       <div className="grid content-start gap-3">
         {points.map((point) => (
-          <div key={point.date} className="rounded-card border border-line/60 bg-surface-alt/70 p-4">
+          <Card key={point.date} padding="compact" className="border-line/60 bg-surface-alt/70">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="font-semibold text-ink">
@@ -177,7 +188,7 @@ function TimeseriesChart({
               </div>
               <p className="font-display text-title text-brand">{formatCompactCurrency(point.revenue)}</p>
             </div>
-          </div>
+          </Card>
         ))}
       </div>
     </div>
@@ -257,7 +268,7 @@ export default function ReportingDashboard({
             </Field>
           </div>
 
-          <div className="rounded-card border border-line/60 bg-surface-alt/60 p-4">
+          <Card padding="compact" className="border-line/60 bg-surface-alt/60">
             <p className="text-caption uppercase tracking-[0.16em] text-ink-muted">Quick ranges</p>
             <ButtonRow className="mt-4 gap-2">
               {quickRanges.map((preset) => (
@@ -285,7 +296,7 @@ export default function ReportingDashboard({
                 Clear filters
               </Button>
             </div>
-          </div>
+          </Card>
         </div>
       </Panel>
 
@@ -333,35 +344,35 @@ export default function ReportingDashboard({
             emptyLabel="No campaign rows matched the current filters."
           >
             <TableWrap>
-              <table className="ui-table">
-                <thead>
-                  <tr>
-                    <th>Campaign</th>
-                    <th>Source</th>
-                    <th>Visits</th>
-                    <th>Orders</th>
-                    <th>Revenue</th>
-                    <th>CVR</th>
-                  </tr>
-                </thead>
-                <tbody>
+              <Table caption="Campaign performance">
+                <TableHead>
+                  <TableRow>
+                    <TableHeaderCell>Campaign</TableHeaderCell>
+                    <TableHeaderCell>Source</TableHeaderCell>
+                    <TableHeaderCell>Visits</TableHeaderCell>
+                    <TableHeaderCell>Orders</TableHeaderCell>
+                    <TableHeaderCell>Revenue</TableHeaderCell>
+                    <TableHeaderCell>CVR</TableHeaderCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
                   {(campaignsSection.data ?? []).map((row) => (
-                    <tr key={`${row.source}-${row.medium}-${row.campaign}-${row.content ?? 'none'}`}>
-                      <td>
+                    <TableRow key={`${row.source}-${row.medium}-${row.campaign}-${row.content ?? 'none'}`}>
+                      <TableCell>
                         <PrimaryCell>
                           <strong>{row.campaign}</strong>
                           <span>{row.content ?? 'No content tag'}</span>
                         </PrimaryCell>
-                      </td>
-                      <td>{`${row.source} / ${row.medium}`}</td>
-                      <td>{formatNumber(row.visits)}</td>
-                      <td>{formatNumber(row.orders)}</td>
-                      <td>{formatCurrency(row.revenue)}</td>
-                      <td>{formatPercent(row.conversionRate)}</td>
-                    </tr>
+                      </TableCell>
+                      <TableCell>{`${row.source} / ${row.medium}`}</TableCell>
+                      <TableCell>{formatNumber(row.visits)}</TableCell>
+                      <TableCell>{formatNumber(row.orders)}</TableCell>
+                      <TableCell>{formatCurrency(row.revenue)}</TableCell>
+                      <TableCell>{formatPercent(row.conversionRate)}</TableCell>
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
+                </TableBody>
+              </Table>
             </TableWrap>
           </SectionState>
         </Panel>
@@ -381,7 +392,7 @@ export default function ReportingDashboard({
                 const share = totalCampaignRevenue > 0 ? row.revenue / totalCampaignRevenue : 0;
 
                 return (
-                  <div key={`${row.source}-${row.campaign}`} className="rounded-card border border-line/60 bg-surface-alt/55 p-4">
+                  <Card key={`${row.source}-${row.campaign}`} padding="compact" className="border-line/60 bg-surface-alt/55">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <p className="truncate font-semibold text-ink">{row.campaign}</p>
@@ -398,7 +409,7 @@ export default function ReportingDashboard({
                         style={{ width: `${Math.max(share * 100, 2)}%` }}
                       />
                     </div>
-                  </div>
+                  </Card>
                 );
               })}
             </div>
@@ -418,21 +429,21 @@ export default function ReportingDashboard({
           emptyLabel="No attributed orders were returned for this range."
         >
           <TableWrap>
-            <table className="ui-table">
-              <thead>
-                <tr>
-                  <th>Order</th>
-                  <th>Processed</th>
-                  <th>Source</th>
-                  <th>Campaign</th>
-                  <th>Total</th>
-                  <th>Reason</th>
-                </tr>
-              </thead>
-              <tbody>
+            <Table caption="Attributed orders">
+              <TableHead>
+                <TableRow>
+                  <TableHeaderCell>Order</TableHeaderCell>
+                  <TableHeaderCell>Processed</TableHeaderCell>
+                  <TableHeaderCell>Source</TableHeaderCell>
+                  <TableHeaderCell>Campaign</TableHeaderCell>
+                  <TableHeaderCell>Total</TableHeaderCell>
+                  <TableHeaderCell>Reason</TableHeaderCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
                 {(ordersSection.data ?? []).map((row) => (
-                  <tr key={row.shopifyOrderId}>
-                    <td>
+                  <TableRow key={row.shopifyOrderId}>
+                    <TableCell>
                       <PrimaryCell>
                         <button
                           type="button"
@@ -443,20 +454,20 @@ export default function ReportingDashboard({
                         </button>
                         <span>{row.medium ?? 'No medium'}</span>
                       </PrimaryCell>
-                    </td>
-                    <td>{formatDateTimeLabel(row.processedAt, reportingTimezone)}</td>
-                    <td>{row.source ?? 'Unattributed'}</td>
-                    <td>{row.campaign ?? 'No campaign'}</td>
-                    <td>{formatCurrency(row.totalPrice)}</td>
-                    <td>
-                      <span className="inline-flex rounded-pill border border-teal/20 bg-teal-soft px-3 py-1 text-[0.8rem] font-semibold text-teal">
+                    </TableCell>
+                    <TableCell>{formatDateTimeLabel(row.processedAt, reportingTimezone)}</TableCell>
+                    <TableCell>{row.source ?? 'Unattributed'}</TableCell>
+                    <TableCell>{row.campaign ?? 'No campaign'}</TableCell>
+                    <TableCell>{formatCurrency(row.totalPrice)}</TableCell>
+                    <TableCell>
+                      <Badge tone="teal">
                         {row.attributionReason}
-                      </span>
-                    </td>
-                  </tr>
+                      </Badge>
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           </TableWrap>
         </SectionState>
       </Panel>

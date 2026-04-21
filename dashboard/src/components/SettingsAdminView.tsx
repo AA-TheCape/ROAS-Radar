@@ -12,9 +12,14 @@ import type {
 } from '../lib/api';
 import { formatDateLabel, formatDateTimeLabel } from '../lib/format';
 import {
+  Badge,
   Banner,
   Button,
   ButtonRow,
+  Card,
+  CardDescription,
+  CardHeader,
+  CardTitle,
   CheckboxField,
   ConnectionState,
   DetailList,
@@ -26,6 +31,12 @@ import {
   Panel,
   PrimaryCell,
   SectionState,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeaderCell,
+  TableRow,
   StatusPill,
   TableWrap
 } from './AuthenticatedUi';
@@ -117,14 +128,14 @@ function SettingsMetric({
   detail: string;
 }) {
   return (
-    <article className="relative overflow-hidden rounded-panel border border-line/70 bg-surface/90 p-5 shadow-panel backdrop-blur">
+    <Card padding="compact" className="border-line/70">
       <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-teal via-brand/65 to-brand/90" />
       <p className="text-caption uppercase tracking-[0.16em] text-ink-muted">{label}</p>
       <p className="mt-4 font-display text-[clamp(1.8rem,3.6vw,2.6rem)] leading-none tracking-[-0.05em] text-ink">
         {value}
       </p>
       <p className="mt-3 text-body text-ink-soft">{detail}</p>
-    </article>
+    </Card>
   );
 }
 
@@ -144,7 +155,7 @@ function IntegrationCard({
   children: JSX.Element;
 }) {
   return (
-    <article className="overflow-hidden rounded-panel border border-line/70 bg-surface/92 shadow-panel backdrop-blur">
+    <Card className="overflow-hidden bg-surface/92 p-0">
       <div
         className={[
           'h-1 w-full',
@@ -154,17 +165,17 @@ function IntegrationCard({
         ].join(' ')}
       />
       <div className="grid gap-6 p-panel">
-        <div className="flex flex-wrap items-start justify-between gap-4">
+        <CardHeader className="items-start gap-4">
           <div className="max-w-2xl">
             <p className="text-caption uppercase tracking-[0.16em] text-ink-muted">{eyebrow}</p>
-            <h3 className="mt-3 font-display text-title text-ink">{title}</h3>
-            <p className="mt-3 text-body text-ink-soft">{description}</p>
+            <CardTitle className="mt-3">{title}</CardTitle>
+            <CardDescription className="mt-3">{description}</CardDescription>
           </div>
-          <StatusPill>{status}</StatusPill>
-        </div>
+          <StatusPill tone={accent === 'teal' ? 'teal' : 'brand'}>{status}</StatusPill>
+        </CardHeader>
         {children}
       </div>
-    </article>
+    </Card>
   );
 }
 
@@ -375,12 +386,12 @@ export default function SettingsAdminView({
                     </Field>
                   </FieldGrid>
 
-                  <div className="rounded-card border border-line/60 bg-canvas-tint/80 p-4">
+                  <Card padding="compact" className="border-line/60 bg-canvas-tint/80 shadow-none">
                     <p className="text-caption uppercase tracking-[0.14em] text-ink-muted">Recovery tools</p>
                     <p className="mt-2 text-body text-ink-soft">
                       Backfill imports historical orders. Attribution recovery rescans unattributed web orders in the same date window.
                     </p>
-                  </div>
+                  </Card>
 
                   <ButtonRow>
                     <Button
@@ -747,37 +758,37 @@ export default function SettingsAdminView({
                     <p className="text-caption uppercase tracking-[0.16em] text-ink-muted">Current users</p>
                     <h3 className="mt-2 font-display text-title text-ink">{usersSection.data?.length ?? 0} authenticated accounts</h3>
                   </div>
-                  <div className="rounded-pill border border-line/70 bg-canvas-tint px-4 py-2 text-[0.82rem] font-semibold text-ink-soft">
+                  <Badge tone="neutral" className="px-4 py-2">
                     Last reviewed in {reportingTimezone}
-                  </div>
+                  </Badge>
                 </div>
 
                 <TableWrap>
-                  <table className="ui-table">
-                    <thead>
-                      <tr>
-                        <th>User</th>
-                        <th>Role</th>
-                        <th>Status</th>
-                        <th>Last login</th>
-                      </tr>
-                    </thead>
-                    <tbody>
+                  <Table caption="Authenticated users">
+                    <TableHead>
+                      <TableRow>
+                        <TableHeaderCell>User</TableHeaderCell>
+                        <TableHeaderCell>Role</TableHeaderCell>
+                        <TableHeaderCell>Status</TableHeaderCell>
+                        <TableHeaderCell>Last login</TableHeaderCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
                       {(usersSection.data ?? []).map((user) => (
-                        <tr key={user.id}>
-                          <td>
+                        <TableRow key={user.id}>
+                          <TableCell>
                             <PrimaryCell>
                               <strong>{user.displayName}</strong>
                               <span>{user.email}</span>
                             </PrimaryCell>
-                          </td>
-                          <td>{user.isAdmin ? 'Admin' : 'Viewer'}</td>
-                          <td>{user.status}</td>
-                          <td>{formatOptionalDateTime(user.lastLoginAt, reportingTimezone)}</td>
-                        </tr>
+                          </TableCell>
+                          <TableCell>{user.isAdmin ? 'Admin' : 'Viewer'}</TableCell>
+                          <TableCell>{user.status}</TableCell>
+                          <TableCell>{formatOptionalDateTime(user.lastLoginAt, reportingTimezone)}</TableCell>
+                        </TableRow>
                       ))}
-                    </tbody>
-                  </table>
+                    </TableBody>
+                  </Table>
                 </TableWrap>
               </div>
             </div>

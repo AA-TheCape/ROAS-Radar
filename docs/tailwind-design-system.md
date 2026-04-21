@@ -93,3 +93,31 @@ This token set establishes the light-only visual direction for authenticated das
 
 - The token preview page lives at `dashboard/src/StyleGuidePage.tsx`.
 - Run `npm run dev` in `dashboard/` and open `/#style-guide` to review the full foundation set in the browser.
+
+## Component Library
+
+The authenticated UI now exposes a reusable Tailwind component layer from `dashboard/src/components/AuthenticatedUi.tsx`.
+
+### Standard Components
+
+| Component | Variants | Accessibility basics |
+| --- | --- | --- |
+| `Button` | `primary`, `secondary`, `ghost` | Focus ring inherited from base styles, native `button` semantics |
+| `Input`, `Select`, `Textarea` | Shared field styling | Label-first usage through `Field`, focus ring, native form semantics |
+| `Card` | `default`, `accent`, `teal` with `compact`, `panel`, `card` padding | Semantic headings through `CardTitle` and `CardDescription` |
+| `Table` | Captioned data table wrapper | Optional screen-reader caption, semantic `thead` / `tbody` |
+| `Badge` / `StatusPill` | `brand`, `teal`, `success`, `warning`, `danger`, `neutral` | Text-only status indicator with strong color contrast |
+| `Alert` / `Banner` | `default`, `success`, `warning`, `error` | `role="status"` for feedback messaging |
+| `Modal` | Single shared dialog shell | `role="dialog"`, `aria-modal`, labelled/described content |
+| `Tabs` | Shared segmented tablist | `tablist`, `tab`, and `tabpanel` roles |
+| `Tooltip` | Compact helper label | Hover plus keyboard focus support, `title` fallback |
+| `EmptyState` | `default`, `muted`, `danger` | Clear heading plus descriptive body copy |
+| `Skeleton` | regular and `compact` | Decorative only via `aria-hidden` |
+
+### Authenticated Surface Adoption
+
+- `dashboard/src/components/ReportingDashboard.tsx`
+- `dashboard/src/components/OrderDetailsView.tsx`
+- `dashboard/src/components/SettingsAdminView.tsx`
+
+These three authenticated pages consume the shared component library directly rather than relying on page-specific Tailwind markup.

@@ -2,7 +2,26 @@ import type { ReactNode } from 'react';
 
 import type { OrderDetailsResponse } from '../lib/api';
 import { formatCurrency, formatDateTimeLabel, formatNumber } from '../lib/format';
-import { DetailList, PrimaryCell, SectionState, StatusPill, TableWrap } from './AuthenticatedUi';
+import {
+  Badge,
+  Card,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  DetailList,
+  EmptyState,
+  PrimaryCell,
+  SectionState,
+  StatusPill,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeaderCell,
+  TableRow,
+  TableWrap,
+  Tooltip
+} from './AuthenticatedUi';
 
 type AsyncSection<T> = {
   data: T | null;
@@ -42,14 +61,14 @@ function formatJsonValue(value: unknown): string {
 
 function MetricCard({ label, value, detail }: { label: string; value: string; detail: string }) {
   return (
-    <article className="relative overflow-hidden rounded-panel border border-line/70 bg-surface/90 p-5 shadow-panel backdrop-blur">
+    <Card padding="compact" className="border-line/70">
       <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-brand via-brand/75 to-teal/70" />
       <p className="text-caption uppercase tracking-[0.16em] text-ink-muted">{label}</p>
       <p className="mt-4 font-display text-[clamp(1.85rem,3vw,2.6rem)] leading-none tracking-[-0.05em] text-ink">
         {value}
       </p>
       <p className="mt-3 text-body text-ink-soft">{detail}</p>
-    </article>
+    </Card>
   );
 }
 
@@ -63,25 +82,25 @@ function DetailCard({
   children: ReactNode;
 }) {
   return (
-    <article className="rounded-panel border border-line/70 bg-surface/88 p-panel shadow-panel backdrop-blur">
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+    <Card className="bg-surface/88">
+      <CardHeader>
         <div>
-          <h3 className="font-display text-title text-ink">{title}</h3>
-          {description ? <p className="mt-2 text-body text-ink-muted">{description}</p> : null}
+          <CardTitle>{title}</CardTitle>
+          {description ? <CardDescription>{description}</CardDescription> : null}
         </div>
-      </div>
+      </CardHeader>
       {children}
-    </article>
+    </Card>
   );
 }
 
 function EmptyTableRow({ colSpan, label }: { colSpan: number; label: string }) {
   return (
-    <tr>
-      <td colSpan={colSpan} className="px-4 py-10 text-center text-body text-ink-muted">
+    <TableRow>
+      <TableCell colSpan={colSpan} className="px-4 py-10 text-center text-body text-ink-muted">
         {label}
-      </td>
-    </tr>
+      </TableCell>
+    </TableRow>
   );
 }
 
@@ -230,95 +249,95 @@ export default function OrderDetailsView({
 
         <DetailCard title="Line items" description="Commercial line-item detail from Shopify, including variant metadata and ingestion flags.">
           <TableWrap>
-            <table className="ui-table">
-              <thead>
-                <tr>
-                  <th>Title</th>
-                  <th>SKU</th>
-                  <th>Qty</th>
-                  <th>Price</th>
-                  <th>Discount</th>
-                  <th>Vendor</th>
-                  <th>Flags</th>
-                </tr>
-              </thead>
-              <tbody>
+            <Table caption="Order line items">
+              <TableHead>
+                <TableRow>
+                  <TableHeaderCell>Title</TableHeaderCell>
+                  <TableHeaderCell>SKU</TableHeaderCell>
+                  <TableHeaderCell>Qty</TableHeaderCell>
+                  <TableHeaderCell>Price</TableHeaderCell>
+                  <TableHeaderCell>Discount</TableHeaderCell>
+                  <TableHeaderCell>Vendor</TableHeaderCell>
+                  <TableHeaderCell>Flags</TableHeaderCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
                 {lineItems.length === 0 ? <EmptyTableRow colSpan={7} label="No line items were recorded for this order." /> : null}
                 {lineItems.map((item) => (
-                  <tr key={item.shopifyLineItemId}>
-                    <td>
+                  <TableRow key={item.shopifyLineItemId}>
+                    <TableCell>
                       <PrimaryCell>
                         <strong>{item.title ?? 'Untitled line item'}</strong>
                         <span>{item.variantTitle ?? 'No variant title'}</span>
                       </PrimaryCell>
-                    </td>
-                    <td>{formatOptionalValue(item.sku)}</td>
-                    <td>{formatNumber(item.quantity)}</td>
-                    <td>{formatCurrency(item.price)}</td>
-                    <td>{formatCurrency(item.totalDiscount)}</td>
-                    <td>{formatOptionalValue(item.vendor)}</td>
-                    <td>
+                    </TableCell>
+                    <TableCell>{formatOptionalValue(item.sku)}</TableCell>
+                    <TableCell>{formatNumber(item.quantity)}</TableCell>
+                    <TableCell>{formatCurrency(item.price)}</TableCell>
+                    <TableCell>{formatCurrency(item.totalDiscount)}</TableCell>
+                    <TableCell>{formatOptionalValue(item.vendor)}</TableCell>
+                    <TableCell>
                       <div className="grid gap-1 text-body text-ink-muted">
                         <span>{formatOptionalValue(item.fulfillmentStatus)}</span>
                         <span>
                           Shipping {formatOptionalValue(item.requiresShipping)} · Taxable {formatOptionalValue(item.taxable)}
                         </span>
                       </div>
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           </TableWrap>
         </DetailCard>
 
         <DetailCard title="Attribution credits" description="Per-touchpoint revenue allocation stored for this order across attribution models.">
           <TableWrap>
-            <table className="ui-table">
-              <thead>
-                <tr>
-                  <th>Model</th>
-                  <th>Position</th>
-                  <th>Source / medium</th>
-                  <th>Campaign</th>
-                  <th>Touchpoint time</th>
-                  <th>Revenue credit</th>
-                  <th>Weight</th>
-                  <th>Reason</th>
-                </tr>
-              </thead>
-              <tbody>
+            <Table caption="Attribution credits">
+              <TableHead>
+                <TableRow>
+                  <TableHeaderCell>Model</TableHeaderCell>
+                  <TableHeaderCell>Position</TableHeaderCell>
+                  <TableHeaderCell>Source / medium</TableHeaderCell>
+                  <TableHeaderCell>Campaign</TableHeaderCell>
+                  <TableHeaderCell>Touchpoint time</TableHeaderCell>
+                  <TableHeaderCell>Revenue credit</TableHeaderCell>
+                  <TableHeaderCell>Weight</TableHeaderCell>
+                  <TableHeaderCell>Reason</TableHeaderCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
                 {attributionCredits.length === 0 ? (
                   <EmptyTableRow colSpan={8} label="No attribution credits are stored for this order yet." />
                 ) : null}
                 {attributionCredits.map((credit) => (
-                  <tr key={`${credit.attributionModel}-${credit.touchpointPosition}-${credit.sessionId ?? 'none'}`}>
-                    <td>
+                  <TableRow key={`${credit.attributionModel}-${credit.touchpointPosition}-${credit.sessionId ?? 'none'}`}>
+                    <TableCell>
                       <PrimaryCell>
                         <strong>{credit.attributionModel}</strong>
                         <span>{credit.isPrimary ? 'Primary touchpoint' : 'Supporting touchpoint'}</span>
                       </PrimaryCell>
-                    </td>
-                    <td>{formatNumber(credit.touchpointPosition)}</td>
-                    <td>
+                    </TableCell>
+                    <TableCell>{formatNumber(credit.touchpointPosition)}</TableCell>
+                    <TableCell>
                       <PrimaryCell className="gap-0.5">
                         <strong>{`${credit.source ?? 'Unknown'} / ${credit.medium ?? 'Unknown'}`}</strong>
                         <span>{credit.clickIdType && credit.clickIdValue ? `${credit.clickIdType}: ${credit.clickIdValue}` : 'No click ID stored'}</span>
                       </PrimaryCell>
-                    </td>
-                    <td>{credit.campaign ?? 'No campaign'}</td>
-                    <td>{formatOptionalDateTime(credit.touchpointOccurredAt, reportingTimezone)}</td>
-                    <td>{formatCurrency(credit.revenueCredit)}</td>
-                    <td>{formatNumber(credit.creditWeight)}</td>
-                    <td>
-                      <span className="inline-flex min-h-[30px] items-center rounded-pill bg-brand-soft px-3 py-1 text-[0.82rem] font-semibold text-brand">
+                    </TableCell>
+                    <TableCell>{credit.campaign ?? 'No campaign'}</TableCell>
+                    <TableCell>{formatOptionalDateTime(credit.touchpointOccurredAt, reportingTimezone)}</TableCell>
+                    <TableCell>{formatCurrency(credit.revenueCredit)}</TableCell>
+                    <TableCell>{formatNumber(credit.creditWeight)}</TableCell>
+                    <TableCell>
+                      <Badge tone="brand">
                         {credit.attributionReason}
-                      </span>
-                    </td>
-                  </tr>
+                      </Badge>
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           </TableWrap>
         </DetailCard>
 
@@ -329,9 +348,12 @@ export default function OrderDetailsView({
 
           <DetailCard title="Raw line item payloads" description="Per-line-item Shopify payloads, grouped in insertion order.">
             {lineItems.length === 0 ? (
-              <div className="rounded-card border border-line/60 bg-surface-alt/70 px-6 py-8 text-center text-body text-ink-muted">
-                No raw line item payloads were stored for this order.
-              </div>
+              <EmptyState
+                title="No raw payloads stored"
+                description="No raw line item payloads were stored for this order."
+                compact
+                tone="muted"
+              />
             ) : (
               <div className="grid gap-4">
                 {lineItems.map((item, index) => (
@@ -343,7 +365,9 @@ export default function OrderDetailsView({
                           {formatOptionalValue(item.variantTitle)} · Qty {formatNumber(item.quantity)}
                         </p>
                       </div>
-                      <StatusPill>{formatOptionalValue(item.shopifyLineItemId)}</StatusPill>
+                      <Tooltip content="Shopify line item identifier">
+                        <StatusPill>{formatOptionalValue(item.shopifyLineItemId)}</StatusPill>
+                      </Tooltip>
                     </div>
                     <JsonViewer value={item.rawPayload} />
                   </div>
