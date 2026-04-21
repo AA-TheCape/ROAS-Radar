@@ -101,8 +101,8 @@ This token set establishes the light-only visual direction for authenticated das
 
 ## Reference Surface
 
-- The token preview page lives at `dashboard/src/StyleGuidePage.tsx`.
-- Run `npm run dev` in `dashboard/` and open `/#style-guide` to review the full foundation set in the browser.
+- The shared tokens are defined in `dashboard/tailwind.config.js`.
+- Validate the authenticated UI directly through the dashboard surfaces in `dashboard/src/components/`.
 
 ## Component Library
 

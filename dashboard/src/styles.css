@@ -8,21 +8,11 @@
     font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
     line-height: 1.5;
     font-weight: 400;
-    background: linear-gradient(180deg, #f7f9f6 0%, #f4f7f4 55%, #edf5f2 100%);
     color: #17212b;
     font-synthesis: none;
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    --surface: rgba(255, 255, 255, 0.84);
-    --surface-strong: rgba(255, 255, 255, 0.96);
-    --border: rgba(23, 33, 43, 0.1);
-    --text-muted: #627180;
-    --ink-strong: #314051;
-    --accent: #cb6332;
-    --accent-soft: #f6dfd3;
-    --teal: #1f7a74;
-    --shadow: 0 20px 45px rgba(23, 33, 43, 0.08);
   }
 
   * {

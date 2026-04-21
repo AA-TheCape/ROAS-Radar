@@ -1,4 +1,4 @@
-import type { SortDirection } from '../components/AuthenticatedUi';
+export type SortDirection = 'asc' | 'desc';
 
 export type SortState<Key extends string> = {
   key: Key;

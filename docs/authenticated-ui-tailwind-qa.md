@@ -79,6 +79,7 @@ All authenticated surfaces now render through Tailwind-first components in `dash
 
 ## Legacy CSS Retirement
 
+- Removed the dead production `#style-guide` entrypoint and deleted `dashboard/src/StyleGuidePage.tsx`.
 - Removed the dead post-Tailwind selector block from `dashboard/src/styles.css`.
 - Replaced the final legacy `dashboard-grid` reference in `dashboard/src/App.tsx` with Tailwind utilities.
-- Remaining stylesheet rules are limited to Tailwind imports plus shared `ui-*` component primitives still referenced by authenticated surfaces.
+- Removed the unused CSS custom properties from `dashboard/src/styles.css`; remaining stylesheet rules are limited to Tailwind imports plus shared base rules still referenced by authenticated surfaces.
