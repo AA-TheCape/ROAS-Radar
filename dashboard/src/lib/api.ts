@@ -266,17 +266,43 @@ export type GoogleAdsReconciliation = {
 };
 
 export type GoogleAdsStatusResponse = {
+  config: GoogleAdsConfigSummary;
   connection: GoogleAdsConnection | null;
   reconciliation: GoogleAdsReconciliation | null;
 };
 
-export type GoogleAdsConnectionPayload = {
+export type GoogleAdsConfigSummary = {
+  source: 'database' | 'environment';
+  clientId: string;
+  appBaseUrl: string;
+  appScopes: string[];
+  clientSecretConfigured: boolean;
+  developerTokenConfigured: boolean;
+  missingFields: string[];
+};
+
+export type GoogleAdsConfigPayload = {
+  clientId: string;
+  clientSecret?: string;
+  developerToken?: string;
+  appBaseUrl: string;
+  appScopes: string | string[];
+};
+
+export type GoogleAdsConfigResponse = {
+  ok: true;
+  config: GoogleAdsConfigSummary;
+};
+
+export type GoogleAdsOAuthStartPayload = {
   customerId: string;
   loginCustomerId?: string;
-  developerToken: string;
-  clientId: string;
-  clientSecret: string;
-  refreshToken: string;
+};
+
+export type GoogleAdsOAuthStartResponse = {
+  authorizationUrl: string;
+  redirectUri: string;
+  state: string;
 };
 
 export type GoogleAdsConnectResponse = {
@@ -542,11 +568,26 @@ export function fetchGoogleAdsStatus() {
   return requestJson<GoogleAdsStatusResponse>('/api/admin/google-ads/status');
 }
 
-export function connectGoogleAds(payload: GoogleAdsConnectionPayload) {
-  return requestJson<GoogleAdsConnectResponse>('/api/admin/google-ads/connections', {
-    method: 'POST',
+export function updateGoogleAdsConfig(payload: GoogleAdsConfigPayload) {
+  return requestJson<GoogleAdsConfigResponse>('/api/admin/google-ads/config', {
+    method: 'PUT',
     body: payload
   });
+}
+
+export function startGoogleAdsOauth(payload: GoogleAdsOAuthStartPayload, redirectPath?: string) {
+  const searchParams = new URLSearchParams();
+  searchParams.set('customerId', payload.customerId);
+
+  if (payload.loginCustomerId) {
+    searchParams.set('loginCustomerId', payload.loginCustomerId);
+  }
+
+  if (redirectPath) {
+    searchParams.set('redirectPath', redirectPath);
+  }
+
+  return requestJson<GoogleAdsOAuthStartResponse>('/api/admin/google-ads/oauth/start', { searchParams });
 }
 
 export function syncGoogleAds(startDate: string, endDate: string) {

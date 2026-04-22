@@ -2,7 +2,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 
 import { checkDatabaseHealth } from './db/pool.js';
 import { createAuthRouter, createUserAdminRouter } from './modules/auth/index.js';
-import { createGoogleAdsAdminRouter } from './modules/google-ads/index.js';
+import { createGoogleAdsAdminRouter, createGoogleAdsPublicRouter } from './modules/google-ads/index.js';
 import { createMetaAdsAdminRouter, createMetaAdsPublicRouter } from './modules/meta-ads/index.js';
 import { createReportingRouter } from './modules/reporting/index.js';
 import { createSettingsRouter } from './modules/settings/index.js';
@@ -67,6 +67,7 @@ export function createApp() {
   app.use('/api/admin/shopify', createShopifyAdminRouter());
   app.use('/meta-ads', createMetaAdsPublicRouter());
   app.use('/api/admin/meta-ads', createMetaAdsAdminRouter());
+  app.use('/google-ads', createGoogleAdsPublicRouter());
   app.use('/api/admin/google-ads', createGoogleAdsAdminRouter());
 
   app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {

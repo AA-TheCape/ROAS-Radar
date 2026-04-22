@@ -22,6 +22,16 @@ const contentTypes = new Map([
   ['.svg', 'image/svg+xml']
 ]);
 
+function shouldProxyToApi(pathname) {
+  return (
+    pathname.startsWith('/api/') ||
+    pathname.startsWith('/google-ads/') ||
+    pathname.startsWith('/meta-ads/') ||
+    pathname.startsWith('/shopify/') ||
+    pathname === '/track'
+  );
+}
+
 function writeJson(response, statusCode, body) {
   response.writeHead(statusCode, { 'content-type': 'application/json; charset=utf-8' });
   response.end(JSON.stringify(body));
@@ -135,7 +145,7 @@ const server = http.createServer((request, response) => {
     return;
   }
 
-  if (url.pathname.startsWith('/api/')) {
+  if (shouldProxyToApi(url.pathname)) {
     proxyApiRequest(request, response, url).catch((error) => {
       writeJson(response, 502, {
         error: error instanceof Error ? error.message : 'unexpected_proxy_error'

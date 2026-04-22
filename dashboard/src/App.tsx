@@ -13,7 +13,6 @@ import {
 import {
   backfillShopifyOrders,
   clearStoredAuthToken,
-  connectGoogleAds,
   createUser,
   fetchAppSettings,
   fetchCampaigns,
@@ -33,16 +32,18 @@ import {
   recoverShopifyAttributionHints,
   storeAuthToken,
   syncShopifyWebhooks,
+  startGoogleAdsOauth,
   startMetaAdsOauth,
   syncGoogleAds,
   syncMetaAds,
   updateAppSettings,
+  updateGoogleAdsConfig,
   updateMetaAdsConfig,
   type AppSettings,
   type AuthUser,
   type CampaignRow,
   type CreateUserPayload,
-  type GoogleAdsConnectionPayload,
+  type GoogleAdsConfigSummary,
   type GoogleAdsStatusResponse,
   type MetaAdsConnection,
   type MetaAdsConfigSummary,
@@ -122,6 +123,25 @@ type MetaConfigForm = {
   appBaseUrl: string;
   appScopes: string;
   adAccountId: string;
+};
+
+type GoogleConfigForm = {
+  clientId: string;
+  clientSecret: string;
+  developerToken: string;
+  appBaseUrl: string;
+  appScopes: string;
+};
+
+type GoogleConnectForm = {
+  customerId: string;
+  loginCustomerId: string;
+};
+
+type GoogleConnectionState = {
+  config: GoogleAdsConfigSummary;
+  connection: GoogleAdsStatusResponse['connection'];
+  reconciliation: GoogleAdsStatusResponse['reconciliation'];
 };
 
 type SettingsForm = {
@@ -432,14 +452,17 @@ function App() {
     appScopes: 'ads_read',
     adAccountId: ''
   });
-  const [googleConnection, setGoogleConnection] = useState<AsyncSection<GoogleAdsStatusResponse>>(createLoadingSection());
-  const [googleForm, setGoogleForm] = useState<GoogleAdsConnectionPayload>({
-    customerId: '',
-    loginCustomerId: '',
-    developerToken: '',
+  const [googleConnection, setGoogleConnection] = useState<AsyncSection<GoogleConnectionState>>(createLoadingSection());
+  const [googleConfigForm, setGoogleConfigForm] = useState<GoogleConfigForm>({
     clientId: '',
     clientSecret: '',
-    refreshToken: ''
+    developerToken: '',
+    appBaseUrl: '',
+    appScopes: 'https://www.googleapis.com/auth/adwords'
+  });
+  const [googleForm, setGoogleForm] = useState<GoogleConnectForm>({
+    customerId: '',
+    loginCustomerId: ''
   });
   const [actionFeedback, setActionFeedback] = useState<ActionFeedback>({
     context: null,
@@ -519,6 +542,13 @@ function App() {
         adAccountId: metaStatus.config.adAccountId || current.adAccountId
       }));
       setGoogleConnection(createResolvedSection(googleStatus));
+      setGoogleConfigForm((current) => ({
+        clientId: googleStatus.config.clientId || current.clientId,
+        clientSecret: '',
+        developerToken: '',
+        appBaseUrl: googleStatus.config.appBaseUrl || current.appBaseUrl,
+        appScopes: googleStatus.config.appScopes.length ? googleStatus.config.appScopes.join(', ') : current.appScopes
+      }));
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to load ad connection state';
       setShopifyConnection(createErroredSection(message));
@@ -1045,32 +1075,75 @@ function App() {
     }
   }
 
+  async function handleGoogleConfigSave(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setActionFeedback({
+      loading: 'google-config-save',
+      error: null,
+      message: null
+    });
+
+    try {
+      const response = await updateGoogleAdsConfig({
+        clientId: googleConfigForm.clientId.trim(),
+        clientSecret: googleConfigForm.clientSecret.trim() || undefined,
+        developerToken: googleConfigForm.developerToken.trim() || undefined,
+        appBaseUrl: googleConfigForm.appBaseUrl.trim(),
+        appScopes: googleConfigForm.appScopes
+      });
+      await loadConnections();
+      setGoogleConfigForm((current) => ({
+        ...current,
+        clientSecret: '',
+        developerToken: '',
+        appScopes: response.config.appScopes.join(', ')
+      }));
+      setActionFeedback({
+        loading: null,
+        error: null,
+        message: 'Saved Google Ads config.'
+      });
+    } catch (error) {
+      setActionFeedback({
+        loading: null,
+        error: error instanceof Error ? error.message : 'Failed to save Google Ads config',
+        message: null
+      });
+    }
+  }
+
   async function handleGoogleConnect(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setActionFeedback({
-      context: 'google-connect',
       loading: 'google-connect',
       error: null,
       message: null
     });
 
     try {
-      const response = await connectGoogleAds({
-        ...googleForm,
-        loginCustomerId: googleForm.loginCustomerId?.trim() ? googleForm.loginCustomerId.trim() : undefined
-      });
-      await loadConnections();
+      if ((googleConnection.data?.config.missingFields.length ?? 0) > 0) {
+        throw new Error('Save the Google Ads configuration first. Some required fields are still missing.');
+      }
+
+      const response = await startGoogleAdsOauth(
+        {
+          customerId: googleForm.customerId.trim(),
+          loginCustomerId: googleForm.loginCustomerId.trim() || undefined
+        },
+        window.location.pathname
+      );
       setActionFeedback({
         context: 'google-connect',
         loading: null,
         error: null,
-        message: `Connected Google Ads customer ${response.customerId}${response.customerName ? ` (${response.customerName})` : ''}.`
+        message: 'Redirecting to Google Ads…'
       });
+      window.location.assign(response.authorizationUrl);
     } catch (error) {
       setActionFeedback({
         context: 'google-connect',
         loading: null,
-        error: error instanceof Error ? error.message : 'Failed to connect Google Ads',
+        error: error instanceof Error ? error.message : 'Failed to start Google Ads OAuth',
         message: null
       });
     }
@@ -1379,6 +1452,616 @@ function App() {
             <AuthenticatedViewFallback
               title="Settings"
               description="Loading reporting settings, integration health, and access controls."
+      {currentPage !== 'order-details' ? <section className="dashboard-grid">
+        {currentPage === 'settings' ? (
+        <article className="panel panel-wide">
+          <div className="panel-header">
+            <h2>Settings</h2>
+            <p>Manage reporting timezone, store connections, ad platform credentials, and dashboard access here.</p>
+          </div>
+          {actionFeedback.error ? <div className="action-banner action-banner-error">{actionFeedback.error}</div> : null}
+          {actionFeedback.message ? <div className="action-banner">{actionFeedback.message}</div> : null}
+        </article>
+        ) : null}
+
+        {currentPage === 'settings' ? (
+        <article className="panel panel-wide">
+          <div className="panel-header">
+            <h2>Reporting timezone</h2>
+            <p>Dashboard date ranges, daily aggregation, and reporting rollups all use this timezone.</p>
+          </div>
+          <SectionState
+            loading={appSettings.loading}
+            error={appSettings.error}
+            empty={false}
+            emptyLabel=""
+          >
+            <div className="connection-card-body">
+              <form className="credential-form" onSubmit={(event) => void handleSettingsSave(event)}>
+                <div className="credential-grid">
+                  <label>
+                    <span>Timezone</span>
+                    <input
+                      type="text"
+                      list="reporting-timezone-options"
+                      value={settingsForm.reportingTimezone}
+                      onChange={(event) =>
+                        setSettingsForm((current) => ({ ...current, reportingTimezone: event.target.value }))
+                      }
+                      placeholder="America/Los_Angeles"
+                      required
+                    />
+                    <datalist id="reporting-timezone-options">
+                      {REPORTING_TIMEZONE_OPTIONS.map((option) => (
+                        <option key={option} value={option} />
+                      ))}
+                    </datalist>
+                  </label>
+                </div>
+                <div className="connection-note">
+                  Default is Pacific time. You can enter a valid IANA timezone such as <code>America/Los_Angeles</code>,
+                  or use the alias <code>PST</code>.
+                </div>
+                <div className="detail-list">
+                  <div>
+                    <dt>Active timezone</dt>
+                    <dd>{appSettings.data?.reportingTimezone ?? DEFAULT_REPORTING_TIMEZONE}</dd>
+                  </div>
+                  <div>
+                    <dt>Updated</dt>
+                    <dd>{formatOptionalDateTime(appSettings.data?.updatedAt, reportingTimezone)}</dd>
+                  </div>
+                </div>
+                <div className="button-row">
+                  <button type="submit" className="action-button" disabled={actionFeedback.loading !== null}>
+                    {actionFeedback.loading === 'settings-save' ? 'Saving…' : 'Save reporting timezone'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </SectionState>
+        </article>
+        ) : null}
+
+        {currentPage === 'settings' ? (
+        <article className="panel panel-wide">
+          <div className="panel-header">
+            <h2>Ad connections</h2>
+            <p>Connect spend sources here so ROAS Radar can populate spend and ROAS, not just attributed revenue.</p>
+          </div>
+          <div className="connections-grid">
+            <section className="connection-card">
+              <div className="connection-card-header">
+                <div>
+                  <h3>Shopify</h3>
+                  <p>Checks the installed Shopify app connection and can re-provision webhooks if needed.</p>
+                </div>
+                <span className="status-pill">
+                  {shopifyConnection.data?.status ??
+                    (shopifyConnection.data?.connected ? 'active' : shopifyConnection.loading ? 'Loading' : 'Not connected')}
+                </span>
+              </div>
+              <ConnectionState loading={shopifyConnection.loading} error={shopifyConnection.error}>
+                <div className="connection-card-body">
+                  <dl className="detail-list">
+                    <div>
+                      <dt>Shop</dt>
+                      <dd>{shopifyConnection.data?.shop?.name ?? shopifyConnection.data?.shopDomain ?? 'Not connected'}</dd>
+                    </div>
+                    <div>
+                      <dt>Domain</dt>
+                      <dd>{shopifyConnection.data?.shopDomain ?? 'Not available'}</dd>
+                    </div>
+                    <div>
+                      <dt>Installed</dt>
+                      <dd>{formatOptionalDateTime(shopifyConnection.data?.installedAt, reportingTimezone)}</dd>
+                    </div>
+                    <div>
+                      <dt>Webhooks</dt>
+                      <dd>{shopifyConnection.data?.webhookBaseUrl ?? 'Not available'}</dd>
+                    </div>
+                  </dl>
+                    {shopifyConnection.data?.reconnectUrl ? (
+                      <div className="connection-note">Reconnect URL is available if the store needs to be reauthorized.</div>
+                    ) : null}
+                    <form className="credentials-form" onSubmit={handleShopifyBackfill}>
+                      <div className="credentials-grid">
+                        <label className="credential-field">
+                          <span>Backfill start</span>
+                          <input
+                            type="date"
+                            value={shopifyBackfillRange.startDate}
+                            onChange={(event) =>
+                              setShopifyBackfillRange((current) => ({ ...current, startDate: event.target.value }))
+                            }
+                            required
+                          />
+                        </label>
+                        <label className="credential-field">
+                          <span>Backfill end</span>
+                          <input
+                            type="date"
+                            value={shopifyBackfillRange.endDate}
+                            onChange={(event) =>
+                              setShopifyBackfillRange((current) => ({ ...current, endDate: event.target.value }))
+                            }
+                            required
+                          />
+                        </label>
+                      </div>
+                      <div className="button-row">
+                        <button
+                          type="submit"
+                          className="action-button action-button-secondary"
+                          disabled={actionFeedback.loading !== null || !shopifyConnection.data?.connected}
+                        >
+                          {actionFeedback.loading === 'shopify-backfill'
+                            ? 'Backfilling…'
+                            : `Backfill Shopify orders`}
+                        </button>
+                        <button
+                          type="button"
+                          className="action-button action-button-secondary"
+                          onClick={() => void handleShopifyAttributionRecovery()}
+                          disabled={actionFeedback.loading !== null || !shopifyConnection.data?.connected}
+                        >
+                          {actionFeedback.loading === 'shopify-attribution-recovery'
+                            ? 'Recovering…'
+                            : 'Recover attribution hints'}
+                        </button>
+                      </div>
+                    </form>
+                    <div className="button-row">
+                      <button
+                        type="button"
+                      className="action-button"
+                      onClick={() => void handleShopifyTest()}
+                      disabled={actionFeedback.loading !== null}
+                    >
+                      {actionFeedback.loading === 'shopify-test' ? 'Testing…' : 'Test Shopify connection'}
+                    </button>
+                    <button
+                      type="button"
+                      className="action-button action-button-secondary"
+                      onClick={() => void handleShopifyWebhookSync()}
+                      disabled={actionFeedback.loading !== null || !shopifyConnection.data?.connected}
+                    >
+                      {actionFeedback.loading === 'shopify-webhooks' ? 'Syncing…' : 'Sync Shopify webhooks'}
+                    </button>
+                  </div>
+                </div>
+              </ConnectionState>
+            </section>
+
+            <section className="connection-card">
+              <div className="connection-card-header">
+                <div>
+                  <h3>Meta Ads</h3>
+                  <p>Save your Meta app settings here, then start OAuth to attach the ad account.</p>
+                </div>
+                <span className="status-pill">
+                  {metaConnection.data?.connection?.status ??
+                    (metaConnection.data?.config.missingFields.length ? 'Needs config' : metaConnection.loading ? 'Loading' : 'Not connected')}
+                </span>
+              </div>
+              <ConnectionState loading={metaConnection.loading} error={metaConnection.error}>
+                <div className="connection-card-body">
+                  <dl className="detail-list">
+                    <div>
+                      <dt>Config source</dt>
+                      <dd>{metaConnection.data?.config.source ?? 'Not available'}</dd>
+                    </div>
+                    <div>
+                      <dt>Ad account</dt>
+                      <dd>
+                        {metaConnection.data?.connection?.account_name ??
+                          metaConnection.data?.config.adAccountId ??
+                          'Not configured'}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Last sync</dt>
+                      <dd>{formatOptionalDateTime(metaConnection.data?.connection?.last_sync_completed_at, reportingTimezone)}</dd>
+                    </div>
+                    <div>
+                      <dt>Sync status</dt>
+                      <dd>{metaConnection.data?.connection?.last_sync_status ?? 'Not started'}</dd>
+                    </div>
+                  </dl>
+                  {metaConnection.data?.config.missingFields.length ? (
+                    <div className="connection-note connection-note-error">
+                      Missing Meta config: {metaConnection.data.config.missingFields.join(', ')}
+                    </div>
+                  ) : null}
+                  {metaConnection.data?.connection?.last_sync_error ? (
+                    <div className="connection-note connection-note-error">{metaConnection.data.connection.last_sync_error}</div>
+                  ) : null}
+                  <form className="credentials-form" onSubmit={handleMetaConfigSave}>
+                    <div className="credentials-grid">
+                      <label className="credential-field">
+                        <span>Meta app ID</span>
+                        <input
+                          type="text"
+                          value={metaConfigForm.appId}
+                          onChange={(event) =>
+                            setMetaConfigForm((current) => ({ ...current, appId: event.target.value }))
+                          }
+                          placeholder="123456789012345"
+                        />
+                      </label>
+                      <label className="credential-field">
+                        <span>Ad account ID</span>
+                        <input
+                          type="text"
+                          value={metaConfigForm.adAccountId}
+                          onChange={(event) =>
+                            setMetaConfigForm((current) => ({ ...current, adAccountId: event.target.value }))
+                          }
+                          placeholder="act_123456789012345 or 123456789012345"
+                        />
+                      </label>
+                      <label className="credential-field credential-field-wide">
+                        <span>Meta app secret</span>
+                        <input
+                          type="password"
+                          value={metaConfigForm.appSecret}
+                          onChange={(event) =>
+                            setMetaConfigForm((current) => ({ ...current, appSecret: event.target.value }))
+                          }
+                          placeholder={
+                            metaConnection.data?.config.appSecretConfigured
+                              ? 'Leave blank to keep the saved secret'
+                              : 'Paste the Meta app secret'
+                          }
+                        />
+                      </label>
+                      <label className="credential-field credential-field-wide">
+                        <span>OAuth base URL</span>
+                        <input
+                          type="url"
+                          value={metaConfigForm.appBaseUrl}
+                          onChange={(event) =>
+                            setMetaConfigForm((current) => ({ ...current, appBaseUrl: event.target.value }))
+                          }
+                          placeholder="https://roas-radar.api.thecapemarine.com"
+                        />
+                      </label>
+                      <label className="credential-field credential-field-wide">
+                        <span>Scopes</span>
+                        <input
+                          type="text"
+                          value={metaConfigForm.appScopes}
+                          onChange={(event) =>
+                            setMetaConfigForm((current) => ({ ...current, appScopes: event.target.value }))
+                          }
+                          placeholder="ads_read"
+                        />
+                      </label>
+                    </div>
+                    <div className="button-row">
+                      <button type="submit" className="action-button" disabled={actionFeedback.loading !== null}>
+                        {actionFeedback.loading === 'meta-config-save' ? 'Saving…' : 'Save Meta config'}
+                      </button>
+                    </div>
+                  </form>
+                  <div className="button-row">
+                    <button
+                      type="button"
+                      className="action-button"
+                      onClick={() => void handleMetaConnect()}
+                      disabled={actionFeedback.loading !== null || Boolean(metaConnection.data?.config.missingFields.length)}
+                    >
+                      {actionFeedback.loading === 'meta-connect' ? 'Opening Meta…' : 'Connect Meta Ads'}
+                    </button>
+                    <button
+                      type="button"
+                      className="action-button action-button-secondary"
+                      onClick={() => void handleMetaSync()}
+                      disabled={actionFeedback.loading !== null || metaConnection.data?.connection == null}
+                    >
+                      {actionFeedback.loading === 'meta-sync' ? 'Queueing…' : `Sync ${filters.startDate} to ${filters.endDate}`}
+                    </button>
+                  </div>
+                </div>
+              </ConnectionState>
+            </section>
+
+            <section className="connection-card">
+              <div className="connection-card-header">
+                <div>
+                  <h3>Google Ads</h3>
+                  <p>Save the Google OAuth app settings once, then connect each Google Ads account with Google sign-in.</p>
+                </div>
+                <span className="status-pill">
+                  {googleConnection.data?.connection?.status ??
+                    (googleConnection.data?.config.missingFields.length ? 'Needs config' : googleConnection.loading ? 'Loading' : 'Not connected')}
+                </span>
+              </div>
+              <ConnectionState loading={googleConnection.loading} error={googleConnection.error}>
+                <div className="connection-card-body">
+                  <dl className="detail-list">
+                    <div>
+                      <dt>Config source</dt>
+                      <dd>{googleConnection.data?.config.source ?? 'Not available'}</dd>
+                    </div>
+                    <div>
+                      <dt>Customer</dt>
+                      <dd>
+                        {googleConnection.data?.connection?.customer_descriptive_name ??
+                          googleConnection.data?.connection?.customer_id ??
+                          'Not connected'}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Currency</dt>
+                      <dd>{googleConnection.data?.connection?.currency_code ?? 'Not available'}</dd>
+                    </div>
+                    <div>
+                      <dt>Last sync</dt>
+                      <dd>{formatOptionalDateTime(googleConnection.data?.connection?.last_sync_completed_at, reportingTimezone)}</dd>
+                    </div>
+                    <div>
+                      <dt>Reconciliation</dt>
+                      <dd>{googleConnection.data?.reconciliation?.status ?? 'Not run'}</dd>
+                    </div>
+                  </dl>
+                  {googleConnection.data?.config.missingFields.length ? (
+                    <div className="connection-note connection-note-error">
+                      Missing Google Ads config: {googleConnection.data.config.missingFields.join(', ')}
+                    </div>
+                  ) : null}
+                  {googleConnection.data?.connection?.last_sync_error ? (
+                    <div className="connection-note connection-note-error">
+                      {googleConnection.data.connection.last_sync_error}
+                    </div>
+                  ) : null}
+                  {googleConnection.data?.reconciliation?.missing_dates?.length ? (
+                    <div className="connection-note">
+                      Missing dates: {googleConnection.data.reconciliation.missing_dates.join(', ')}
+                    </div>
+                  ) : null}
+                  <form className="credentials-form" onSubmit={handleGoogleConfigSave}>
+                    <div className="credentials-grid">
+                      <label className="credential-field credential-field-wide">
+                        <span>OAuth client ID</span>
+                        <input
+                          type="text"
+                          value={googleConfigForm.clientId}
+                          onChange={(event) =>
+                            setGoogleConfigForm((current) => ({ ...current, clientId: event.target.value }))
+                          }
+                          placeholder="1234567890-abc123.apps.googleusercontent.com"
+                        />
+                      </label>
+                      <label className="credential-field credential-field-wide">
+                        <span>OAuth client secret</span>
+                        <input
+                          type="password"
+                          value={googleConfigForm.clientSecret}
+                          onChange={(event) =>
+                            setGoogleConfigForm((current) => ({ ...current, clientSecret: event.target.value }))
+                          }
+                          placeholder={
+                            googleConnection.data?.config.clientSecretConfigured
+                              ? 'Leave blank to keep the saved secret'
+                              : 'Paste the Google OAuth client secret'
+                          }
+                        />
+                      </label>
+                      <label className="credential-field credential-field-wide">
+                        <span>Developer token</span>
+                        <input
+                          type="password"
+                          value={googleConfigForm.developerToken}
+                          onChange={(event) =>
+                            setGoogleConfigForm((current) => ({ ...current, developerToken: event.target.value }))
+                          }
+                          placeholder={
+                            googleConnection.data?.config.developerTokenConfigured
+                              ? 'Leave blank to keep the saved token'
+                              : 'Paste the Google Ads developer token'
+                          }
+                        />
+                      </label>
+                      <label className="credential-field credential-field-wide">
+                        <span>OAuth base URL</span>
+                        <input
+                          type="url"
+                          value={googleConfigForm.appBaseUrl}
+                          onChange={(event) =>
+                            setGoogleConfigForm((current) => ({ ...current, appBaseUrl: event.target.value }))
+                          }
+                          placeholder="https://roas-radar.thecapemarine.com"
+                        />
+                      </label>
+                      <label className="credential-field credential-field-wide">
+                        <span>Scopes</span>
+                        <input
+                          type="text"
+                          value={googleConfigForm.appScopes}
+                          onChange={(event) =>
+                            setGoogleConfigForm((current) => ({ ...current, appScopes: event.target.value }))
+                          }
+                          placeholder="https://www.googleapis.com/auth/adwords"
+                        />
+                      </label>
+                    </div>
+                    <div className="button-row">
+                      <button type="submit" className="action-button" disabled={actionFeedback.loading !== null}>
+                        {actionFeedback.loading === 'google-config-save' ? 'Saving…' : 'Save Google Ads config'}
+                      </button>
+                    </div>
+                  </form>
+                  <form className="credential-form" onSubmit={(event) => void handleGoogleConnect(event)}>
+                    <div className="credential-grid">
+                      <label>
+                        <span>Customer ID</span>
+                        <input
+                          type="text"
+                          value={googleForm.customerId}
+                          onChange={(event) =>
+                            setGoogleForm((current) => ({ ...current, customerId: event.target.value }))
+                          }
+                          placeholder="123-456-7890"
+                          required
+                        />
+                      </label>
+                      <label>
+                        <span>Login customer ID</span>
+                        <input
+                          type="text"
+                          value={googleForm.loginCustomerId ?? ''}
+                          onChange={(event) =>
+                            setGoogleForm((current) => ({ ...current, loginCustomerId: event.target.value }))
+                          }
+                          placeholder="Optional MCC login"
+                        />
+                      </label>
+                    </div>
+                    <div className="button-row">
+                      <button
+                        type="submit"
+                        className="action-button"
+                        disabled={actionFeedback.loading !== null || Boolean(googleConnection.data?.config.missingFields.length)}
+                      >
+                        {actionFeedback.loading === 'google-connect' ? 'Opening Google…' : 'Connect Google Ads'}
+                      </button>
+                      <button
+                        type="button"
+                        className="action-button action-button-secondary"
+                        onClick={() => void handleGoogleSync()}
+                        disabled={actionFeedback.loading !== null || googleConnection.data?.connection == null}
+                      >
+                        {actionFeedback.loading === 'google-sync' ? 'Queueing…' : `Sync ${filters.startDate} to ${filters.endDate}`}
+                      </button>
+                      <button
+                        type="button"
+                        className="action-button action-button-secondary"
+                        onClick={() => void handleGoogleReconcile()}
+                        disabled={actionFeedback.loading !== null || googleConnection.data?.connection == null}
+                      >
+                        {actionFeedback.loading === 'google-reconcile' ? 'Running…' : 'Reconcile gaps'}
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </ConnectionState>
+            </section>
+          </div>
+        </article>
+        ) : null}
+
+        {currentPage === 'settings' && authState.user.isAdmin ? (
+          <article className="panel panel-wide">
+            <div className="panel-header">
+              <h2>User access</h2>
+              <p>All dashboard reporting and admin tools are locked behind app-user authentication.</p>
+            </div>
+            <SectionState
+              loading={usersSection.loading}
+              error={usersSection.error}
+              empty={false}
+              emptyLabel=""
+            >
+              <div className="connection-card-body">
+                <form className="credential-form" onSubmit={(event) => void handleCreateUser(event)}>
+                  <div className="credential-grid">
+                    <label>
+                      <span>Display name</span>
+                      <input
+                        type="text"
+                        value={newUserForm.displayName}
+                        onChange={(event) =>
+                          setNewUserForm((current) => ({ ...current, displayName: event.target.value }))
+                        }
+                        required
+                      />
+                    </label>
+                    <label>
+                      <span>Email</span>
+                      <input
+                        type="email"
+                        value={newUserForm.email}
+                        onChange={(event) => setNewUserForm((current) => ({ ...current, email: event.target.value }))}
+                        required
+                      />
+                    </label>
+                    <label>
+                      <span>Password</span>
+                      <input
+                        type="password"
+                        value={newUserForm.password}
+                        onChange={(event) =>
+                          setNewUserForm((current) => ({ ...current, password: event.target.value }))
+                        }
+                        minLength={12}
+                        required
+                      />
+                    </label>
+                    <label className="checkbox-label">
+                      <span>Admin access</span>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(newUserForm.isAdmin)}
+                        onChange={(event) =>
+                          setNewUserForm((current) => ({ ...current, isAdmin: event.target.checked }))
+                        }
+                      />
+                    </label>
+                  </div>
+                  <div className="button-row">
+                    <button type="submit" className="action-button" disabled={actionFeedback.loading !== null}>
+                      {actionFeedback.loading === 'user-create' ? 'Creating…' : 'Add user'}
+                    </button>
+                  </div>
+                </form>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>User</th>
+                        <th>Role</th>
+                        <th>Status</th>
+                        <th>Last login</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(usersSection.data ?? []).map((user) => (
+                        <tr key={user.id}>
+                          <td>
+                            <div className="primary-cell">
+                              <strong>{user.displayName}</strong>
+                              <span>{user.email}</span>
+                            </div>
+                          </td>
+                          <td>{user.isAdmin ? 'Admin' : 'Viewer'}</td>
+                          <td>{user.status}</td>
+                          <td>{formatOptionalDateTime(user.lastLoginAt, reportingTimezone)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </SectionState>
+          </article>
+        ) : null}
+
+        {currentPage === 'dashboard' ? <article className="panel panel-wide">
+          <div className="panel-header">
+            <h2>Revenue trend</h2>
+            <p>Uses the reporting timeseries contract and switches grouping without changing the rest of the dashboard.</p>
+          </div>
+          <SectionState
+            loading={dashboard.timeseries.loading}
+            error={dashboard.timeseries.error}
+            empty={!dashboard.timeseries.data?.length}
+            emptyLabel="No timeseries data returned for this filter range."
+          >
+            <TimeseriesChart
+              points={dashboard.timeseries.data ?? []}
+              groupBy={groupBy}
+              reportingTimezone={reportingTimezone}
             />
           }
         >

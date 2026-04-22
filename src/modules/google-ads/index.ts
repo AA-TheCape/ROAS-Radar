@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { Router } from 'express';
@@ -12,17 +12,31 @@ import { buildCanonicalSpendDimensions } from '../marketing-dimensions/index.js'
 import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
 
 const GOOGLE_OAUTH_TOKEN_URL = 'https://oauth2.googleapis.com/token';
+const GOOGLE_OAUTH_AUTHORIZATION_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_ADS_API_BASE_URL = 'https://googleads.googleapis.com';
+const GOOGLE_ADS_OAUTH_STATE_TTL_MINUTES = 10;
 const GOOGLE_ADS_SYNC_JOB_STATUSES = ['pending', 'processing', 'retry', 'completed', 'failed'] as const;
 const GOOGLE_ADS_SPEND_GRANULARITIES = ['account', 'campaign', 'adset', 'ad', 'creative'] as const;
 
-const connectionUpsertSchema = z.object({
+const oauthStartQuerySchema = z.object({
   customerId: z.string().min(1),
-  loginCustomerId: z.string().optional().nullable(),
-  developerToken: z.string().min(1),
+  loginCustomerId: z.string().optional(),
+  redirectPath: z.string().optional()
+});
+
+const googleAdsConfigUpdateSchema = z.object({
   clientId: z.string().min(1),
-  clientSecret: z.string().min(1),
-  refreshToken: z.string().min(1)
+  clientSecret: z.string().optional(),
+  developerToken: z.string().optional(),
+  appBaseUrl: z.string().url(),
+  appScopes: z.union([z.string(), z.array(z.string())]).optional()
+});
+
+const oauthCallbackSchema = z.object({
+  code: z.string().min(1).optional(),
+  state: z.string().min(1).optional(),
+  error: z.string().optional(),
+  error_description: z.string().optional()
 });
 
 const manualSyncSchema = z.object({
@@ -62,6 +76,32 @@ type GoogleAdsConnectionSummaryRow = {
   currency_code: string | null;
 };
 
+type GoogleAdsSettingsRow = {
+  id: number;
+  client_id: string;
+  client_secret: string | null;
+  developer_token: string | null;
+  app_base_url: string;
+  app_scopes: string[];
+  updated_at: Date;
+};
+
+type GoogleAdsResolvedConfig = {
+  clientId: string;
+  clientSecret: string;
+  developerToken: string;
+  appBaseUrl: string;
+  appScopes: string[];
+  encryptionKey: string;
+  source: 'database' | 'environment';
+};
+
+type GoogleAdsOAuthStateRow = {
+  redirect_path: string | null;
+  customer_id: string;
+  login_customer_id: string | null;
+};
+
 type GoogleAdsSyncJobRow = {
   id: number;
   connection_id: number;
@@ -82,6 +122,7 @@ type GoogleAdsReconciliationRow = {
 type GoogleAdsAccessTokenResponse = {
   access_token?: string;
   expires_in?: number;
+  refresh_token?: string;
   scope?: string;
   token_type?: string;
   error?: string;
@@ -219,6 +260,21 @@ function assertGoogleAdsConfig(): void {
   }
 }
 
+function normalizeGoogleAdsScopes(rawValue: string | string[] | undefined): string[] {
+  if (Array.isArray(rawValue)) {
+    return rawValue.map((entry) => entry.trim()).filter(Boolean);
+  }
+
+  if (typeof rawValue !== 'string') {
+    return [];
+  }
+
+  return rawValue
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
 function normalizeGoogleAdsCustomerId(value: string): string {
   const normalized = value.replace(/-/g, '').trim();
 
@@ -227,6 +283,236 @@ function normalizeGoogleAdsCustomerId(value: string): string {
   }
 
   return normalized;
+}
+
+function normalizeRedirectPath(rawValue: string | undefined): string | null {
+  if (!rawValue) {
+    return null;
+  }
+
+  const trimmed = rawValue.trim();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  if (!trimmed.startsWith('/')) {
+    throw new GoogleAdsHttpError(400, 'invalid_redirect_path', 'redirectPath must be a root-relative path');
+  }
+
+  return trimmed;
+}
+
+async function getStoredGoogleAdsSettings(): Promise<GoogleAdsSettingsRow | null> {
+  const result = await query<GoogleAdsSettingsRow>(
+    `
+      SELECT
+        id,
+        client_id,
+        pgp_sym_decrypt(client_secret_encrypted, $1) AS client_secret,
+        pgp_sym_decrypt(developer_token_encrypted, $1) AS developer_token,
+        app_base_url,
+        app_scopes,
+        updated_at
+      FROM google_ads_settings
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `,
+    [env.GOOGLE_ADS_ENCRYPTION_KEY]
+  );
+
+  return result.rows[0] ?? null;
+}
+
+async function getResolvedGoogleAdsConfig(): Promise<GoogleAdsResolvedConfig> {
+  assertGoogleAdsConfig();
+
+  const stored = await getStoredGoogleAdsSettings();
+  const clientId = stored?.client_id?.trim() || env.GOOGLE_ADS_CLIENT_ID.trim();
+  const clientSecret = stored?.client_secret?.trim() || env.GOOGLE_ADS_CLIENT_SECRET.trim();
+  const developerToken = stored?.developer_token?.trim() || env.GOOGLE_ADS_DEVELOPER_TOKEN.trim();
+  const appBaseUrl = (stored?.app_base_url?.trim() || env.GOOGLE_ADS_APP_BASE_URL.trim()).replace(/\/$/, '');
+  const appScopes = (stored?.app_scopes?.length ? stored.app_scopes : env.GOOGLE_ADS_APP_SCOPES)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const missing = [
+    ['GOOGLE_ADS_CLIENT_ID', clientId],
+    ['GOOGLE_ADS_CLIENT_SECRET', clientSecret],
+    ['GOOGLE_ADS_DEVELOPER_TOKEN', developerToken],
+    ['GOOGLE_ADS_APP_BASE_URL', appBaseUrl]
+  ]
+    .filter(([, value]) => !value)
+    .map(([key]) => key);
+
+  if (missing.length > 0) {
+    throw new GoogleAdsHttpError(500, 'google_ads_config_missing', `Missing Google Ads configuration: ${missing.join(', ')}`);
+  }
+
+  return {
+    clientId,
+    clientSecret,
+    developerToken,
+    appBaseUrl,
+    appScopes,
+    encryptionKey: env.GOOGLE_ADS_ENCRYPTION_KEY,
+    source: stored ? 'database' : 'environment'
+  };
+}
+
+async function getGoogleAdsConfigurationSummary(): Promise<{
+  source: 'database' | 'environment';
+  clientId: string;
+  appBaseUrl: string;
+  appScopes: string[];
+  clientSecretConfigured: boolean;
+  developerTokenConfigured: boolean;
+  missingFields: string[];
+}> {
+  const stored = env.GOOGLE_ADS_ENCRYPTION_KEY ? await getStoredGoogleAdsSettings() : null;
+  const clientId = stored?.client_id?.trim() || env.GOOGLE_ADS_CLIENT_ID.trim();
+  const clientSecretConfigured = Boolean(stored?.client_secret?.trim() || env.GOOGLE_ADS_CLIENT_SECRET.trim());
+  const developerTokenConfigured = Boolean(stored?.developer_token?.trim() || env.GOOGLE_ADS_DEVELOPER_TOKEN.trim());
+  const appBaseUrl = (stored?.app_base_url?.trim() || env.GOOGLE_ADS_APP_BASE_URL.trim()).replace(/\/$/, '');
+  const appScopes = (stored?.app_scopes?.length ? stored.app_scopes : env.GOOGLE_ADS_APP_SCOPES)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const missingFields = [
+    ['clientId', clientId],
+    ['clientSecret', clientSecretConfigured ? 'configured' : ''],
+    ['developerToken', developerTokenConfigured ? 'configured' : ''],
+    ['appBaseUrl', appBaseUrl],
+    ['encryptionKey', env.GOOGLE_ADS_ENCRYPTION_KEY]
+  ]
+    .filter(([, value]) => !value)
+    .map(([key]) => key);
+
+  return {
+    source: stored ? 'database' : 'environment',
+    clientId,
+    appBaseUrl,
+    appScopes,
+    clientSecretConfigured,
+    developerTokenConfigured,
+    missingFields
+  };
+}
+
+async function upsertGoogleAdsSettings(payload: z.infer<typeof googleAdsConfigUpdateSchema>): Promise<void> {
+  assertGoogleAdsConfig();
+
+  const clientSecretProvided = typeof payload.clientSecret === 'string' && payload.clientSecret.trim().length > 0;
+  const developerTokenProvided = typeof payload.developerToken === 'string' && payload.developerToken.trim().length > 0;
+  const normalizedScopes = normalizeGoogleAdsScopes(payload.appScopes);
+  const existing = await getStoredGoogleAdsSettings();
+  const nextClientSecret = clientSecretProvided ? payload.clientSecret!.trim() : existing?.client_secret ?? '';
+  const nextDeveloperToken = developerTokenProvided ? payload.developerToken!.trim() : existing?.developer_token ?? '';
+
+  await query(
+    `
+      DELETE FROM google_ads_settings
+    `
+  );
+
+  await query(
+    `
+      INSERT INTO google_ads_settings (
+        id,
+        client_id,
+        client_secret_encrypted,
+        developer_token_encrypted,
+        app_base_url,
+        app_scopes,
+        updated_at
+      )
+      VALUES (
+        1,
+        $1,
+        CASE
+          WHEN $2::text = '' THEN NULL
+          ELSE pgp_sym_encrypt($2, $5, 'cipher-algo=aes256, compress-algo=0')
+        END,
+        CASE
+          WHEN $3::text = '' THEN NULL
+          ELSE pgp_sym_encrypt($3, $5, 'cipher-algo=aes256, compress-algo=0')
+        END,
+        $4,
+        $6::text[],
+        now()
+      )
+    `,
+    [
+      payload.clientId.trim(),
+      nextClientSecret,
+      nextDeveloperToken,
+      new URL(payload.appBaseUrl).toString().replace(/\/$/, ''),
+      env.GOOGLE_ADS_ENCRYPTION_KEY,
+      normalizedScopes.length > 0 ? normalizedScopes : ['https://www.googleapis.com/auth/adwords']
+    ]
+  );
+}
+
+function getGoogleAdsAppBaseUrl(config: GoogleAdsResolvedConfig): string {
+  return new URL(config.appBaseUrl).toString().replace(/\/$/, '');
+}
+
+function buildGoogleAdsRedirectUri(config: GoogleAdsResolvedConfig): string {
+  return `${getGoogleAdsAppBaseUrl(config)}/google-ads/oauth/callback`;
+}
+
+function createOAuthStateDigest(state: string): string {
+  return createHash('sha256').update(state).digest('hex');
+}
+
+function buildGoogleAdsAuthorizationUrl(config: GoogleAdsResolvedConfig, state: string): string {
+  const url = new URL(GOOGLE_OAUTH_AUTHORIZATION_URL);
+  url.searchParams.set('client_id', config.clientId);
+  url.searchParams.set('redirect_uri', buildGoogleAdsRedirectUri(config));
+  url.searchParams.set('response_type', 'code');
+  url.searchParams.set('scope', config.appScopes.join(' '));
+  url.searchParams.set('access_type', 'offline');
+  url.searchParams.set('prompt', 'consent');
+  url.searchParams.set('include_granted_scopes', 'true');
+  url.searchParams.set('state', state);
+  return url.toString();
+}
+
+async function insertOAuthState(params: {
+  redirectPath: string | null;
+  customerId: string;
+  loginCustomerId: string | null;
+}): Promise<string> {
+  const state = randomBytes(24).toString('hex');
+  const stateDigest = createOAuthStateDigest(state);
+
+  await query(
+    `
+      INSERT INTO google_ads_oauth_states (state_digest, redirect_path, customer_id, login_customer_id, expires_at)
+      VALUES ($1, $2, $3, $4, now() + ($5::int * interval '1 minute'))
+    `,
+    [stateDigest, params.redirectPath, params.customerId, params.loginCustomerId, GOOGLE_ADS_OAUTH_STATE_TTL_MINUTES]
+  );
+
+  return state;
+}
+
+async function consumeOAuthState(state: string): Promise<GoogleAdsOAuthStateRow> {
+  const result = await query<GoogleAdsOAuthStateRow>(
+    `
+      UPDATE google_ads_oauth_states
+      SET consumed_at = now()
+      WHERE state_digest = $1
+        AND consumed_at IS NULL
+        AND expires_at >= now()
+      RETURNING redirect_path, customer_id, login_customer_id
+    `,
+    [createOAuthStateDigest(state)]
+  );
+
+  if (!result.rowCount) {
+    throw new GoogleAdsHttpError(400, 'invalid_google_ads_oauth_state', 'The Google Ads OAuth state is invalid or expired');
+  }
+
+  return result.rows[0];
 }
 
 function formatDateOnly(value: Date): string {
@@ -320,6 +606,38 @@ function buildAccessTokenRequestBody(connection: GoogleAdsConnectionSecretRow): 
   body.set('refresh_token', connection.refresh_token);
   body.set('grant_type', 'refresh_token');
   return body;
+}
+
+function buildAuthorizationCodeRequestBody(config: GoogleAdsResolvedConfig, code: string): URLSearchParams {
+  const body = new URLSearchParams();
+  body.set('client_id', config.clientId);
+  body.set('client_secret', config.clientSecret);
+  body.set('code', code);
+  body.set('grant_type', 'authorization_code');
+  body.set('redirect_uri', buildGoogleAdsRedirectUri(config));
+  return body;
+}
+
+async function exchangeAuthorizationCode(config: GoogleAdsResolvedConfig, code: string): Promise<GoogleAdsAccessTokenResponse> {
+  const response = await fetch(GOOGLE_OAUTH_TOKEN_URL, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded'
+    },
+    body: buildAuthorizationCodeRequestBody(config, code)
+  });
+  const text = await response.text();
+  const payload = text ? (JSON.parse(text) as GoogleAdsAccessTokenResponse) : {};
+
+  if (!response.ok || !payload.access_token || !payload.refresh_token) {
+    throw new GoogleAdsApiError(
+      response.status,
+      payload.error_description ?? payload.error ?? 'Google OAuth code exchange failed',
+      payload
+    );
+  }
+
+  return payload;
 }
 
 async function exchangeRefreshToken(connection: GoogleAdsConnectionSecretRow): Promise<string> {
@@ -1352,50 +1670,59 @@ export async function processGoogleAdsSyncQueue(
   return result;
 }
 
-export function createGoogleAdsAdminRouter(): Router {
+export function createGoogleAdsPublicRouter(): Router {
   const router = Router();
 
-  router.use(attachAuthContext);
-  router.use(requireAdmin);
-
-  router.post('/connections', async (req, res, next) => {
+  router.get('/oauth/callback', async (req, res, next) => {
     try {
-      assertGoogleAdsConfig();
-      const payload = connectionUpsertSchema.parse(req.body);
-      const normalizedCustomerId = normalizeGoogleAdsCustomerId(payload.customerId);
-      const loginCustomerId = payload.loginCustomerId ? normalizeGoogleAdsCustomerId(payload.loginCustomerId) : null;
+      const config = await getResolvedGoogleAdsConfig();
+      const payload = oauthCallbackSchema.parse(req.query);
+
+      if (payload.error) {
+        throw new GoogleAdsHttpError(
+          400,
+          'google_ads_oauth_denied',
+          payload.error_description ?? `Google Ads OAuth failed with error: ${payload.error}`
+        );
+      }
+
+      if (!payload.code || !payload.state) {
+        throw new GoogleAdsHttpError(400, 'google_ads_oauth_invalid_callback', 'Missing OAuth callback parameters');
+      }
+
+      const oauthState = await consumeOAuthState(payload.state);
+      const tokenPayload = await exchangeAuthorizationCode(config, payload.code);
       const connectionForValidation: GoogleAdsConnectionSecretRow = {
         id: 0,
-        customer_id: normalizedCustomerId,
-        login_customer_id: loginCustomerId,
-        developer_token: payload.developerToken.trim(),
-        client_id: payload.clientId.trim(),
-        client_secret: payload.clientSecret.trim(),
-        refresh_token: payload.refreshToken.trim(),
-        token_scopes: ['https://www.googleapis.com/auth/adwords'],
+        customer_id: oauthState.customer_id,
+        login_customer_id: oauthState.login_customer_id,
+        developer_token: config.developerToken,
+        client_id: config.clientId,
+        client_secret: config.clientSecret,
+        refresh_token: tokenPayload.refresh_token!,
+        token_scopes: config.appScopes,
         last_refreshed_at: null,
         status: 'active',
         customer_descriptive_name: null,
         currency_code: null
       };
-      const accessToken = await exchangeRefreshToken(connectionForValidation);
-      const customer = await fetchCustomerMetadata(connectionForValidation, accessToken);
+      const customer = await fetchCustomerMetadata(connectionForValidation, tokenPayload.access_token!);
 
-      if (customer.customerId !== normalizedCustomerId) {
+      if (customer.customerId !== oauthState.customer_id) {
         throw new GoogleAdsHttpError(
           400,
           'google_ads_customer_mismatch',
-          `Provided customerId ${normalizedCustomerId} does not match resolved customer ${customer.customerId}`
+          `Provided customerId ${oauthState.customer_id} does not match resolved customer ${customer.customerId}`
         );
       }
 
       await upsertGoogleAdsConnection({
-        customerId: normalizedCustomerId,
-        loginCustomerId,
-        developerToken: payload.developerToken.trim(),
-        clientId: payload.clientId.trim(),
-        clientSecret: payload.clientSecret.trim(),
-        refreshToken: payload.refreshToken.trim(),
+        customerId: oauthState.customer_id,
+        loginCustomerId: oauthState.login_customer_id,
+        developerToken: config.developerToken,
+        clientId: config.clientId,
+        clientSecret: config.clientSecret,
+        refreshToken: tokenPayload.refresh_token!,
         customer
       });
 
@@ -1403,9 +1730,14 @@ export function createGoogleAdsAdminRouter(): Router {
       const initialDates = buildPlanningDates(new Date(), null);
       await enqueueSyncDates(connection.id, initialDates);
 
-      res.status(201).json({
+      if (oauthState.redirect_path) {
+        res.redirect(302, oauthState.redirect_path);
+        return;
+      }
+
+      res.status(200).json({
         ok: true,
-        customerId: normalizedCustomerId,
+        customerId: oauthState.customer_id,
         customerName: customer.descriptiveName,
         currencyCode: customer.currencyCode,
         plannedDates: initialDates
@@ -1415,8 +1747,55 @@ export function createGoogleAdsAdminRouter(): Router {
     }
   });
 
+  return router;
+}
+
+export function createGoogleAdsAdminRouter(): Router {
+  const router = Router();
+
+  router.use(attachAuthContext);
+  router.use(requireAdmin);
+
+  router.put('/config', async (req, res, next) => {
+    try {
+      const payload = googleAdsConfigUpdateSchema.parse(req.body);
+      await upsertGoogleAdsSettings(payload);
+
+      res.status(200).json({
+        ok: true,
+        config: await getGoogleAdsConfigurationSummary()
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/oauth/start', async (req, res, next) => {
+    try {
+      const config = await getResolvedGoogleAdsConfig();
+      const payload = oauthStartQuerySchema.parse(req.query);
+      const normalizedCustomerId = normalizeGoogleAdsCustomerId(payload.customerId);
+      const loginCustomerId = payload.loginCustomerId ? normalizeGoogleAdsCustomerId(payload.loginCustomerId) : null;
+      const redirectPath = normalizeRedirectPath(payload.redirectPath);
+      const state = await insertOAuthState({
+        redirectPath,
+        customerId: normalizedCustomerId,
+        loginCustomerId
+      });
+
+      res.status(200).json({
+        authorizationUrl: buildGoogleAdsAuthorizationUrl(config, state),
+        redirectUri: buildGoogleAdsRedirectUri(config),
+        state
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get('/status', async (_req, res, next) => {
     try {
+      const config = await getGoogleAdsConfigurationSummary();
       const connectionResult = await query<GoogleAdsConnectionSummaryRow>(
         `
           SELECT
@@ -1455,6 +1834,7 @@ export function createGoogleAdsAdminRouter(): Router {
       );
 
       res.status(200).json({
+        config,
         connection: connectionResult.rows[0] ?? null,
         reconciliation: reconciliationResult.rows[0] ?? null
       });
