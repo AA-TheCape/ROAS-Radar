@@ -5,8 +5,7 @@ COPY package.json package-lock.json ./
 RUN npm ci
 
 FROM deps AS build
-COPY index.html tsconfig.json tsconfig.node.json vite.config.ts ./
-COPY src ./src
+COPY . ./
 RUN npm run build
 
 FROM node:22-bookworm-slim AS runtime
