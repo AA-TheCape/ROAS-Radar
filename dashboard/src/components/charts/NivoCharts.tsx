@@ -192,6 +192,8 @@ const desktopViewportSnapshot: ViewportSnapshot = {
   isTablet: false
 };
 
+let cachedViewportSnapshot = desktopViewportSnapshot;
+
 let viewportListeners = new Set<() => void>();
 let viewportListening = false;
 
@@ -201,11 +203,20 @@ function readViewportSnapshot(): ViewportSnapshot {
   }
 
   const width = window.innerWidth;
-
-  return {
+  const nextSnapshot = {
     isCompact: width < 640,
     isTablet: width >= 640 && width < 1024
   };
+
+  if (
+    cachedViewportSnapshot.isCompact === nextSnapshot.isCompact &&
+    cachedViewportSnapshot.isTablet === nextSnapshot.isTablet
+  ) {
+    return cachedViewportSnapshot;
+  }
+
+  cachedViewportSnapshot = nextSnapshot;
+  return cachedViewportSnapshot;
 }
 
 function emitViewportChange() {
