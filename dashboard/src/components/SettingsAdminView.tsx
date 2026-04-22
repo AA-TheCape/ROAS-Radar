@@ -4,7 +4,6 @@ import type {
   AppSettings,
   AuthUser,
   CreateUserPayload,
-  GoogleAdsConnectionPayload,
   GoogleAdsStatusResponse,
   MetaAdsConfigSummary,
   MetaAdsConnection,
@@ -84,6 +83,19 @@ type SettingsForm = {
   reportingTimezone: string;
 };
 
+type GoogleConfigForm = {
+  clientId: string;
+  clientSecret: string;
+  developerToken: string;
+  appBaseUrl: string;
+  appScopes: string;
+};
+
+type GoogleConnectForm = {
+  customerId: string;
+  loginCustomerId: string;
+};
+
 type SettingsAdminViewProps = {
   isAdmin: boolean;
   reportingTimezone: string;
@@ -111,13 +123,16 @@ type SettingsAdminViewProps = {
   metaConfigForm: MetaConfigForm;
   setMetaConfigForm: (updater: (current: MetaConfigForm) => MetaConfigForm) => void;
   googleConnection: AsyncSection<GoogleAdsStatusResponse>;
-  googleForm: GoogleAdsConnectionPayload;
-  setGoogleForm: (updater: (current: GoogleAdsConnectionPayload) => GoogleAdsConnectionPayload) => void;
+  googleConfigForm: GoogleConfigForm;
+  setGoogleConfigForm: (updater: (current: GoogleConfigForm) => GoogleConfigForm) => void;
+  googleForm: GoogleConnectForm;
+  setGoogleForm: (updater: (current: GoogleConnectForm) => GoogleConnectForm) => void;
   actionFeedback: ActionFeedback;
   onSettingsSave: (event: FormEvent<HTMLFormElement>) => void | Promise<void>;
   onCreateUser: (event: FormEvent<HTMLFormElement>) => void | Promise<void>;
   onShopifyBackfill: (event: FormEvent<HTMLFormElement>) => void | Promise<void>;
   onMetaConfigSave: (event: FormEvent<HTMLFormElement>) => void | Promise<void>;
+  onGoogleConfigSave: (event: FormEvent<HTMLFormElement>) => void | Promise<void>;
   onGoogleConnect: (event: FormEvent<HTMLFormElement>) => void | Promise<void>;
   onShopifyTest: () => void | Promise<void>;
   onShopifyWebhookSync: () => void | Promise<void>;
@@ -222,6 +237,8 @@ export default function SettingsAdminView({
   metaConfigForm,
   setMetaConfigForm,
   googleConnection,
+  googleConfigForm,
+  setGoogleConfigForm,
   googleForm,
   setGoogleForm,
   actionFeedback,
@@ -229,6 +246,7 @@ export default function SettingsAdminView({
   onCreateUser,
   onShopifyBackfill,
   onMetaConfigSave,
+  onGoogleConfigSave,
   onGoogleConnect,
   onShopifyTest,
   onShopifyWebhookSync,
@@ -269,18 +287,22 @@ export default function SettingsAdminView({
     appScopes: metaMissingFields.includes('appScopes') ? 'Provide at least one Meta scope.' : null,
     adAccountId: metaMissingFields.includes('adAccountId') ? 'Ad account ID is required before OAuth can start.' : null
   };
+  const googleMissingFields = googleConnection.data?.config.missingFields ?? [];
+  const googleConfigErrors = {
+    developerToken: googleMissingFields.includes('developerToken') ? 'Enter the Google Ads developer token.' : null,
+    clientId: googleMissingFields.includes('clientId') ? 'Enter the OAuth client ID.' : null,
+    clientSecret: googleMissingFields.includes('clientSecret') ? 'Enter the OAuth client secret.' : null,
+    appBaseUrl: googleMissingFields.includes('appBaseUrl') ? 'Enter the OAuth base URL.' : null,
+    appScopes: googleMissingFields.includes('appScopes') ? 'Provide at least one Google Ads scope.' : null
+  };
   const trimmedGoogleCustomerId = googleForm.customerId.trim();
   const trimmedGoogleLoginCustomerId = googleForm.loginCustomerId?.trim() ?? '';
-  const googleErrors = {
+  const googleConnectErrors = {
     customerId: trimmedGoogleCustomerId ? null : 'Enter the Google Ads customer ID.',
     loginCustomerId:
       trimmedGoogleLoginCustomerId && !/^[\d-]+$/.test(trimmedGoogleLoginCustomerId)
         ? 'Use digits with optional hyphens for the login customer ID.'
-        : null,
-    developerToken: googleForm.developerToken ? null : 'Enter the developer token.',
-    clientId: googleForm.clientId ? null : 'Enter the OAuth client ID.',
-    clientSecret: googleForm.clientSecret ? null : 'Enter the OAuth client secret.',
-    refreshToken: googleForm.refreshToken ? null : 'Enter the OAuth refresh token.'
+        : null
   };
   const isSettingsSaving = actionFeedback.loading === 'settings-save';
   const isShopifyBusy =
@@ -786,9 +808,120 @@ export default function SettingsAdminView({
                 {googleConnection.data?.connection?.last_sync_error ? (
                   <HelpText tone="error">{googleConnection.data.connection.last_sync_error}</HelpText>
                 ) : null}
+                {googleMissingFields.length ? (
+                  <HelpText tone="error">Missing Google Ads config: {googleMissingFields.join(', ')}</HelpText>
+                ) : null}
                 {googleConnection.data?.reconciliation?.missing_dates?.length ? (
                   <HelpText>Missing dates: {googleConnection.data.reconciliation.missing_dates.join(', ')}</HelpText>
                 ) : null}
+
+                <Form onSubmit={onGoogleConfigSave}>
+                  <FormSection disabled={isGoogleBusy}>
+                    <FieldGrid>
+                      <Field
+                        label="Developer token"
+                        htmlFor="google-developer-token"
+                        required
+                        description="Stored encrypted and reused for sync and reconciliation jobs."
+                        error={googleConfigErrors.developerToken ?? undefined}
+                      >
+                        <Input
+                          id="google-developer-token"
+                          type="password"
+                          value={googleConfigForm.developerToken}
+                          onChange={(event) =>
+                            setGoogleConfigForm((current) => ({ ...current, developerToken: event.target.value }))
+                          }
+                          aria-invalid={googleConfigErrors.developerToken ? 'true' : 'false'}
+                        />
+                      </Field>
+                      <Field
+                        label="Client ID"
+                        htmlFor="google-client-id"
+                        required
+                        description="OAuth client ID from the Google Cloud project used for Ads access."
+                        error={googleConfigErrors.clientId ?? undefined}
+                      >
+                        <Input
+                          id="google-client-id"
+                          type="password"
+                          value={googleConfigForm.clientId}
+                          onChange={(event) =>
+                            setGoogleConfigForm((current) => ({ ...current, clientId: event.target.value }))
+                          }
+                          aria-invalid={googleConfigErrors.clientId ? 'true' : 'false'}
+                        />
+                      </Field>
+                      <Field
+                        label="Client secret"
+                        htmlFor="google-client-secret"
+                        required
+                        description="Pairs with the client ID above."
+                        error={googleConfigErrors.clientSecret ?? undefined}
+                      >
+                        <Input
+                          id="google-client-secret"
+                          type="password"
+                          value={googleConfigForm.clientSecret}
+                          onChange={(event) =>
+                            setGoogleConfigForm((current) => ({ ...current, clientSecret: event.target.value }))
+                          }
+                          aria-invalid={googleConfigErrors.clientSecret ? 'true' : 'false'}
+                        />
+                      </Field>
+                      <Field
+                        label="OAuth base URL"
+                        htmlFor="google-app-base-url"
+                        required
+                        description="Used to build the Google OAuth callback and redirect flow."
+                        error={googleConfigErrors.appBaseUrl ?? undefined}
+                      >
+                        <Input
+                          id="google-app-base-url"
+                          type="url"
+                          value={googleConfigForm.appBaseUrl}
+                          onChange={(event) =>
+                            setGoogleConfigForm((current) => ({ ...current, appBaseUrl: event.target.value }))
+                          }
+                          placeholder="https://roas-radar.thecapemarine.com"
+                          aria-invalid={googleConfigErrors.appBaseUrl ? 'true' : 'false'}
+                        />
+                      </Field>
+                      <Field
+                        label="Scopes"
+                        htmlFor="google-app-scopes"
+                        required
+                        description="Comma-separated scopes requested during Google Ads OAuth."
+                        error={googleConfigErrors.appScopes ?? undefined}
+                      >
+                        <Input
+                          id="google-app-scopes"
+                          type="text"
+                          value={googleConfigForm.appScopes}
+                          onChange={(event) =>
+                            setGoogleConfigForm((current) => ({ ...current, appScopes: event.target.value }))
+                          }
+                          placeholder="https://www.googleapis.com/auth/adwords"
+                          aria-invalid={googleConfigErrors.appScopes ? 'true' : 'false'}
+                        />
+                      </Field>
+                    </FieldGrid>
+                    {hasMessageForAction(actionFeedback, ['google-config-save']) ? (
+                      <FormMessage tone={actionFeedback.error ? 'error' : isGoogleBusy ? 'warning' : 'success'}>
+                        {actionFeedback.error
+                          ? actionFeedback.error
+                          : isGoogleBusy
+                            ? 'Saving the Google Ads configuration and waiting for the API response…'
+                            : actionFeedback.message}
+                      </FormMessage>
+                    ) : null}
+                    <ButtonRow>
+                      <Button type="submit">
+                        {actionFeedback.loading === 'google-config-save' ? 'Saving…' : 'Save Google Ads config'}
+                      </Button>
+                    </ButtonRow>
+                  </FormSection>
+                </Form>
 
                 <Form onSubmit={onGoogleConnect}>
                   <FormSection disabled={isGoogleBusy}>
@@ -798,7 +931,7 @@ export default function SettingsAdminView({
                         htmlFor="google-customer-id"
                         required
                         description="Use the destination Google Ads customer in `123-456-7890` format."
-                        error={googleErrors.customerId ?? undefined}
+                        error={googleConnectErrors.customerId ?? undefined}
                       >
                         <Input
                           id="google-customer-id"
@@ -806,7 +939,7 @@ export default function SettingsAdminView({
                           value={googleForm.customerId}
                           onChange={(event) => setGoogleForm((current) => ({ ...current, customerId: event.target.value }))}
                           placeholder="123-456-7890"
-                          aria-invalid={googleErrors.customerId ? 'true' : 'false'}
+                          aria-invalid={googleConnectErrors.customerId ? 'true' : 'false'}
                           required
                         />
                       </Field>
@@ -815,7 +948,7 @@ export default function SettingsAdminView({
                         htmlFor="google-login-customer-id"
                         optional
                         description="Set this only when the OAuth credentials belong to an MCC."
-                        error={googleErrors.loginCustomerId ?? undefined}
+                        error={googleConnectErrors.loginCustomerId ?? undefined}
                       >
                         <Input
                           id="google-login-customer-id"
@@ -825,77 +958,7 @@ export default function SettingsAdminView({
                             setGoogleForm((current) => ({ ...current, loginCustomerId: event.target.value }))
                           }
                           placeholder="Optional MCC login"
-                          aria-invalid={googleErrors.loginCustomerId ? 'true' : 'false'}
-                        />
-                      </Field>
-                      <Field
-                        label="Developer token"
-                        htmlFor="google-developer-token"
-                        required
-                        description="Stored encrypted and reused for sync and reconciliation jobs."
-                        error={googleErrors.developerToken ?? undefined}
-                      >
-                        <Input
-                          id="google-developer-token"
-                          type="password"
-                          value={googleForm.developerToken}
-                          onChange={(event) =>
-                            setGoogleForm((current) => ({ ...current, developerToken: event.target.value }))
-                          }
-                          aria-invalid={googleErrors.developerToken ? 'true' : 'false'}
-                          required
-                        />
-                      </Field>
-                      <Field
-                        label="Client ID"
-                        htmlFor="google-client-id"
-                        required
-                        description="OAuth client ID from the Google Cloud project used for Ads access."
-                        error={googleErrors.clientId ?? undefined}
-                      >
-                        <Input
-                          id="google-client-id"
-                          type="password"
-                          value={googleForm.clientId}
-                          onChange={(event) => setGoogleForm((current) => ({ ...current, clientId: event.target.value }))}
-                          aria-invalid={googleErrors.clientId ? 'true' : 'false'}
-                          required
-                        />
-                      </Field>
-                      <Field
-                        label="Client secret"
-                        htmlFor="google-client-secret"
-                        required
-                        description="Pairs with the client ID above."
-                        error={googleErrors.clientSecret ?? undefined}
-                      >
-                        <Input
-                          id="google-client-secret"
-                          type="password"
-                          value={googleForm.clientSecret}
-                          onChange={(event) =>
-                            setGoogleForm((current) => ({ ...current, clientSecret: event.target.value }))
-                          }
-                          aria-invalid={googleErrors.clientSecret ? 'true' : 'false'}
-                          required
-                        />
-                      </Field>
-                      <Field
-                        label="Refresh token"
-                        htmlFor="google-refresh-token"
-                        required
-                        description="Long-lived refresh token used to mint access tokens for spend sync."
-                        error={googleErrors.refreshToken ?? undefined}
-                      >
-                        <Input
-                          id="google-refresh-token"
-                          type="password"
-                          value={googleForm.refreshToken}
-                          onChange={(event) =>
-                            setGoogleForm((current) => ({ ...current, refreshToken: event.target.value }))
-                          }
-                          aria-invalid={googleErrors.refreshToken ? 'true' : 'false'}
-                          required
+                          aria-invalid={googleConnectErrors.loginCustomerId ? 'true' : 'false'}
                         />
                       </Field>
                     </FieldGrid>
@@ -911,16 +974,9 @@ export default function SettingsAdminView({
                     <ButtonRow>
                       <Button
                         type="submit"
-                        disabled={Boolean(
-                          googleErrors.customerId ||
-                            googleErrors.loginCustomerId ||
-                            googleErrors.developerToken ||
-                            googleErrors.clientId ||
-                            googleErrors.clientSecret ||
-                            googleErrors.refreshToken
-                        )}
+                        disabled={Boolean(googleConnectErrors.customerId || googleConnectErrors.loginCustomerId || googleMissingFields.length)}
                       >
-                        {actionFeedback.loading === 'google-connect' ? 'Saving…' : 'Connect Google Ads'}
+                        {actionFeedback.loading === 'google-connect' ? 'Opening Google…' : 'Connect Google Ads'}
                       </Button>
                       <Button
                         type="button"

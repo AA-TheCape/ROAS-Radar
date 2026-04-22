@@ -7,7 +7,7 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
-          if (id.includes('/@nivo/')) {
+          if (id.indexOf('/@nivo/') !== -1) {
             return 'nivo';
           }
 
