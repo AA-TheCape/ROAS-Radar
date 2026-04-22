@@ -1,4 +1,14 @@
-import { startTransition, useDeferredValue, useEffect, useMemo, useState, type FormEvent } from 'react';
+import {
+  Suspense,
+  lazy,
+  startTransition,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useState,
+  type FormEvent
+} from 'react';
 
 import {
   backfillShopifyOrders,
@@ -54,6 +64,27 @@ import {
   formatNumber,
   formatPercent
 } from './lib/format';
+import AuthenticatedAppShell, {
+  type AppShellBreadcrumb,
+  type AppShellNavItem
+} from './components/AuthenticatedAppShell';
+import {
+  AuthGate,
+  Banner,
+  Button,
+  ButtonRow,
+  Field,
+  FieldGrid,
+  Form,
+  Input,
+  Panel,
+  SectionState,
+  Select
+} from './components/AuthenticatedUi';
+
+const ReportingDashboard = lazy(() => import('./components/ReportingDashboard'));
+const OrderDetailsView = lazy(() => import('./components/OrderDetailsView'));
+const SettingsAdminView = lazy(() => import('./components/SettingsAdminView'));
 
 type AsyncSection<T> = {
   data: T | null;
@@ -69,6 +100,7 @@ type DashboardState = {
 };
 
 type ActionFeedback = {
+  context: string | null;
   loading: string | null;
   error: string | null;
   message: string | null;
@@ -118,6 +150,19 @@ type SettingsForm = {
 
 type AppPage = 'dashboard' | 'settings' | 'order-details';
 
+const AUTHENTICATED_NAV_ITEMS: AppShellNavItem[] = [
+  {
+    key: 'dashboard',
+    label: 'Dashboard',
+    description: 'Summary metrics, campaign performance, time-based revenue trends, and attributed order rows.'
+  },
+  {
+    key: 'settings',
+    label: 'Settings',
+    description: 'Reporting timezone, platform connections, sync actions, and dashboard user access.'
+  }
+];
+
 const DEFAULT_REPORTING_TIMEZONE = 'America/Los_Angeles';
 const REPORTING_TIMEZONE_OPTIONS = [
   'America/Los_Angeles',
@@ -140,12 +185,6 @@ const PRESETS = [
   { label: 'Last 30D', value: (reportingTimezone: string) => buildRange(30, reportingTimezone) },
   { label: 'Last 90D', value: (reportingTimezone: string) => buildRange(90, reportingTimezone) }
 ] as const;
-
-const GROUP_BY_OPTIONS: Array<{ value: TimeseriesGroupBy; label: string }> = [
-  { value: 'day', label: 'Daily' },
-  { value: 'source', label: 'By source' },
-  { value: 'campaign', label: 'By campaign' }
-];
 
 function formatDateInput(date: Date, reportingTimezone = DEFAULT_REPORTING_TIMEZONE): string {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -233,22 +272,6 @@ function createErroredSection<T>(message: string): AsyncSection<T> {
     loading: false,
     error: message
   };
-}
-
-function buildSeriesPath(points: TimeseriesPoint[]): string {
-  if (points.length === 0) {
-    return '';
-  }
-
-  const maxRevenue = Math.max(...points.map((point) => point.revenue), 1);
-
-  return points
-    .map((point, index) => {
-      const x = points.length === 1 ? 320 : (index / (points.length - 1)) * 320;
-      const y = 144 - (point.revenue / maxRevenue) * 120;
-      return `${index === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${y.toFixed(2)}`;
-    })
-    .join(' ');
 }
 
 function useDashboardData(
@@ -368,131 +391,18 @@ function useDashboardData(
   return state;
 }
 
-function SectionState({
-  loading,
-  error,
-  empty,
-  emptyLabel,
-  children
-}: {
-  loading: boolean;
-  error: string | null;
-  empty: boolean;
-  emptyLabel: string;
-  children: JSX.Element;
-}) {
-  if (loading) {
-    return <div className="panel-state">Loading data…</div>;
-  }
-
-  if (error) {
-    return <div className="panel-state panel-state-error">{error}</div>;
-  }
-
-  if (empty) {
-    return <div className="panel-state">{emptyLabel}</div>;
-  }
-
-  return children;
-}
-
-function SummaryCard({ label, value, detail }: { label: string; value: string; detail: string }) {
-  return (
-    <article className="metric-card">
-      <span>{label}</span>
-      <strong>{value}</strong>
-      <small>{detail}</small>
-    </article>
-  );
-}
-
-function TimeseriesChart({
-  points,
-  groupBy,
-  reportingTimezone
-}: {
-  points: TimeseriesPoint[];
-  groupBy: TimeseriesGroupBy;
-  reportingTimezone: string;
-}) {
-  const path = buildSeriesPath(points);
-  const maxRevenue = Math.max(...points.map((point) => point.revenue), 1);
-
-  return (
-    <div className="chart-card">
-      <div className="chart-svg-shell">
-        <svg viewBox="0 0 320 160" className="chart-svg" aria-label="Revenue timeseries">
-          <defs>
-            <linearGradient id="revenueFill" x1="0" x2="0" y1="0" y2="1">
-              <stop offset="0%" stopColor="rgba(186, 87, 32, 0.35)" />
-              <stop offset="100%" stopColor="rgba(186, 87, 32, 0.02)" />
-            </linearGradient>
-          </defs>
-          <path d="M 0 144 H 320" className="chart-axis" />
-          <path d={path} className="chart-line" />
-          {path ? <path d={`${path} L 320 144 L 0 144 Z`} className="chart-area" /> : null}
-          {points.map((point, index) => {
-            const x = points.length === 1 ? 320 : (index / (points.length - 1)) * 320;
-            const y = 144 - (point.revenue / maxRevenue) * 120;
-
-            return <circle key={`${point.date}-${index}`} cx={x} cy={y} r="4" className="chart-dot" />;
-          })}
-        </svg>
-      </div>
-      <div className="chart-labels">
-        {points.map((point) => (
-          <div key={point.date} className="chart-label">
-            <strong>{groupBy === 'day' ? formatDateLabel(point.date, reportingTimezone) : point.date}</strong>
-            <span>{formatCurrency(point.revenue)}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function formatOptionalDateTime(value: string | null | undefined, reportingTimezone: string): string {
   return value ? formatDateTimeLabel(value, reportingTimezone) : 'Not available';
 }
 
-function formatOptionalValue(value: string | number | boolean | null | undefined): string {
-  if (value === null || value === undefined || value === '') {
-    return 'Not available';
-  }
-
-  if (typeof value === 'boolean') {
-    return value ? 'Yes' : 'No';
-  }
-
-  return String(value);
-}
-
-function formatJsonValue(value: unknown): string {
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-}
-
-function ConnectionState({
-  loading,
-  error,
-  children
-}: {
-  loading: boolean;
-  error: string | null;
-  children: JSX.Element;
-}) {
-  if (loading) {
-    return <div className="panel-state connection-state">Loading connection state…</div>;
-  }
-
-  if (error) {
-    return <div className="panel-state panel-state-error connection-state">{error}</div>;
-  }
-
-  return children;
+function AuthenticatedViewFallback({ title, description }: { title: string; description: string }) {
+  return (
+    <Panel title={title} description={description} wide>
+      <SectionState loading empty={false} error={null} emptyLabel="">
+        <div />
+      </SectionState>
+    </Panel>
+  );
 }
 
 function App() {
@@ -555,6 +465,7 @@ function App() {
     loginCustomerId: ''
   });
   const [actionFeedback, setActionFeedback] = useState<ActionFeedback>({
+    context: null,
     loading: null,
     error: null,
     message: null
@@ -706,7 +617,7 @@ function App() {
       });
   }, []);
 
-  async function openOrderDetails(shopifyOrderId: string) {
+  const openOrderDetails = useCallback(async (shopifyOrderId: string) => {
     setCurrentPage('order-details');
     setSelectedOrderId(shopifyOrderId);
     setOrderDetailsSection(createLoadingSection());
@@ -719,9 +630,9 @@ function App() {
         createErroredSection(error instanceof Error ? error.message : 'Failed to load order details')
       );
     }
-  }
+  }, []);
 
-  function closeOrderDetails() {
+  const closeOrderDetails = useCallback(() => {
     setCurrentPage('dashboard');
     setSelectedOrderId(null);
     setOrderDetailsSection({
@@ -729,7 +640,7 @@ function App() {
       loading: false,
       error: null
     });
-  }
+  }, []);
 
   async function loadUsers() {
     if (!authState.user?.isAdmin) {
@@ -789,11 +700,6 @@ function App() {
       }
     ];
   }, [dashboard.summary.data, filters.endDate, filters.startDate, reportingTimezone]);
-
-  const totalCampaignRevenue = useMemo(
-    () => (dashboard.campaigns.data ?? []).reduce((sum, row) => sum + row.revenue, 0),
-    [dashboard.campaigns.data]
-  );
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -858,6 +764,7 @@ function App() {
     });
     setSelectedOrderId(null);
     setActionFeedback({
+      context: null,
       loading: null,
       error: null,
       message: null
@@ -867,6 +774,7 @@ function App() {
   async function handleSettingsSave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setActionFeedback({
+      context: 'settings-save',
       loading: 'settings-save',
       error: null,
       message: null
@@ -894,12 +802,14 @@ function App() {
         setDashboardRefreshKey((current) => current + 1);
       });
       setActionFeedback({
+        context: 'settings-save',
         loading: null,
         error: null,
         message: `Saved reporting timezone as ${response.settings.reportingTimezone}.`
       });
     } catch (error) {
       setActionFeedback({
+        context: 'settings-save',
         loading: null,
         error: error instanceof Error ? error.message : 'Failed to save dashboard settings',
         message: null
@@ -910,6 +820,7 @@ function App() {
   async function handleCreateUser(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setActionFeedback({
+      context: 'user-create',
       loading: 'user-create',
       error: null,
       message: null
@@ -929,12 +840,14 @@ function App() {
         isAdmin: false
       });
       setActionFeedback({
+        context: 'user-create',
         loading: null,
         error: null,
         message: `Created user ${response.user.email}.`
       });
     } catch (error) {
       setActionFeedback({
+        context: 'user-create',
         loading: null,
         error: error instanceof Error ? error.message : 'Failed to create user',
         message: null
@@ -944,6 +857,7 @@ function App() {
 
   async function handleMetaConnect() {
     setActionFeedback({
+      context: 'meta-connect',
       loading: 'meta-connect',
       error: null,
       message: null
@@ -956,6 +870,7 @@ function App() {
 
       const response = await startMetaAdsOauth(window.location.pathname);
       setActionFeedback({
+        context: 'meta-connect',
         loading: null,
         error: null,
         message: 'Redirecting to Meta Ads…'
@@ -963,6 +878,7 @@ function App() {
       window.location.assign(response.authorizationUrl);
     } catch (error) {
       setActionFeedback({
+        context: 'meta-connect',
         loading: null,
         error: error instanceof Error ? error.message : 'Failed to start Meta Ads OAuth',
         message: null
@@ -973,6 +889,7 @@ function App() {
   async function handleMetaConfigSave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setActionFeedback({
+      context: 'meta-config-save',
       loading: 'meta-config-save',
       error: null,
       message: null
@@ -993,12 +910,14 @@ function App() {
         appScopes: response.config.appScopes.join(', ')
       }));
       setActionFeedback({
+        context: 'meta-config-save',
         loading: null,
         error: null,
         message: 'Saved Meta Ads configuration.'
       });
     } catch (error) {
       setActionFeedback({
+        context: 'meta-config-save',
         loading: null,
         error: error instanceof Error ? error.message : 'Failed to save Meta Ads configuration',
         message: null
@@ -1008,6 +927,7 @@ function App() {
 
   async function handleShopifyTest() {
     setActionFeedback({
+      context: 'shopify-test',
       loading: 'shopify-test',
       error: null,
       message: null
@@ -1017,6 +937,7 @@ function App() {
       const response = await fetchShopifyConnection();
       setShopifyConnection(createResolvedSection(response));
       setActionFeedback({
+        context: 'shopify-test',
         loading: null,
         error: null,
         message: response.connected
@@ -1025,6 +946,7 @@ function App() {
       });
     } catch (error) {
       setActionFeedback({
+        context: 'shopify-test',
         loading: null,
         error: error instanceof Error ? error.message : 'Failed to verify Shopify connection',
         message: null
@@ -1034,6 +956,7 @@ function App() {
 
   async function handleShopifyWebhookSync() {
     setActionFeedback({
+      context: 'shopify-webhooks',
       loading: 'shopify-webhooks',
       error: null,
       message: null
@@ -1043,12 +966,14 @@ function App() {
       const response = await syncShopifyWebhooks();
       await loadConnections();
       setActionFeedback({
+        context: 'shopify-webhooks',
         loading: null,
         error: null,
         message: `Re-provisioned Shopify webhooks for ${response.shopDomain}.`
       });
     } catch (error) {
       setActionFeedback({
+        context: 'shopify-webhooks',
         loading: null,
         error: error instanceof Error ? error.message : 'Failed to sync Shopify webhooks',
         message: null
@@ -1059,6 +984,7 @@ function App() {
   async function handleShopifyBackfill(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setActionFeedback({
+      context: 'shopify-backfill',
       loading: 'shopify-backfill',
       error: null,
       message: null
@@ -1074,12 +1000,14 @@ function App() {
         setDashboardRefreshKey((current) => current + 1);
       });
       setActionFeedback({
+        context: 'shopify-backfill',
         loading: null,
         error: null,
         message: `Backfilled ${response.importedOrders} Shopify orders for ${response.startDate} to ${response.endDate} (${response.processedOrders} imported, ${response.duplicatedOrders} already present).`
       });
     } catch (error) {
       setActionFeedback({
+        context: 'shopify-backfill',
         loading: null,
         error: error instanceof Error ? error.message : 'Failed to backfill Shopify orders',
         message: null
@@ -1089,6 +1017,7 @@ function App() {
 
   async function handleShopifyAttributionRecovery() {
     setActionFeedback({
+      context: 'shopify-attribution-recovery',
       loading: 'shopify-attribution-recovery',
       error: null,
       message: null
@@ -1104,12 +1033,14 @@ function App() {
         setDashboardRefreshKey((current) => current + 1);
       });
       setActionFeedback({
+        context: 'shopify-attribution-recovery',
         loading: null,
         error: null,
         message: `Rescanned ${response.rescannedOrders} unknown Shopify web orders for ${response.startDate} to ${response.endDate}; relinked ${response.relinkedOrders}, attributed ${response.shopifyHintAttributedOrders} from Shopify hints, and requeued ${response.requeuedOrders} for standard attribution.`
       });
     } catch (error) {
       setActionFeedback({
+        context: 'shopify-attribution-recovery',
         loading: null,
         error: error instanceof Error ? error.message : 'Failed to recover Shopify attribution hints',
         message: null
@@ -1119,6 +1050,7 @@ function App() {
 
   async function handleMetaSync() {
     setActionFeedback({
+      context: 'meta-sync',
       loading: 'meta-sync',
       error: null,
       message: null
@@ -1128,12 +1060,14 @@ function App() {
       const response = await syncMetaAds(filters.startDate, filters.endDate);
       await loadConnections();
       setActionFeedback({
+        context: 'meta-sync',
         loading: null,
         error: null,
         message: `Queued ${response.enqueuedJobs} Meta Ads sync jobs for ${response.dates.length} dates.`
       });
     } catch (error) {
       setActionFeedback({
+        context: 'meta-sync',
         loading: null,
         error: error instanceof Error ? error.message : 'Failed to queue Meta Ads sync',
         message: null
@@ -1199,6 +1133,7 @@ function App() {
         window.location.pathname
       );
       setActionFeedback({
+        context: 'google-connect',
         loading: null,
         error: null,
         message: 'Redirecting to Google Ads…'
@@ -1206,6 +1141,7 @@ function App() {
       window.location.assign(response.authorizationUrl);
     } catch (error) {
       setActionFeedback({
+        context: 'google-connect',
         loading: null,
         error: error instanceof Error ? error.message : 'Failed to start Google Ads OAuth',
         message: null
@@ -1215,6 +1151,7 @@ function App() {
 
   async function handleGoogleSync() {
     setActionFeedback({
+      context: 'google-sync',
       loading: 'google-sync',
       error: null,
       message: null
@@ -1224,12 +1161,14 @@ function App() {
       const response = await syncGoogleAds(filters.startDate, filters.endDate);
       await loadConnections();
       setActionFeedback({
+        context: 'google-sync',
         loading: null,
         error: null,
         message: `Queued ${response.enqueuedJobs} Google Ads sync jobs for ${response.dates.length} dates.`
       });
     } catch (error) {
       setActionFeedback({
+        context: 'google-sync',
         loading: null,
         error: error instanceof Error ? error.message : 'Failed to queue Google Ads sync',
         message: null
@@ -1239,6 +1178,7 @@ function App() {
 
   async function handleGoogleReconcile() {
     setActionFeedback({
+      context: 'google-reconcile',
       loading: 'google-reconcile',
       error: null,
       message: null
@@ -1248,12 +1188,14 @@ function App() {
       const response = await reconcileGoogleAds();
       await loadConnections();
       setActionFeedback({
+        context: 'google-reconcile',
         loading: null,
         error: null,
         message: `Queued ${response.enqueuedJobs} Google Ads reconciliation jobs.`
       });
     } catch (error) {
       setActionFeedback({
+        context: 'google-reconcile',
         loading: null,
         error: error instanceof Error ? error.message : 'Failed to reconcile Google Ads',
         message: null
@@ -1261,360 +1203,255 @@ function App() {
     }
   }
 
+  const pageEyebrow =
+    currentPage === 'settings'
+      ? 'Admin settings'
+      : currentPage === 'order-details'
+        ? 'Order drill-in'
+        : 'MVP reporting dashboard';
+  const pageTitle =
+    currentPage === 'settings'
+      ? 'Configure reporting settings and platform connections'
+      : currentPage === 'order-details'
+        ? `Inspect order #${selectedOrderId ?? 'Unknown'}`
+        : 'Monitor acquisition performance across revenue, campaigns, and orders';
+  const pageDescription =
+    currentPage === 'settings'
+      ? 'Configure store integrations, ad platform connections, and dashboard user access from one place.'
+      : currentPage === 'order-details'
+        ? 'Inspect the full stored Shopify order record, attribution credits, line items, and raw payload for one order.'
+        : 'Monitor paid acquisition performance for a single Shopify store across headline metrics, campaign rows, time-based trends, and order-level attribution evidence.';
+  const activeNavKey = currentPage;
+  const shellNavItems: AppShellNavItem[] =
+    currentPage === 'order-details'
+      ? [
+          ...AUTHENTICATED_NAV_ITEMS,
+          {
+            key: 'order-details',
+            label: 'Order details',
+            shortLabel: 'Order',
+            description: 'Contextual drill-in for a selected attributed Shopify order.'
+          }
+        ]
+      : AUTHENTICATED_NAV_ITEMS;
+  const breadcrumbs: AppShellBreadcrumb[] =
+    currentPage === 'dashboard'
+      ? [
+          { label: 'Authenticated app' },
+          { label: 'Dashboard', current: true }
+        ]
+      : currentPage === 'settings'
+        ? [
+            { label: 'Authenticated app' },
+            { label: 'Settings', current: true }
+          ]
+        : [
+            { label: 'Authenticated app' },
+            { label: 'Dashboard', onClick: closeOrderDetails },
+            { label: selectedOrderId ? `Order ${selectedOrderId}` : 'Order details', current: true }
+          ];
+  const shellHeaderStatus = (
+    <div className="grid gap-4">
+      <div>
+        <p className="text-caption uppercase tracking-[0.14em] text-ink-muted">Active window</p>
+        <p className="mt-2 font-display text-display text-ink">
+          {currentPage === 'order-details' ? `#${selectedOrderId ?? '—'}` : filters.endDate}
+        </p>
+        <p className="mt-2 text-body text-ink-soft">{activeWindowTime}</p>
+      </div>
+      <dl className="grid gap-3 text-body">
+        <div className="rounded-card border border-line/70 bg-canvas-tint p-4">
+          <dt className="text-caption uppercase tracking-[0.12em] text-ink-muted">Traffic scope</dt>
+          <dd className="mt-2 text-ink-soft">
+            {(filters.source ?? '').trim() || (filters.campaign ?? '').trim()
+              ? `Filtered by ${[(filters.source ?? '').trim(), (filters.campaign ?? '').trim()].filter(Boolean).join(' / ')}`
+              : 'All attributed traffic'}
+          </dd>
+        </div>
+        <div className="rounded-card border border-line/70 bg-canvas-tint p-4">
+          <dt className="text-caption uppercase tracking-[0.12em] text-ink-muted">Reporting timezone</dt>
+          <dd className="mt-2 text-ink-soft">{reportingTimezone}</dd>
+        </div>
+      </dl>
+    </div>
+  );
+  const shellHeaderActions = (
+    <>
+      {currentPage === 'order-details' ? (
+        <Button type="button" tone="ghost" onClick={closeOrderDetails}>
+          Back to dashboard
+        </Button>
+      ) : null}
+      <Button type="button" onClick={() => void handleLogout()}>
+        Logout
+      </Button>
+    </>
+  );
+  const handleAppNavigation = useCallback(
+    (key: string) => {
+      if (key === 'order-details') {
+        return;
+      }
+
+      if (key === 'dashboard') {
+        closeOrderDetails();
+        return;
+      }
+
+      setSelectedOrderId(null);
+      setOrderDetailsSection({
+        data: null,
+        loading: false,
+        error: null
+      });
+      setCurrentPage(key as AppPage);
+    },
+    [closeOrderDetails]
+  );
+  const handleDashboardFiltersChange = useCallback((next: ReportingFilters) => {
+    setFilters(next);
+  }, []);
+  const handleDashboardGroupByChange = useCallback((value: TimeseriesGroupBy) => {
+    setGroupBy(value);
+  }, []);
+  const handleApplyQuickRange = useCallback((range: Pick<ReportingFilters, 'startDate' | 'endDate'>) => {
+    startTransition(() => {
+      setFilters((current) => ({
+        ...current,
+        ...range
+      }));
+    });
+  }, []);
+  const handleClearDashboardFilters = useCallback(() => {
+    startTransition(() => {
+      setFilters((current) => ({
+        ...current,
+        source: '',
+        campaign: ''
+      }));
+    });
+  }, []);
+
   if (authState.checking) {
     return (
-      <main className="auth-shell">
-        <section className="auth-card">
-          <p className="eyebrow">Secure dashboard</p>
-          <h1>Checking your session</h1>
-          <p className="hero-copy">The dashboard stays locked until an authenticated user is verified.</p>
-        </section>
-      </main>
+      <AuthGate
+        eyebrow="Secure dashboard"
+        title="Checking your session"
+        description="The dashboard stays locked until an authenticated user is verified."
+      />
     );
   }
 
   if (!authState.user) {
     return (
-      <main className="auth-shell">
-        <section className="auth-card">
-          <p className="eyebrow">Secure dashboard</p>
-          <h1>ROAS Radar Login</h1>
-          <p className="hero-copy">Sign in with an app user account before viewing any reporting or admin tools.</p>
-          <form className="credential-form" onSubmit={(event) => void handleLogin(event)}>
-            <div className="credential-grid auth-grid">
-              <label>
-                <span>Email</span>
-                <input type="email" value={loginEmail} onChange={(event) => setLoginEmail(event.target.value)} required />
-              </label>
-              <label>
-                <span>Password</span>
-                <input
-                  type="password"
-                  value={loginPassword}
-                  onChange={(event) => setLoginPassword(event.target.value)}
-                  required
-                />
-              </label>
-            </div>
-            {authState.error ? <div className="action-banner action-banner-error">{authState.error}</div> : null}
-            <div className="button-row">
-              <button type="submit" className="action-button" disabled={loginSubmitting}>
-                {loginSubmitting ? 'Signing in…' : 'Login'}
-              </button>
-            </div>
-          </form>
-        </section>
-      </main>
+      <AuthGate
+        eyebrow="Secure dashboard"
+        title="ROAS Radar Login"
+        description="Sign in with an app user account before viewing any reporting or admin tools."
+      >
+        <Form onSubmit={(event) => void handleLogin(event)}>
+          <FieldGrid>
+            <Field label="Email">
+              <Input type="email" value={loginEmail} onChange={(event) => setLoginEmail(event.target.value)} required />
+            </Field>
+            <Field label="Password">
+              <Input
+                type="password"
+                value={loginPassword}
+                onChange={(event) => setLoginPassword(event.target.value)}
+                required
+              />
+            </Field>
+          </FieldGrid>
+          {authState.error ? <Banner tone="error">{authState.error}</Banner> : null}
+          <ButtonRow>
+            <Button type="submit" disabled={loginSubmitting}>
+              {loginSubmitting ? 'Signing in…' : 'Login'}
+            </Button>
+          </ButtonRow>
+        </Form>
+      </AuthGate>
     );
   }
 
+  const authenticatedUser = authState.user;
+
   return (
-    <main className="app-shell">
-      <section className="hero">
-        <div className="hero-copy-block">
-          <p className="eyebrow">
-            {currentPage === 'settings'
-              ? 'Admin settings'
-              : currentPage === 'order-details'
-                ? 'Order drill-in'
-                : 'MVP reporting dashboard'}
-          </p>
-          <h1>ROAS Radar</h1>
-          <p className="hero-copy">
-            {currentPage === 'settings'
-              ? 'Configure store integrations, ad platform connections, and dashboard user access from one place.'
-              : currentPage === 'order-details'
-                ? 'Inspect the full stored Shopify order record, attribution credits, line items, and raw payload for one order.'
-                : 'Monitor paid acquisition performance for a single Shopify store across headline metrics, campaign rows, time-based trends, and order-level attribution evidence.'}
-          </p>
+    <AuthenticatedAppShell
+      navItems={shellNavItems}
+      activeNavKey={activeNavKey}
+      onNavigate={handleAppNavigation}
+      breadcrumbs={breadcrumbs}
+      eyebrow={pageEyebrow}
+      title={pageTitle}
+      description={pageDescription}
+      topbarMeta={
+        <div className="space-y-1">
+          <p className="font-semibold text-ink">{authenticatedUser.displayName}</p>
+          <p>{authenticatedUser.email}</p>
         </div>
-        <div className="hero-status-card">
-          <span>Active window</span>
-          <strong>{currentPage === 'order-details' ? `Order #${selectedOrderId ?? '—'}` : filters.endDate}</strong>
-          <small>{activeWindowTime}</small>
-          <small>
-            {(filters.source ?? '').trim() || (filters.campaign ?? '').trim()
-              ? `Filtered by ${[(filters.source ?? '').trim(), (filters.campaign ?? '').trim()].filter(Boolean).join(' / ')}`
-              : 'All attributed traffic'}
-          </small>
-          <small>{`Reporting timezone: ${reportingTimezone}`}</small>
-          <small>{`Signed in as ${authState.user.displayName} (${authState.user.email})`}</small>
-          <div className="hero-status-actions">
-            <button
-              type="button"
-              className="nav-link-button"
-              onClick={() => {
-                if (currentPage === 'settings' || currentPage === 'order-details') {
-                  closeOrderDetails();
-                  setCurrentPage('dashboard');
-                  return;
-                }
-
-                setCurrentPage('settings');
-              }}
-            >
-              {currentPage === 'settings' || currentPage === 'order-details' ? 'Back to dashboard' : 'Settings'}
-            </button>
-          </div>
-          <div className="button-row">
-            <button type="button" className="action-button action-button-secondary" onClick={() => void handleLogout()}>
-              Logout
-            </button>
-          </div>
-        </div>
-      </section>
-
-      {currentPage === 'dashboard' ? <section className="control-bar">
-        <div className="control-group">
-          <label htmlFor="start-date">Start date</label>
-          <input
-            id="start-date"
-            type="date"
-            value={filters.startDate}
-            onChange={(event) => {
-              setFilters((current) => ({ ...current, startDate: event.target.value }));
-            }}
+      }
+      headerStatus={shellHeaderStatus}
+      headerActions={shellHeaderActions}
+    >
+      {currentPage === 'dashboard' ? (
+        <Suspense
+          fallback={
+            <AuthenticatedViewFallback
+              title="Dashboard"
+              description="Loading reporting controls, summary widgets, tables, and charts."
+            />
+          }
+        >
+          <ReportingDashboard
+            filters={filters}
+            onFiltersChange={handleDashboardFiltersChange}
+            groupBy={groupBy}
+            onGroupByChange={handleDashboardGroupByChange}
+            reportingTimezone={reportingTimezone}
+            quickRanges={PRESETS}
+            onApplyQuickRange={handleApplyQuickRange}
+            onClearFilters={handleClearDashboardFilters}
+            summaryCards={summaryCards}
+            summarySection={dashboard.summary}
+            campaignsSection={dashboard.campaigns}
+            timeseriesSection={dashboard.timeseries}
+            ordersSection={dashboard.orders}
+            onOpenOrderDetails={(shopifyOrderId) => void openOrderDetails(shopifyOrderId)}
           />
-        </div>
-        <div className="control-group">
-          <label htmlFor="end-date">End date</label>
-          <input
-            id="end-date"
-            type="date"
-            value={filters.endDate}
-            onChange={(event) => {
-              setFilters((current) => ({ ...current, endDate: event.target.value }));
-            }}
-          />
-        </div>
-        <div className="control-group">
-          <label htmlFor="source-filter">Source</label>
-          <input
-            id="source-filter"
-            type="text"
-            placeholder="google, meta, facebook"
-            value={filters.source}
-            onChange={(event) => {
-              setFilters((current) => ({ ...current, source: event.target.value }));
-            }}
-          />
-        </div>
-        <div className="control-group">
-          <label htmlFor="campaign-filter">Campaign</label>
-          <input
-            id="campaign-filter"
-            type="text"
-            placeholder="spring-sale"
-            value={filters.campaign}
-            onChange={(event) => {
-              setFilters((current) => ({ ...current, campaign: event.target.value }));
-            }}
-          />
-        </div>
-        <div className="control-group control-group-wide">
-          <label htmlFor="group-by">Timeseries grouping</label>
-          <select
-            id="group-by"
-            value={groupBy}
-            onChange={(event) => {
-              setGroupBy(event.target.value as TimeseriesGroupBy);
-            }}
-          >
-            {GROUP_BY_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="control-group control-group-wide">
-          <label>Quick ranges</label>
-          <div className="preset-row">
-            {PRESETS.map((preset) => (
-              <button
-                key={preset.label}
-                type="button"
-                className="preset-chip"
-                onClick={() =>
-                  startTransition(() => {
-                    setFilters((current) => ({
-                      ...current,
-                    ...preset.value(reportingTimezone)
-                  }));
-                })
-              }
-              >
-                {preset.label}
-              </button>
-            ))}
-            <button
-              type="button"
-              className="preset-chip preset-chip-secondary"
-              onClick={() =>
-                startTransition(() => {
-                  setFilters((current) => ({
-                    ...current,
-                    source: '',
-                    campaign: ''
-                  }));
-                })
-              }
-            >
-              Clear filters
-            </button>
-          </div>
-        </div>
-      </section> : null}
-
-      {currentPage === 'dashboard' ? <section className="summary-grid">
-        {summaryCards.map((card) => (
-          <SummaryCard key={card.label} label={card.label} value={card.value} detail={card.detail} />
-        ))}
-      </section> : null}
+        </Suspense>
+      ) : null}
 
       {currentPage === 'order-details' ? (
-        <section className="dashboard-grid">
-          <article className="panel panel-wide">
-            <div className="panel-header">
-              <h2>Order details</h2>
-              <p>Everything currently stored for this Shopify order, including line items, attribution credits, and raw payload.</p>
-            </div>
-            <SectionState
-              loading={orderDetailsSection.loading}
-              error={orderDetailsSection.error}
-              empty={!orderDetailsSection.data}
-              emptyLabel={selectedOrderId ? `No details were loaded for order ${selectedOrderId}.` : 'No order selected.'}
+        <section className="grid gap-section">
+          <Panel
+            title="Order details"
+            description="Everything currently stored for this Shopify order, including line items, attribution credits, and raw payload."
+            wide
+          >
+            <Suspense
+              fallback={
+                <SectionState loading empty={false} error={null} emptyLabel="">
+                  <div />
+                </SectionState>
+              }
             >
-              <div className="detail-stack">
-                <div className="detail-grid detail-grid-two-column">
-                  <div className="detail-card">
-                    <h3>Order overview</h3>
-                    <dl className="detail-list">
-                      <div><dt>Shopify order ID</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.shopifyOrderId)}</dd></div>
-                      <div><dt>Order number</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.shopifyOrderNumber)}</dd></div>
-                      <div><dt>Currency</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.currencyCode)}</dd></div>
-                      <div><dt>Subtotal</dt><dd>{formatCurrency(orderDetailsSection.data?.order.subtotalPrice)}</dd></div>
-                      <div><dt>Total</dt><dd>{formatCurrency(orderDetailsSection.data?.order.totalPrice)}</dd></div>
-                      <div><dt>Financial status</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.financialStatus)}</dd></div>
-                      <div><dt>Fulfillment status</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.fulfillmentStatus)}</dd></div>
-                      <div><dt>Source name</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.sourceName)}</dd></div>
-                    </dl>
-                  </div>
-                  <div className="detail-card">
-                    <h3>Customer and linkage</h3>
-                    <dl className="detail-list">
-                      <div><dt>Shopify customer ID</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.shopifyCustomerId)}</dd></div>
-                      <div><dt>Customer identity ID</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.customerIdentityId)}</dd></div>
-                      <div><dt>Email</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.email)}</dd></div>
-                      <div><dt>Email hash</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.emailHash)}</dd></div>
-                      <div><dt>Landing session ID</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.landingSessionId)}</dd></div>
-                      <div><dt>Checkout token</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.checkoutToken)}</dd></div>
-                      <div><dt>Cart token</dt><dd>{formatOptionalValue(orderDetailsSection.data?.order.cartToken)}</dd></div>
-                    </dl>
-                  </div>
-                  <div className="detail-card">
-                    <h3>Timestamps</h3>
-                    <dl className="detail-list">
-                      <div><dt>Processed</dt><dd>{formatOptionalDateTime(orderDetailsSection.data?.order.processedAt, reportingTimezone)}</dd></div>
-                      <div><dt>Created in Shopify</dt><dd>{formatOptionalDateTime(orderDetailsSection.data?.order.createdAtShopify, reportingTimezone)}</dd></div>
-                      <div><dt>Updated in Shopify</dt><dd>{formatOptionalDateTime(orderDetailsSection.data?.order.updatedAtShopify, reportingTimezone)}</dd></div>
-                      <div><dt>Ingested</dt><dd>{formatOptionalDateTime(orderDetailsSection.data?.order.ingestedAt, reportingTimezone)}</dd></div>
-                    </dl>
-                  </div>
-                </div>
-
-                <div className="detail-card">
-                  <h3>Line items</h3>
-                  <div className="table-wrap">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Title</th>
-                          <th>SKU</th>
-                          <th>Qty</th>
-                          <th>Price</th>
-                          <th>Discount</th>
-                          <th>Vendor</th>
-                          <th>Status</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(orderDetailsSection.data?.lineItems ?? []).map((item) => (
-                          <tr key={item.shopifyLineItemId}>
-                            <td>
-                              <div className="primary-cell">
-                                <strong>{item.title ?? 'Untitled line item'}</strong>
-                                <span>{item.variantTitle ?? 'No variant title'}</span>
-                              </div>
-                            </td>
-                            <td>{formatOptionalValue(item.sku)}</td>
-                            <td>{formatNumber(item.quantity)}</td>
-                            <td>{formatCurrency(item.price)}</td>
-                            <td>{formatCurrency(item.totalDiscount)}</td>
-                            <td>{formatOptionalValue(item.vendor)}</td>
-                            <td>{formatOptionalValue(item.fulfillmentStatus)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                <div className="detail-card">
-                  <h3>Attribution credits</h3>
-                  <div className="table-wrap">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Model</th>
-                          <th>Position</th>
-                          <th>Source / medium</th>
-                          <th>Campaign</th>
-                          <th>Touchpoint time</th>
-                          <th>Revenue credit</th>
-                          <th>Weight</th>
-                          <th>Reason</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(orderDetailsSection.data?.attributionCredits ?? []).map((credit) => (
-                          <tr key={`${credit.attributionModel}-${credit.touchpointPosition}`}>
-                            <td>
-                              <div className="primary-cell">
-                                <strong>{credit.attributionModel}</strong>
-                                <span>{credit.isPrimary ? 'Primary touchpoint' : 'Supporting touchpoint'}</span>
-                              </div>
-                            </td>
-                            <td>{formatNumber(credit.touchpointPosition)}</td>
-                            <td>{`${credit.source ?? 'Unknown'} / ${credit.medium ?? 'Unknown'}`}</td>
-                            <td>{credit.campaign ?? 'No campaign'}</td>
-                            <td>{formatOptionalDateTime(credit.touchpointOccurredAt, reportingTimezone)}</td>
-                            <td>{formatCurrency(credit.revenueCredit)}</td>
-                            <td>{formatNumber(credit.creditWeight)}</td>
-                            <td><span className="reason-pill">{credit.attributionReason}</span></td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                <div className="detail-grid detail-grid-two-column">
-                  <div className="detail-card">
-                    <h3>Raw order payload</h3>
-                    <pre className="json-view">{formatJsonValue(orderDetailsSection.data?.order.rawPayload ?? {})}</pre>
-                  </div>
-                  <div className="detail-card">
-                    <h3>Raw line item payloads</h3>
-                    <pre className="json-view">{formatJsonValue(orderDetailsSection.data?.lineItems.map((item) => item.rawPayload) ?? [])}</pre>
-                  </div>
-                </div>
-              </div>
-            </SectionState>
-          </article>
+              <OrderDetailsView
+                selectedOrderId={selectedOrderId}
+                reportingTimezone={reportingTimezone}
+                orderDetailsSection={orderDetailsSection}
+              />
+            </Suspense>
+          </Panel>
         </section>
       ) : null}
 
+      {currentPage === 'settings' ? (
+        <Suspense
+          fallback={
+            <AuthenticatedViewFallback
+              title="Settings"
+              description="Loading reporting settings, integration health, and access controls."
       {currentPage !== 'order-details' ? <section className="dashboard-grid">
         {currentPage === 'settings' ? (
         <article className="panel panel-wide">
@@ -2226,140 +2063,46 @@ function App() {
               groupBy={groupBy}
               reportingTimezone={reportingTimezone}
             />
-          </SectionState>
-        </article> : null}
-
-        {currentPage === 'dashboard' ? <article className="panel">
-          <div className="panel-header">
-            <h2>Campaign performance</h2>
-            <p>Top campaign rows ordered by revenue, matching the API’s table response.</p>
-          </div>
-          <SectionState
-            loading={dashboard.campaigns.loading}
-            error={dashboard.campaigns.error}
-            empty={!dashboard.campaigns.data?.length}
-            emptyLabel="No campaign rows matched the current filters."
-          >
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Campaign</th>
-                    <th>Source</th>
-                    <th>Visits</th>
-                    <th>Orders</th>
-                    <th>Revenue</th>
-                    <th>CVR</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(dashboard.campaigns.data ?? []).map((row) => (
-                    <tr key={`${row.source}-${row.medium}-${row.campaign}-${row.content ?? 'none'}`}>
-                      <td>
-                        <div className="primary-cell">
-                          <strong>{row.campaign}</strong>
-                          <span>{row.content ?? 'No content tag'}</span>
-                        </div>
-                      </td>
-                      <td>{`${row.source} / ${row.medium}`}</td>
-                      <td>{formatNumber(row.visits)}</td>
-                      <td>{formatNumber(row.orders)}</td>
-                      <td>{formatCurrency(row.revenue)}</td>
-                      <td>{formatPercent(row.conversionRate)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </SectionState>
-        </article> : null}
-
-        {currentPage === 'dashboard' ? <article className="panel">
-          <div className="panel-header">
-            <h2>Campaign mix</h2>
-            <p>Revenue share makes it obvious which campaigns dominate the selected window.</p>
-          </div>
-          <SectionState
-            loading={dashboard.campaigns.loading}
-            error={dashboard.campaigns.error}
-            empty={!dashboard.campaigns.data?.length}
-            emptyLabel="No campaign mix available yet."
-          >
-            <div className="stack-list">
-              {(dashboard.campaigns.data ?? []).map((row) => {
-                const share = totalCampaignRevenue > 0 ? row.revenue / totalCampaignRevenue : 0;
-
-                return (
-                  <div key={`${row.source}-${row.campaign}`} className="stack-row">
-                    <div className="stack-copy">
-                      <strong>{row.campaign}</strong>
-                      <span>{`${row.source} / ${row.medium}`}</span>
-                    </div>
-                    <div className="stack-bar-shell">
-                      <div className="stack-bar" style={{ width: `${Math.max(share * 100, 2)}%` }} />
-                    </div>
-                    <div className="stack-value">{formatPercent(share)}</div>
-                  </div>
-                );
-              })}
-            </div>
-          </SectionState>
-        </article> : null}
-
-        {currentPage === 'dashboard' ? <article className="panel panel-wide">
-          <div className="panel-header">
-            <h2>Attributed orders</h2>
-            <p>Order-level attribution rows help debug why a sale was assigned to a source and campaign.</p>
-          </div>
-          <SectionState
-            loading={dashboard.orders.loading}
-            error={dashboard.orders.error}
-            empty={!dashboard.orders.data?.length}
-            emptyLabel="No attributed orders were returned for this range."
-          >
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Order</th>
-                    <th>Processed</th>
-                    <th>Source</th>
-                    <th>Campaign</th>
-                    <th>Total</th>
-                    <th>Reason</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(dashboard.orders.data ?? []).map((row) => (
-                    <tr key={row.shopifyOrderId}>
-                      <td>
-                        <div className="primary-cell">
-                          <button
-                            type="button"
-                            className="table-link-button"
-                            onClick={() => void openOrderDetails(row.shopifyOrderId)}
-                          >
-                            #{row.shopifyOrderId}
-                          </button>
-                          <span>{row.medium ?? 'No medium'}</span>
-                        </div>
-                      </td>
-                      <td>{formatDateTimeLabel(row.processedAt, reportingTimezone)}</td>
-                      <td>{row.source ?? 'Unattributed'}</td>
-                      <td>{row.campaign ?? 'No campaign'}</td>
-                      <td>{formatCurrency(row.totalPrice)}</td>
-                      <td>
-                        <span className="reason-pill">{row.attributionReason}</span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </SectionState>
-        </article> : null}
-      </section> : null}
-    </main>
+          }
+        >
+          <SettingsAdminView
+            isAdmin={authState.user.isAdmin}
+            reportingTimezone={reportingTimezone}
+            defaultReportingTimezone={DEFAULT_REPORTING_TIMEZONE}
+            reportingTimezoneOptions={REPORTING_TIMEZONE_OPTIONS}
+            filters={filters}
+            appSettings={appSettings}
+            settingsForm={settingsForm}
+            setSettingsForm={(updater) => setSettingsForm((current) => updater(current))}
+            usersSection={usersSection}
+            newUserForm={newUserForm}
+            setNewUserForm={(updater) => setNewUserForm((current) => updater(current))}
+            shopifyConnection={shopifyConnection}
+            shopifyBackfillRange={shopifyBackfillRange}
+            setShopifyBackfillRange={(updater) => setShopifyBackfillRange((current) => updater(current))}
+            metaConnection={metaConnection}
+            metaConfigForm={metaConfigForm}
+            setMetaConfigForm={(updater) => setMetaConfigForm((current) => updater(current))}
+            googleConnection={googleConnection}
+            googleForm={googleForm}
+            setGoogleForm={(updater) => setGoogleForm((current) => updater(current))}
+            actionFeedback={actionFeedback}
+            onSettingsSave={handleSettingsSave}
+            onCreateUser={handleCreateUser}
+            onShopifyBackfill={handleShopifyBackfill}
+            onMetaConfigSave={handleMetaConfigSave}
+            onGoogleConnect={handleGoogleConnect}
+            onShopifyTest={handleShopifyTest}
+            onShopifyWebhookSync={handleShopifyWebhookSync}
+            onShopifyAttributionRecovery={handleShopifyAttributionRecovery}
+            onMetaConnect={handleMetaConnect}
+            onMetaSync={handleMetaSync}
+            onGoogleSync={handleGoogleSync}
+            onGoogleReconcile={handleGoogleReconcile}
+          />
+        </Suspense>
+      ) : null}
+    </AuthenticatedAppShell>
   );
 }
 

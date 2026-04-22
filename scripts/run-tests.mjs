@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { readdirSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -12,6 +12,24 @@ const mode = process.argv[2] ?? 'all';
 const integrationTests = new Set(['attribution-e2e.integration.test.ts', 'reporting-api.integration.test.ts']);
 const unitTests = [];
 const selectedTests = [];
+
+function ensureDashboardDependencies() {
+  const dashboardNodeModules = path.join(repoRoot, 'dashboard', 'node_modules');
+
+  if (existsSync(dashboardNodeModules)) {
+    return;
+  }
+
+  const installResult = spawnSync('npm', ['--prefix', 'dashboard', 'ci'], {
+    cwd: repoRoot,
+    stdio: 'inherit',
+    env: process.env
+  });
+
+  if (installResult.status !== 0) {
+    process.exit(installResult.status ?? 1);
+  }
+}
 
 function runMigrations() {
   const migrationResult = spawnSync('npx', ['tsx', 'src/db/migrate.ts'], {
@@ -52,6 +70,10 @@ if (mode === 'unit') {
 if (selectedTests.length === 0) {
   process.stderr.write(`No tests matched mode ${mode}\n`);
   process.exit(1);
+}
+
+if (selectedTests.some((file) => /authenticated-ui|dashboard-ui/.test(file))) {
+  ensureDashboardDependencies();
 }
 
 if (mode === 'integration' || mode === 'all') {
