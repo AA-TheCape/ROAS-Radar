@@ -19,7 +19,6 @@ import type {
 import {
   Badge,
   Button,
-  ButtonRow,
   Card,
   DataTableToolbar,
   CardDescription,
@@ -356,99 +355,116 @@ const DashboardControlPanel = memo(function DashboardControlPanel({
   );
 
   return (
-    <Panel
-      title="Reporting controls"
-      description="Tune the attribution window and reshape the overview without leaving the dashboard surface."
-      wide
-      className="overflow-hidden"
+    <Card
+      padding="compact"
+      className="col-[1/-1] overflow-hidden border-line/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(237,245,242,0.78))] shadow-panel"
     >
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.45fr)_minmax(20rem,0.9fr)]">
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-          <Field label="Start date" htmlFor="start-date">
-            <Input
-              id="start-date"
-              type="date"
-              value={filters.startDate}
-              onChange={(event) => onFiltersChange({ ...filters, startDate: event.target.value })}
-            />
-          </Field>
-          <Field label="End date" htmlFor="end-date">
-            <Input
-              id="end-date"
-              type="date"
-              value={filters.endDate}
-              onChange={(event) => onFiltersChange({ ...filters, endDate: event.target.value })}
-            />
-          </Field>
-          <Field label="Source" htmlFor="source-filter">
-            <Input
-              id="source-filter"
-              type="text"
-              placeholder="google, meta, facebook"
-              value={filters.source}
-              onChange={(event) => onFiltersChange({ ...filters, source: event.target.value })}
-            />
-          </Field>
-          <Field label="Campaign" htmlFor="campaign-filter">
-            <Input
-              id="campaign-filter"
-              type="text"
-              placeholder="spring-sale"
-              value={filters.campaign}
-              onChange={(event) => onFiltersChange({ ...filters, campaign: event.target.value })}
-            />
-          </Field>
-          <Field label="Timeseries grouping" htmlFor="group-by">
-            <Select id="group-by" value={groupBy} onChange={(event) => onGroupByChange(event.target.value as TimeseriesGroupBy)}>
-              {GROUP_BY_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </Select>
-          </Field>
+      <div className="grid gap-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <Eyebrow>Reporting controls</Eyebrow>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <h2 className="font-display text-[1.35rem] leading-tight text-ink">Top control card</h2>
+              <Badge tone="teal" className="min-h-[26px] px-2.5 py-0.5 text-[0.68rem]">
+                {reportingTimezone}
+              </Badge>
+            </div>
+            <p className="mt-2 max-w-3xl text-[0.95rem] leading-6 text-ink-muted">
+              Tune dates, source filters, and chart grouping without giving the dashboard a full-height control section.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge tone="neutral" className="min-h-[26px] px-2.5 py-0.5 text-[0.68rem]">
+              {GROUP_BY_OPTIONS.find((option) => option.value === groupBy)?.label ?? groupBy}
+            </Badge>
+            <Button type="button" tone="ghost" className="min-h-[36px] px-3 py-1.5 text-label" onClick={onClearFilters}>
+              Clear filters
+            </Button>
+          </div>
         </div>
 
-        <Card padding="compact" className="border-line/60 bg-[linear-gradient(180deg,rgba(237,245,242,0.7),rgba(255,255,255,0.92))]">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <Eyebrow>Quick ranges</Eyebrow>
-              <p className="mt-3 max-w-[24ch] text-body text-ink-soft">
-                Shortcuts respect the reporting timezone and immediately re-scope the dashboard.
-              </p>
-            </div>
-            <Badge tone="teal">{reportingTimezone}</Badge>
-          </div>
-
-          <ButtonRow className="mt-5 grid-cols-2 gap-2">
-            {quickRanges.map((preset) => (
-              <Button
-                key={preset.label}
-                type="button"
-                tone="secondary"
-                className="min-w-[5.25rem] w-full sm:flex-1"
-                onClick={() => onApplyQuickRange(preset.value(reportingTimezone))}
+        <div className="grid gap-3 xl:grid-cols-[minmax(0,1.8fr)_minmax(18rem,auto)] xl:items-end">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            <Field label="Start date" htmlFor="start-date">
+              <Input
+                id="start-date"
+                type="date"
+                className="min-h-[40px] rounded-card px-3 py-2 text-[0.95rem]"
+                value={filters.startDate}
+                onChange={(event) => onFiltersChange({ ...filters, startDate: event.target.value })}
+              />
+            </Field>
+            <Field label="End date" htmlFor="end-date">
+              <Input
+                id="end-date"
+                type="date"
+                className="min-h-[40px] rounded-card px-3 py-2 text-[0.95rem]"
+                value={filters.endDate}
+                onChange={(event) => onFiltersChange({ ...filters, endDate: event.target.value })}
+              />
+            </Field>
+            <Field label="Source" htmlFor="source-filter">
+              <Input
+                id="source-filter"
+                type="text"
+                className="min-h-[40px] rounded-card px-3 py-2 text-[0.95rem]"
+                placeholder="google, meta, facebook"
+                value={filters.source}
+                onChange={(event) => onFiltersChange({ ...filters, source: event.target.value })}
+              />
+            </Field>
+            <Field label="Campaign" htmlFor="campaign-filter">
+              <Input
+                id="campaign-filter"
+                type="text"
+                className="min-h-[40px] rounded-card px-3 py-2 text-[0.95rem]"
+                placeholder="spring-sale"
+                value={filters.campaign}
+                onChange={(event) => onFiltersChange({ ...filters, campaign: event.target.value })}
+              />
+            </Field>
+            <Field label="Timeseries grouping" htmlFor="group-by">
+              <Select
+                id="group-by"
+                className="min-h-[40px] rounded-card px-3 py-2 text-[0.95rem]"
+                value={groupBy}
+                onChange={(event) => onGroupByChange(event.target.value as TimeseriesGroupBy)}
               >
-                {preset.label}
-              </Button>
-            ))}
-          </ButtonRow>
+                {GROUP_BY_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          </div>
 
-          <div className="mt-5 rounded-card border border-line/60 bg-white/80 px-4 py-4">
-            <p className="text-label uppercase text-ink-muted">Current scope</p>
-            <p className="mt-2 text-body text-ink-soft">{scopeLabel}</p>
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-              <Badge tone="neutral">
-                {GROUP_BY_OPTIONS.find((option) => option.value === groupBy)?.label ?? groupBy}
-              </Badge>
-              <Button type="button" tone="ghost" onClick={onClearFilters}>
-                Clear filters
-              </Button>
+          <div className="grid gap-3 rounded-card border border-line/60 bg-white/75 px-3 py-3 shadow-inset-soft">
+            <div className="flex flex-wrap items-center gap-2">
+              {quickRanges.map((preset) => (
+                <Button
+                  key={preset.label}
+                  type="button"
+                  tone="secondary"
+                  className="min-h-[34px] min-w-[4.75rem] px-3 py-1 text-label"
+                  onClick={() => onApplyQuickRange(preset.value(reportingTimezone))}
+                >
+                  {preset.label}
+                </Button>
+              ))}
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-label uppercase text-ink-muted">Current scope</p>
+                <p className="mt-1 truncate text-[0.95rem] text-ink-soft xl:max-w-[22rem]">{scopeLabel}</p>
+              </div>
             </div>
           </div>
-        </Card>
+        </div>
       </div>
-    </Panel>
+    </Card>
   );
 });
 
