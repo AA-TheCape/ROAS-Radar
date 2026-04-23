@@ -182,6 +182,10 @@ function formatMetric(value: number, formatter?: (value: number) => string) {
   return formatter ? formatter(value) : value.toLocaleString('en-US');
 }
 
+export function formatPieMetric(value: number, formatter?: (value: number) => string) {
+  return formatMetric(Math.round(value), formatter);
+}
+
 type ViewportSnapshot = {
   isCompact: boolean;
   isTablet: boolean;
@@ -626,6 +630,10 @@ export const NivoPieChart = memo(function NivoPieChart({
   const { isCompact, isTablet } = useChartViewport();
   const effectiveLegends = isCompact ? [] : legends;
   const effectiveHeight = isCompact ? Math.max(260, height - 20) : height;
+  const pieValueFormat = useMemo(
+    () => (value: number | string) => formatPieMetric(Number(value), valueFormat),
+    [valueFormat]
+  );
   const effectiveMargin = useMemo(
     () => ({
       ...basePieMargin,
@@ -661,7 +669,9 @@ export const NivoPieChart = memo(function NivoPieChart({
         arcLinkLabelsThickness={1}
         arcLinkLabelsColor="#627180"
         arcLabelsSkipAngle={isCompact ? 360 : 12}
+        arcLabel={(datum) => pieValueFormat(datum.value)}
         arcLabelsTextColor="#17212b"
+        valueFormat={pieValueFormat}
         legends={effectiveLegends}
         tooltip={({ datum }: any) => (
           <ChartTooltip
@@ -669,7 +679,7 @@ export const NivoPieChart = memo(function NivoPieChart({
             rows={[
               {
                 label: 'Value',
-                value: formatMetric(Number(datum.value), valueFormat),
+                value: pieValueFormat(datum.value),
                 color: datum.color
               },
               ...(datum.data?.revenueLabel ? [{ label: 'Revenue', value: String(datum.data.revenueLabel) }] : [])

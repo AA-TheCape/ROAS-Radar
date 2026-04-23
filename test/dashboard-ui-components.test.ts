@@ -253,6 +253,16 @@ test('nivo charts render smoke coverage for dashboard data visuals', async () =>
   }
 });
 
+test('pie chart value formatting rounds decimal values to whole numbers before display formatting', async () => {
+  const charts = await loadDashboardModule<typeof import('../dashboard/src/components/charts/NivoCharts')>(
+    'dashboard/src/components/charts/NivoCharts.tsx'
+  );
+
+  assert.equal(charts.formatPieMetric(12.6), '13');
+  assert.equal(charts.formatPieMetric(12.4), '12');
+  assert.equal(charts.formatPieMetric(12960.4, (value) => `$${value.toLocaleString('en-US')}`), '$12,960');
+});
+
 test('reporting dashboard date-range helper corrects invalid custom ranges with clear feedback', async () => {
   const { applyDateRangeChange } = await loadDashboardModule<typeof import('../dashboard/src/components/ReportingDashboard')>(
     'dashboard/src/components/ReportingDashboard.tsx'
