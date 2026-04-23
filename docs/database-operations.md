@@ -46,3 +46,36 @@ Do not restore in place for production unless the outage model requires it. Pref
   - migration runner uses a PostgreSQL advisory transaction lock,
   - migration job is single-task and single-parallelism,
   - runtime services do not have DDL credentials.
+
+## Session Attribution Capture Operations
+
+Migration `0019_add_session_attribution_capture_tables.sql` adds canonical session-attribution capture tables for:
+
+- first-party session identity keyed by `roas_radar_session_id`
+- touch event persistence keyed by session and event time
+- order-to-session attribution linkage keyed by `shopify_order_id`
+
+The migration bakes in 30-day retention support with `retained_until` columns and matching pruning indexes.
+Operational pruning can delete expired rows in this order:
+
+1. `DELETE FROM order_attribution_links WHERE retained_until < now();`
+2. `DELETE FROM session_attribution_touch_events WHERE retained_until < now();`
+3. `DELETE FROM session_attribution_identities WHERE retained_until < now();`
+
+Verify primary lookup plans after migration on each environment:
+
+```sh
+npm run db:verify:session-attribution-plans
+```
+
+The verification script seeds representative data inside a transaction, runs `EXPLAIN (FORMAT JSON)` for the primary session, order, and event-time queries, and fails if PostgreSQL does not choose:
+
+- `session_attribution_touch_events_session_occurred_at_idx`
+- `order_attribution_links_order_lookup_idx`
+- `session_attribution_touch_events_occurred_at_idx`
+
+If rollback is required, apply:
+
+```sh
+psql "$MIGRATOR_DATABASE_URL" -f db/rollbacks/0019_add_session_attribution_capture_tables.down.sql
+```
