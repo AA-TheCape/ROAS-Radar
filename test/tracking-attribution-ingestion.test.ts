@@ -30,6 +30,7 @@ const validPayload = {
   gclid: 'ABC123',
   gbraid: 'GB-123',
   wbraid: 'WB-456',
+  consent_state: 'denied',
   fbclid: null,
   ttclid: null,
   msclkid: null
@@ -183,7 +184,8 @@ test('tracking attribution endpoint persists canonical touch events and mirrors 
     assert.equal(touchInsert.params?.[7], 'cpc');
     assert.equal(touchInsert.params?.[12], 'GB-123');
     assert.equal(touchInsert.params?.[13], 'WB-456');
-    assert.equal(touchInsert.params?.[17], 'server');
+    assert.equal(touchInsert.params?.[17], 'denied');
+    assert.equal(touchInsert.params?.[18], 'server');
 
     const trackingInsert = queries.find((entry) => entry.text.includes('INSERT INTO tracking_events'));
     assert.ok(trackingInsert);
@@ -191,7 +193,8 @@ test('tracking attribution endpoint persists canonical touch events and mirrors 
     assert.equal(trackingInsert.params?.[7], 'cpc');
     assert.equal(trackingInsert.params?.[12], 'GB-123');
     assert.equal(trackingInsert.params?.[13], 'WB-456');
-    assert.equal(trackingInsert.params?.[18], 'server');
+    assert.equal(trackingInsert.params?.[17], 'denied');
+    assert.equal(trackingInsert.params?.[19], 'server');
   } finally {
     await closeServer(server);
   }

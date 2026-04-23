@@ -9,8 +9,11 @@ import { query, withTransaction } from '../../db/pool.js';
 import { logError, logInfo, logWarning } from '../../observability/index.js';
 import {
   ATTRIBUTION_SCHEMA_VERSION,
+  ATTRIBUTION_CONSENT_STATES,
+  normalizeAttributionConsentState,
   normalizeAttributionCaptureV1,
-  type AttributionCaptureV1
+  type AttributionCaptureV1,
+  type AttributionConsentState
 } from '../../../packages/attribution-schema/index.js';
 import { enqueueAttributionForTrackingTouchpoint } from '../attribution/index.js';
 import { buildCanonicalTouchpointDimensions } from '../marketing-dimensions/index.js';
@@ -68,10 +71,12 @@ type TrackingIngestionSource = 'browser' | 'server' | (typeof REQUEST_CONTEXT_IN
 
 type RequestContextAttributionCapture = {
   input: AttributionCaptureV1;
+  consentState: AttributionConsentState;
   ingestionSource: (typeof REQUEST_CONTEXT_INGESTION_SOURCES)[number];
 };
 
 type AttributionCaptureInsertOptions = {
+  consentState: AttributionConsentState;
   eventType: string;
   ingestionSource: TrackingIngestionSource;
   deduplicationKey: string;
@@ -143,6 +148,7 @@ const trackingEventSchema = z
     shopifyCartToken: nullableSanitizedString(MAX_TOKEN_LENGTH),
     shopifyCheckoutToken: nullableSanitizedString(MAX_TOKEN_LENGTH),
     clientEventId: nullableSanitizedString(MAX_CLIENT_EVENT_ID_LENGTH),
+    consentState: z.enum(ATTRIBUTION_CONSENT_STATES).default('unknown'),
     context: z
       .object({
         userAgent: nullableSanitizedString(MAX_USER_AGENT_LENGTH),
@@ -452,6 +458,7 @@ function sanitizeTrackingInput(input: TrackingEventInput): TrackingEventInput {
     shopifyCartToken: normalizeNullableString(input.shopifyCartToken),
     shopifyCheckoutToken: normalizeNullableString(input.shopifyCheckoutToken),
     clientEventId: normalizeNullableString(input.clientEventId),
+    consentState: input.consentState,
     context: {
       userAgent: normalizeNullableString(input.context.userAgent),
       screen: normalizeNullableString(input.context.screen),
@@ -501,6 +508,7 @@ function buildRequestContextAttributionCapture(
 
   return {
     ingestionSource,
+    consentState: 'unknown',
     input: normalizeAttributionCaptureV1({
       schema_version: ATTRIBUTION_SCHEMA_VERSION,
       roas_radar_session_id: sessionId,
@@ -790,6 +798,7 @@ async function persistSessionBootstrap(
 
     if (requestContextCapture) {
       const fallbackResult = await ingestAttributionCaptureWithClient(client, requestContextCapture.input, {
+        consentState: requestContextCapture.consentState,
         eventType: 'page_view',
         ingestionSource: requestContextCapture.ingestionSource,
         deduplicationKey: hashRequestContextCaptureFingerprint(
@@ -798,6 +807,7 @@ async function persistSessionBootstrap(
         ),
         rawPayload: {
           ...requestContextCapture.input,
+          consent_state: requestContextCapture.consentState,
           ingestion_source: requestContextCapture.ingestionSource,
           capture_origin: 'request_context'
         }
@@ -1067,6 +1077,7 @@ async function insertTrackingEvent(
           shopify_cart_token,
           shopify_checkout_token,
           client_event_id,
+          consent_state,
           ingestion_fingerprint,
           ingestion_source,
           ingested_at,
@@ -1095,8 +1106,9 @@ async function insertTrackingEvent(
           $20,
           $21,
           $22,
+          $23,
           now(),
-          $23::jsonb
+          $24::jsonb
         )
       `,
       [
@@ -1120,6 +1132,7 @@ async function insertTrackingEvent(
         normalizeNullableString(input.shopifyCartToken),
         normalizeNullableString(input.shopifyCheckoutToken),
         input.clientEventId ?? null,
+        input.consentState,
         ingestionFingerprint,
         'browser',
         JSON.stringify({
@@ -1422,6 +1435,7 @@ async function insertSessionAttributionTouchEvent(
           fbclid,
           ttclid,
           msclkid,
+          consent_state,
           ingestion_source,
           ingestion_fingerprint,
           raw_payload
@@ -1446,7 +1460,8 @@ async function insertSessionAttributionTouchEvent(
           $17,
           $18,
           $19,
-          $20::jsonb
+          $20,
+          $21::jsonb
         )
         RETURNING id, captured_at, roas_radar_session_id
       `,
@@ -1468,6 +1483,7 @@ async function insertSessionAttributionTouchEvent(
         input.fbclid,
         input.ttclid,
         input.msclkid,
+        options.consentState,
         options.ingestionSource,
         ingestionFingerprint,
         JSON.stringify(options.rawPayload)
@@ -1524,6 +1540,7 @@ async function insertTrackingEventFromAttributionCapture(
           fbclid,
           ttclid,
           msclkid,
+          consent_state,
           ingestion_fingerprint,
           ingestion_source,
           ingested_at,
@@ -1549,8 +1566,9 @@ async function insertTrackingEventFromAttributionCapture(
           $17,
           $18,
           $19,
+          $20,
           now(),
-          $20::jsonb
+          $21::jsonb
         )
       `,
       [
@@ -1571,6 +1589,7 @@ async function insertTrackingEventFromAttributionCapture(
         input.fbclid,
         input.ttclid,
         input.msclkid,
+        options.consentState,
         ingestionFingerprint,
         options.ingestionSource,
         JSON.stringify(options.rawPayload)
@@ -1742,11 +1761,21 @@ function parseInput<TSchema extends z.ZodTypeAny>(schema: TSchema, input: unknow
   }
 }
 
-function parseAttributionCaptureRequestBody(body: TrackingRequestBody): AttributionCaptureV1 {
+function parseAttributionCaptureRequestBody(
+  body: TrackingRequestBody
+): {
+  capture: AttributionCaptureV1;
+  consentState: AttributionConsentState;
+} {
   const payload = parseTrackingRequestBody(body);
 
   try {
-    return normalizeAttributionCaptureV1(payload);
+    return {
+      capture: normalizeAttributionCaptureV1(payload),
+      consentState: normalizeAttributionConsentState(
+        typeof payload.consent_state === 'string' ? payload.consent_state : undefined
+      )
+    };
   } catch (error) {
     if (error instanceof z.ZodError) {
       throw new TrackingHttpError(400, 'invalid_request', 'Invalid attribution capture payload', error.flatten());
@@ -1859,12 +1888,14 @@ async function emitServerAttributionFromTrackingEvent(input: TrackingEventInput)
       await upsertTrackingSessionFromAttributionCapture(attributionCapture, client);
 
       return ingestAttributionCaptureWithClient(client, attributionCapture, {
+        consentState: input.consentState,
         eventType: input.eventType,
         ingestionSource: 'server',
         deduplicationKey: hashAttributionCaptureFingerprint(attributionCapture, input.eventType),
         mirrorTrackingEvent: false,
         rawPayload: {
           ...attributionCapture,
+          consent_state: input.consentState,
           event_type: input.eventType,
           client_event_id: input.clientEventId,
           ingestion_source: 'server',
@@ -1922,7 +1953,8 @@ async function ingestAttributionCaptureWithClient(
 }
 
 async function ingestAttributionCapture(
-  input: AttributionCaptureV1
+  input: AttributionCaptureV1,
+  consentState: AttributionConsentState
 ): Promise<{
   touchEventId: number;
   trackingEventId: string | null;
@@ -1947,12 +1979,14 @@ async function ingestAttributionCapture(
     await upsertSessionAttributionIdentityFromCapture(input, client);
     await upsertTrackingSessionFromAttributionCapture(input, client);
     return ingestAttributionCaptureWithClient(client, input, {
+      consentState,
       eventType: 'page_view',
       ingestionSource: 'server',
       deduplicationKey,
       rawPayload: {
         ...input,
         schema_version: ATTRIBUTION_SCHEMA_VERSION,
+        consent_state: consentState,
         ingestion_source: 'server'
       }
     });
@@ -2015,8 +2049,8 @@ export function createTrackingRouter(): Router {
       enforceAllowedOrigin(req);
       enforceRateLimit(req);
 
-      const input = parseAttributionCaptureRequestBody(req.body as TrackingRequestBody);
-      const result = await ingestAttributionCapture(input);
+      const parsed = parseAttributionCaptureRequestBody(req.body as TrackingRequestBody);
+      const result = await ingestAttributionCapture(parsed.capture, parsed.consentState);
 
       logInfo(result.deduplicated ? 'tracking_attribution_ingest_duplicate' : 'tracking_attribution_ingest_accepted', {
         sessionId: result.sessionId,

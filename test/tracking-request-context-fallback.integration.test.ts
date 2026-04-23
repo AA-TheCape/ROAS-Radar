@@ -83,6 +83,7 @@ test('request-context bootstrap fallback preserves attributable revenue when the
       utm_campaign: string | null;
       gbraid: string | null;
       ingestion_source: string;
+      consent_state: string;
     }>(
       `
         SELECT
@@ -93,7 +94,8 @@ test('request-context bootstrap fallback preserves attributable revenue when the
           utm_medium,
           utm_campaign,
           gbraid,
-          ingestion_source
+          ingestion_source,
+          consent_state
         FROM tracking_events
         WHERE session_id = $1::uuid
       `,
@@ -109,12 +111,13 @@ test('request-context bootstrap fallback preserves attributable revenue when the
       utm_medium: 'cpc',
       utm_campaign: 'spring-sale',
       gbraid: 'GBRAID-123',
-      ingestion_source: 'request_query'
+      ingestion_source: 'request_query',
+      consent_state: 'unknown'
     });
 
-    const persistedTouchEvent = await pool.query<{ ingestion_source: string }>(
+    const persistedTouchEvent = await pool.query<{ ingestion_source: string; consent_state: string }>(
       `
-        SELECT ingestion_source
+        SELECT ingestion_source, consent_state
         FROM session_attribution_touch_events
         WHERE roas_radar_session_id = $1::uuid
       `,
@@ -123,6 +126,7 @@ test('request-context bootstrap fallback preserves attributable revenue when the
 
     assert.equal(persistedTouchEvent.rowCount, 1);
     assert.equal(persistedTouchEvent.rows[0].ingestion_source, 'request_query');
+    assert.equal(persistedTouchEvent.rows[0].consent_state, 'unknown');
 
     await pool.query(
       `

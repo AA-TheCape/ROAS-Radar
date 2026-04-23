@@ -10,6 +10,7 @@ type TrackerConfig = {
   retryBaseDelayMs?: number;
   maxRetryDelayMs?: number;
   queueStorageKey?: string;
+  consentState?: 'granted' | 'denied' | 'unknown';
 };
 
 type SessionInfo = {
@@ -26,6 +27,7 @@ type TrackingEventPayload = {
   shopifyCartToken: null;
   shopifyCheckoutToken: null;
   clientEventId: string;
+  consentState: 'granted' | 'denied' | 'unknown';
   context: {
     userAgent: string | null;
     screen: string | null;
@@ -71,7 +73,8 @@ function readTrackerConfig(): Required<TrackerConfig> {
   return {
     retryBaseDelayMs: windowConfig.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS,
     maxRetryDelayMs: windowConfig.maxRetryDelayMs ?? DEFAULT_MAX_RETRY_DELAY_MS,
-    queueStorageKey: windowConfig.queueStorageKey ?? DEFAULT_QUEUE_STORAGE_KEY
+    queueStorageKey: windowConfig.queueStorageKey ?? DEFAULT_QUEUE_STORAGE_KEY,
+    consentState: windowConfig.consentState ?? 'unknown'
   };
 }
 
@@ -328,6 +331,7 @@ function buildTrackingPayload(sessionId: string, pageUrl: string, referrerUrl: s
     shopifyCartToken: null,
     shopifyCheckoutToken: null,
     clientEventId: generateUuid(),
+    consentState: readTrackerConfig().consentState ?? 'unknown',
     context: {
       userAgent: window.navigator.userAgent ?? null,
       screen:

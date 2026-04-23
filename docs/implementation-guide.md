@@ -108,6 +108,17 @@ Default is `dev-reporting-token`, but set it explicitly in local shells so your 
 
 For local testing, set `TRACKING_ALLOWED_ORIGINS=http://localhost:5173,https://store.example.com` so browser-based dashboard or synthetic requests are not rejected on origin checks.
 
+### Tracking Consent Policy
+
+Tracking capture is opt-out-compatible for attribution storage. UTM parameters, click IDs, landing URL, referrer URL, page URL, and `roas_radar_session_id` are persisted even when the client reports consent opt-out.
+
+The governing rule is:
+
+- capture storage is not suppressed by consent state
+- every tracking event and mirrored attribution touch stores a `consent_state` of `granted`, `denied`, or `unknown`
+- downstream reporting, governance, or activation logic must filter on `consent_state` instead of assuming missing attribution data means opt-out
+- request-context fallback captures default `consent_state` to `unknown` when no explicit browser consent signal is available
+
 ### Database Pooling
 
 - `DATABASE_POOL_MAX`

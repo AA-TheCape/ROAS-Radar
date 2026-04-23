@@ -4,6 +4,7 @@ export const ATTRIBUTION_SCHEMA_VERSION = 1 as const;
 export const MAX_ATTRIBUTION_URL_LENGTH = 2048;
 export const MAX_ATTRIBUTION_TEXT_LENGTH = 255;
 export const MAX_SESSION_ID_LENGTH = 36;
+export const ATTRIBUTION_CONSENT_STATES = ['granted', 'denied', 'unknown'] as const;
 
 const ISO_TIMESTAMP_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
 
@@ -79,6 +80,8 @@ const isoTimestampSchema = z
   .refine((value) => ISO_TIMESTAMP_REGEX.test(value), 'Invalid ISO-8601 timestamp')
   .transform((value) => new Date(value).toISOString());
 
+export const attributionConsentStateSchema = z.enum(ATTRIBUTION_CONSENT_STATES).default('unknown');
+
 export const attributionCaptureV1Schema = z.object({
   schema_version: z.literal(ATTRIBUTION_SCHEMA_VERSION),
   roas_radar_session_id: z.string().uuid().max(MAX_SESSION_ID_LENGTH),
@@ -102,7 +105,12 @@ export const attributionCaptureV1Schema = z.object({
 
 export type AttributionSchemaVersion = typeof ATTRIBUTION_SCHEMA_VERSION;
 export type AttributionCaptureV1 = z.infer<typeof attributionCaptureV1Schema>;
+export type AttributionConsentState = z.infer<typeof attributionConsentStateSchema>;
 
 export function normalizeAttributionCaptureV1(input: unknown): AttributionCaptureV1 {
   return attributionCaptureV1Schema.parse(input);
+}
+
+export function normalizeAttributionConsentState(input: unknown): AttributionConsentState {
+  return attributionConsentStateSchema.parse(input);
 }

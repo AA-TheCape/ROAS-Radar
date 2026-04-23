@@ -64,12 +64,14 @@ test('React attribution tracker bootstraps the first landing and posts updated p
       trackPayloads[0].pageUrl,
       'http://localhost/?utm_source=google&utm_medium=cpc&gbraid=GBRAID-123&wbraid=WBRAID-456'
     );
+    assert.equal(trackPayloads[0].consentState, 'unknown');
 
     dom.window.history.pushState({}, '', '/collections/sale');
     await tick(25);
 
     assert.equal(trackPayloads.length, 2);
     assert.equal(trackPayloads[1].pageUrl, 'http://localhost/collections/sale');
+    assert.equal(trackPayloads[1].consentState, 'unknown');
     assert.equal(
       trackPayloads[1].referrerUrl,
       'http://localhost/?utm_source=google&utm_medium=cpc&gbraid=GBRAID-123&wbraid=WBRAID-456'

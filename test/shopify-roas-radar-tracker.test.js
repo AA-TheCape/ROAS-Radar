@@ -274,6 +274,7 @@ test("persists a 365-day _hba_id cookie and reuses it across sessions", async ()
 
   const secondPayload = JSON.parse(secondRun.beaconCalls[0].body);
   assert.equal(secondPayload.sessionId, sessionId);
+  assert.equal(secondPayload.consentState, "unknown");
   assert.equal(cookieJar.get("_hba_id"), sessionId);
 });
 
@@ -303,9 +304,28 @@ test("emits the required tracking payload fields on page load", async () => {
   assert.equal(payload.shopifyCartToken, null);
   assert.equal(payload.shopifyCheckoutToken, null);
   assert.match(payload.clientEventId, /^[0-9a-f-]{36}$/i);
+  assert.equal(payload.consentState, "unknown");
   assert.equal(payload.context.userAgent, "Mozilla/5.0 Test Browser");
   assert.equal(payload.context.screen, "1440x900");
   assert.equal(payload.context.language, "en-US");
+});
+
+test("captures explicit consent state without suppressing the tracking payload", async () => {
+  const sessionId = "123e4567-e89b-42d3-a456-426614174000";
+  const run = await runTracker({
+    config: {
+      consentState: "denied"
+    },
+    fetch: createBootstrapFetch(sessionId, "2026-04-23T12:00:00.000Z"),
+    sendBeacon: () => true
+  });
+
+  const payload = JSON.parse(run.beaconCalls[0].body);
+  assert.equal(payload.consentState, "denied");
+  assert.equal(
+    payload.pageUrl,
+    "https://store.example.com/products/widget?utm_source=google&utm_medium=cpc&utm_campaign=spring-sale&gclid=abc123"
+  );
 });
 
 test("falls back to fetch when sendBeacon is unsupported or returns false", async () => {
@@ -383,6 +403,7 @@ test("falls back to a client-generated session when the bootstrap endpoint is un
 
   const payload = JSON.parse(run.beaconCalls[0].body);
   assert.match(payload.sessionId, /^[0-9a-f-]{36}$/i);
+  assert.equal(payload.consentState, "unknown");
   assert.equal(run.localStorageData.get("_hba_id"), payload.sessionId);
   assert.match(run.localStorageData.get("roas_radar_session_created_at"), /^\d{4}-\d{2}-\d{2}T/);
 });

@@ -240,6 +240,54 @@
     return window.location.origin + window.location.pathname + window.location.search;
   }
 
+  function normalizeConsentState(value) {
+    return value === "granted" || value === "denied" || value === "unknown" ? value : null;
+  }
+
+  function readConsentSignal(value) {
+    if (typeof value === "function") {
+      try {
+        return readConsentSignal(value());
+      } catch (error) {
+        return null;
+      }
+    }
+
+    return typeof value === "boolean" ? value : null;
+  }
+
+  function resolveConsentState() {
+    var configured = normalizeConsentState(config.consentState);
+    if (configured) {
+      return configured;
+    }
+
+    var privacy = window.Shopify && window.Shopify.customerPrivacy;
+    if (!privacy) {
+      return "unknown";
+    }
+
+    var signals = [
+      readConsentSignal(privacy.marketingAllowed),
+      readConsentSignal(privacy.analyticsProcessingAllowed),
+      readConsentSignal(privacy.userCanBeTracked)
+    ];
+
+    for (var index = 0; index < signals.length; index += 1) {
+      if (signals[index] === false) {
+        return "denied";
+      }
+    }
+
+    for (var signalIndex = 0; signalIndex < signals.length; signalIndex += 1) {
+      if (signals[signalIndex] === true) {
+        return "granted";
+      }
+    }
+
+    return "unknown";
+  }
+
   function buildPayload(sessionId) {
     return {
       eventType: config.eventType,
@@ -250,6 +298,7 @@
       shopifyCartToken: null,
       shopifyCheckoutToken: null,
       clientEventId: generateUuid(),
+      consentState: resolveConsentState(),
       context: {
         userAgent: (window.navigator && window.navigator.userAgent) || "",
         screen:

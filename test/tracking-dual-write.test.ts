@@ -23,6 +23,7 @@ const validTrackPayload = {
   shopifyCartToken: null,
   shopifyCheckoutToken: null,
   clientEventId: '223e4567-e89b-42d3-a456-426614174000',
+  consentState: 'denied',
   context: {
     userAgent: 'Mozilla/5.0 Test Browser',
     screen: '1440x900',
@@ -209,7 +210,8 @@ test('tracking endpoint dual-writes browser events into the attribution touch st
       (entry) => entry.transaction === 1 && entry.text.includes('INSERT INTO tracking_events')
     );
     assert.ok(browserEventInsert);
-    assert.equal(browserEventInsert.params?.[21], 'browser');
+    assert.equal(browserEventInsert.params?.[20], 'denied');
+    assert.equal(browserEventInsert.params?.[22], 'browser');
 
     const touchInsert = queries.find(
       (entry) => entry.transaction === 2 && entry.text.includes('INSERT INTO session_attribution_touch_events')
@@ -219,7 +221,8 @@ test('tracking endpoint dual-writes browser events into the attribution touch st
     assert.equal(touchInsert.params?.[6], 'google');
     assert.equal(touchInsert.params?.[7], 'cpc');
     assert.equal(touchInsert.params?.[11], 'ABC123');
-    assert.equal(touchInsert.params?.[17], 'server');
+    assert.equal(touchInsert.params?.[17], 'denied');
+    assert.equal(touchInsert.params?.[18], 'server');
   } finally {
     await closeServer(server);
   }
