@@ -39,7 +39,17 @@ class TrackingHttpError extends Error {
 type TrackingRequestBody = TrackingEventInput | Record<string, unknown> | string | undefined;
 
 type NormalizedCampaignParameters = Record<
-  'utm_source' | 'utm_medium' | 'utm_campaign' | 'utm_content' | 'utm_term' | 'gclid' | 'fbclid' | 'ttclid' | 'msclkid',
+  | 'utm_source'
+  | 'utm_medium'
+  | 'utm_campaign'
+  | 'utm_content'
+  | 'utm_term'
+  | 'gclid'
+  | 'gbraid'
+  | 'wbraid'
+  | 'fbclid'
+  | 'ttclid'
+  | 'msclkid',
   string | null
 >;
 
@@ -273,6 +283,8 @@ function parseCampaignParameters(pageUrl: string): NormalizedCampaignParameters 
     utm_content: normalizeNullableString(url.searchParams.get('utm_content')),
     utm_term: normalizeNullableString(url.searchParams.get('utm_term')),
     gclid: normalizeNullableString(url.searchParams.get('gclid')),
+    gbraid: normalizeNullableString(url.searchParams.get('gbraid')),
+    wbraid: normalizeNullableString(url.searchParams.get('wbraid')),
     fbclid: normalizeNullableString(url.searchParams.get('fbclid')),
     ttclid: normalizeNullableString(url.searchParams.get('ttclid')),
     msclkid: normalizeNullableString(url.searchParams.get('msclkid'))
@@ -395,6 +407,8 @@ async function persistBootstrapTrackingSession(
     content: params.utm_content,
     term: params.utm_term,
     gclid: params.gclid,
+    gbraid: params.gbraid,
+    wbraid: params.wbraid,
     fbclid: params.fbclid,
     ttclid: params.ttclid,
     msclkid: params.msclkid
@@ -416,6 +430,8 @@ async function persistBootstrapTrackingSession(
         initial_utm_content,
         initial_utm_term,
         initial_gclid,
+        initial_gbraid,
+        initial_wbraid,
         initial_fbclid,
         initial_ttclid,
         initial_msclkid,
@@ -440,7 +456,9 @@ async function persistBootstrapTrackingSession(
         $12,
         $13,
         $14,
-        $15
+        $15,
+        $16,
+        $17
       )
       ON CONFLICT (id)
       DO UPDATE SET
@@ -454,6 +472,8 @@ async function persistBootstrapTrackingSession(
         initial_utm_content = COALESCE(tracking_sessions.initial_utm_content, EXCLUDED.initial_utm_content),
         initial_utm_term = COALESCE(tracking_sessions.initial_utm_term, EXCLUDED.initial_utm_term),
         initial_gclid = COALESCE(tracking_sessions.initial_gclid, EXCLUDED.initial_gclid),
+        initial_gbraid = COALESCE(tracking_sessions.initial_gbraid, EXCLUDED.initial_gbraid),
+        initial_wbraid = COALESCE(tracking_sessions.initial_wbraid, EXCLUDED.initial_wbraid),
         initial_fbclid = COALESCE(tracking_sessions.initial_fbclid, EXCLUDED.initial_fbclid),
         initial_ttclid = COALESCE(tracking_sessions.initial_ttclid, EXCLUDED.initial_ttclid),
         initial_msclkid = COALESCE(tracking_sessions.initial_msclkid, EXCLUDED.initial_msclkid),
@@ -470,10 +490,12 @@ async function persistBootstrapTrackingSession(
       canonicalDimensions.campaign,
       canonicalDimensions.content,
       canonicalDimensions.term,
-      canonicalDimensions.clickIdType === 'gclid' ? canonicalDimensions.clickIdValue : null,
-      canonicalDimensions.clickIdType === 'fbclid' ? canonicalDimensions.clickIdValue : null,
-      canonicalDimensions.clickIdType === 'ttclid' ? canonicalDimensions.clickIdValue : null,
-      canonicalDimensions.clickIdType === 'msclkid' ? canonicalDimensions.clickIdValue : null,
+      params.gclid,
+      params.gbraid,
+      params.wbraid,
+      params.fbclid,
+      params.ttclid,
+      params.msclkid,
       userAgent,
       ipHash
     ]
@@ -514,6 +536,8 @@ async function persistSessionBootstrap(
           initial_utm_content,
           initial_utm_term,
           initial_gclid,
+          initial_gbraid,
+          initial_wbraid,
           initial_fbclid,
           initial_ttclid,
           initial_msclkid
@@ -534,7 +558,9 @@ async function persistSessionBootstrap(
           $10,
           $11,
           $12,
-          $13
+          $13,
+          $14,
+          $15
         )
         ON CONFLICT (roas_radar_session_id)
         DO UPDATE SET
@@ -551,6 +577,8 @@ async function persistSessionBootstrap(
           initial_utm_content = COALESCE(session_attribution_identities.initial_utm_content, EXCLUDED.initial_utm_content),
           initial_utm_term = COALESCE(session_attribution_identities.initial_utm_term, EXCLUDED.initial_utm_term),
           initial_gclid = COALESCE(session_attribution_identities.initial_gclid, EXCLUDED.initial_gclid),
+          initial_gbraid = COALESCE(session_attribution_identities.initial_gbraid, EXCLUDED.initial_gbraid),
+          initial_wbraid = COALESCE(session_attribution_identities.initial_wbraid, EXCLUDED.initial_wbraid),
           initial_fbclid = COALESCE(session_attribution_identities.initial_fbclid, EXCLUDED.initial_fbclid),
           initial_ttclid = COALESCE(session_attribution_identities.initial_ttclid, EXCLUDED.initial_ttclid),
           initial_msclkid = COALESCE(session_attribution_identities.initial_msclkid, EXCLUDED.initial_msclkid)
@@ -566,6 +594,8 @@ async function persistSessionBootstrap(
         params?.utm_content ?? null,
         params?.utm_term ?? null,
         params?.gclid ?? null,
+        params?.gbraid ?? null,
+        params?.wbraid ?? null,
         params?.fbclid ?? null,
         params?.ttclid ?? null,
         params?.msclkid ?? null
@@ -631,6 +661,8 @@ async function upsertTrackingSession(
     content: params.utm_content,
     term: params.utm_term,
     gclid: params.gclid,
+    gbraid: params.gbraid,
+    wbraid: params.wbraid,
     fbclid: params.fbclid,
     ttclid: params.ttclid,
     msclkid: params.msclkid
@@ -652,6 +684,8 @@ async function upsertTrackingSession(
         initial_utm_content,
         initial_utm_term,
         initial_gclid,
+        initial_gbraid,
+        initial_wbraid,
         initial_fbclid,
         initial_ttclid,
         initial_msclkid,
@@ -676,7 +710,9 @@ async function upsertTrackingSession(
         $12,
         $13,
         $14,
-        $15
+        $15,
+        $16,
+        $17
       )
       ON CONFLICT (id)
       DO UPDATE SET
@@ -690,6 +726,8 @@ async function upsertTrackingSession(
         initial_utm_content = COALESCE(tracking_sessions.initial_utm_content, EXCLUDED.initial_utm_content),
         initial_utm_term = COALESCE(tracking_sessions.initial_utm_term, EXCLUDED.initial_utm_term),
         initial_gclid = COALESCE(tracking_sessions.initial_gclid, EXCLUDED.initial_gclid),
+        initial_gbraid = COALESCE(tracking_sessions.initial_gbraid, EXCLUDED.initial_gbraid),
+        initial_wbraid = COALESCE(tracking_sessions.initial_wbraid, EXCLUDED.initial_wbraid),
         initial_fbclid = COALESCE(tracking_sessions.initial_fbclid, EXCLUDED.initial_fbclid),
         initial_ttclid = COALESCE(tracking_sessions.initial_ttclid, EXCLUDED.initial_ttclid),
         initial_msclkid = COALESCE(tracking_sessions.initial_msclkid, EXCLUDED.initial_msclkid),
@@ -706,10 +744,12 @@ async function upsertTrackingSession(
       canonicalDimensions.campaign,
       canonicalDimensions.content,
       canonicalDimensions.term,
-      canonicalDimensions.clickIdType === 'gclid' ? canonicalDimensions.clickIdValue : null,
-      canonicalDimensions.clickIdType === 'fbclid' ? canonicalDimensions.clickIdValue : null,
-      canonicalDimensions.clickIdType === 'ttclid' ? canonicalDimensions.clickIdValue : null,
-      canonicalDimensions.clickIdType === 'msclkid' ? canonicalDimensions.clickIdValue : null,
+      params.gclid,
+      params.gbraid,
+      params.wbraid,
+      params.fbclid,
+      params.ttclid,
+      params.msclkid,
       userAgent,
       ipHash
     ]
@@ -729,6 +769,8 @@ async function insertTrackingEvent(
     content: params.utm_content,
     term: params.utm_term,
     gclid: params.gclid,
+    gbraid: params.gbraid,
+    wbraid: params.wbraid,
     fbclid: params.fbclid,
     ttclid: params.ttclid,
     msclkid: params.msclkid
@@ -751,6 +793,8 @@ async function insertTrackingEvent(
           utm_content,
           utm_term,
           gclid,
+          gbraid,
+          wbraid,
           fbclid,
           ttclid,
           msclkid,
@@ -781,8 +825,10 @@ async function insertTrackingEvent(
           $17,
           $18,
           $19,
+          $20,
+          $21,
           now(),
-          $20::jsonb
+          $22::jsonb
         )
       `,
       [
@@ -797,10 +843,12 @@ async function insertTrackingEvent(
         canonicalDimensions.campaign,
         canonicalDimensions.content,
         canonicalDimensions.term,
-        canonicalDimensions.clickIdType === 'gclid' ? canonicalDimensions.clickIdValue : null,
-        canonicalDimensions.clickIdType === 'fbclid' ? canonicalDimensions.clickIdValue : null,
-        canonicalDimensions.clickIdType === 'ttclid' ? canonicalDimensions.clickIdValue : null,
-        canonicalDimensions.clickIdType === 'msclkid' ? canonicalDimensions.clickIdValue : null,
+        params.gclid,
+        params.gbraid,
+        params.wbraid,
+        params.fbclid,
+        params.ttclid,
+        params.msclkid,
         normalizeNullableString(input.shopifyCartToken),
         normalizeNullableString(input.shopifyCheckoutToken),
         input.clientEventId ?? null,

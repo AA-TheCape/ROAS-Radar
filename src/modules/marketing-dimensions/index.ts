@@ -1,4 +1,4 @@
-const CLICK_ID_TYPES = ['gclid', 'fbclid', 'ttclid', 'msclkid'] as const;
+const CLICK_ID_TYPES = ['gclid', 'gbraid', 'wbraid', 'fbclid', 'ttclid', 'msclkid'] as const;
 
 const SOURCE_ALIASES: Record<string, string> = {
   google: 'google',
@@ -67,6 +67,14 @@ const CLICK_ID_SOURCE_MEDIUM_MAP: Record<CanonicalClickIdType, { source: string;
     source: 'google',
     medium: 'cpc'
   },
+  gbraid: {
+    source: 'google',
+    medium: 'cpc'
+  },
+  wbraid: {
+    source: 'google',
+    medium: 'cpc'
+  },
   fbclid: {
     source: 'meta',
     medium: 'paid_social'
@@ -113,6 +121,8 @@ type CanonicalTouchpointInput = {
   clickIdType?: string | null;
   clickIdValue?: string | null;
   gclid?: string | null;
+  gbraid?: string | null;
+  wbraid?: string | null;
   fbclid?: string | null;
   ttclid?: string | null;
   msclkid?: string | null;
@@ -177,6 +187,22 @@ function resolveCanonicalClickId(input: CanonicalTouchpointInput | CanonicalSpen
     return {
       clickIdType: 'gclid',
       clickIdValue: gclid
+    };
+  }
+
+  const gbraid = 'gbraid' in input ? normalizeNullableString(input.gbraid) : null;
+  if (gbraid) {
+    return {
+      clickIdType: 'gbraid',
+      clickIdValue: gbraid
+    };
+  }
+
+  const wbraid = 'wbraid' in input ? normalizeNullableString(input.wbraid) : null;
+  if (wbraid) {
+    return {
+      clickIdType: 'wbraid',
+      clickIdValue: wbraid
     };
   }
 
