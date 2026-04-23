@@ -1,0 +1,12 @@
+{
+  "displayName": "ROAS Radar __ENVIRONMENT__ Missing Session ID Rate",
+  "documentation": {
+    "content": "Tracking or attribution capture requests are arriving without a usable `roas_radar_session_id`. Runbook: __RUNBOOK_URL_ATTRIBUTION_COMPLETENESS__",
+    "mimeType": "text/markdown"
+  },
+  "conditions": [
+    {
+      "displayName": "Missing session id rate exceeds 2% for 15 minutes"
+    }
+  ]
+}
