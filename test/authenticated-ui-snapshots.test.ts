@@ -179,6 +179,7 @@ async function renderSnapshots() {
       campaignsSection: { data: [], loading: false, error: null },
       timeseriesSection: { data: [], loading: false, error: null },
       ordersSection: { data: [], loading: false, error: null },
+      spendDetailsSection: { data: [], loading: false, error: null },
       onOpenOrderDetails: noop
     })
   });

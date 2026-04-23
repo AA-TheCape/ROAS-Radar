@@ -21,6 +21,7 @@ import {
   fetchMetaAdsStatus,
   fetchOrderDetails,
   fetchOrders,
+  fetchSpendDetails,
   fetchShopifyConnection,
   fetchSummary,
   fetchTimeseries,
@@ -53,6 +54,7 @@ import {
   type ShopifyConnectionResponse,
   type ShopifyBackfillResponse,
   type ShopifyAttributionRecoveryResponse,
+  type SpendDetailChannelGroup,
   type SummaryTotals,
   type TimeseriesGroupBy,
   type TimeseriesPoint
@@ -98,6 +100,7 @@ type DashboardState = {
   campaigns: AsyncSection<CampaignRow[]>;
   timeseries: AsyncSection<TimeseriesPoint[]>;
   orders: AsyncSection<OrderRow[]>;
+  spendDetails: AsyncSection<SpendDetailChannelGroup[]>;
 };
 
 type ActionFeedback = {
@@ -388,7 +391,8 @@ function useDashboardData(
     summary: createLoadingSection(),
     campaigns: createLoadingSection(),
     timeseries: createLoadingSection(),
-    orders: createLoadingSection()
+    orders: createLoadingSection(),
+    spendDetails: createLoadingSection()
   });
 
   useEffect(() => {
@@ -401,7 +405,8 @@ function useDashboardData(
         },
         campaigns: createResolvedSection<CampaignRow[]>([]),
         timeseries: createResolvedSection<TimeseriesPoint[]>([]),
-        orders: createResolvedSection<OrderRow[]>([])
+        orders: createResolvedSection<OrderRow[]>([]),
+        spendDetails: createResolvedSection<SpendDetailChannelGroup[]>([])
       });
       return;
     }
@@ -412,7 +417,8 @@ function useDashboardData(
       summary: createLoadingSection(),
       campaigns: createLoadingSection(),
       timeseries: createLoadingSection(),
-      orders: createLoadingSection()
+      orders: createLoadingSection(),
+      spendDetails: createLoadingSection()
     });
 
     fetchSummary(filters)
@@ -483,6 +489,24 @@ function useDashboardData(
           setState((current) => ({
             ...current,
             orders: createErroredSection(error.message)
+          }));
+        }
+      });
+
+    fetchSpendDetails(filters)
+      .then((response) => {
+        if (!cancelled) {
+          setState((current) => ({
+            ...current,
+            spendDetails: createResolvedSection(response.groups)
+          }));
+        }
+      })
+      .catch((error: Error) => {
+        if (!cancelled) {
+          setState((current) => ({
+            ...current,
+            spendDetails: createErroredSection(error.message)
           }));
         }
       });
@@ -1481,6 +1505,7 @@ function App() {
             campaignsSection={dashboard.campaigns}
             timeseriesSection={dashboard.timeseries}
             ordersSection={dashboard.orders}
+            spendDetailsSection={dashboard.spendDetails}
             onOpenOrderDetails={(shopifyOrderId) => void openOrderDetails(shopifyOrderId)}
           />
         </Suspense>

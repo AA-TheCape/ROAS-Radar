@@ -45,6 +45,24 @@ export type CampaignsResponse = {
   nextCursor: string | null;
 };
 
+export type SpendDetailCampaignRow = {
+  campaign: string;
+  spend: number;
+};
+
+export type SpendDetailChannelGroup = {
+  source: string;
+  medium: string;
+  channel: string;
+  subtotal: number;
+  campaigns: SpendDetailCampaignRow[];
+};
+
+export type SpendDetailsResponse = {
+  groups: SpendDetailChannelGroup[];
+  totalSpend: number;
+};
+
 export type TimeseriesGroupBy = 'day' | 'source' | 'campaign';
 
 export type TimeseriesPoint = {
@@ -519,6 +537,12 @@ export function logout() {
 export function fetchCampaigns(filters: ReportingFilters, limit = 12) {
   return requestJson<CampaignsResponse>('/api/reporting/campaigns', {
     searchParams: buildSearchParams(filters, { limit: `${limit}` })
+  });
+}
+
+export function fetchSpendDetails(filters: ReportingFilters) {
+  return requestJson<SpendDetailsResponse>('/api/reporting/spend-details', {
+    searchParams: buildSearchParams(filters)
   });
 }
 

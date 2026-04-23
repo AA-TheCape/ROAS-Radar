@@ -151,6 +151,24 @@ test('reporting dashboard search and order drill-in stay wired for high-traffic 
   }
 });
 
+test('reporting dashboard renders the bottom spend report grouped by channel then campaign', async () => {
+  const { default: ReportingDashboard } = await loadDashboardModule<
+    typeof import('../dashboard/src/components/ReportingDashboard')
+  >('dashboard/src/components/ReportingDashboard.tsx');
+
+  const mounted = await mountUi(h(ReportingDashboard, createReportingDashboardProps()));
+
+  try {
+    const text = mounted.container.textContent ?? '';
+    assert.match(text, /Marketing spend detail/);
+    assert.match(text, /Google \/ Cpc/);
+    assert.match(text, /Spring Search/);
+    assert.match(text, /Channel subtotal/);
+  } finally {
+    mounted.cleanup();
+  }
+});
+
 test('order details empty state stays explicit when no drill-in selection is active', async () => {
   const { default: OrderDetailsView } = await loadDashboardModule<typeof import('../dashboard/src/components/OrderDetailsView')>(
     'dashboard/src/components/OrderDetailsView.tsx'

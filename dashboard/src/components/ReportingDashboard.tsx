@@ -12,6 +12,7 @@ import type {
   CampaignRow,
   OrderRow,
   ReportingFilters,
+  SpendDetailChannelGroup,
   SummaryTotals,
   TimeseriesGroupBy,
   TimeseriesPoint
@@ -93,6 +94,7 @@ type ReportingDashboardProps = {
   campaignsSection: DashboardSection<CampaignRow[]>;
   timeseriesSection: DashboardSection<TimeseriesPoint[]>;
   ordersSection: DashboardSection<OrderRow[]>;
+  spendDetailsSection: DashboardSection<SpendDetailChannelGroup[]>;
   onOpenOrderDetails: (shopifyOrderId: string) => void;
 };
 
@@ -241,6 +243,18 @@ function buildSourceMixSummary(
     .slice(0, 5)
     .map((row) => `${row.id}: ${row.revenueLabel ?? formatCurrency(row.value)}.`)
     .join(' ');
+}
+
+function titleCaseToken(value: string) {
+  return value
+    .split('_')
+    .filter(Boolean)
+    .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
+    .join(' ');
+}
+
+function formatChannelLabel(source: string, medium: string) {
+  return `${titleCaseToken(source || 'unknown')} / ${titleCaseToken(medium || 'unknown')}`;
 }
 
 const DashboardOverview = memo(function DashboardOverview({
@@ -692,11 +706,13 @@ const ReportingDashboard = memo(function ReportingDashboard({
   campaignsSection,
   timeseriesSection,
   ordersSection,
+  spendDetailsSection,
   onOpenOrderDetails
 }: ReportingDashboardProps) {
   const campaigns = campaignsSection.data ?? [];
   const timeseriesPoints = timeseriesSection.data ?? [];
   const orders = ordersSection.data ?? [];
+  const spendGroups = spendDetailsSection.data ?? [];
   const [campaignSearch, setCampaignSearch] = useState('');
   const [campaignSort, setCampaignSort] = useState<SortState<CampaignSortKey>>({
     key: 'revenue',
@@ -796,6 +812,10 @@ const ReportingDashboard = memo(function ReportingDashboard({
   const paginatedOrders = useMemo(
     () => paginateRows(sortedOrders, orderPage, ORDER_PAGE_SIZE),
     [orderPage, sortedOrders]
+  );
+  const totalGroupedSpend = useMemo(
+    () => spendGroups.reduce((sum, group) => sum + group.subtotal, 0),
+    [spendGroups]
   );
 
   function toggleCampaignSort(key: CampaignSortKey) {
@@ -1210,6 +1230,86 @@ const ReportingDashboard = memo(function ReportingDashboard({
                 </TableBody>
               </Table>
             </TableWrap>
+          </>
+        </SectionState>
+      </Panel>
+
+      <Panel
+        title="Marketing spend detail"
+        description="Bottom report keeps spend grouped by channel first, then by campaign, with visible subtotals for each media slice."
+        wide
+      >
+        <SectionState
+          loading={spendDetailsSection.loading}
+          error={spendDetailsSection.error}
+          empty={!spendGroups.length}
+          emptyLabel="No marketing spend rows were returned for this range."
+        >
+          <>
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+              <div>
+                <Eyebrow>Spend rollup</Eyebrow>
+                <p className="mt-3 max-w-2xl text-body text-ink-soft">
+                  Channel groupings follow the same reporting window and dashboard filters as the summary totals.
+                </p>
+              </div>
+              <div className="grid gap-2 rounded-card border border-line/60 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(220,239,237,0.52))] px-4 py-4 text-right shadow-inset-soft">
+                <p className="text-label uppercase text-ink-muted">Grouped spend total</p>
+                <p className="font-display text-title text-brand">{formatCurrency(totalGroupedSpend)}</p>
+                <p className="text-body text-ink-muted">
+                  {formatNumber(spendGroups.length)} channels in the current window
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-6 grid gap-4">
+              {spendGroups.map((group) => (
+                <Card
+                  key={`${group.source}-${group.medium}`}
+                  padding="compact"
+                  className="border-line/60 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(246,223,211,0.34))]"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <Eyebrow>Channel</Eyebrow>
+                      <p className="mt-3 font-display text-title text-ink">{formatChannelLabel(group.source, group.medium)}</p>
+                      <p className="mt-2 text-body text-ink-muted">
+                        {formatNumber(group.campaigns.length)} campaigns contributing spend
+                      </p>
+                    </div>
+                    <Badge tone="teal">{formatCurrency(group.subtotal)} subtotal</Badge>
+                  </div>
+
+                  <TableWrap className="mt-5">
+                    <Table caption={`Spend detail for ${formatChannelLabel(group.source, group.medium)}`}>
+                      <TableHead>
+                        <TableRow>
+                          <TableHeaderCell>Campaign</TableHeaderCell>
+                          <TableHeaderCell>Spend</TableHeaderCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {group.campaigns.map((campaign) => (
+                          <TableRow key={`${group.source}-${group.medium}-${campaign.campaign}`}>
+                            <TableCell>
+                              <PrimaryCell>
+                                <strong>{campaign.campaign}</strong>
+                                <span>{formatChannelLabel(group.source, group.medium)}</span>
+                              </PrimaryCell>
+                            </TableCell>
+                            <TableCell>{formatCurrency(campaign.spend)}</TableCell>
+                          </TableRow>
+                        ))}
+                        <TableRow>
+                          <TableCell className="font-semibold text-ink">Channel subtotal</TableCell>
+                          <TableCell className="font-semibold text-ink">{formatCurrency(group.subtotal)}</TableCell>
+                        </TableRow>
+                      </TableBody>
+                    </Table>
+                  </TableWrap>
+                </Card>
+              ))}
+            </div>
           </>
         </SectionState>
       </Panel>

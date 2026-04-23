@@ -377,6 +377,32 @@ export function createReportingDashboardProps(
       loading: false,
       error: null
     } satisfies AsyncSection<import('../dashboard/src/lib/api').OrderRow[]>,
+    spendDetailsSection: {
+      data: [
+        {
+          source: 'google',
+          medium: 'cpc',
+          channel: 'google / cpc',
+          subtotal: 7320,
+          campaigns: [
+            { campaign: 'Spring Search', spend: 5220 },
+            { campaign: 'Brand Search', spend: 2100 }
+          ]
+        },
+        {
+          source: 'meta',
+          medium: 'paid_social',
+          channel: 'meta / paid_social',
+          subtotal: 4056,
+          campaigns: [
+            { campaign: 'Prospecting Carousel', spend: 2556 },
+            { campaign: 'Retargeting Video', spend: 1500 }
+          ]
+        }
+      ],
+      loading: false,
+      error: null
+    } satisfies AsyncSection<import('../dashboard/src/lib/api').SpendDetailChannelGroup[]>,
     onOpenOrderDetails: noop
   };
 

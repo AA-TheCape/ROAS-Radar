@@ -204,6 +204,22 @@ test('authenticated dashboard, order details, and settings pass automated access
         loading: false,
         error: null
       },
+      spendDetailsSection: {
+        data: [
+          {
+            source: 'google',
+            medium: 'cpc',
+            channel: 'google / cpc',
+            subtotal: 7320,
+            campaigns: [
+              { campaign: 'Spring Search', spend: 5220 },
+              { campaign: 'Brand Search', spend: 2100 }
+            ]
+          }
+        ],
+        loading: false,
+        error: null
+      },
       onOpenOrderDetails() {}
     })
   );

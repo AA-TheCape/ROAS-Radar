@@ -83,6 +83,13 @@ type CampaignRow = {
   revenue: string | number;
 };
 
+type SpendDetailRow = {
+  source: string;
+  medium: string;
+  campaign: string;
+  spend: string | number;
+};
+
 type TimeseriesRow = {
   bucket: string;
   visits: string | number;
@@ -325,6 +332,79 @@ export function createReportingRouter(): Router {
           };
         }),
         nextCursor: null
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/spend-details', async (req, res, next) => {
+    try {
+      const input = parseInput(baseFiltersSchema, req.query);
+      const filters = buildMetricDimensionFilters(input.attributionModel, input.source, input.campaign);
+      const result = await query<SpendDetailRow>(
+        `
+          SELECT
+            source,
+            medium,
+            campaign,
+            COALESCE(SUM(spend), 0) AS spend
+          FROM daily_reporting_metrics
+          WHERE metric_date BETWEEN $1::date AND $2::date
+            AND spend > 0
+            ${filters.sql}
+          GROUP BY source, medium, campaign
+          ORDER BY spend DESC, source ASC, medium ASC, campaign ASC
+        `,
+        [input.startDate, input.endDate, ...filters.params]
+      );
+
+      const groups = result.rows.reduce<
+        Array<{
+          source: string;
+          medium: string;
+          channel: string;
+          subtotal: number;
+          campaigns: Array<{
+            campaign: string;
+            spend: number;
+          }>;
+        }>
+      >((accumulator, row) => {
+        const spend = Number(row.spend);
+        const source = row.source;
+        const medium = row.medium;
+        const channel = `${source} / ${medium}`;
+        const existingGroup = accumulator.find((group) => group.source === source && group.medium === medium);
+
+        if (existingGroup) {
+          existingGroup.subtotal += spend;
+          existingGroup.campaigns.push({
+            campaign: row.campaign,
+            spend
+          });
+          return accumulator;
+        }
+
+        accumulator.push({
+          source,
+          medium,
+          channel,
+          subtotal: spend,
+          campaigns: [
+            {
+              campaign: row.campaign,
+              spend
+            }
+          ]
+        });
+
+        return accumulator;
+      }, []);
+
+      res.json({
+        groups,
+        totalSpend: groups.reduce((sum, group) => sum + group.subtotal, 0)
       });
     } catch (error) {
       next(error);

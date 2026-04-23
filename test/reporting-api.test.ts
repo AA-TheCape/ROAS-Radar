@@ -161,6 +161,84 @@ test('reporting campaigns returns campaign rows sorted for dashboard tables', as
   }
 });
 
+test('reporting spend details return channel groups with campaign subtotals in descending order', async () => {
+  pool.query = (async (text: string, params?: unknown[]) => {
+    assert.match(text, /GROUP BY source, medium, campaign/);
+    assert.match(text, /AND spend > 0/);
+    assert.deepEqual(params, ['2026-04-01', '2026-04-10', 'last_touch']);
+
+    return {
+      rows: [
+        {
+          source: 'google',
+          medium: 'cpc',
+          campaign: 'spring-search',
+          spend: '1200.00'
+        },
+        {
+          source: 'google',
+          medium: 'cpc',
+          campaign: 'brand-search',
+          spend: '300.00'
+        },
+        {
+          source: 'meta',
+          medium: 'paid_social',
+          campaign: 'prospecting-us',
+          spend: '900.50'
+        }
+      ]
+    };
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(
+      server,
+      '/api/reporting/spend-details?startDate=2026-04-01&endDate=2026-04-10'
+    );
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(body, {
+      groups: [
+        {
+          source: 'google',
+          medium: 'cpc',
+          channel: 'google / cpc',
+          subtotal: 1500,
+          campaigns: [
+            {
+              campaign: 'spring-search',
+              spend: 1200
+            },
+            {
+              campaign: 'brand-search',
+              spend: 300
+            }
+          ]
+        },
+        {
+          source: 'meta',
+          medium: 'paid_social',
+          channel: 'meta / paid_social',
+          subtotal: 900.5,
+          campaigns: [
+            {
+              campaign: 'prospecting-us',
+              spend: 900.5
+            }
+          ]
+        }
+      ],
+      totalSpend: 2400.5
+    });
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
 test('reporting timeseries returns grouped points for the requested dimension', async () => {
   pool.query = (async (text: string, params?: unknown[]) => {
     assert.match(text, /SELECT\s+source AS bucket/);
@@ -217,8 +295,25 @@ test('reporting timeseries returns grouped points for the requested dimension', 
 
 test('reporting orders returns order-level attribution details for debugging', async () => {
   pool.query = (async (text: string, params?: unknown[]) => {
+    if (text.includes('INSERT INTO app_settings')) {
+      assert.deepEqual(params, ['America/Los_Angeles']);
+      return { rows: [], rowCount: 0 };
+    }
+
+    if (text.includes('SELECT reporting_timezone')) {
+      return {
+        rows: [
+          {
+            reporting_timezone: 'America/Los_Angeles',
+            updated_at: new Date('2026-04-01T00:00:00.000Z')
+          }
+        ],
+        rowCount: 1
+      };
+    }
+
     assert.match(text, /LEFT JOIN LATERAL/);
-    assert.deepEqual(params, ['2026-04-01', '2026-04-10', 'last_touch', 'facebook', 1]);
+    assert.deepEqual(params, ['2026-04-01', '2026-04-10', 'last_touch', 'facebook', 'America/Los_Angeles', 1]);
 
     return {
       rows: [
