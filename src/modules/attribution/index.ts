@@ -334,12 +334,21 @@ async function fetchExactSession(client: PoolClient, sessionId: string, reason: 
         s.initial_utm_term AS term,
         CASE
           WHEN s.initial_gclid IS NOT NULL THEN 'gclid'
+          WHEN s.initial_gbraid IS NOT NULL THEN 'gbraid'
+          WHEN s.initial_wbraid IS NOT NULL THEN 'wbraid'
           WHEN s.initial_fbclid IS NOT NULL THEN 'fbclid'
           WHEN s.initial_ttclid IS NOT NULL THEN 'ttclid'
           WHEN s.initial_msclkid IS NOT NULL THEN 'msclkid'
           ELSE NULL
         END AS click_id_type,
-        COALESCE(s.initial_gclid, s.initial_fbclid, s.initial_ttclid, s.initial_msclkid) AS click_id_value
+        COALESCE(
+          s.initial_gclid,
+          s.initial_gbraid,
+          s.initial_wbraid,
+          s.initial_fbclid,
+          s.initial_ttclid,
+          s.initial_msclkid
+        ) AS click_id_value
       FROM tracking_sessions s
       WHERE s.id = $1::uuid
       LIMIT 1
@@ -380,12 +389,21 @@ async function fetchJourneyByIdentity(
         s.initial_utm_term AS term,
         CASE
           WHEN s.initial_gclid IS NOT NULL THEN 'gclid'
+          WHEN s.initial_gbraid IS NOT NULL THEN 'gbraid'
+          WHEN s.initial_wbraid IS NOT NULL THEN 'wbraid'
           WHEN s.initial_fbclid IS NOT NULL THEN 'fbclid'
           WHEN s.initial_ttclid IS NOT NULL THEN 'ttclid'
           WHEN s.initial_msclkid IS NOT NULL THEN 'msclkid'
           ELSE NULL
         END AS click_id_type,
-        COALESCE(s.initial_gclid, s.initial_fbclid, s.initial_ttclid, s.initial_msclkid) AS click_id_value
+        COALESCE(
+          s.initial_gclid,
+          s.initial_gbraid,
+          s.initial_wbraid,
+          s.initial_fbclid,
+          s.initial_ttclid,
+          s.initial_msclkid
+        ) AS click_id_value
       FROM tracking_sessions s
       WHERE (
         ($1::uuid IS NOT NULL AND s.customer_identity_id = $1::uuid)
@@ -437,10 +455,14 @@ async function resolveAttributionJourney(client: PoolClient, order: AttributionO
           COALESCE(e.utm_term, s.initial_utm_term) AS term,
           CASE
             WHEN e.gclid IS NOT NULL THEN 'gclid'
+            WHEN e.gbraid IS NOT NULL THEN 'gbraid'
+            WHEN e.wbraid IS NOT NULL THEN 'wbraid'
             WHEN e.fbclid IS NOT NULL THEN 'fbclid'
             WHEN e.ttclid IS NOT NULL THEN 'ttclid'
             WHEN e.msclkid IS NOT NULL THEN 'msclkid'
             WHEN s.initial_gclid IS NOT NULL THEN 'gclid'
+            WHEN s.initial_gbraid IS NOT NULL THEN 'gbraid'
+            WHEN s.initial_wbraid IS NOT NULL THEN 'wbraid'
             WHEN s.initial_fbclid IS NOT NULL THEN 'fbclid'
             WHEN s.initial_ttclid IS NOT NULL THEN 'ttclid'
             WHEN s.initial_msclkid IS NOT NULL THEN 'msclkid'
@@ -448,10 +470,14 @@ async function resolveAttributionJourney(client: PoolClient, order: AttributionO
           END AS click_id_type,
           COALESCE(
             e.gclid,
+            e.gbraid,
+            e.wbraid,
             e.fbclid,
             e.ttclid,
             e.msclkid,
             s.initial_gclid,
+            s.initial_gbraid,
+            s.initial_wbraid,
             s.initial_fbclid,
             s.initial_ttclid,
             s.initial_msclkid
@@ -489,10 +515,14 @@ async function resolveAttributionJourney(client: PoolClient, order: AttributionO
           COALESCE(e.utm_term, s.initial_utm_term) AS term,
           CASE
             WHEN e.gclid IS NOT NULL THEN 'gclid'
+            WHEN e.gbraid IS NOT NULL THEN 'gbraid'
+            WHEN e.wbraid IS NOT NULL THEN 'wbraid'
             WHEN e.fbclid IS NOT NULL THEN 'fbclid'
             WHEN e.ttclid IS NOT NULL THEN 'ttclid'
             WHEN e.msclkid IS NOT NULL THEN 'msclkid'
             WHEN s.initial_gclid IS NOT NULL THEN 'gclid'
+            WHEN s.initial_gbraid IS NOT NULL THEN 'gbraid'
+            WHEN s.initial_wbraid IS NOT NULL THEN 'wbraid'
             WHEN s.initial_fbclid IS NOT NULL THEN 'fbclid'
             WHEN s.initial_ttclid IS NOT NULL THEN 'ttclid'
             WHEN s.initial_msclkid IS NOT NULL THEN 'msclkid'
@@ -500,10 +530,14 @@ async function resolveAttributionJourney(client: PoolClient, order: AttributionO
           END AS click_id_type,
           COALESCE(
             e.gclid,
+            e.gbraid,
+            e.wbraid,
             e.fbclid,
             e.ttclid,
             e.msclkid,
             s.initial_gclid,
+            s.initial_gbraid,
+            s.initial_wbraid,
             s.initial_fbclid,
             s.initial_ttclid,
             s.initial_msclkid

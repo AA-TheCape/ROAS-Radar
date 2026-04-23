@@ -26,6 +26,8 @@ const MAX_SCREEN_LENGTH = 64;
 const MAX_CLIENT_EVENT_ID_LENGTH = 128;
 const TRACKING_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365;
 const TRACKING_COOKIE_NAMES = ['_hba_id', 'roas_radar_session_id'] as const;
+const REQUEST_CONTEXT_INGESTION_SOURCES = ['request_query', 'request_referrer'] as const;
+const FALLBACK_BROWSER_DEDUPLICATION_WINDOW_MINUTES = 5;
 
 class TrackingHttpError extends Error {
   statusCode: number;
@@ -61,6 +63,19 @@ type NormalizedCampaignParameters = Record<
 type SessionBootstrapInput = z.infer<typeof sessionBootstrapSchema>;
 
 type TrackingEventInput = z.infer<typeof trackingEventSchema>;
+
+type TrackingIngestionSource = 'browser' | 'server' | (typeof REQUEST_CONTEXT_INGESTION_SOURCES)[number];
+
+type RequestContextAttributionCapture = {
+  input: AttributionCaptureV1;
+  ingestionSource: (typeof REQUEST_CONTEXT_INGESTION_SOURCES)[number];
+};
+
+type AttributionCaptureInsertOptions = {
+  eventType: string;
+  ingestionSource: TrackingIngestionSource;
+  rawPayload: unknown;
+};
 
 type ExistingTrackingEventRow = {
   id: string;
@@ -347,14 +362,66 @@ function sanitizeTrackingInput(input: TrackingEventInput): TrackingEventInput {
 }
 
 function parseSessionBootstrapInput(req: Request): SessionBootstrapInput {
-  const pageUrl = typeof req.query.pageUrl === 'string' ? req.query.pageUrl : null;
-  const landingUrl = typeof req.query.landingUrl === 'string' ? req.query.landingUrl : pageUrl;
+  const queryPageUrl = typeof req.query.pageUrl === 'string' ? req.query.pageUrl : null;
+  const queryLandingUrl = typeof req.query.landingUrl === 'string' ? req.query.landingUrl : queryPageUrl;
   const referrerUrl = typeof req.query.referrerUrl === 'string' ? req.query.referrerUrl : null;
+  const headerReferrerUrl = normalizeNullableUrl(req.header('referer'));
+  const pageUrl = normalizeNullableUrl(queryPageUrl) ?? headerReferrerUrl;
+  const landingUrl = normalizeNullableUrl(queryLandingUrl) ?? pageUrl;
 
   return {
-    pageUrl: normalizeNullableUrl(pageUrl),
-    landingUrl: normalizeNullableUrl(landingUrl),
+    pageUrl,
+    landingUrl,
     referrerUrl: normalizeNullableUrl(referrerUrl)
+  };
+}
+
+function buildRequestContextAttributionCapture(
+  req: Request,
+  sessionId: string,
+  bootstrap: SessionBootstrapInput,
+  occurredAt: Date
+): RequestContextAttributionCapture | null {
+  const ingestionSource =
+    typeof req.query.pageUrl === 'string' ||
+    typeof req.query.landingUrl === 'string' ||
+    typeof req.query.referrerUrl === 'string'
+      ? 'request_query'
+      : normalizeNullableUrl(req.header('referer'))
+        ? 'request_referrer'
+        : null;
+
+  const pageUrl = bootstrap.pageUrl ?? bootstrap.landingUrl;
+  const landingUrl = bootstrap.landingUrl ?? pageUrl;
+
+  if (!ingestionSource || !pageUrl || !landingUrl) {
+    return null;
+  }
+
+  const campaignParameters = parseCampaignParameters(landingUrl);
+
+  return {
+    ingestionSource,
+    input: normalizeAttributionCaptureV1({
+      schema_version: ATTRIBUTION_SCHEMA_VERSION,
+      roas_radar_session_id: sessionId,
+      occurred_at: occurredAt.toISOString(),
+      captured_at: occurredAt.toISOString(),
+      landing_url: landingUrl,
+      referrer_url: bootstrap.referrerUrl,
+      page_url: pageUrl,
+      utm_source: campaignParameters.utm_source,
+      utm_medium: campaignParameters.utm_medium,
+      utm_campaign: campaignParameters.utm_campaign,
+      utm_content: campaignParameters.utm_content,
+      utm_term: campaignParameters.utm_term,
+      gclid: campaignParameters.gclid,
+      gbraid: campaignParameters.gbraid,
+      wbraid: campaignParameters.wbraid,
+      fbclid: campaignParameters.fbclid,
+      ttclid: campaignParameters.ttclid,
+      msclkid: campaignParameters.msclkid
+    })
   };
 }
 
@@ -517,11 +584,18 @@ async function persistSessionBootstrap(
   req: Request,
   sessionId: string,
   bootstrap: SessionBootstrapInput
-): Promise<{ sessionId: string; createdAt: string; isNewSession: boolean }> {
+): Promise<{
+  sessionId: string;
+  createdAt: string;
+  isNewSession: boolean;
+  requestContextCaptured: boolean;
+  requestContextSource: (typeof REQUEST_CONTEXT_INGESTION_SOURCES)[number] | null;
+}> {
   const requestIp = resolveRequestIp(req);
   const userAgent = normalizeNullableString(req.header('user-agent'));
   const ipHash = hashIp(requestIp);
   const now = new Date();
+  const requestContextCapture = buildRequestContextAttributionCapture(req, sessionId, bootstrap, now);
 
   return withTransaction(async (client) => {
     const existing = await findSessionIdentity(sessionId, client);
@@ -613,10 +687,31 @@ async function persistSessionBootstrap(
       ]
     );
 
+    let requestContextCaptured = false;
+
+    if (requestContextCapture) {
+      const fallbackResult = await ingestAttributionCaptureWithClient(client, requestContextCapture.input, {
+        eventType: 'page_view',
+        ingestionSource: requestContextCapture.ingestionSource,
+        rawPayload: {
+          ...requestContextCapture.input,
+          ingestion_source: requestContextCapture.ingestionSource,
+          capture_origin: 'request_context'
+        }
+      });
+
+      requestContextCaptured = !fallbackResult.deduplicated;
+    }
+
+    const metricDate = formatDateInTimezone(now, await getReportingTimezone(client));
+    await refreshDailyReportingMetrics(client, [metricDate]);
+
     return {
       sessionId,
       createdAt: (existing?.created_at ?? now).toISOString(),
-      isNewSession: !existing
+      isNewSession: !existing,
+      requestContextCaptured,
+      requestContextSource: requestContextCapture?.ingestionSource ?? null
     };
   });
 }
@@ -652,6 +747,44 @@ async function findExistingTrackingEventByFingerprint(ingestionFingerprint: stri
       LIMIT 1
     `,
     [ingestionFingerprint]
+  );
+
+  return result.rows[0] ?? null;
+}
+
+async function findMatchingFallbackTrackingEvent(input: TrackingEventInput): Promise<ExistingTrackingEventRow | null> {
+  if (input.eventType !== 'page_view') {
+    return null;
+  }
+
+  const result = await query<ExistingTrackingEventRow>(
+    `
+      SELECT
+        id,
+        occurred_at,
+        ingested_at,
+        session_id
+      FROM tracking_events
+      WHERE session_id = $1::uuid
+        AND event_type = $2
+        AND page_url = $3
+        AND COALESCE(referrer_url, '') = COALESCE($4, '')
+        AND ingestion_source = ANY($5::text[])
+        AND occurred_at BETWEEN
+          $6::timestamptz - ($7::int * interval '1 minute')
+          AND $6::timestamptz + ($7::int * interval '1 minute')
+      ORDER BY ABS(EXTRACT(EPOCH FROM (occurred_at - $6::timestamptz))) ASC, occurred_at ASC
+      LIMIT 1
+    `,
+    [
+      input.sessionId,
+      input.eventType,
+      input.pageUrl,
+      input.referrerUrl ?? null,
+      [...REQUEST_CONTEXT_INGESTION_SOURCES],
+      new Date(input.occurredAt),
+      FALLBACK_BROWSER_DEDUPLICATION_WINDOW_MINUTES
+    ]
   );
 
   return result.rows[0] ?? null;
@@ -832,6 +965,7 @@ async function insertTrackingEvent(
           shopify_checkout_token,
           client_event_id,
           ingestion_fingerprint,
+          ingestion_source,
           ingested_at,
           raw_payload
         )
@@ -857,8 +991,9 @@ async function insertTrackingEvent(
           $19,
           $20,
           $21,
+          $22,
           now(),
-          $22::jsonb
+          $23::jsonb
         )
       `,
       [
@@ -883,8 +1018,10 @@ async function insertTrackingEvent(
         normalizeNullableString(input.shopifyCheckoutToken),
         input.clientEventId ?? null,
         ingestionFingerprint,
+        'browser',
         JSON.stringify({
           ...input,
+          ingestion_source: 'browser',
           marketingDimensions: canonicalDimensions
         })
       ]
@@ -908,6 +1045,34 @@ async function insertTrackingEvent(
 
 function hashAttributionCaptureFingerprint(input: AttributionCaptureV1): string {
   return createHash('sha256').update(JSON.stringify(input)).digest('hex');
+}
+
+function hashRequestContextCaptureFingerprint(
+  input: AttributionCaptureV1,
+  ingestionSource: (typeof REQUEST_CONTEXT_INGESTION_SOURCES)[number]
+): string {
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        roas_radar_session_id: input.roas_radar_session_id,
+        landing_url: input.landing_url,
+        referrer_url: input.referrer_url,
+        page_url: input.page_url,
+        utm_source: input.utm_source,
+        utm_medium: input.utm_medium,
+        utm_campaign: input.utm_campaign,
+        utm_content: input.utm_content,
+        utm_term: input.utm_term,
+        gclid: input.gclid,
+        gbraid: input.gbraid,
+        wbraid: input.wbraid,
+        fbclid: input.fbclid,
+        ttclid: input.ttclid,
+        msclkid: input.msclkid,
+        ingestion_source: ingestionSource
+      })
+    )
+    .digest('hex');
 }
 
 function buildCanonicalDimensionsFromCapture(input: AttributionCaptureV1) {
@@ -1106,7 +1271,8 @@ async function upsertSessionAttributionIdentityFromCapture(
 async function insertSessionAttributionTouchEvent(
   client: PoolClient,
   input: AttributionCaptureV1,
-  ingestionFingerprint: string
+  ingestionFingerprint: string,
+  options: AttributionCaptureInsertOptions
 ): Promise<{
   touchEvent: ExistingSessionAttributionTouchEventRow;
   deduplicated: boolean;
@@ -1140,7 +1306,6 @@ async function insertSessionAttributionTouchEvent(
         )
         VALUES (
           $1,
-          'server_capture',
           $2,
           $3,
           $4,
@@ -1156,14 +1321,16 @@ async function insertSessionAttributionTouchEvent(
           $14,
           $15,
           $16,
-          'server',
           $17,
-          $18::jsonb
+          $18,
+          $19,
+          $20::jsonb
         )
         RETURNING id, captured_at, roas_radar_session_id
       `,
       [
         input.roas_radar_session_id,
+        options.eventType,
         new Date(input.occurred_at),
         new Date(input.captured_at),
         input.page_url,
@@ -1179,8 +1346,9 @@ async function insertSessionAttributionTouchEvent(
         input.fbclid,
         input.ttclid,
         input.msclkid,
+        options.ingestionSource,
         ingestionFingerprint,
-        JSON.stringify(input)
+        JSON.stringify(options.rawPayload)
       ]
     );
 
@@ -1207,7 +1375,8 @@ async function insertSessionAttributionTouchEvent(
 async function insertTrackingEventFromAttributionCapture(
   client: PoolClient,
   input: AttributionCaptureV1,
-  ingestionFingerprint: string
+  ingestionFingerprint: string,
+  options: AttributionCaptureInsertOptions
 ): Promise<string> {
   const canonicalDimensions = buildCanonicalDimensionsFromCapture(input);
   const eventId = randomUUID();
@@ -1234,13 +1403,13 @@ async function insertTrackingEventFromAttributionCapture(
           ttclid,
           msclkid,
           ingestion_fingerprint,
+          ingestion_source,
           ingested_at,
           raw_payload
         )
         VALUES (
           $1,
           $2,
-          'server_capture',
           $3,
           $4,
           $5,
@@ -1256,13 +1425,16 @@ async function insertTrackingEventFromAttributionCapture(
           $15,
           $16,
           $17,
+          $18,
+          $19,
           now(),
-          $18::jsonb
+          $20::jsonb
         )
       `,
       [
         eventId,
         input.roas_radar_session_id,
+        options.eventType,
         new Date(input.occurred_at),
         input.page_url,
         input.referrer_url,
@@ -1278,11 +1450,8 @@ async function insertTrackingEventFromAttributionCapture(
         input.ttclid,
         input.msclkid,
         ingestionFingerprint,
-        JSON.stringify({
-          ...input,
-          schema_version: ATTRIBUTION_SCHEMA_VERSION,
-          ingestion_source: 'server'
-        })
+        options.ingestionSource,
+        JSON.stringify(options.rawPayload)
       ]
     );
   } catch (error) {
@@ -1489,6 +1658,17 @@ async function ingestTrackingEvent(
     }
   }
 
+  const matchingFallbackEvent = await findMatchingFallbackTrackingEvent(sanitizedInput);
+
+  if (matchingFallbackEvent) {
+    return {
+      eventId: matchingFallbackEvent.id,
+      ingestedAt: matchingFallbackEvent.ingested_at.toISOString(),
+      sessionId: matchingFallbackEvent.session_id,
+      deduplicated: true
+    };
+  }
+
   const duplicatePayload = await findExistingTrackingEventByFingerprint(ingestionFingerprint);
 
   if (duplicatePayload) {
@@ -1525,6 +1705,34 @@ async function ingestTrackingEvent(
   };
 }
 
+async function ingestAttributionCaptureWithClient(
+  client: PoolClient,
+  input: AttributionCaptureV1,
+  options: AttributionCaptureInsertOptions
+): Promise<{
+  touchEvent: ExistingSessionAttributionTouchEventRow;
+  deduplicated: boolean;
+  trackingEventId: string | null;
+}> {
+  const ingestionFingerprint =
+    options.ingestionSource === 'request_query' || options.ingestionSource === 'request_referrer'
+      ? hashRequestContextCaptureFingerprint(input, options.ingestionSource)
+      : hashAttributionCaptureFingerprint(input);
+
+  const touchEventInsert = await insertSessionAttributionTouchEvent(client, input, ingestionFingerprint, options);
+  let trackingEventId: string | null = null;
+
+  if (!touchEventInsert.deduplicated) {
+    trackingEventId = await insertTrackingEventFromAttributionCapture(client, input, ingestionFingerprint, options);
+  }
+
+  return {
+    touchEvent: touchEventInsert.touchEvent,
+    deduplicated: touchEventInsert.deduplicated,
+    trackingEventId
+  };
+}
+
 async function ingestAttributionCapture(
   input: AttributionCaptureV1
 ): Promise<{
@@ -1550,19 +1758,15 @@ async function ingestAttributionCapture(
   const result = await withTransaction(async (client) => {
     await upsertSessionAttributionIdentityFromCapture(input, client);
     await upsertTrackingSessionFromAttributionCapture(input, client);
-
-    const touchEventInsert = await insertSessionAttributionTouchEvent(client, input, ingestionFingerprint);
-    let trackingEventId: string | null = null;
-
-    if (!touchEventInsert.deduplicated) {
-      trackingEventId = await insertTrackingEventFromAttributionCapture(client, input, ingestionFingerprint);
-    }
-
-    return {
-      touchEvent: touchEventInsert.touchEvent,
-      deduplicated: touchEventInsert.deduplicated,
-      trackingEventId
-    };
+    return ingestAttributionCaptureWithClient(client, input, {
+      eventType: 'server_capture',
+      ingestionSource: 'server',
+      rawPayload: {
+        ...input,
+        schema_version: ATTRIBUTION_SCHEMA_VERSION,
+        ingestion_source: 'server'
+      }
+    });
   });
 
   return {
@@ -1588,7 +1792,9 @@ export function createTrackingRouter(): Router {
       appendTrackingSessionCookies(req, res, result.sessionId);
       logInfo(result.isNewSession ? 'tracking_session_bootstrap_created' : 'tracking_session_bootstrap_reused', {
         sessionId: result.sessionId,
-        isNewSession: result.isNewSession
+        isNewSession: result.isNewSession,
+        requestContextCaptured: result.requestContextCaptured,
+        requestContextSource: result.requestContextSource
       });
 
       res.status(200).json({

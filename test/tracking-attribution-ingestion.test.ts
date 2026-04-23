@@ -178,18 +178,20 @@ test('tracking attribution endpoint persists canonical touch events and mirrors 
 
     const touchInsert = queries.find((entry) => entry.text.includes('INSERT INTO session_attribution_touch_events'));
     assert.ok(touchInsert);
-    assert.equal(touchInsert.params?.[3], 'https://example.com/products/widget?gclid=ABC123');
-    assert.equal(touchInsert.params?.[5], 'google');
-    assert.equal(touchInsert.params?.[6], 'cpc');
-    assert.equal(touchInsert.params?.[11], 'GB-123');
-    assert.equal(touchInsert.params?.[12], 'WB-456');
+    assert.equal(touchInsert.params?.[4], 'https://example.com/products/widget?gclid=ABC123');
+    assert.equal(touchInsert.params?.[6], 'google');
+    assert.equal(touchInsert.params?.[7], 'cpc');
+    assert.equal(touchInsert.params?.[12], 'GB-123');
+    assert.equal(touchInsert.params?.[13], 'WB-456');
+    assert.equal(touchInsert.params?.[17], 'server');
 
     const trackingInsert = queries.find((entry) => entry.text.includes('INSERT INTO tracking_events'));
     assert.ok(trackingInsert);
-    assert.equal(trackingInsert.params?.[5], 'google');
-    assert.equal(trackingInsert.params?.[6], 'cpc');
-    assert.equal(trackingInsert.params?.[11], 'GB-123');
-    assert.equal(trackingInsert.params?.[12], 'WB-456');
+    assert.equal(trackingInsert.params?.[6], 'google');
+    assert.equal(trackingInsert.params?.[7], 'cpc');
+    assert.equal(trackingInsert.params?.[12], 'GB-123');
+    assert.equal(trackingInsert.params?.[13], 'WB-456');
+    assert.equal(trackingInsert.params?.[18], 'server');
   } finally {
     await closeServer(server);
   }

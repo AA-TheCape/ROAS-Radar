@@ -1,6 +1,7 @@
 const integrationTests = new Set([
   'attribution-e2e.integration.test.ts',
   'reporting-api.integration.test.ts',
+  'tracking-request-context-fallback.integration.test.ts',
   'tracking-retention.integration.test.ts'
 ]);
 
