@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { formatCurrency, formatNumber } from '../dashboard/src/lib/format';
 import {
   click,
   createOrderDetailsProps,
@@ -165,6 +166,173 @@ test('reporting dashboard summary cards keep spend visible alongside the overvie
     assert.match(text, /Spend/);
     assert.match(text, /\$11,376\.00/);
     assert.match(text, /Media/);
+  } finally {
+    mounted.cleanup();
+  }
+});
+
+test('reporting dashboard preserves key sections across qa target breakpoints', async () => {
+  const { default: ReportingDashboard } = await loadDashboardModule<
+    typeof import('../dashboard/src/components/ReportingDashboard')
+  >('dashboard/src/components/ReportingDashboard.tsx');
+
+  for (const width of [375, 768, 1024, 1440]) {
+    const mounted = await mountUi(h(ReportingDashboard, createReportingDashboardProps()), { width, height: 900 });
+
+    try {
+      const text = mounted.container.textContent ?? '';
+      assert.match(text, /Top control card/);
+      assert.match(text, /Overview command center/);
+      assert.match(text, /Top buckets/);
+      assert.match(text, /Lowest-performing buckets/);
+      assert.match(text, /Marketing spend detail/);
+      assert.match(text, /Grouped spend total/);
+    } finally {
+      mounted.cleanup();
+    }
+  }
+});
+
+test('reporting dashboard keeps overview, charts, and report tables internally consistent for qa totals', async () => {
+  const { default: ReportingDashboard } = await loadDashboardModule<
+    typeof import('../dashboard/src/components/ReportingDashboard')
+  >('dashboard/src/components/ReportingDashboard.tsx');
+
+  const props = createReportingDashboardProps({
+    summaryCards: [
+      { label: 'Visits', value: '1,500', detail: 'Apr 1 to Apr 3' },
+      { label: 'Orders', value: '12', detail: '0.8% conversion' },
+      { label: 'Revenue', value: '$1,200.00', detail: '2 ROAS' },
+      { label: 'Spend', value: '$600.00', detail: 'Apr 1 to Apr 3' },
+      { label: 'AOV', value: '$100.00', detail: '12 attributed orders' }
+    ],
+    summarySection: {
+      data: {
+        visits: 1500,
+        orders: 12,
+        revenue: 1200,
+        spend: 600,
+        conversionRate: 0.008,
+        roas: 2
+      },
+      loading: false,
+      error: null
+    },
+    campaignsSection: {
+      data: [
+        {
+          source: 'google',
+          medium: 'cpc',
+          campaign: 'Brand Search',
+          content: 'hero',
+          visits: 900,
+          orders: 7,
+          revenue: 700,
+          conversionRate: 0.0078
+        },
+        {
+          source: 'meta',
+          medium: 'paid_social',
+          campaign: 'Prospecting Video',
+          content: 'video',
+          visits: 600,
+          orders: 5,
+          revenue: 500,
+          conversionRate: 0.0083
+        }
+      ],
+      loading: false,
+      error: null
+    },
+    timeseriesSection: {
+      data: [
+        { date: '2026-04-01', visits: 500, orders: 4, revenue: 400 },
+        { date: '2026-04-02', visits: 450, orders: 3, revenue: 300 },
+        { date: '2026-04-03', visits: 550, orders: 5, revenue: 500 }
+      ],
+      loading: false,
+      error: null
+    },
+    ordersSection: {
+      data: [
+        {
+          shopifyOrderId: '1201',
+          processedAt: '2026-04-03T18:00:00.000Z',
+          source: 'google',
+          medium: 'cpc',
+          campaign: 'Brand Search',
+          totalPrice: 700,
+          attributionReason: 'last-touch'
+        },
+        {
+          shopifyOrderId: '1200',
+          processedAt: '2026-04-02T18:00:00.000Z',
+          source: 'meta',
+          medium: 'paid_social',
+          campaign: 'Prospecting Video',
+          totalPrice: 500,
+          attributionReason: 'linear'
+        }
+      ],
+      loading: false,
+      error: null
+    },
+    spendDetailsSection: {
+      data: [
+        {
+          source: 'google',
+          medium: 'cpc',
+          channel: 'google / cpc',
+          subtotal: 350,
+          campaigns: [
+            { campaign: 'Brand Search', spend: 200 },
+            { campaign: 'Non-Brand Search', spend: 150 }
+          ]
+        },
+        {
+          source: 'meta',
+          medium: 'paid_social',
+          channel: 'meta / paid_social',
+          subtotal: 250,
+          campaigns: [{ campaign: 'Prospecting Video', spend: 250 }]
+        }
+      ],
+      loading: false,
+      error: null
+    }
+  });
+
+  const summary = props.summarySection.data;
+  const campaigns = props.campaignsSection.data ?? [];
+  const points = props.timeseriesSection.data ?? [];
+  const orders = props.ordersSection.data ?? [];
+  const spendGroups = props.spendDetailsSection.data ?? [];
+
+  assert.ok(summary);
+  assert.equal(campaigns.reduce((sum, row) => sum + row.visits, 0), summary.visits);
+  assert.equal(campaigns.reduce((sum, row) => sum + row.orders, 0), summary.orders);
+  assert.equal(campaigns.reduce((sum, row) => sum + row.revenue, 0), summary.revenue);
+  assert.equal(points.reduce((sum, point) => sum + point.visits, 0), summary.visits);
+  assert.equal(points.reduce((sum, point) => sum + point.orders, 0), summary.orders);
+  assert.equal(points.reduce((sum, point) => sum + point.revenue, 0), summary.revenue);
+  assert.equal(orders.reduce((sum, row) => sum + row.totalPrice, 0), summary.revenue);
+  assert.equal(spendGroups.reduce((sum, group) => sum + group.subtotal, 0), summary.spend);
+  assert.equal(
+    spendGroups.reduce((sum, group) => sum + group.campaigns.reduce((groupSum, campaign) => groupSum + campaign.spend, 0), 0),
+    summary.spend
+  );
+
+  const mounted = await mountUi(h(ReportingDashboard, props), { width: 1440, height: 900 });
+
+  try {
+    const text = mounted.container.textContent ?? '';
+    assert.match(text, new RegExp(formatNumber(summary.visits)));
+    assert.match(text, new RegExp(formatNumber(summary.orders)));
+    assert.match(text, new RegExp(`\\${formatCurrency(summary.revenue)}`));
+    assert.match(text, new RegExp(`\\${formatCurrency(summary.spend)}`));
+    assert.match(text, /Brand Search/);
+    assert.match(text, /Prospecting Video/);
+    assert.match(text, /Channel subtotal/);
   } finally {
     mounted.cleanup();
   }
