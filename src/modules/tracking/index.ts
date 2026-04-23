@@ -7,6 +7,11 @@ import { z } from 'zod';
 import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
 import { logError, logInfo, logWarning } from '../../observability/index.js';
+import {
+  ATTRIBUTION_SCHEMA_VERSION,
+  normalizeAttributionCaptureV1,
+  type AttributionCaptureV1
+} from '../../../packages/attribution-schema/index.js';
 import { enqueueAttributionForTrackingTouchpoint } from '../attribution/index.js';
 import { buildCanonicalTouchpointDimensions } from '../marketing-dimensions/index.js';
 import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
@@ -67,6 +72,12 @@ type ExistingTrackingEventRow = {
 type SessionIdentityRow = {
   roas_radar_session_id: string;
   created_at: Date;
+};
+
+type ExistingSessionAttributionTouchEventRow = {
+  id: number;
+  captured_at: Date;
+  roas_radar_session_id: string;
 };
 
 const sanitizedString = (maxLength: number) =>
@@ -646,6 +657,25 @@ async function findExistingTrackingEventByFingerprint(ingestionFingerprint: stri
   return result.rows[0] ?? null;
 }
 
+async function findExistingSessionAttributionTouchEventByFingerprint(
+  ingestionFingerprint: string
+): Promise<ExistingSessionAttributionTouchEventRow | null> {
+  const result = await query<ExistingSessionAttributionTouchEventRow>(
+    `
+      SELECT
+        id,
+        captured_at,
+        roas_radar_session_id
+      FROM session_attribution_touch_events
+      WHERE ingestion_fingerprint = $1
+      LIMIT 1
+    `,
+    [ingestionFingerprint]
+  );
+
+  return result.rows[0] ?? null;
+}
+
 async function upsertTrackingSession(
   input: TrackingEventInput,
   occurredAt: Date,
@@ -876,6 +906,400 @@ async function insertTrackingEvent(
   return eventId;
 }
 
+function hashAttributionCaptureFingerprint(input: AttributionCaptureV1): string {
+  return createHash('sha256').update(JSON.stringify(input)).digest('hex');
+}
+
+function buildCanonicalDimensionsFromCapture(input: AttributionCaptureV1) {
+  return buildCanonicalTouchpointDimensions({
+    source: input.utm_source,
+    medium: input.utm_medium,
+    campaign: input.utm_campaign,
+    content: input.utm_content,
+    term: input.utm_term,
+    gclid: input.gclid,
+    gbraid: input.gbraid,
+    wbraid: input.wbraid,
+    fbclid: input.fbclid,
+    ttclid: input.ttclid,
+    msclkid: input.msclkid
+  });
+}
+
+async function upsertTrackingSessionFromAttributionCapture(
+  input: AttributionCaptureV1,
+  client: PoolClient
+): Promise<void> {
+  const canonicalDimensions = buildCanonicalDimensionsFromCapture(input);
+  const occurredAt = new Date(input.occurred_at);
+
+  await client.query(
+    `
+      INSERT INTO tracking_sessions (
+        id,
+        created_at,
+        updated_at,
+        first_seen_at,
+        last_seen_at,
+        landing_page,
+        referrer_url,
+        initial_utm_source,
+        initial_utm_medium,
+        initial_utm_campaign,
+        initial_utm_content,
+        initial_utm_term,
+        initial_gclid,
+        initial_gbraid,
+        initial_wbraid,
+        initial_fbclid,
+        initial_ttclid,
+        initial_msclkid
+      )
+      VALUES (
+        $1,
+        now(),
+        now(),
+        $2,
+        $2,
+        $3,
+        $4,
+        $5,
+        $6,
+        $7,
+        $8,
+        $9,
+        $10,
+        $11,
+        $12,
+        $13,
+        $14,
+        $15
+      )
+      ON CONFLICT (id)
+      DO UPDATE SET
+        updated_at = now(),
+        last_seen_at = GREATEST(tracking_sessions.last_seen_at, EXCLUDED.last_seen_at),
+        landing_page = COALESCE(tracking_sessions.landing_page, EXCLUDED.landing_page),
+        referrer_url = COALESCE(tracking_sessions.referrer_url, EXCLUDED.referrer_url),
+        initial_utm_source = COALESCE(tracking_sessions.initial_utm_source, EXCLUDED.initial_utm_source),
+        initial_utm_medium = COALESCE(tracking_sessions.initial_utm_medium, EXCLUDED.initial_utm_medium),
+        initial_utm_campaign = COALESCE(tracking_sessions.initial_utm_campaign, EXCLUDED.initial_utm_campaign),
+        initial_utm_content = COALESCE(tracking_sessions.initial_utm_content, EXCLUDED.initial_utm_content),
+        initial_utm_term = COALESCE(tracking_sessions.initial_utm_term, EXCLUDED.initial_utm_term),
+        initial_gclid = COALESCE(tracking_sessions.initial_gclid, EXCLUDED.initial_gclid),
+        initial_gbraid = COALESCE(tracking_sessions.initial_gbraid, EXCLUDED.initial_gbraid),
+        initial_wbraid = COALESCE(tracking_sessions.initial_wbraid, EXCLUDED.initial_wbraid),
+        initial_fbclid = COALESCE(tracking_sessions.initial_fbclid, EXCLUDED.initial_fbclid),
+        initial_ttclid = COALESCE(tracking_sessions.initial_ttclid, EXCLUDED.initial_ttclid),
+        initial_msclkid = COALESCE(tracking_sessions.initial_msclkid, EXCLUDED.initial_msclkid)
+    `,
+    [
+      input.roas_radar_session_id,
+      occurredAt,
+      input.landing_url,
+      input.referrer_url,
+      canonicalDimensions.source,
+      canonicalDimensions.medium,
+      canonicalDimensions.campaign,
+      canonicalDimensions.content,
+      canonicalDimensions.term,
+      input.gclid,
+      input.gbraid,
+      input.wbraid,
+      input.fbclid,
+      input.ttclid,
+      input.msclkid
+    ]
+  );
+}
+
+async function upsertSessionAttributionIdentityFromCapture(
+  input: AttributionCaptureV1,
+  client: PoolClient
+): Promise<void> {
+  const canonicalDimensions = buildCanonicalDimensionsFromCapture(input);
+  const capturedAt = new Date(input.captured_at);
+
+  await client.query(
+    `
+      INSERT INTO session_attribution_identities (
+        roas_radar_session_id,
+        created_at,
+        updated_at,
+        first_captured_at,
+        last_captured_at,
+        landing_url,
+        referrer_url,
+        initial_utm_source,
+        initial_utm_medium,
+        initial_utm_campaign,
+        initial_utm_content,
+        initial_utm_term,
+        initial_gclid,
+        initial_gbraid,
+        initial_wbraid,
+        initial_fbclid,
+        initial_ttclid,
+        initial_msclkid
+      )
+      VALUES (
+        $1,
+        now(),
+        now(),
+        $2,
+        $2,
+        $3,
+        $4,
+        $5,
+        $6,
+        $7,
+        $8,
+        $9,
+        $10,
+        $11,
+        $12,
+        $13,
+        $14,
+        $15
+      )
+      ON CONFLICT (roas_radar_session_id)
+      DO UPDATE SET
+        updated_at = now(),
+        last_captured_at = GREATEST(
+          session_attribution_identities.last_captured_at,
+          EXCLUDED.last_captured_at
+        ),
+        landing_url = COALESCE(session_attribution_identities.landing_url, EXCLUDED.landing_url),
+        referrer_url = COALESCE(session_attribution_identities.referrer_url, EXCLUDED.referrer_url),
+        initial_utm_source = COALESCE(session_attribution_identities.initial_utm_source, EXCLUDED.initial_utm_source),
+        initial_utm_medium = COALESCE(session_attribution_identities.initial_utm_medium, EXCLUDED.initial_utm_medium),
+        initial_utm_campaign = COALESCE(session_attribution_identities.initial_utm_campaign, EXCLUDED.initial_utm_campaign),
+        initial_utm_content = COALESCE(session_attribution_identities.initial_utm_content, EXCLUDED.initial_utm_content),
+        initial_utm_term = COALESCE(session_attribution_identities.initial_utm_term, EXCLUDED.initial_utm_term),
+        initial_gclid = COALESCE(session_attribution_identities.initial_gclid, EXCLUDED.initial_gclid),
+        initial_gbraid = COALESCE(session_attribution_identities.initial_gbraid, EXCLUDED.initial_gbraid),
+        initial_wbraid = COALESCE(session_attribution_identities.initial_wbraid, EXCLUDED.initial_wbraid),
+        initial_fbclid = COALESCE(session_attribution_identities.initial_fbclid, EXCLUDED.initial_fbclid),
+        initial_ttclid = COALESCE(session_attribution_identities.initial_ttclid, EXCLUDED.initial_ttclid),
+        initial_msclkid = COALESCE(session_attribution_identities.initial_msclkid, EXCLUDED.initial_msclkid)
+    `,
+    [
+      input.roas_radar_session_id,
+      capturedAt,
+      input.landing_url,
+      input.referrer_url,
+      canonicalDimensions.source,
+      canonicalDimensions.medium,
+      canonicalDimensions.campaign,
+      canonicalDimensions.content,
+      canonicalDimensions.term,
+      input.gclid,
+      input.gbraid,
+      input.wbraid,
+      input.fbclid,
+      input.ttclid,
+      input.msclkid
+    ]
+  );
+}
+
+async function insertSessionAttributionTouchEvent(
+  client: PoolClient,
+  input: AttributionCaptureV1,
+  ingestionFingerprint: string
+): Promise<{
+  touchEvent: ExistingSessionAttributionTouchEventRow;
+  deduplicated: boolean;
+}> {
+  const canonicalDimensions = buildCanonicalDimensionsFromCapture(input);
+
+  try {
+    const result = await client.query<ExistingSessionAttributionTouchEventRow>(
+      `
+        INSERT INTO session_attribution_touch_events (
+          roas_radar_session_id,
+          event_type,
+          occurred_at,
+          captured_at,
+          page_url,
+          referrer_url,
+          utm_source,
+          utm_medium,
+          utm_campaign,
+          utm_content,
+          utm_term,
+          gclid,
+          gbraid,
+          wbraid,
+          fbclid,
+          ttclid,
+          msclkid,
+          ingestion_source,
+          ingestion_fingerprint,
+          raw_payload
+        )
+        VALUES (
+          $1,
+          'server_capture',
+          $2,
+          $3,
+          $4,
+          $5,
+          $6,
+          $7,
+          $8,
+          $9,
+          $10,
+          $11,
+          $12,
+          $13,
+          $14,
+          $15,
+          $16,
+          'server',
+          $17,
+          $18::jsonb
+        )
+        RETURNING id, captured_at, roas_radar_session_id
+      `,
+      [
+        input.roas_radar_session_id,
+        new Date(input.occurred_at),
+        new Date(input.captured_at),
+        input.page_url,
+        input.referrer_url,
+        canonicalDimensions.source,
+        canonicalDimensions.medium,
+        canonicalDimensions.campaign,
+        canonicalDimensions.content,
+        canonicalDimensions.term,
+        input.gclid,
+        input.gbraid,
+        input.wbraid,
+        input.fbclid,
+        input.ttclid,
+        input.msclkid,
+        ingestionFingerprint,
+        JSON.stringify(input)
+      ]
+    );
+
+    return {
+      touchEvent: result.rows[0],
+      deduplicated: false
+    };
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === '23505') {
+      const existing = await findExistingSessionAttributionTouchEventByFingerprint(ingestionFingerprint);
+
+      if (existing) {
+        return {
+          touchEvent: existing,
+          deduplicated: true
+        };
+      }
+    }
+
+    throw error;
+  }
+}
+
+async function insertTrackingEventFromAttributionCapture(
+  client: PoolClient,
+  input: AttributionCaptureV1,
+  ingestionFingerprint: string
+): Promise<string> {
+  const canonicalDimensions = buildCanonicalDimensionsFromCapture(input);
+  const eventId = randomUUID();
+
+  try {
+    await client.query(
+      `
+        INSERT INTO tracking_events (
+          id,
+          session_id,
+          event_type,
+          occurred_at,
+          page_url,
+          referrer_url,
+          utm_source,
+          utm_medium,
+          utm_campaign,
+          utm_content,
+          utm_term,
+          gclid,
+          gbraid,
+          wbraid,
+          fbclid,
+          ttclid,
+          msclkid,
+          ingestion_fingerprint,
+          ingested_at,
+          raw_payload
+        )
+        VALUES (
+          $1,
+          $2,
+          'server_capture',
+          $3,
+          $4,
+          $5,
+          $6,
+          $7,
+          $8,
+          $9,
+          $10,
+          $11,
+          $12,
+          $13,
+          $14,
+          $15,
+          $16,
+          $17,
+          now(),
+          $18::jsonb
+        )
+      `,
+      [
+        eventId,
+        input.roas_radar_session_id,
+        new Date(input.occurred_at),
+        input.page_url,
+        input.referrer_url,
+        canonicalDimensions.source,
+        canonicalDimensions.medium,
+        canonicalDimensions.campaign,
+        canonicalDimensions.content,
+        canonicalDimensions.term,
+        input.gclid,
+        input.gbraid,
+        input.wbraid,
+        input.fbclid,
+        input.ttclid,
+        input.msclkid,
+        ingestionFingerprint,
+        JSON.stringify({
+          ...input,
+          schema_version: ATTRIBUTION_SCHEMA_VERSION,
+          ingestion_source: 'server'
+        })
+      ]
+    );
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === '23505') {
+      const existing = await findExistingTrackingEventByFingerprint(ingestionFingerprint);
+
+      if (existing) {
+        return existing.id;
+      }
+    }
+
+    throw error;
+  }
+
+  return eventId;
+}
+
 function resolveRequestIp(req: Request): string | undefined {
   const forwardedFor = req.header('x-forwarded-for');
 
@@ -995,9 +1419,40 @@ function parseTrackingRequestBody(body: TrackingRequestBody): Record<string, unk
   return body;
 }
 
+function parseInput<TSchema extends z.ZodTypeAny>(schema: TSchema, input: unknown): z.infer<TSchema> {
+  try {
+    return schema.parse(input);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      throw new TrackingHttpError(400, 'invalid_request', 'Invalid tracking request', error.flatten());
+    }
+
+    throw error;
+  }
+}
+
+function parseAttributionCaptureRequestBody(body: TrackingRequestBody): AttributionCaptureV1 {
+  const payload = parseTrackingRequestBody(body);
+
+  try {
+    return normalizeAttributionCaptureV1(payload);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      throw new TrackingHttpError(400, 'invalid_request', 'Invalid attribution capture payload', error.flatten());
+    }
+
+    throw error;
+  }
+}
+
 function enforceRateLimit(req: Request): void {
   const requestIp = resolveRequestIp(req);
-  const sessionHint = typeof req.body?.sessionId === 'string' ? req.body.sessionId : 'anonymous';
+  const sessionHint =
+    typeof req.body?.sessionId === 'string'
+      ? req.body.sessionId
+      : typeof req.body?.roas_radar_session_id === 'string'
+        ? req.body.roas_radar_session_id
+        : 'anonymous';
   const key = createHash('sha256').update(`${requestIp ?? 'unknown'}:${sessionHint}`).digest('hex');
   const result = trackingRateLimiter.check(key);
 
@@ -1070,6 +1525,55 @@ async function ingestTrackingEvent(
   };
 }
 
+async function ingestAttributionCapture(
+  input: AttributionCaptureV1
+): Promise<{
+  touchEventId: number;
+  trackingEventId: string | null;
+  capturedAt: string;
+  sessionId: string;
+  deduplicated: boolean;
+}> {
+  const ingestionFingerprint = hashAttributionCaptureFingerprint(input);
+  const existingTouchEvent = await findExistingSessionAttributionTouchEventByFingerprint(ingestionFingerprint);
+
+  if (existingTouchEvent) {
+    return {
+      touchEventId: existingTouchEvent.id,
+      trackingEventId: null,
+      capturedAt: existingTouchEvent.captured_at.toISOString(),
+      sessionId: existingTouchEvent.roas_radar_session_id,
+      deduplicated: true
+    };
+  }
+
+  const result = await withTransaction(async (client) => {
+    await upsertSessionAttributionIdentityFromCapture(input, client);
+    await upsertTrackingSessionFromAttributionCapture(input, client);
+
+    const touchEventInsert = await insertSessionAttributionTouchEvent(client, input, ingestionFingerprint);
+    let trackingEventId: string | null = null;
+
+    if (!touchEventInsert.deduplicated) {
+      trackingEventId = await insertTrackingEventFromAttributionCapture(client, input, ingestionFingerprint);
+    }
+
+    return {
+      touchEvent: touchEventInsert.touchEvent,
+      deduplicated: touchEventInsert.deduplicated,
+      trackingEventId
+    };
+  });
+
+  return {
+    touchEventId: result.touchEvent.id,
+    trackingEventId: result.trackingEventId,
+    capturedAt: result.touchEvent.captured_at.toISOString(),
+    sessionId: result.touchEvent.roas_radar_session_id,
+    deduplicated: result.deduplicated
+  };
+}
+
 export function createTrackingRouter(): Router {
   const router = Router();
 
@@ -1110,6 +1614,46 @@ export function createTrackingRouter(): Router {
     }
   });
 
+  router.post('/attribution', async (req, res, next) => {
+    try {
+      enforceSupportedContentType(req);
+      enforceAllowedOrigin(req);
+      enforceRateLimit(req);
+
+      const input = parseAttributionCaptureRequestBody(req.body as TrackingRequestBody);
+      const result = await ingestAttributionCapture(input);
+
+      logInfo(result.deduplicated ? 'tracking_attribution_ingest_duplicate' : 'tracking_attribution_ingest_accepted', {
+        sessionId: result.sessionId,
+        touchEventId: result.touchEventId,
+        deduplicated: result.deduplicated
+      });
+
+      res.status(200).json({
+        ok: true,
+        sessionId: result.sessionId,
+        touchEventId: result.touchEventId,
+        trackingEventId: result.trackingEventId,
+        capturedAt: result.capturedAt,
+        deduplicated: result.deduplicated
+      });
+    } catch (error) {
+      if (error instanceof TrackingHttpError) {
+        logWarning('tracking_attribution_ingest_rejected', {
+          code: error.code,
+          statusCode: error.statusCode,
+          details: error.details
+        });
+      } else {
+        logError('tracking_attribution_ingest_failed', error, {
+          path: req.baseUrl ? `${req.baseUrl}${req.path}` : req.path
+        });
+      }
+
+      next(error);
+    }
+  });
+
   router.post('/', async (req, res, next) => {
     try {
       enforceSupportedContentType(req);
@@ -1117,7 +1661,7 @@ export function createTrackingRouter(): Router {
       enforceRateLimit(req);
 
       const body = parseTrackingRequestBody(req.body as TrackingRequestBody);
-      const input = trackingEventSchema.parse(body);
+      const input = parseInput(trackingEventSchema, body);
       const result = await ingestTrackingEvent(input, resolveRequestIp(req));
       logInfo(result.deduplicated ? 'tracking_ingest_duplicate' : 'tracking_ingest_accepted', {
         sessionId: result.sessionId,
