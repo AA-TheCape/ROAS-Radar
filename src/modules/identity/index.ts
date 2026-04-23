@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 
-import { type PoolClient } from 'pg';
+import type { PoolClient } from 'pg';
 
 type IdentityRecord = {
   id: string;

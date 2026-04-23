@@ -279,9 +279,9 @@ export function Skeleton({
       )}
       aria-hidden="true"
     >
-      {Array.from({ length: lines }).map((_, index) => (
+      {Array.from({ length: lines }, (_, index) => `skeleton-line-${index}`).map((lineKey, index) => (
         <div
-          key={index}
+          key={lineKey}
           className={cx(
             'h-4 animate-pulse rounded-pill bg-gradient-to-r from-canvas-tint via-surface to-canvas-tint',
             index === 0 && 'w-1/2',
@@ -385,7 +385,7 @@ export function Tooltip({
   const tooltipId = useId();
 
   return (
-    <span className={cx('group relative inline-flex', className)} tabIndex={0} aria-describedby={tooltipId}>
+    <span className={cx('group relative inline-flex', className)} aria-describedby={tooltipId}>
       {children}
       <span
         id={tooltipId}
@@ -415,7 +415,7 @@ export function Modal({
 }) {
   const titleId = useId();
   const descriptionId = useId();
-  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const dialogRef = useRef<HTMLDialogElement | null>(null);
   const lastFocusedElementRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
@@ -482,16 +482,32 @@ export function Modal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-ink/30 px-4 backdrop-blur-sm" onClick={onClose}>
+    <dialog
+      ref={dialogRef}
+      className="fixed inset-0 z-50 m-0 grid h-full max-h-none w-full max-w-none place-items-center border-0 bg-ink/30 px-4 backdrop-blur-sm"
+      open
+      aria-labelledby={titleId}
+      aria-describedby={description ? descriptionId : undefined}
+      onClick={onClose}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          onClose();
+        }
+      }}
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+    >
       <div
-        ref={dialogRef}
         className="w-full max-w-xl rounded-shell border border-line/80 bg-surface p-panel shadow-lift"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        aria-describedby={description ? descriptionId : undefined}
         tabIndex={-1}
         onClick={(event) => event.stopPropagation()}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.stopPropagation();
+          }
+        }}
       >
         <div className="flex items-start justify-between gap-3">
           <div>
@@ -516,7 +532,7 @@ export function Modal({
         <div className="mt-5">{children}</div>
         {footer ? <div className="mt-6 flex flex-wrap justify-end gap-3">{footer}</div> : null}
       </div>
-    </div>
+    </dialog>
   );
 }
 

@@ -26,7 +26,6 @@ function createDom(markup = '<!doctype html><html><body></body></html>') {
   Object.assign(globalThis, {
     window: dom.window,
     document: dom.window.document,
-    navigator: dom.window.navigator,
     HTMLElement: dom.window.HTMLElement,
     SVGElement: dom.window.SVGElement,
     Node: dom.window.Node,
@@ -35,6 +34,10 @@ function createDom(markup = '<!doctype html><html><body></body></html>') {
     getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
     requestAnimationFrame: (callback: FrameRequestCallback) => setTimeout(callback, 0),
     cancelAnimationFrame: (handle: number) => clearTimeout(handle)
+  });
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: dom.window.navigator
   });
   Object.defineProperty(globalThis, 'localStorage', {
     configurable: true,
@@ -458,7 +461,7 @@ test('modal traps focus, closes on escape, and restores the previous focus targe
   });
   await new Promise((resolve) => setTimeout(resolve, 0));
 
-  const dialog = dom.window.document.querySelector('[role="dialog"]') as HTMLDivElement | null;
+  const dialog = dom.window.document.querySelector('dialog') as HTMLDialogElement | null;
   assert.ok(dialog, 'dialog should render');
   const closeButton = dom.window.document.querySelector('[aria-label="Close modal"]') as HTMLButtonElement | null;
   const saveButton = Array.from(dom.window.document.querySelectorAll('button')).find(

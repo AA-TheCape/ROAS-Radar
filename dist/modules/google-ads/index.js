@@ -175,8 +175,8 @@ async function upsertGoogleAdsSettings(payload) {
     const developerTokenProvided = typeof payload.developerToken === 'string' && payload.developerToken.trim().length > 0;
     const normalizedScopes = normalizeGoogleAdsScopes(payload.appScopes);
     const existing = await getStoredGoogleAdsSettings();
-    const nextClientSecret = clientSecretProvided ? payload.clientSecret.trim() : existing?.client_secret ?? '';
-    const nextDeveloperToken = developerTokenProvided ? payload.developerToken.trim() : existing?.developer_token ?? '';
+    const nextClientSecret = clientSecretProvided ? (payload.clientSecret ?? '').trim() : existing?.client_secret ?? '';
+    const nextDeveloperToken = developerTokenProvided ? (payload.developerToken ?? '').trim() : existing?.developer_token ?? '';
     await query(`
       DELETE FROM google_ads_settings
     `);
@@ -1199,6 +1199,11 @@ export function createGoogleAdsPublicRouter() {
             }
             const oauthState = await consumeOAuthState(payload.state);
             const tokenPayload = await exchangeAuthorizationCode(config, payload.code);
+            const refreshToken = tokenPayload.refresh_token;
+            const accessToken = tokenPayload.access_token;
+            if (!refreshToken || !accessToken) {
+                throw new GoogleAdsHttpError(502, 'google_ads_oauth_token_missing', 'Google Ads OAuth response did not include the required access and refresh tokens');
+            }
             const connectionForValidation = {
                 id: 0,
                 customer_id: oauthState.customer_id,
@@ -1206,14 +1211,14 @@ export function createGoogleAdsPublicRouter() {
                 developer_token: config.developerToken,
                 client_id: config.clientId,
                 client_secret: config.clientSecret,
-                refresh_token: tokenPayload.refresh_token,
+                refresh_token: refreshToken,
                 token_scopes: config.appScopes,
                 last_refreshed_at: null,
                 status: 'active',
                 customer_descriptive_name: null,
                 currency_code: null
             };
-            const customer = await fetchCustomerMetadata(connectionForValidation, tokenPayload.access_token);
+            const customer = await fetchCustomerMetadata(connectionForValidation, accessToken);
             if (customer.customerId !== oauthState.customer_id) {
                 throw new GoogleAdsHttpError(400, 'google_ads_customer_mismatch', `Provided customerId ${oauthState.customer_id} does not match resolved customer ${customer.customerId}`);
             }
@@ -1223,7 +1228,7 @@ export function createGoogleAdsPublicRouter() {
                 developerToken: config.developerToken,
                 clientId: config.clientId,
                 clientSecret: config.clientSecret,
-                refreshToken: tokenPayload.refresh_token,
+                refreshToken,
                 customer
             });
             const connection = await getLatestGoogleAdsConnection();

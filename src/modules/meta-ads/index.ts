@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { Router } from 'express';
-import { type PoolClient } from 'pg';
+import type { PoolClient } from 'pg';
 import { z } from 'zod';
 
 import { env } from '../../config/env.js';
@@ -354,7 +354,7 @@ async function upsertMetaAdsSettings(payload: z.infer<typeof metaAdsConfigUpdate
   const secretProvided = typeof payload.appSecret === 'string' && payload.appSecret.trim().length > 0;
   const normalizedScopes = normalizeMetaAdsScopes(payload.appScopes);
   const existing = await getStoredMetaAdsSettings();
-  const nextSecret = secretProvided ? payload.appSecret!.trim() : existing?.app_secret ?? '';
+  const nextSecret = secretProvided ? (payload.appSecret ?? '').trim() : existing?.app_secret ?? '';
 
   await query(
     `

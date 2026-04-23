@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { type AddressInfo } from 'node:net';
+import type { AddressInfo } from 'node:net';
 import test from 'node:test';
 
 process.env.DATABASE_URL ??= 'postgres://postgres:postgres@localhost:5432/roas_radar_test';

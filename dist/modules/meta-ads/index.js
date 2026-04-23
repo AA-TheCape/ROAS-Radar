@@ -167,7 +167,7 @@ async function upsertMetaAdsSettings(payload) {
     const secretProvided = typeof payload.appSecret === 'string' && payload.appSecret.trim().length > 0;
     const normalizedScopes = normalizeMetaAdsScopes(payload.appScopes);
     const existing = await getStoredMetaAdsSettings();
-    const nextSecret = secretProvided ? payload.appSecret.trim() : existing?.app_secret ?? '';
+    const nextSecret = secretProvided ? (payload.appSecret ?? '').trim() : existing?.app_secret ?? '';
     await query(`
       DELETE FROM meta_ads_settings
     `);

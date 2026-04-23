@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 
 import { type Request, Router } from 'express';
-import { type PoolClient } from 'pg';
+import type { PoolClient } from 'pg';
 import { z } from 'zod';
 
 import { env } from '../../config/env.js';

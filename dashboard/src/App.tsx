@@ -396,6 +396,8 @@ function useDashboardData(
   });
 
   useEffect(() => {
+    void refreshKey;
+
     if (!enabled) {
       setState({
         summary: {
@@ -612,7 +614,7 @@ function App() {
   const dashboard = useDashboardData(appliedFilters, groupBy, authState.user !== null, dashboardRefreshKey);
   const reportingTimezone = appSettings.data?.reportingTimezone ?? settingsForm.reportingTimezone ?? DEFAULT_REPORTING_TIMEZONE;
 
-  async function loadAppSettings() {
+  const loadAppSettings = useCallback(async () => {
     setAppSettings(createLoadingSection());
 
     try {
@@ -629,9 +631,9 @@ function App() {
       const message = error instanceof Error ? error.message : 'Failed to load dashboard settings';
       setAppSettings(createErroredSection(message));
     }
-  }
+  }, []);
 
-  async function loadConnections() {
+  const loadConnections = useCallback(async () => {
     setShopifyConnection(createLoadingSection());
     setMetaConnection(createLoadingSection());
     setGoogleConnection(createLoadingSection());
@@ -665,7 +667,7 @@ function App() {
       setMetaConnection(createErroredSection(message));
       setGoogleConnection(createErroredSection(message));
     }
-  }
+  }, []);
 
   useEffect(() => {
     if (authState.user) {
@@ -678,7 +680,7 @@ function App() {
     setShopifyConnection(createLoadingSection());
     setMetaConnection(createLoadingSection());
     setGoogleConnection(createLoadingSection());
-  }, [authState.user]);
+  }, [authState.user, loadAppSettings, loadConnections]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -762,7 +764,7 @@ function App() {
     });
   }, []);
 
-  async function loadUsers() {
+  const loadUsers = useCallback(async () => {
     if (!authState.user?.isAdmin) {
       setUsersSection(createResolvedSection([]));
       return;
@@ -776,7 +778,7 @@ function App() {
     } catch (error) {
       setUsersSection(createErroredSection(error instanceof Error ? error.message : 'Failed to load users'));
     }
-  }
+  }, [authState.user?.isAdmin]);
 
   useEffect(() => {
     if (authState.user?.isAdmin) {
@@ -789,7 +791,7 @@ function App() {
       loading: false,
       error: null
     });
-  }, [authState.user]);
+  }, [authState.user, loadUsers]);
 
   const summaryCards = useMemo(() => {
     const totals = dashboard.summary.data;

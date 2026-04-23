@@ -405,6 +405,8 @@ const DashboardControlPanel = memo(function DashboardControlPanel({
 }) {
   const [dateFeedback, setDateFeedback] = useState<string | null>(null);
   const preserveDateFeedbackRef = useRef(false);
+  const dateRangeKey = `${filters.startDate}:${filters.endDate}`;
+  const previousDateRangeKeyRef = useRef(dateRangeKey);
   const scopeLabel = useMemo(
     () =>
       (filters.source ?? '').trim() || (filters.campaign ?? '').trim()
@@ -418,13 +420,19 @@ const DashboardControlPanel = memo(function DashboardControlPanel({
   );
 
   useEffect(() => {
+    if (previousDateRangeKeyRef.current === dateRangeKey) {
+      return;
+    }
+
+    previousDateRangeKeyRef.current = dateRangeKey;
+
     if (preserveDateFeedbackRef.current) {
       preserveDateFeedbackRef.current = false;
       return;
     }
 
     setDateFeedback(null);
-  }, [filters.endDate, filters.startDate]);
+  }, [dateRangeKey]);
 
   function handleDateChange(field: DateField, value: string) {
     const { nextFilters, feedback } = applyDateRangeChange(filters, field, value);
@@ -552,9 +560,9 @@ const DashboardControlPanel = memo(function DashboardControlPanel({
             </div>
 
             {dateFeedback ? (
-              <p className="text-[0.85rem] font-medium text-danger" role="status" aria-live="polite">
+              <output className="text-[0.85rem] font-medium text-danger" aria-live="polite">
                 {dateFeedback}
-              </p>
+              </output>
             ) : null}
           </div>
         </div>

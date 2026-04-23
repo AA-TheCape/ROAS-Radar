@@ -4,12 +4,16 @@ import test from 'node:test';
 
 process.env.DATABASE_URL ??= 'postgres://postgres:postgres@127.0.0.1:5432/roas_radar';
 process.env.REPORTING_API_TOKEN = 'test-reporting-token';
+process.env.SHOPIFY_APP_API_SECRET ??= 'test-app-secret';
+process.env.SHOPIFY_WEBHOOK_SECRET ??= 'test-webhook-secret';
 
 const poolModule = await import('../src/db/pool.js');
 const serverModule = await import('../src/server.js');
+const harnessModule = await import('./e2e-harness.js');
 
 const { pool } = poolModule;
 const { closeServer, createServer } = serverModule;
+const { resetE2EDatabase } = harnessModule;
 
 function buildHeaders(): Record<string, string> {
   return {
@@ -28,7 +32,7 @@ async function requestJson(server: ReturnType<typeof createServer>, path: string
 }
 
 test('reporting summary reads persisted daily aggregates from PostgreSQL', async () => {
-  await pool.query('TRUNCATE daily_reporting_metrics');
+  await resetE2EDatabase();
   await pool.query(
     `INSERT INTO daily_reporting_metrics (
       metric_date,
@@ -78,12 +82,12 @@ test('reporting summary reads persisted daily aggregates from PostgreSQL', async
     });
   } finally {
     await closeServer(server);
-    await pool.query('TRUNCATE daily_reporting_metrics');
+    await resetE2EDatabase();
   }
 });
 
 test('reporting spend details and lowest buckets are scoped to the requested date range', async () => {
-  await pool.query('TRUNCATE daily_reporting_metrics');
+  await resetE2EDatabase();
   await pool.query(
     `INSERT INTO daily_reporting_metrics (
       metric_date,
@@ -209,7 +213,7 @@ test('reporting spend details and lowest buckets are scoped to the requested dat
     });
   } finally {
     await closeServer(server);
-    await pool.query('TRUNCATE daily_reporting_metrics');
+    await resetE2EDatabase();
   }
 });
 

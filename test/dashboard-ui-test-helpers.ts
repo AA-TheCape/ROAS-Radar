@@ -146,7 +146,6 @@ function installDomGlobals(dom: import('../dashboard/node_modules/jsdom').JSDOM,
   Object.assign(globalThis, {
     window,
     document: window.document,
-    navigator: window.navigator,
     HTMLElement: window.HTMLElement,
     SVGElement: window.SVGElement,
     Node: window.Node,
@@ -157,6 +156,11 @@ function installDomGlobals(dom: import('../dashboard/node_modules/jsdom').JSDOM,
     requestAnimationFrame: (callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0),
     cancelAnimationFrame: (handle: number) => clearTimeout(handle),
     ResizeObserver
+  });
+
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: window.navigator
   });
 
   Object.defineProperty(globalThis, 'localStorage', {

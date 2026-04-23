@@ -1,4 +1,4 @@
-import React, { useEffect, useState, type ReactNode } from 'react';
+import React, { useEffect, useRef, useState, type ReactNode } from 'react';
 
 export type AppShellNavItem = {
   key: string;
@@ -108,8 +108,14 @@ export default function AuthenticatedAppShell({
   children
 }: AuthenticatedAppShellProps) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const previousActiveNavKeyRef = useRef(activeNavKey);
 
   useEffect(() => {
+    if (previousActiveNavKeyRef.current === activeNavKey) {
+      return;
+    }
+
+    previousActiveNavKeyRef.current = activeNavKey;
     setMobileNavOpen(false);
   }, [activeNavKey]);
 
@@ -171,11 +177,24 @@ export default function AuthenticatedAppShell({
       </header>
 
       {mobileNavOpen ? (
-        <div className="fixed inset-0 z-30 bg-ink/20 backdrop-blur-sm lg:hidden" onClick={() => setMobileNavOpen(false)}>
+        <div
+          className="fixed inset-0 z-30 bg-ink/20 backdrop-blur-sm lg:hidden"
+          onClick={() => setMobileNavOpen(false)}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              setMobileNavOpen(false);
+            }
+          }}
+        >
           <aside
             id="app-shell-mobile-nav"
             className="h-full w-[min(22rem,calc(100vw-2rem))] border-r border-line/80 bg-canvas p-gutter shadow-lift"
             onClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.stopPropagation();
+              }
+            }}
           >
             <div className="mb-6 rounded-shell border border-line/80 bg-surface p-panel shadow-panel">
               <p className="text-caption font-semibold uppercase tracking-[0.14em] text-teal">Navigation</p>

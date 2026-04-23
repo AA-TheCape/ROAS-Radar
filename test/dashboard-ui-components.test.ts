@@ -243,7 +243,7 @@ test('nivo charts render smoke coverage for dashboard data visuals', async () =>
   try {
     await tick(20);
 
-    assert.equal(mounted.container.querySelectorAll('figure[role="group"]').length, 3);
+    assert.equal(mounted.container.querySelectorAll('figure').length, 3);
     assert.ok(mounted.container.querySelectorAll('svg').length >= 3);
     assert.match(mounted.container.textContent ?? '', /Revenue trend chart/);
     assert.match(mounted.container.textContent ?? '', /Campaign mix chart/);

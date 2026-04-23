@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { type QueryResult, type QueryResultRow } from 'pg';
+import type { QueryResult, QueryResultRow } from 'pg';
 
 import { withTransaction, query } from '../../db/pool.js';
 import { attachAuthContext, requireAdmin, requireAuthenticated } from '../auth/index.js';

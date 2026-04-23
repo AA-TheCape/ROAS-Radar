@@ -55,7 +55,7 @@ function allocateRevenueAcrossWeights(totalCents, normalizedWeights) {
     });
     let distributedCents = provisional.reduce((sum, entry) => sum + entry.wholeCents, 0);
     const remainingCents = totalCents - distributedCents;
-    provisional
+    const entriesByRemainder = provisional
         .slice()
         .sort((left, right) => {
         if (right.remainder !== left.remainder) {
@@ -63,11 +63,11 @@ function allocateRevenueAcrossWeights(totalCents, normalizedWeights) {
         }
         return left.index - right.index;
     })
-        .slice(0, remainingCents)
-        .forEach((entry) => {
+        .slice(0, remainingCents);
+    for (const entry of entriesByRemainder) {
         provisional[entry.index].wholeCents += 1;
         distributedCents += 1;
-    });
+    }
     if (distributedCents !== totalCents) {
         throw new Error('Revenue allocation failed to conserve cents');
     }
@@ -110,7 +110,7 @@ function timeDecayWeights(touchpoints, orderOccurredAt, halfLifeDays) {
     const halfLifeMs = toPositiveNumber(halfLifeDays, DEFAULT_TIME_DECAY_HALF_LIFE_DAYS) * 24 * 60 * 60 * 1000;
     return touchpoints.map((touchpoint) => {
         const deltaMs = Math.max(orderOccurredAt.getTime() - touchpoint.occurredAt.getTime(), 0);
-        return Math.pow(0.5, deltaMs / halfLifeMs);
+        return 0.5 ** (deltaMs / halfLifeMs);
     });
 }
 function positionBasedWeights(touchpoints, firstWeight, lastWeight) {
