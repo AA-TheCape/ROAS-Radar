@@ -1,50 +1,30 @@
-import { randomUUID } from 'node:crypto';
-import { setTimeout as delay } from 'node:timers/promises';
-
-import { env } from './config/env.js';
-import { pool } from './db/pool.js';
-import { processAttributionQueue } from './modules/attribution/index.js';
-import { processShopifyOrderWritebackQueue } from './modules/shopify/writeback.js';
-import { logError, logInfo } from './observability/index.js';
+import { processShopifyOrderWritebackQueue, reconcileRecentShopifyOrderAttributes } from './modules/shopify/writeback.js';
 
 async function run(): Promise<void> {
   const workerId = `attribution-worker-${randomUUID()}`;
   let shouldStop = false;
-
-  const requestStop = () => {
-    shouldStop = true;
-  };
-
-  process.on('SIGINT', requestStop);
-  process.on('SIGTERM', requestStop);
-
-  logInfo('attribution_worker_started', {
-    workerId,
-    mode: env.ATTRIBUTION_WORKER_LOOP ? 'daemon' : 'oneshot'
-  });
+  let nextShopifyReconciliationAt = 0;
 
   do {
-    const attributionResult = await processAttributionQueue({
-      workerId,
-      limit: env.ATTRIBUTION_JOB_BATCH_SIZE,
-      staleScanLimit: env.ATTRIBUTION_STALE_SCAN_BATCH_SIZE,
-      emitMetrics: true
-    });
-    const writebackResult = await processShopifyOrderWritebackQueue({
-      workerId,
-      limit: env.SHOPIFY_ORDER_WRITEBACK_BATCH_SIZE,
-      staleScanLimit: env.ATTRIBUTION_STALE_SCAN_BATCH_SIZE
-    });
+    const shouldRunReconciliation =
+      env.SHOPIFY_RECONCILIATION_ENABLED && Date.now() >= nextShopifyReconciliationAt;
+    const reconciliationResult = shouldRunReconciliation
+      ? await reconcileRecentShopifyOrderAttributes({
+          workerId,
+          limit: env.SHOPIFY_RECONCILIATION_BATCH_SIZE,
+          lookbackDays: env.SHOPIFY_RECONCILIATION_LOOKBACK_DAYS
+        })
+      : null;
 
-    if (!env.ATTRIBUTION_WORKER_LOOP) {
-      break;
+    if (shouldRunReconciliation) {
+      nextShopifyReconciliationAt = Date.now() + env.SHOPIFY_RECONCILIATION_INTERVAL_MS;
     }
 
-    if (shouldStop) {
-      break;
-    }
+    const attributionResult = await processAttributionQueue({ ... });
+    const writebackResult = await processShopifyOrderWritebackQueue({ ... });
 
     if (
+      (!reconciliationResult || reconciliationResult.requeuedOrders === 0) &&
       attributionResult.claimedJobs === 0 &&
       attributionResult.staleJobsEnqueued === 0 &&
       writebackResult.claimedJobs === 0 &&
@@ -53,14 +33,4 @@ async function run(): Promise<void> {
       await delay(env.ATTRIBUTION_WORKER_POLL_INTERVAL_MS);
     }
   } while (!shouldStop);
-
-  await pool.end();
 }
-
-run().catch(async (error) => {
-  logError('attribution_worker_crashed', error, {
-    service: process.env.K_SERVICE ?? 'roas-radar-attribution-worker'
-  });
-  await pool.end().catch(() => undefined);
-  process.exit(1);
-});
