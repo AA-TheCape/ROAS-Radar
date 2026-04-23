@@ -231,6 +231,17 @@ function buildAprilFirstDateInput(reportingTimezone = DEFAULT_REPORTING_TIMEZONE
   return `${currentYear}-04-01`;
 }
 
+function normalizeReportingFilters(filters: ReportingFilters): ReportingFilters {
+  if (filters.startDate && filters.endDate && filters.startDate > filters.endDate) {
+    return {
+      ...filters,
+      endDate: filters.startDate
+    };
+  }
+
+  return filters;
+}
+
 function createLoadingSection<T>(): AsyncSection<T> {
   return {
     data: null,
@@ -1236,7 +1247,7 @@ function App() {
     [closeOrderDetails]
   );
   const handleDashboardFiltersChange = useCallback((next: ReportingFilters) => {
-    setFilters(next);
+    setFilters(normalizeReportingFilters(next));
   }, []);
   const handleDashboardGroupByChange = useCallback((value: TimeseriesGroupBy) => {
     setGroupBy(value);
@@ -1244,8 +1255,10 @@ function App() {
   const handleApplyQuickRange = useCallback((range: Pick<ReportingFilters, 'startDate' | 'endDate'>) => {
     startTransition(() => {
       setFilters((current) => ({
-        ...current,
-        ...range
+        ...normalizeReportingFilters({
+          ...current,
+          ...range
+        })
       }));
     });
   }, []);

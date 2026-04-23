@@ -5,6 +5,7 @@ import {
   React,
   changeInputValue,
   click,
+  createReportingDashboardProps,
   h,
   keydown,
   loadDashboardModule,
@@ -247,6 +248,77 @@ test('nivo charts render smoke coverage for dashboard data visuals', async () =>
     assert.match(mounted.container.textContent ?? '', /Revenue trend chart/);
     assert.match(mounted.container.textContent ?? '', /Campaign mix chart/);
     assert.match(mounted.container.textContent ?? '', /Source contribution chart/);
+  } finally {
+    mounted.cleanup();
+  }
+});
+
+test('reporting dashboard date-range helper corrects invalid custom ranges with clear feedback', async () => {
+  const { applyDateRangeChange } = await loadDashboardModule<typeof import('../dashboard/src/components/ReportingDashboard')>(
+    'dashboard/src/components/ReportingDashboard.tsx'
+  );
+
+  assert.deepEqual(
+    applyDateRangeChange(
+      {
+        startDate: '2026-04-01',
+        endDate: '2026-04-20',
+        source: '',
+        campaign: ''
+      },
+      'startDate',
+      '2026-04-25'
+    ),
+    {
+      nextFilters: {
+        startDate: '2026-04-25',
+        endDate: '2026-04-25',
+        source: '',
+        campaign: ''
+      },
+      feedback: 'End date was adjusted to match the new start date so the range stays valid.'
+    }
+  );
+
+  assert.deepEqual(
+    applyDateRangeChange(
+      {
+        startDate: '2026-04-10',
+        endDate: '2026-04-20',
+        source: '',
+        campaign: ''
+      },
+      'endDate',
+      '2026-04-05'
+    ),
+    {
+      nextFilters: {
+        startDate: '2026-04-10',
+        endDate: '2026-04-10',
+        source: '',
+        campaign: ''
+      },
+      feedback: 'End date cannot be earlier than the start date. It was moved forward to keep the range valid.'
+    }
+  );
+});
+
+test('reporting dashboard exposes constrained date inputs for custom reporting windows', async () => {
+  const { default: ReportingDashboard } = await loadDashboardModule<
+    typeof import('../dashboard/src/components/ReportingDashboard')
+  >('dashboard/src/components/ReportingDashboard.tsx');
+
+  const mounted = await mountUi(h(ReportingDashboard, createReportingDashboardProps()));
+
+  try {
+    const startDateInput = mounted.container.querySelector('#start-date') as HTMLInputElement | null;
+    const endDateInput = mounted.container.querySelector('#end-date') as HTMLInputElement | null;
+
+    assert.ok(startDateInput);
+    assert.ok(endDateInput);
+    assert.equal(startDateInput.getAttribute('max'), '2026-04-20');
+    assert.equal(endDateInput.getAttribute('min'), '2026-04-01');
+    assert.match(mounted.container.textContent ?? '', /Apr 1 to Apr 20/);
   } finally {
     mounted.cleanup();
   }

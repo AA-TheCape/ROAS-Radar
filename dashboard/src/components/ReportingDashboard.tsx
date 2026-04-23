@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, memo, useMemo, useState } from 'react';
+import React, { Suspense, lazy, memo, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   formatCompactCurrency,
@@ -104,6 +104,7 @@ const GROUP_BY_OPTIONS: Array<{ value: TimeseriesGroupBy; label: string }> = [
 
 type CampaignSortKey = 'campaign' | 'source' | 'visits' | 'orders' | 'revenue' | 'conversionRate';
 type OrderSortKey = 'order' | 'processedAt' | 'source' | 'campaign' | 'totalPrice';
+export type DateField = 'startDate' | 'endDate';
 
 const CAMPAIGN_PAGE_SIZE = 6;
 const ORDER_PAGE_SIZE = 8;
@@ -141,6 +142,43 @@ const SUMMARY_CARD_DECOR: Record<
 const chartSuspenseFallback = (
   <div className="min-h-[280px] animate-pulse rounded-card border border-line/60 bg-surface-alt/70" aria-hidden="true" />
 );
+
+function normalizeDateRange(filters: ReportingFilters): ReportingFilters {
+  if (filters.startDate && filters.endDate && filters.startDate > filters.endDate) {
+    return {
+      ...filters,
+      endDate: filters.startDate
+    };
+  }
+
+  return filters;
+}
+
+export function applyDateRangeChange(filters: ReportingFilters, field: DateField, value: string) {
+  const nextFilters = normalizeDateRange({
+    ...filters,
+    [field]: value
+  });
+
+  if (field === 'startDate' && value && filters.endDate && value > filters.endDate) {
+    return {
+      nextFilters,
+      feedback: 'End date was adjusted to match the new start date so the range stays valid.'
+    };
+  }
+
+  if (field === 'endDate' && value && filters.startDate && value < filters.startDate) {
+    return {
+      nextFilters,
+      feedback: 'End date cannot be earlier than the start date. It was moved forward to keep the range valid.'
+    };
+  }
+
+  return {
+    nextFilters,
+    feedback: null
+  };
+}
 
 const SummaryCard = memo(function SummaryCard({ label, value, detail }: SummaryCardData) {
   const decor = SUMMARY_CARD_DECOR[label] ?? SUMMARY_CARD_DECOR.Visits;
@@ -346,6 +384,8 @@ const DashboardControlPanel = memo(function DashboardControlPanel({
   onApplyQuickRange: (range: Pick<ReportingFilters, 'startDate' | 'endDate'>) => void;
   onClearFilters: () => void;
 }) {
+  const [dateFeedback, setDateFeedback] = useState<string | null>(null);
+  const preserveDateFeedbackRef = useRef(false);
   const scopeLabel = useMemo(
     () =>
       (filters.source ?? '').trim() || (filters.campaign ?? '').trim()
@@ -353,6 +393,33 @@ const DashboardControlPanel = memo(function DashboardControlPanel({
         : 'All attributed traffic',
     [filters.campaign, filters.source]
   );
+  const formattedRange = useMemo(
+    () => `${formatDateLabel(filters.startDate, reportingTimezone)} to ${formatDateLabel(filters.endDate, reportingTimezone)}`,
+    [filters.endDate, filters.startDate, reportingTimezone]
+  );
+
+  useEffect(() => {
+    if (preserveDateFeedbackRef.current) {
+      preserveDateFeedbackRef.current = false;
+      return;
+    }
+
+    setDateFeedback(null);
+  }, [filters.endDate, filters.startDate]);
+
+  function handleDateChange(field: DateField, value: string) {
+    const { nextFilters, feedback } = applyDateRangeChange(filters, field, value);
+
+    if (feedback) {
+      preserveDateFeedbackRef.current = true;
+      setDateFeedback(feedback);
+      onFiltersChange(nextFilters);
+      return;
+    }
+
+    setDateFeedback(null);
+    onFiltersChange(nextFilters);
+  }
 
   return (
     <Card
@@ -392,7 +459,8 @@ const DashboardControlPanel = memo(function DashboardControlPanel({
                 type="date"
                 className="min-h-[40px] rounded-card px-3 py-2 text-[0.95rem]"
                 value={filters.startDate}
-                onChange={(event) => onFiltersChange({ ...filters, startDate: event.target.value })}
+                max={filters.endDate}
+                onChange={(event) => handleDateChange('startDate', event.target.value)}
               />
             </Field>
             <Field label="End date" htmlFor="end-date">
@@ -401,7 +469,8 @@ const DashboardControlPanel = memo(function DashboardControlPanel({
                 type="date"
                 className="min-h-[40px] rounded-card px-3 py-2 text-[0.95rem]"
                 value={filters.endDate}
-                onChange={(event) => onFiltersChange({ ...filters, endDate: event.target.value })}
+                min={filters.startDate}
+                onChange={(event) => handleDateChange('endDate', event.target.value)}
               />
             </Field>
             <Field label="Source" htmlFor="source-filter">
@@ -459,8 +528,15 @@ const DashboardControlPanel = memo(function DashboardControlPanel({
               <div className="min-w-0">
                 <p className="text-label uppercase text-ink-muted">Current scope</p>
                 <p className="mt-1 truncate text-[0.95rem] text-ink-soft xl:max-w-[22rem]">{scopeLabel}</p>
+                <p className="mt-1 text-[0.82rem] text-ink-muted">{formattedRange}</p>
               </div>
             </div>
+
+            {dateFeedback ? (
+              <p className="text-[0.85rem] font-medium text-danger" role="status" aria-live="polite">
+                {dateFeedback}
+              </p>
+            ) : null}
           </div>
         </div>
       </div>
