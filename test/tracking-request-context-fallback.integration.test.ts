@@ -27,6 +27,7 @@ async function resetIntegrationDatabase() {
   await pool.query(`
     TRUNCATE TABLE
       attribution_jobs,
+      shopify_order_writeback_jobs,
       attribution_order_credits,
       attribution_results,
       daily_reporting_metrics,

@@ -12,6 +12,7 @@ import { attachAuthContext, requireAdmin } from '../auth/index.js';
 import { hashIdentityEmail, stitchKnownCustomerIdentity } from '../identity/index.js';
 import { buildCanonicalTouchpointDimensions } from '../marketing-dimensions/index.js';
 import { getReportingTimezone } from '../settings/index.js';
+import { enqueueShopifyOrderWriteback } from './writeback.js';
 
 const OAUTH_STATE_TTL_MINUTES = 10;
 
@@ -1587,6 +1588,7 @@ async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPay
     });
 
     await enqueueAttributionForOrder(shopifyOrderId, 'shopify_order_upserted', client);
+    await enqueueShopifyOrderWriteback(shopifyOrderId, 'shopify_order_upserted', client);
 
     await client.query(
       `

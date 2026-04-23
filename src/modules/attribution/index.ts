@@ -4,6 +4,7 @@ import { query, withTransaction } from '../../db/pool.js';
 import { logError } from '../../observability/index.js';
 import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
 import { getReportingTimezone, formatDateInTimezone } from '../settings/index.js';
+import { enqueueShopifyOrderWriteback } from '../shopify/writeback.js';
 import {
   ATTRIBUTION_MODELS,
   computeAttributionOutputs,
@@ -726,6 +727,8 @@ async function persistAttribution(
       ATTRIBUTION_MODEL_VERSION
     ]
   );
+
+  await enqueueShopifyOrderWriteback(order.shopify_order_id, 'attribution_persisted', client);
 }
 
 async function processClaimedJob(client: PoolClient, job: AttributionJobRow, workerId: string): Promise<void> {

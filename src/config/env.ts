@@ -72,6 +72,8 @@ const envSchema = z.object({
   ATTRIBUTION_STALE_SCAN_BATCH_SIZE: integerString.default(100),
   ATTRIBUTION_WORKER_LOOP: booleanString.default(true),
   ATTRIBUTION_WORKER_POLL_INTERVAL_MS: integerString.default(10_000),
+  SHOPIFY_ORDER_WRITEBACK_BATCH_SIZE: integerString.default(25),
+  SHOPIFY_ORDER_WRITEBACK_MAX_RETRIES: integerString.default(8),
   SHOPIFY_WEBHOOK_SECRET: z.string().optional().default(''),
   SHOPIFY_APP_API_KEY: z.string().optional().default(''),
   SHOPIFY_APP_API_SECRET: z.string().optional().default(''),
