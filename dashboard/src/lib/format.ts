@@ -85,3 +85,22 @@ export function formatDateTimeLabel(
     timeZone: reportingTimezone
   }).format(date);
 }
+
+export function formatCurrentTimestamp(
+  value: Date,
+  options: {
+    timeZone?: string;
+    includeTimeZoneName?: boolean;
+  } = {}
+): string {
+  const { timeZone, includeTimeZoneName = false } = options;
+
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    ...(timeZone ? { timeZone } : {}),
+    ...(includeTimeZoneName ? { timeZoneName: 'short' as const } : {})
+  }).format(value);
+}

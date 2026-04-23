@@ -58,6 +58,7 @@ import AuthenticatedAppShell, {
   type AppShellBreadcrumb,
   type AppShellNavItem
 } from './components/AuthenticatedAppShell';
+import TitleBarTimestamp from './components/TitleBarTimestamp';
 import {
   AuthGate,
   Banner,
@@ -1309,9 +1310,12 @@ function App() {
       onNavigate={handleAppNavigation}
       breadcrumbs={breadcrumbs}
       topbarMeta={
-        <div className="space-y-1">
-          <p className="font-semibold text-ink">{authenticatedUser.displayName}</p>
-          <p>{authenticatedUser.email}</p>
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <p className="font-semibold text-ink">{authenticatedUser.displayName}</p>
+            <p>{authenticatedUser.email}</p>
+          </div>
+          <TitleBarTimestamp />
         </div>
       }
       headerActions={shellHeaderActions}

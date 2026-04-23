@@ -252,9 +252,20 @@ export function createShellProps(overrides: Partial<import('../dashboard/src/com
     ],
     topbarMeta: h(
       'div',
-      { className: 'space-y-1' },
-      h('p', { className: 'font-semibold text-ink' }, 'Taylor Operator'),
-      h('p', null, 'taylor@roasradar.dev')
+      { className: 'space-y-3' },
+      h(
+        'div',
+        { className: 'space-y-1' },
+        h('p', { className: 'font-semibold text-ink' }, 'Taylor Operator'),
+        h('p', null, 'taylor@roasradar.dev')
+      ),
+      h(
+        'div',
+        { 'aria-label': 'Current timestamp', className: 'space-y-1 border-t border-line/60 pt-3 text-caption text-ink-muted' },
+        h('p', { className: 'font-semibold uppercase tracking-[0.14em] text-teal' }, 'Current time'),
+        h('p', null, 'Apr 20, 12:15 PM PDT'),
+        h('p', null, 'UTC Apr 20, 7:15 PM')
+      )
     ),
     headerActions: h('button', { type: 'button' }, 'Logout'),
     children: h('div', null, 'Shell content'),

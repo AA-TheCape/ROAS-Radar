@@ -49,12 +49,74 @@ test('authenticated shell removes deprecated workspace and header cards without 
   try {
     assert.doesNotMatch(mounted.container.textContent ?? '', /Workspace/);
     assert.doesNotMatch(mounted.container.textContent ?? '', /Active window/);
+    assert.match(mounted.container.textContent ?? '', /Current time/);
+    assert.match(mounted.container.textContent ?? '', /UTC Apr 20, 7:15 PM/);
     assert.equal(mounted.container.querySelector('aside[aria-label="Section navigation"]'), null);
     assert.equal(mounted.container.querySelector('[aria-label="Current workspace status"]'), null);
+    assert.ok(mounted.container.querySelector('[aria-label="Current timestamp"]'));
     assert.ok(mounted.container.querySelector('#app-shell-main'));
   } finally {
     mounted.cleanup();
   }
+});
+
+test('title bar timestamp updates on the next minute boundary and clears timers on unmount', async () => {
+  const { default: TitleBarTimestamp } = await loadDashboardModule<
+    typeof import('../dashboard/src/components/TitleBarTimestamp')
+  >('dashboard/src/components/TitleBarTimestamp.tsx');
+
+  let now = new Date('2026-04-20T19:14:15.250Z');
+  let timeoutCallback: (() => void) | null = null;
+  let intervalCallback: (() => void) | null = null;
+  let timeoutDelay = -1;
+  let intervalDelay = -1;
+  const clearedTimeouts: number[] = [];
+  const clearedIntervals: number[] = [];
+
+  const mounted = await mountUi(
+    h(TitleBarTimestamp, {
+      getNow: () => now,
+      scheduleTimeout: ((callback: () => void, delay?: number) => {
+        timeoutCallback = callback;
+        timeoutDelay = delay ?? 0;
+        return 11 as ReturnType<typeof setTimeout>;
+      }) as typeof setTimeout,
+      clearScheduledTimeout: ((timer: number) => {
+        clearedTimeouts.push(timer);
+      }) as typeof clearTimeout,
+      scheduleInterval: ((callback: () => void, delay?: number) => {
+        intervalCallback = callback;
+        intervalDelay = delay ?? 0;
+        return 29 as ReturnType<typeof setInterval>;
+      }) as typeof setInterval,
+      clearScheduledInterval: ((timer: number) => {
+        clearedIntervals.push(timer);
+      }) as typeof clearInterval
+    })
+  );
+
+  try {
+    assert.match(mounted.container.textContent ?? '', /UTC Apr 20, 7:14 PM/);
+    assert.equal(timeoutDelay, 44_750);
+
+    now = new Date('2026-04-20T19:15:00.000Z');
+    timeoutCallback?.();
+    await tick();
+
+    assert.equal(intervalDelay, 60_000);
+    assert.match(mounted.container.textContent ?? '', /UTC Apr 20, 7:15 PM/);
+
+    now = new Date('2026-04-20T19:16:00.000Z');
+    intervalCallback?.();
+    await tick();
+
+    assert.match(mounted.container.textContent ?? '', /UTC Apr 20, 7:16 PM/);
+  } finally {
+    mounted.cleanup();
+  }
+
+  assert.deepEqual(clearedTimeouts, [11]);
+  assert.deepEqual(clearedIntervals, [29]);
 });
 
 test('reporting dashboard search and order drill-in stay wired for high-traffic workflows', async () => {
