@@ -22,6 +22,8 @@ export type AttributionTouchpoint = {
   attributionReason: string;
   isDirect: boolean;
   isForced: boolean;
+  sourceTouchEventId?: string | null;
+  ingestionSource?: string | null;
 };
 
 export type RuleBasedWeightConfig = {
@@ -182,6 +184,16 @@ function buildCredits(
     revenueCredit: centsToRevenue(creditedCents[index] ?? 0),
     isPrimary: index === primaryTouchpointIndex
   }));
+}
+
+export function computeSingleWinnerCredits(
+  attributionModel: AttributionModel,
+  touchpoints: AttributionTouchpoint[],
+  winnerIndex: number,
+  totalRevenue: number | string
+): AttributionCredit[] {
+  const winnerWeights = touchpoints.map((_touchpoint, index) => (index === winnerIndex ? 1 : 0));
+  return buildCredits(attributionModel, touchpoints, normalizeWeights(winnerWeights), totalRevenue);
 }
 
 function firstTouchWeights(touchpoints: AttributionTouchpoint[]): number[] {

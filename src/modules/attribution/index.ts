@@ -7,10 +7,20 @@ import { getReportingTimezone, formatDateInTimezone } from '../settings/index.js
 import { enqueueShopifyOrderWriteback } from '../shopify/writeback.js';
 import {
   ATTRIBUTION_MODELS,
+  buildUnattributedTouchpoint,
+  computeSingleWinnerCredits,
   computeAttributionOutputs,
-  type AttributionCredit,
-  type AttributionTouchpoint
+  type AttributionCredit
 } from './engine.js';
+import {
+  confidenceScoreForWinner,
+  dedupeDeterministicCandidates,
+  isDirectTouchpoint,
+  selectLastNonDirectWinner,
+  type DeterministicIngestionSource,
+  type ResolvedAttributionTouchpoint,
+  type ResolvedJourney
+} from './resolver.js';
 
 const ATTRIBUTION_MODEL_VERSION = 1;
 const ATTRIBUTION_WINDOW_DAYS = 7;
@@ -38,6 +48,7 @@ type AttributionJobRow = {
 
 type SessionTouchpointRow = {
   session_id: string;
+  source_touch_event_id: string | null;
   occurred_at: Date;
   source: string | null;
   medium: string | null;
@@ -46,12 +57,6 @@ type SessionTouchpointRow = {
   term: string | null;
   click_id_type: string | null;
   click_id_value: string | null;
-};
-
-type QueueJobInput = {
-  shopifyOrderId: string;
-  requestedReason: string;
-  client?: PoolClient;
 };
 
 type TouchpointEnqueueInput = {
@@ -75,11 +80,6 @@ export type AttributionQueueProcessResult = {
   succeededJobs: number;
   failedJobs: number;
   durationMs: number;
-};
-
-type ResolvedJourney = {
-  touchpoints: AttributionTouchpoint[];
-  confidenceScore: number;
 };
 
 export type SyntheticAttributionInput = {
@@ -298,14 +298,12 @@ async function fetchOrder(client: PoolClient, shopifyOrderId: string): Promise<A
   return result.rows[0] ?? null;
 }
 
-function buildSessionTouchpoint(
+function buildResolvedTouchpoint(
   row: SessionTouchpointRow,
+  ingestionSource: DeterministicIngestionSource,
   attributionReason: string,
   isForced: boolean
-): AttributionTouchpoint {
-  const isDirect =
-    !row.source && !row.medium && !row.campaign && !row.click_id_value;
-
+): ResolvedAttributionTouchpoint {
   return {
     sessionId: row.session_id,
     occurredAt: row.occurred_at,
@@ -317,16 +315,30 @@ function buildSessionTouchpoint(
     clickIdType: row.click_id_type,
     clickIdValue: row.click_id_value,
     attributionReason,
-    isDirect,
-    isForced
+    isDirect: isDirectTouchpoint({
+      source: row.source,
+      medium: row.medium,
+      campaign: row.campaign,
+      content: row.content,
+      term: row.term,
+      clickIdValue: row.click_id_value
+    }),
+    isForced,
+    sourceTouchEventId: row.source_touch_event_id,
+    ingestionSource
   };
 }
 
-async function fetchExactSession(client: PoolClient, sessionId: string, reason: string): Promise<ResolvedJourney | null> {
+async function fetchLandingSessionCandidate(
+  client: PoolClient,
+  sessionId: string,
+  orderOccurredAt: Date
+): Promise<ResolvedAttributionTouchpoint | null> {
   const result = await client.query<SessionTouchpointRow>(
     `
       SELECT
         s.id::text AS session_id,
+        first_event.id::text AS source_touch_event_id,
         s.first_seen_at AS occurred_at,
         s.initial_utm_source AS source,
         s.initial_utm_medium AS medium,
@@ -351,37 +363,124 @@ async function fetchExactSession(client: PoolClient, sessionId: string, reason: 
           s.initial_msclkid
         ) AS click_id_value
       FROM tracking_sessions s
+      LEFT JOIN LATERAL (
+        SELECT e.id
+        FROM tracking_events e
+        WHERE e.session_id = s.id
+          AND e.occurred_at <= $2
+        ORDER BY e.occurred_at ASC, e.id ASC
+        LIMIT 1
+      ) first_event ON TRUE
       WHERE s.id = $1::uuid
+        AND s.first_seen_at <= $2
+        AND s.first_seen_at >= $2 - ($3::int * interval '1 day')
       LIMIT 1
     `,
-    [sessionId]
+    [sessionId, orderOccurredAt, ATTRIBUTION_WINDOW_DAYS]
   );
 
   const row = result.rows[0];
-
-  if (!row) {
-    return null;
-  }
-
-  return {
-    touchpoints: [buildSessionTouchpoint(row, reason, true)],
-    confidenceScore: 1
-  };
+  return row ? buildResolvedTouchpoint(row, 'landing_session_id', 'matched_by_landing_session', true) : null;
 }
 
-async function fetchJourneyByIdentity(
+async function fetchTokenCandidate(
+  client: PoolClient,
+  tokenField: 'shopify_checkout_token' | 'shopify_cart_token',
+  tokenValue: string,
+  orderOccurredAt: Date,
+  ingestionSource: 'checkout_token' | 'cart_token',
+  attributionReason: string
+): Promise<ResolvedAttributionTouchpoint | null> {
+  const result = await client.query<SessionTouchpointRow>(
+    `
+      SELECT
+        e.session_id::text AS session_id,
+        e.id::text AS source_touch_event_id,
+        e.occurred_at,
+        COALESCE(e.utm_source, s.initial_utm_source) AS source,
+        COALESCE(e.utm_medium, s.initial_utm_medium) AS medium,
+        COALESCE(e.utm_campaign, s.initial_utm_campaign) AS campaign,
+        COALESCE(e.utm_content, s.initial_utm_content) AS content,
+        COALESCE(e.utm_term, s.initial_utm_term) AS term,
+        CASE
+          WHEN e.gclid IS NOT NULL THEN 'gclid'
+          WHEN e.gbraid IS NOT NULL THEN 'gbraid'
+          WHEN e.wbraid IS NOT NULL THEN 'wbraid'
+          WHEN e.fbclid IS NOT NULL THEN 'fbclid'
+          WHEN e.ttclid IS NOT NULL THEN 'ttclid'
+          WHEN e.msclkid IS NOT NULL THEN 'msclkid'
+          WHEN s.initial_gclid IS NOT NULL THEN 'gclid'
+          WHEN s.initial_gbraid IS NOT NULL THEN 'gbraid'
+          WHEN s.initial_wbraid IS NOT NULL THEN 'wbraid'
+          WHEN s.initial_fbclid IS NOT NULL THEN 'fbclid'
+          WHEN s.initial_ttclid IS NOT NULL THEN 'ttclid'
+          WHEN s.initial_msclkid IS NOT NULL THEN 'msclkid'
+          ELSE NULL
+        END AS click_id_type,
+        COALESCE(
+          e.gclid,
+          e.gbraid,
+          e.wbraid,
+          e.fbclid,
+          e.ttclid,
+          e.msclkid,
+          s.initial_gclid,
+          s.initial_gbraid,
+          s.initial_wbraid,
+          s.initial_fbclid,
+          s.initial_ttclid,
+          s.initial_msclkid
+        ) AS click_id_value
+      FROM tracking_events e
+      INNER JOIN tracking_sessions s
+        ON s.id = e.session_id
+      WHERE ${tokenField} = $1
+        AND e.occurred_at <= $2
+        AND e.occurred_at >= $2 - ($3::int * interval '1 day')
+      ORDER BY
+        e.occurred_at DESC,
+        CASE
+          WHEN COALESCE(
+            e.gclid,
+            e.gbraid,
+            e.wbraid,
+            e.fbclid,
+            e.ttclid,
+            e.msclkid,
+            s.initial_gclid,
+            s.initial_gbraid,
+            s.initial_wbraid,
+            s.initial_fbclid,
+            s.initial_ttclid,
+            s.initial_msclkid
+          ) IS NOT NULL THEN 0
+          ELSE 1
+        END ASC,
+        e.session_id::text ASC,
+        e.id::text ASC
+      LIMIT 1
+    `,
+    [tokenValue, orderOccurredAt, ATTRIBUTION_WINDOW_DAYS]
+  );
+
+  const row = result.rows[0];
+  return row ? buildResolvedTouchpoint(row, ingestionSource, attributionReason, true) : null;
+}
+
+async function fetchIdentityCandidates(
   client: PoolClient,
   order: AttributionOrderRow,
   orderOccurredAt: Date
-): Promise<ResolvedJourney | null> {
-  if (!order.customer_identity_id && !order.email_hash) {
-    return null;
+): Promise<ResolvedAttributionTouchpoint[]> {
+  if (!order.customer_identity_id) {
+    return [];
   }
 
   const result = await client.query<SessionTouchpointRow>(
     `
       SELECT
         s.id::text AS session_id,
+        first_event.id::text AS source_touch_event_id,
         s.first_seen_at AS occurred_at,
         s.initial_utm_source AS source,
         s.initial_utm_medium AS medium,
@@ -406,176 +505,121 @@ async function fetchJourneyByIdentity(
           s.initial_msclkid
         ) AS click_id_value
       FROM tracking_sessions s
-      WHERE (
-        ($1::uuid IS NOT NULL AND s.customer_identity_id = $1::uuid)
-        OR EXISTS (
-          SELECT 1
-          FROM shopify_orders o
-          WHERE o.shopify_order_id = $2
-            AND o.customer_identity_id IS NOT NULL
-            AND o.customer_identity_id = s.customer_identity_id
-        )
-      )
-        AND s.first_seen_at <= $3
-        AND s.first_seen_at >= $3 - ($4::int * interval '1 day')
+      LEFT JOIN LATERAL (
+        SELECT e.id
+        FROM tracking_events e
+        WHERE e.session_id = s.id
+          AND e.occurred_at <= $2
+        ORDER BY e.occurred_at ASC, e.id ASC
+        LIMIT 1
+      ) first_event ON TRUE
+      WHERE s.customer_identity_id = $1::uuid
+        AND s.first_seen_at <= $2
+        AND s.first_seen_at >= $2 - ($3::int * interval '1 day')
       ORDER BY s.first_seen_at ASC, s.id ASC
     `,
-    [order.customer_identity_id, order.shopify_order_id, orderOccurredAt, ATTRIBUTION_WINDOW_DAYS]
+    [order.customer_identity_id, orderOccurredAt, ATTRIBUTION_WINDOW_DAYS]
   );
 
-  if (result.rows.length === 0) {
-    return null;
-  }
-
-  return {
-    touchpoints: result.rows.map((row) => buildSessionTouchpoint(row, 'matched_by_customer_identity', false)),
-    confidenceScore: 0.6
-  };
+  return result.rows.map((row) =>
+    buildResolvedTouchpoint(row, 'customer_identity', 'matched_by_customer_identity', false)
+  );
 }
 
 async function resolveAttributionJourney(client: PoolClient, order: AttributionOrderRow): Promise<ResolvedJourney> {
   const orderOccurredAt = order.processed_at ?? order.created_at_shopify ?? order.ingested_at;
+  const candidates: ResolvedAttributionTouchpoint[] = [];
 
   if (order.landing_session_id) {
-    const journey = await fetchExactSession(client, order.landing_session_id, 'matched_by_landing_session');
-    if (journey) {
-      return journey;
+    const landingCandidate = await fetchLandingSessionCandidate(client, order.landing_session_id, orderOccurredAt);
+    if (landingCandidate) {
+      candidates.push(landingCandidate);
     }
   }
 
   if (order.checkout_token) {
-    const checkoutMatch = await client.query<SessionTouchpointRow>(
-      `
-        SELECT
-          e.session_id::text AS session_id,
-          e.occurred_at,
-          COALESCE(e.utm_source, s.initial_utm_source) AS source,
-          COALESCE(e.utm_medium, s.initial_utm_medium) AS medium,
-          COALESCE(e.utm_campaign, s.initial_utm_campaign) AS campaign,
-          COALESCE(e.utm_content, s.initial_utm_content) AS content,
-          COALESCE(e.utm_term, s.initial_utm_term) AS term,
-          CASE
-            WHEN e.gclid IS NOT NULL THEN 'gclid'
-            WHEN e.gbraid IS NOT NULL THEN 'gbraid'
-            WHEN e.wbraid IS NOT NULL THEN 'wbraid'
-            WHEN e.fbclid IS NOT NULL THEN 'fbclid'
-            WHEN e.ttclid IS NOT NULL THEN 'ttclid'
-            WHEN e.msclkid IS NOT NULL THEN 'msclkid'
-            WHEN s.initial_gclid IS NOT NULL THEN 'gclid'
-            WHEN s.initial_gbraid IS NOT NULL THEN 'gbraid'
-            WHEN s.initial_wbraid IS NOT NULL THEN 'wbraid'
-            WHEN s.initial_fbclid IS NOT NULL THEN 'fbclid'
-            WHEN s.initial_ttclid IS NOT NULL THEN 'ttclid'
-            WHEN s.initial_msclkid IS NOT NULL THEN 'msclkid'
-            ELSE NULL
-          END AS click_id_type,
-          COALESCE(
-            e.gclid,
-            e.gbraid,
-            e.wbraid,
-            e.fbclid,
-            e.ttclid,
-            e.msclkid,
-            s.initial_gclid,
-            s.initial_gbraid,
-            s.initial_wbraid,
-            s.initial_fbclid,
-            s.initial_ttclid,
-            s.initial_msclkid
-          ) AS click_id_value
-        FROM tracking_events e
-        INNER JOIN tracking_sessions s
-          ON s.id = e.session_id
-        WHERE e.shopify_checkout_token = $1
-          AND e.occurred_at <= $2
-          AND e.occurred_at >= $2 - ($3::int * interval '1 day')
-        ORDER BY e.occurred_at DESC
-        LIMIT 1
-      `,
-      [order.checkout_token, orderOccurredAt, ATTRIBUTION_WINDOW_DAYS]
+    const checkoutCandidate = await fetchTokenCandidate(
+      client,
+      'shopify_checkout_token',
+      order.checkout_token,
+      orderOccurredAt,
+      'checkout_token',
+      'matched_by_checkout_token'
     );
-
-    if (checkoutMatch.rows[0]) {
-      return {
-        touchpoints: [buildSessionTouchpoint(checkoutMatch.rows[0], 'matched_by_checkout_token', true)],
-        confidenceScore: 1
-      };
+    if (checkoutCandidate) {
+      candidates.push(checkoutCandidate);
     }
   }
 
   if (order.cart_token) {
-    const cartMatch = await client.query<SessionTouchpointRow>(
-      `
-        SELECT
-          e.session_id::text AS session_id,
-          e.occurred_at,
-          COALESCE(e.utm_source, s.initial_utm_source) AS source,
-          COALESCE(e.utm_medium, s.initial_utm_medium) AS medium,
-          COALESCE(e.utm_campaign, s.initial_utm_campaign) AS campaign,
-          COALESCE(e.utm_content, s.initial_utm_content) AS content,
-          COALESCE(e.utm_term, s.initial_utm_term) AS term,
-          CASE
-            WHEN e.gclid IS NOT NULL THEN 'gclid'
-            WHEN e.gbraid IS NOT NULL THEN 'gbraid'
-            WHEN e.wbraid IS NOT NULL THEN 'wbraid'
-            WHEN e.fbclid IS NOT NULL THEN 'fbclid'
-            WHEN e.ttclid IS NOT NULL THEN 'ttclid'
-            WHEN e.msclkid IS NOT NULL THEN 'msclkid'
-            WHEN s.initial_gclid IS NOT NULL THEN 'gclid'
-            WHEN s.initial_gbraid IS NOT NULL THEN 'gbraid'
-            WHEN s.initial_wbraid IS NOT NULL THEN 'wbraid'
-            WHEN s.initial_fbclid IS NOT NULL THEN 'fbclid'
-            WHEN s.initial_ttclid IS NOT NULL THEN 'ttclid'
-            WHEN s.initial_msclkid IS NOT NULL THEN 'msclkid'
-            ELSE NULL
-          END AS click_id_type,
-          COALESCE(
-            e.gclid,
-            e.gbraid,
-            e.wbraid,
-            e.fbclid,
-            e.ttclid,
-            e.msclkid,
-            s.initial_gclid,
-            s.initial_gbraid,
-            s.initial_wbraid,
-            s.initial_fbclid,
-            s.initial_ttclid,
-            s.initial_msclkid
-          ) AS click_id_value
-        FROM tracking_events e
-        INNER JOIN tracking_sessions s
-          ON s.id = e.session_id
-        WHERE e.shopify_cart_token = $1
-          AND e.occurred_at <= $2
-          AND e.occurred_at >= $2 - ($3::int * interval '1 day')
-        ORDER BY e.occurred_at DESC
-        LIMIT 1
-      `,
-      [order.cart_token, orderOccurredAt, ATTRIBUTION_WINDOW_DAYS]
+    const cartCandidate = await fetchTokenCandidate(
+      client,
+      'shopify_cart_token',
+      order.cart_token,
+      orderOccurredAt,
+      'cart_token',
+      'matched_by_cart_token'
     );
-
-    if (cartMatch.rows[0]) {
-      return {
-        touchpoints: [buildSessionTouchpoint(cartMatch.rows[0], 'matched_by_cart_token', true)],
-        confidenceScore: 0.9
-      };
+    if (cartCandidate) {
+      candidates.push(cartCandidate);
     }
   }
 
-  const identityJourney = await fetchJourneyByIdentity(client, order, orderOccurredAt);
-  if (identityJourney) {
-    return identityJourney;
-  }
+  candidates.push(...(await fetchIdentityCandidates(client, order, orderOccurredAt)));
+
+  const touchpoints = dedupeDeterministicCandidates(candidates);
+  const winner = selectLastNonDirectWinner(touchpoints);
 
   return {
-    touchpoints: [],
-    confidenceScore: 0
+    touchpoints,
+    winner,
+    confidenceScore: confidenceScoreForWinner(winner)
   };
 }
 
 function selectPrimaryCredit(credits: AttributionCredit[]): AttributionCredit {
   return credits.find((credit) => credit.isPrimary) ?? credits[credits.length - 1];
+}
+
+function buildOrderAttributionSnapshot(orderOccurredAt: Date, journey: ResolvedJourney): Record<string, unknown> {
+  return {
+    version: 1,
+    resolvedAt: new Date().toISOString(),
+    orderOccurredAt: orderOccurredAt.toISOString(),
+    confidenceScore: journey.confidenceScore,
+    winner: journey.winner
+      ? {
+          sessionId: journey.winner.sessionId,
+          sourceTouchEventId: journey.winner.sourceTouchEventId,
+          occurredAt: journey.winner.occurredAt.toISOString(),
+          source: journey.winner.source,
+          medium: journey.winner.medium,
+          campaign: journey.winner.campaign,
+          content: journey.winner.content,
+          term: journey.winner.term,
+          clickIdType: journey.winner.clickIdType,
+          clickIdValue: journey.winner.clickIdValue,
+          attributionReason: journey.winner.attributionReason,
+          ingestionSource: journey.winner.ingestionSource,
+          isDirect: journey.winner.isDirect
+        }
+      : null,
+    timeline: journey.touchpoints.map((touchpoint) => ({
+      sessionId: touchpoint.sessionId,
+      sourceTouchEventId: touchpoint.sourceTouchEventId,
+      occurredAt: touchpoint.occurredAt.toISOString(),
+      source: touchpoint.source,
+      medium: touchpoint.medium,
+      campaign: touchpoint.campaign,
+      content: touchpoint.content,
+      term: touchpoint.term,
+      clickIdType: touchpoint.clickIdType,
+      clickIdValue: touchpoint.clickIdValue,
+      attributionReason: touchpoint.attributionReason,
+      ingestionSource: touchpoint.ingestionSource,
+      isDirect: touchpoint.isDirect
+    }))
+  };
 }
 
 async function persistAttribution(
@@ -584,10 +628,17 @@ async function persistAttribution(
   journey: ResolvedJourney
 ): Promise<void> {
   const orderOccurredAt = order.processed_at ?? order.created_at_shopify ?? order.ingested_at;
-  const outputs = computeAttributionOutputs(journey.touchpoints, {
+  const orderedTouchpoints = journey.touchpoints.length > 0 ? journey.touchpoints : [buildUnattributedTouchpoint(orderOccurredAt)];
+  const outputs = computeAttributionOutputs(orderedTouchpoints, {
     orderOccurredAt,
     orderRevenue: order.total_price
   });
+  const winnerIndex = journey.winner ? orderedTouchpoints.findIndex((touchpoint) => touchpoint === journey.winner) : -1;
+
+  if (winnerIndex >= 0) {
+    outputs.last_touch = computeSingleWinnerCredits('last_touch', orderedTouchpoints, winnerIndex, order.total_price);
+  }
+
   const primaryCredit = selectPrimaryCredit(outputs.last_touch);
 
   await client.query('DELETE FROM attribution_order_credits WHERE shopify_order_id = $1', [order.shopify_order_id]);
@@ -728,6 +779,17 @@ async function persistAttribution(
     ]
   );
 
+  await client.query(
+    `
+      UPDATE shopify_orders
+      SET
+        attribution_snapshot = $2::jsonb,
+        attribution_snapshot_updated_at = now()
+      WHERE shopify_order_id = $1
+    `,
+    [order.shopify_order_id, JSON.stringify(buildOrderAttributionSnapshot(orderOccurredAt, journey))]
+  );
+
   await enqueueShopifyOrderWriteback(order.shopify_order_id, 'attribution_persisted', client);
 }
 
@@ -804,8 +866,7 @@ async function processClaimedJob(client: PoolClient, job: AttributionJobRow, wor
 }
 
 function primaryCreditReason(journey: ResolvedJourney): string {
-  const lastTouchpoint = journey.touchpoints[journey.touchpoints.length - 1];
-  return lastTouchpoint?.attributionReason ?? 'unattributed';
+  return journey.winner?.attributionReason ?? 'unattributed';
 }
 
 export async function applySyntheticAttributionForOrder(
@@ -821,7 +882,7 @@ export async function applySyntheticAttributionForOrder(
     }
 
     const orderOccurredAt = order.processed_at ?? order.created_at_shopify ?? order.ingested_at;
-    const touchpoint: AttributionTouchpoint = {
+    const touchpoint: ResolvedAttributionTouchpoint = {
       sessionId: null,
       occurredAt: input.occurredAt ?? orderOccurredAt,
       source: normalizeNullableString(input.source),
@@ -832,18 +893,22 @@ export async function applySyntheticAttributionForOrder(
       clickIdType: normalizeNullableString(input.clickIdType),
       clickIdValue: normalizeNullableString(input.clickIdValue),
       attributionReason: input.attributionReason,
-      isDirect:
-        !input.source &&
-        !input.medium &&
-        !input.campaign &&
-        !input.content &&
-        !input.term &&
-        !input.clickIdValue,
-      isForced: true
+      isDirect: isDirectTouchpoint({
+        source: normalizeNullableString(input.source),
+        medium: normalizeNullableString(input.medium),
+        campaign: normalizeNullableString(input.campaign),
+        content: normalizeNullableString(input.content),
+        term: normalizeNullableString(input.term),
+        clickIdValue: normalizeNullableString(input.clickIdValue)
+      }),
+      isForced: true,
+      sourceTouchEventId: null,
+      ingestionSource: 'customer_identity'
     };
 
     await persistAttribution(db, order, {
       touchpoints: [touchpoint],
+      winner: touchpoint,
       confidenceScore: input.confidenceScore ?? 0.35
     });
 
@@ -935,5 +1000,7 @@ export async function processAttributionQueue(
 export const __attributionTestUtils = {
   buildQueueKey,
   computeRetryDelaySeconds,
-  buildProcessingMetricsLog
+  buildProcessingMetricsLog,
+  dedupeDeterministicCandidates,
+  selectLastNonDirectWinner
 };
