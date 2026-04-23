@@ -8,6 +8,7 @@
     landingPathAttributeKey: "roas_radar_landing_path",
     sessionStorageKey: "roas_radar_session_id",
     trackingSessionStorageKey: "_hba_id",
+    sessionBootstrapEndpoint: "/track/session",
     syncEndpoint: "/cart/update.js",
     checkoutSelectors: [
       "form[action^='/cart'] [name='checkout']",
@@ -24,6 +25,7 @@
   var config = assign({}, DEFAULTS, window.ROASRadarConfig || {});
   var syncInFlight = null;
   var lastSyncedSessionId = null;
+  var sessionBootstrapPromise = null;
 
   function assign(target) {
     for (var i = 1; i < arguments.length; i += 1) {
@@ -64,7 +66,7 @@
     }
 
     var trimmed = value.trim();
-    return trimmed ? trimmed.slice(0, 128) : null;
+    return /^[0-9a-f-]{36}$/i.test(trimmed) ? trimmed : null;
   }
 
   function resolveSessionId() {
@@ -170,7 +172,7 @@
       credentials: "same-origin",
       headers: {
         "Content-Type": "application/json",
-        "Accept": "application/json"
+        Accept: "application/json"
       },
       body: buildPayload(sessionId)
     })
@@ -201,6 +203,81 @@
     return syncInFlight;
   }
 
+  function buildSessionBootstrapUrl() {
+    if (!window.location || !config.sessionBootstrapEndpoint) {
+      return null;
+    }
+
+    var endpoint = String(config.sessionBootstrapEndpoint);
+    var separator = endpoint.indexOf("?") === -1 ? "?" : "&";
+    var pageUrl = window.location.origin + window.location.pathname + window.location.search;
+    var query = [
+      "pageUrl=" + encodeURIComponent(pageUrl),
+      "landingUrl=" + encodeURIComponent(pageUrl),
+      "referrerUrl=" + encodeURIComponent(document.referrer || "")
+    ].join("&");
+
+    return endpoint + separator + query;
+  }
+
+  function bootstrapSessionId() {
+    if (sessionBootstrapPromise) {
+      return sessionBootstrapPromise;
+    }
+
+    if (typeof window.fetch !== "function") {
+      return Promise.resolve(resolveSessionId());
+    }
+
+    var url = buildSessionBootstrapUrl();
+    if (!url) {
+      return Promise.resolve(resolveSessionId());
+    }
+
+    sessionBootstrapPromise = window
+      .fetch(url, {
+        method: "GET",
+        credentials: "same-origin",
+        headers: {
+          Accept: "application/json"
+        }
+      })
+      .then(function (response) {
+        if (!response.ok || typeof response.json !== "function") {
+          throw new Error("ROAS Radar session bootstrap failed with status " + response.status);
+        }
+
+        return response.json();
+      })
+      .then(function (payload) {
+        var sessionId = sanitizeSessionId(payload && payload.sessionId);
+        if (!sessionId) {
+          return resolveSessionId();
+        }
+
+        persistSessionId(sessionId);
+        return sessionId;
+      })
+      .catch(function () {
+        return resolveSessionId();
+      })
+      .finally(function () {
+        sessionBootstrapPromise = null;
+      });
+
+    return sessionBootstrapPromise;
+  }
+
+  function ensureCartSessionSync(sessionId) {
+    if (!sessionId) {
+      return;
+    }
+
+    persistSessionId(sessionId);
+    updateCartForms(sessionId);
+    syncCartAttributes(sessionId);
+  }
+
   function attachCheckoutListeners() {
     document.addEventListener(
       "click",
@@ -215,10 +292,7 @@
           return;
         }
 
-        var sessionId = resolveSessionId();
-        persistSessionId(sessionId);
-        updateCartForms(sessionId || "");
-        syncCartAttributes(sessionId);
+        bootstrapSessionId().then(ensureCartSessionSync);
       },
       { passive: true }
     );
@@ -226,26 +300,27 @@
     document.addEventListener(
       "submit",
       function () {
-        var sessionId = resolveSessionId();
-        persistSessionId(sessionId);
-        updateCartForms(sessionId || "");
-        syncCartAttributes(sessionId);
+        bootstrapSessionId().then(ensureCartSessionSync);
       },
       true
     );
+
+    document.addEventListener("roas-radar:session-ready", function (event) {
+      var detail = event && event.detail ? event.detail : null;
+      ensureCartSessionSync(sanitizeSessionId(detail && detail.sessionId));
+    });
   }
 
   function init() {
     attachCheckoutListeners();
 
     var sessionId = resolveSessionId();
-    if (!sessionId) {
+    if (sessionId) {
+      ensureCartSessionSync(sessionId);
       return;
     }
 
-    persistSessionId(sessionId);
-    updateCartForms(sessionId);
-    syncCartAttributes(sessionId);
+    bootstrapSessionId().then(ensureCartSessionSync);
   }
 
   if (document.readyState === "loading") {

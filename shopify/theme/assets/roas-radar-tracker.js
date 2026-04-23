@@ -6,8 +6,10 @@
     legacyCookieName: "roas_radar_session_id",
     storageKey: "_hba_id",
     legacyStorageKey: "roas_radar_session_id",
+    sessionCreatedAtStorageKey: "roas_radar_session_created_at",
     queueStorageKey: "roas_radar_pending_track_events",
     endpoint: "/track",
+    sessionBootstrapEndpoint: "/track/session",
     cookieDays: 365,
     cookiePath: "/",
     eventType: "page_view",
@@ -16,6 +18,7 @@
 
   var config = assign({}, DEFAULTS, window.ROASRadarConfig || {});
   var hasTrackedPageLoad = false;
+  var sessionBootstrapPromise = null;
 
   function assign(target) {
     for (var i = 1; i < arguments.length; i += 1) {
@@ -149,10 +152,10 @@
       }
     }
 
-    return generateUuid();
+    return null;
   }
 
-  function persistSessionId(sessionId) {
+  function persistSessionId(sessionId, createdAt) {
     if (!isUuid(sessionId)) {
       return null;
     }
@@ -160,13 +163,54 @@
     window.__ROAS_RADAR_TRACKING_SESSION_ID = sessionId;
     window.__ROAS_RADAR_SESSION_ID = sessionId;
 
+    if (createdAt) {
+      window.__ROAS_RADAR_SESSION_CREATED_AT = createdAt;
+    }
+
     writeCookie(config.cookieName, sessionId, config.cookieDays, config.cookiePath);
     writeStorage(config.storageKey, sessionId, window.localStorage);
     writeStorage(config.storageKey, sessionId, window.sessionStorage);
     writeStorage(config.legacyStorageKey, sessionId, window.localStorage);
     writeStorage(config.legacyStorageKey, sessionId, window.sessionStorage);
 
+    if (createdAt) {
+      writeStorage(config.sessionCreatedAtStorageKey, createdAt, window.localStorage);
+      writeStorage(config.sessionCreatedAtStorageKey, createdAt, window.sessionStorage);
+    }
+
     return sessionId;
+  }
+
+  function getPersistedSessionCreatedAt() {
+    var candidates = [
+      window.__ROAS_RADAR_SESSION_CREATED_AT,
+      readStorage(config.sessionCreatedAtStorageKey, window.localStorage),
+      readStorage(config.sessionCreatedAtStorageKey, window.sessionStorage)
+    ];
+
+    for (var i = 0; i < candidates.length; i += 1) {
+      if (typeof candidates[i] === "string" && candidates[i]) {
+        return candidates[i];
+      }
+    }
+
+    return null;
+  }
+
+  function dispatchSessionReady(sessionId, createdAt, source) {
+    if (typeof window.CustomEvent !== "function" || !document || typeof document.dispatchEvent !== "function") {
+      return;
+    }
+
+    document.dispatchEvent(
+      new window.CustomEvent("roas-radar:session-ready", {
+        detail: {
+          sessionId: sessionId,
+          createdAt: createdAt || null,
+          source: source || "unknown"
+        }
+      })
+    );
   }
 
   function getQueue() {
@@ -217,6 +261,108 @@
     };
   }
 
+  function buildSessionBootstrapUrl() {
+    if (!window.location || !config.sessionBootstrapEndpoint) {
+      return null;
+    }
+
+    var endpoint = String(config.sessionBootstrapEndpoint);
+    var separator = endpoint.indexOf("?") === -1 ? "?" : "&";
+    var pageUrl = buildPageUrl();
+    var query = [
+      "pageUrl=" + encodeURIComponent(pageUrl),
+      "landingUrl=" + encodeURIComponent(pageUrl),
+      "referrerUrl=" + encodeURIComponent(document.referrer || "")
+    ].join("&");
+
+    return endpoint + separator + query;
+  }
+
+  function requestServerSession() {
+    if (typeof window.fetch !== "function") {
+      return Promise.resolve(null);
+    }
+
+    var url = buildSessionBootstrapUrl();
+    if (!url) {
+      return Promise.resolve(null);
+    }
+
+    return window
+      .fetch(url, {
+        method: "GET",
+        credentials: "same-origin",
+        headers: {
+          Accept: "application/json"
+        }
+      })
+      .then(function (response) {
+        if (!response || !response.ok || typeof response.json !== "function") {
+          return null;
+        }
+
+        return response.json().catch(function () {
+          return null;
+        });
+      })
+      .then(function (payload) {
+        if (!payload || !isUuid(payload.sessionId)) {
+          return null;
+        }
+
+        return {
+          sessionId: payload.sessionId,
+          createdAt: typeof payload.createdAt === "string" ? payload.createdAt : null,
+          source: payload.isNewSession ? "server_created" : "server_reused"
+        };
+      })
+      .catch(function () {
+        return null;
+      });
+  }
+
+  function ensureSessionIdentity() {
+    if (sessionBootstrapPromise) {
+      return sessionBootstrapPromise;
+    }
+
+    sessionBootstrapPromise = requestServerSession()
+      .then(function (serverSession) {
+        if (serverSession && isUuid(serverSession.sessionId)) {
+          persistSessionId(serverSession.sessionId, serverSession.createdAt);
+          dispatchSessionReady(serverSession.sessionId, serverSession.createdAt, serverSession.source);
+          return serverSession;
+        }
+
+        var existingSessionId = resolveSessionId();
+        if (existingSessionId) {
+          var existingCreatedAt = getPersistedSessionCreatedAt();
+          persistSessionId(existingSessionId, existingCreatedAt);
+          dispatchSessionReady(existingSessionId, existingCreatedAt, "client_reused");
+          return {
+            sessionId: existingSessionId,
+            createdAt: existingCreatedAt,
+            source: "client_reused"
+          };
+        }
+
+        var fallbackSessionId = generateUuid();
+        var fallbackCreatedAt = new Date().toISOString();
+        persistSessionId(fallbackSessionId, fallbackCreatedAt);
+        dispatchSessionReady(fallbackSessionId, fallbackCreatedAt, "client_fallback");
+        return {
+          sessionId: fallbackSessionId,
+          createdAt: fallbackCreatedAt,
+          source: "client_fallback"
+        };
+      })
+      .finally(function () {
+        sessionBootstrapPromise = null;
+      });
+
+    return sessionBootstrapPromise;
+  }
+
   function tryBeacon(body) {
     if (!window.navigator || typeof window.navigator.sendBeacon !== "function") {
       return false;
@@ -241,7 +387,7 @@
         credentials: "omit",
         headers: {
           "Content-Type": "application/json",
-          "Accept": "application/json"
+          Accept: "application/json"
         },
         body: body
       })
@@ -350,19 +496,23 @@
 
     hasTrackedPageLoad = true;
 
-    var sessionId = persistSessionId(resolveSessionId());
-    var payload = buildPayload(sessionId);
+    ensureSessionIdentity()
+      .then(function (session) {
+        var payload = buildPayload(session.sessionId);
 
-    flushQueuedPayloads()
-      .then(function () {
-        return deliverPayload(payload);
-      })
-      .then(function (delivered) {
-        if (!delivered) {
-          enqueuePayload(payload);
-        }
+        return flushQueuedPayloads()
+          .then(function () {
+            return deliverPayload(payload);
+          })
+          .then(function (delivered) {
+            if (!delivered) {
+              enqueuePayload(payload);
+            }
+          });
       })
       .catch(function () {
+        var fallbackSessionId = persistSessionId(resolveSessionId() || generateUuid(), new Date().toISOString());
+        var payload = buildPayload(fallbackSessionId);
         enqueuePayload(payload);
       });
   }

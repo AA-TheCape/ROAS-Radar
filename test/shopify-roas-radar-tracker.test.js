@@ -217,22 +217,58 @@ async function runTracker(overrides = {}) {
   };
 }
 
+function createJsonResponse(body, ok = true, statusCode = 200) {
+  return {
+    ok,
+    status: statusCode,
+    json: async function () {
+      return body;
+    }
+  };
+}
+
+function createBootstrapFetch(sessionId, createdAt, extraHandler) {
+  return async function (url, options) {
+    if (String(url).startsWith("/track/session")) {
+      return createJsonResponse({
+        ok: true,
+        sessionId,
+        createdAt,
+        isNewSession: true
+      });
+    }
+
+    if (typeof extraHandler === "function") {
+      return extraHandler(url, options);
+    }
+
+    return createJsonResponse({}, true, 200);
+  };
+}
+
 test("persists a 365-day _hba_id cookie and reuses it across sessions", async () => {
   const cookieJar = new Map();
-  const firstRun = await runTracker({ cookieJar });
-  const sessionId = cookieJar.get("_hba_id");
+  const createdAt = "2026-04-23T12:00:00.000Z";
+  const sessionId = "123e4567-e89b-42d3-a456-426614174000";
+  const firstRun = await runTracker({
+    cookieJar,
+    fetch: createBootstrapFetch(sessionId, createdAt),
+    sendBeacon: () => true
+  });
 
-  assert.match(sessionId, /^[0-9a-f-]{36}$/i);
+  assert.equal(cookieJar.get("_hba_id"), sessionId);
   assert.ok(
     firstRun.document.__cookieAssignments.some((value) => value.includes("Max-Age=31536000")),
     "expected cookie max age to cover 365 days"
   );
   assert.equal(firstRun.localStorageData.get("_hba_id"), sessionId);
+  assert.equal(firstRun.localStorageData.get("roas_radar_session_created_at"), createdAt);
 
   const secondRun = await runTracker({
     cookieJar,
     localStorageData: firstRun.localStorageData,
     sessionStorageData: firstRun.sessionStorageData,
+    fetch: createBootstrapFetch(sessionId, createdAt),
     sendBeacon: () => true
   });
 
@@ -242,11 +278,15 @@ test("persists a 365-day _hba_id cookie and reuses it across sessions", async ()
 });
 
 test("emits the required tracking payload fields on page load", async () => {
+  const sessionId = "123e4567-e89b-42d3-a456-426614174000";
   const run = await runTracker({
+    fetch: createBootstrapFetch(sessionId, "2026-04-23T12:00:00.000Z"),
     sendBeacon: () => true
   });
 
   assert.equal(run.beaconCalls.length, 1);
+  assert.equal(run.fetchCalls.length, 1);
+  assert.match(run.fetchCalls[0].url, /^\/track\/session\?/);
 
   const call = run.beaconCalls[0];
   const payload = JSON.parse(call.body);
@@ -254,7 +294,7 @@ test("emits the required tracking payload fields on page load", async () => {
   assert.equal(call.url, "/track");
   assert.equal(payload.eventType, "page_view");
   assert.match(payload.occurredAt, /^\d{4}-\d{2}-\d{2}T/);
-  assert.match(payload.sessionId, /^[0-9a-f-]{36}$/i);
+  assert.equal(payload.sessionId, sessionId);
   assert.equal(
     payload.pageUrl,
     "https://store.example.com/products/widget?utm_source=google&utm_medium=cpc&utm_campaign=spring-sale&gclid=abc123"
@@ -269,15 +309,23 @@ test("emits the required tracking payload fields on page load", async () => {
 });
 
 test("falls back to fetch when sendBeacon is unsupported or returns false", async () => {
+  const sessionId = "123e4567-e89b-42d3-a456-426614174000";
   const run = await runTracker({
     sendBeacon: () => false,
-    fetch: async () => ({ ok: true })
+    fetch: createBootstrapFetch(sessionId, "2026-04-23T12:00:00.000Z", async function (url) {
+      if (url === "/track") {
+        return { ok: true };
+      }
+
+      return createJsonResponse({}, true, 200);
+    })
   });
 
   assert.equal(run.beaconCalls.length, 1);
-  assert.equal(run.fetchCalls.length, 1);
-  assert.equal(run.fetchCalls[0].url, "/track");
-  assert.equal(run.fetchCalls[0].options.keepalive, true);
+  assert.equal(run.fetchCalls.length, 2);
+  assert.match(run.fetchCalls[0].url, /^\/track\/session\?/);
+  assert.equal(run.fetchCalls[1].url, "/track");
+  assert.equal(run.fetchCalls[1].options.keepalive, true);
 });
 
 test("falls back to XMLHttpRequest when sendBeacon and fetch are unavailable", async () => {
@@ -292,12 +340,17 @@ test("falls back to XMLHttpRequest when sendBeacon and fetch are unavailable", a
 test("queues failed payloads and retries them on the next page load", async () => {
   const cookieJar = new Map();
   const localStorageData = new Map();
+  const sessionId = "123e4567-e89b-42d3-a456-426614174000";
   const firstRun = await runTracker({
     cookieJar,
     localStorageData,
-    fetch: async () => {
-      throw new Error("network down");
-    },
+    fetch: createBootstrapFetch(sessionId, "2026-04-23T12:00:00.000Z", async function (url) {
+      if (url === "/track") {
+        throw new Error("network down");
+      }
+
+      return createJsonResponse({}, true, 200);
+    }),
     XMLHttpRequest: createXmlHttpRequest([], 500)
   });
 
@@ -307,9 +360,29 @@ test("queues failed payloads and retries them on the next page load", async () =
   const secondRun = await runTracker({
     cookieJar,
     localStorageData: firstRun.localStorageData,
-    fetch: async () => ({ ok: true })
+    fetch: createBootstrapFetch(sessionId, "2026-04-23T12:00:00.000Z", async function (url) {
+      if (url === "/track") {
+        return { ok: true };
+      }
+
+      return createJsonResponse({}, true, 200);
+    })
   });
 
-  assert.equal(secondRun.fetchCalls.length, 2);
+  assert.equal(secondRun.fetchCalls.length, 3);
   assert.equal(secondRun.localStorageData.get("roas_radar_pending_track_events"), "[]");
+});
+
+test("falls back to a client-generated session when the bootstrap endpoint is unavailable", async () => {
+  const run = await runTracker({
+    fetch: async function () {
+      throw new Error("bootstrap down");
+    },
+    sendBeacon: () => true
+  });
+
+  const payload = JSON.parse(run.beaconCalls[0].body);
+  assert.match(payload.sessionId, /^[0-9a-f-]{36}$/i);
+  assert.equal(run.localStorageData.get("_hba_id"), payload.sessionId);
+  assert.match(run.localStorageData.get("roas_radar_session_created_at"), /^\d{4}-\d{2}-\d{2}T/);
 });
