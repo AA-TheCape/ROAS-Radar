@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 
-import { type Server } from 'node:http';
+import type { Server } from 'node:http';
 
 import { processAttributionQueue } from '../src/modules/attribution/index.js';
 import {
@@ -44,6 +44,7 @@ type ReportingSummaryResponse = {
     visits: number;
     orders: number;
     revenue: number;
+    spend: number;
     conversionRate: number;
     roas: number | null;
   };

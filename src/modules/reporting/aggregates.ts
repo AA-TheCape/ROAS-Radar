@@ -1,4 +1,4 @@
-import { type PoolClient } from 'pg';
+import type { PoolClient } from 'pg';
 
 import { ATTRIBUTION_MODELS } from '../attribution/engine.js';
 import { getReportingTimezone } from '../settings/index.js';

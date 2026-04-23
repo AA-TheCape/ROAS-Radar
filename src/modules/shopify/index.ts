@@ -1,7 +1,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 import { type RequestHandler, Router } from 'express';
-import { type PoolClient } from 'pg';
+import type { PoolClient } from 'pg';
 import { z } from 'zod';
 
 import { env } from '../../config/env.js';
@@ -220,7 +220,7 @@ class ShopifyHttpError extends Error {
 }
 
 function getShopifySharedSecret(): string {
-  return env.SHOPIFY_APP_API_SECRET || env.SHOPIFY_WEBHOOK_SECRET;
+  return env.SHOPIFY_WEBHOOK_SECRET || env.SHOPIFY_APP_API_SECRET;
 }
 
 function normalizeShopDomain(rawShop: string): string {
@@ -1227,9 +1227,7 @@ function extractShopifyHintAttribution(payload: ShopifyOrderPayload): ShopifyHin
       rawDimensions.fbclid ??= normalizeNullableString(url.searchParams.get('fbclid'));
       rawDimensions.ttclid ??= normalizeNullableString(url.searchParams.get('ttclid'));
       rawDimensions.msclkid ??= normalizeNullableString(url.searchParams.get('msclkid'));
-    } catch {
-      continue;
-    }
+    } catch {}
   }
 
   const canonicalDimensions = buildCanonicalTouchpointDimensions({

@@ -16,6 +16,7 @@ export type SummaryTotals = {
   visits: number;
   orders: number;
   revenue: number;
+  spend: number;
   conversionRate: number;
   roas: number | null;
 };
@@ -44,6 +45,38 @@ export type CampaignsResponse = {
   nextCursor: string | null;
 };
 
+export type SpendDetailCampaignRow = {
+  campaign: string;
+  spend: number;
+};
+
+export type SpendDetailChannelGroup = {
+  source: string;
+  medium: string;
+  channel: string;
+  subtotal: number;
+  campaigns: SpendDetailCampaignRow[];
+};
+
+export type SpendDetailsSummary = {
+  totalSpend: number;
+  activeChannels: number;
+  activeCampaigns: number;
+  averageDailySpend: number;
+  topChannel: {
+    source: string;
+    medium: string;
+    channel: string;
+    spend: number;
+  } | null;
+};
+
+export type SpendDetailsResponse = {
+  summary: SpendDetailsSummary;
+  groups: SpendDetailChannelGroup[];
+  totalSpend: number;
+};
+
 export type TimeseriesGroupBy = 'day' | 'source' | 'campaign';
 
 export type TimeseriesPoint = {
@@ -55,6 +88,15 @@ export type TimeseriesPoint = {
 
 export type TimeseriesResponse = {
   points: TimeseriesPoint[];
+  lowestBuckets: Array<{
+    bucket: string;
+    visits: number;
+    orders: number;
+    revenue: number;
+    spend: number;
+    conversionRate: number;
+    roas: number | null;
+  }>;
 };
 
 export type OrderRow = {
@@ -369,12 +411,13 @@ declare global {
 }
 
 const runtimeConfig = window.__ROAS_RADAR_RUNTIME_CONFIG__;
-const API_BASE_URL = (runtimeConfig?.apiBaseUrl ?? import.meta.env.VITE_API_BASE_URL ?? '').replace(
+const viteEnv = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
+const API_BASE_URL = (runtimeConfig?.apiBaseUrl ?? viteEnv.VITE_API_BASE_URL ?? '').replace(
   /\/$/,
   ''
 );
-const REPORTING_TOKEN = runtimeConfig?.reportingToken ?? import.meta.env.VITE_REPORTING_API_TOKEN ?? '';
-const TENANT_ID = runtimeConfig?.reportingTenantId ?? import.meta.env.VITE_REPORTING_TENANT_ID ?? 'roas-radar';
+const REPORTING_TOKEN = runtimeConfig?.reportingToken ?? viteEnv.VITE_REPORTING_API_TOKEN ?? '';
+const TENANT_ID = runtimeConfig?.reportingTenantId ?? viteEnv.VITE_REPORTING_TENANT_ID ?? 'roas-radar';
 const AUTH_TOKEN_STORAGE_KEY = 'roas_radar_auth_token';
 
 export function getStoredAuthToken(): string {
@@ -517,6 +560,12 @@ export function logout() {
 export function fetchCampaigns(filters: ReportingFilters, limit = 12) {
   return requestJson<CampaignsResponse>('/api/reporting/campaigns', {
     searchParams: buildSearchParams(filters, { limit: `${limit}` })
+  });
+}
+
+export function fetchSpendDetails(filters: ReportingFilters) {
+  return requestJson<SpendDetailsResponse>('/api/reporting/spend-details', {
+    searchParams: buildSearchParams(filters)
   });
 }
 

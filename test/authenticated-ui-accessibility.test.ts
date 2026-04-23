@@ -26,7 +26,6 @@ function createDom(markup = '<!doctype html><html><body></body></html>') {
   Object.assign(globalThis, {
     window: dom.window,
     document: dom.window.document,
-    navigator: dom.window.navigator,
     HTMLElement: dom.window.HTMLElement,
     SVGElement: dom.window.SVGElement,
     Node: dom.window.Node,
@@ -35,6 +34,10 @@ function createDom(markup = '<!doctype html><html><body></body></html>') {
     getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
     requestAnimationFrame: (callback: FrameRequestCallback) => setTimeout(callback, 0),
     cancelAnimationFrame: (handle: number) => clearTimeout(handle)
+  });
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: dom.window.navigator
   });
   Object.defineProperty(globalThis, 'localStorage', {
     configurable: true,
@@ -58,41 +61,9 @@ function createDom(markup = '<!doctype html><html><body></body></html>') {
   return dom;
 }
 
-function shellHeader() {
-  return h(
-    'div',
-    { className: 'grid gap-4' },
-    h(
-      'div',
-      null,
-      h('p', { className: 'text-caption uppercase tracking-[0.14em] text-ink-muted' }, 'Active window'),
-      h('p', { className: 'mt-2 font-display text-display text-ink' }, '2026-04-20'),
-      h('p', { className: 'mt-2 text-body text-ink-soft' }, 'Apr 20, 4:30 PM')
-    ),
-    h(
-      'dl',
-      { className: 'grid gap-3 text-body' },
-      h(
-        'div',
-        { className: 'rounded-card border border-line/70 bg-canvas-tint p-4' },
-        h('dt', { className: 'text-caption uppercase tracking-[0.12em] text-ink-muted' }, 'Traffic scope'),
-        h('dd', { className: 'mt-2 text-ink-soft' }, 'All attributed traffic')
-      ),
-      h(
-        'div',
-        { className: 'rounded-card border border-line/70 bg-canvas-tint p-4' },
-        h('dt', { className: 'text-caption uppercase tracking-[0.12em] text-ink-muted' }, 'Reporting timezone'),
-        h('dd', { className: 'mt-2 text-ink-soft' }, 'America/Los_Angeles')
-      )
-    )
-  );
-}
-
 function renderRouteShell(
   AuthenticatedAppShell: typeof import('../dashboard/src/components/AuthenticatedAppShell').default,
   activeNavKey: string,
-  title: string,
-  description: string,
   children: React.ReactNode
 ) {
   const navItems = [
@@ -126,17 +97,19 @@ function renderRouteShell(
             : navItems,
         activeNavKey,
         onNavigate() {},
-        breadcrumbs: [{ label: 'Authenticated app' }, { label: title, current: true }],
-        eyebrow: activeNavKey === 'settings' ? 'Admin settings' : activeNavKey === 'order-details' ? 'Order drill-in' : 'MVP reporting dashboard',
-        title,
-        description,
+        breadcrumbs: [
+          { label: 'Authenticated app' },
+          {
+            label: activeNavKey === 'settings' ? 'Settings' : activeNavKey === 'order-details' ? 'Order details' : 'Dashboard',
+            current: true
+          }
+        ],
         topbarMeta: h(
           'div',
           { className: 'space-y-1' },
           h('p', { className: 'font-semibold text-ink' }, 'Taylor Operator'),
           h('p', null, 'taylor@roasradar.dev')
         ),
-        headerStatus: shellHeader(),
         headerActions: h('button', { type: 'button' }, 'Logout')
       },
       children
@@ -171,8 +144,6 @@ test('authenticated dashboard, order details, and settings pass automated access
   const dashboardMarkup = renderRouteShell(
     AuthenticatedAppShell,
     'dashboard',
-    'Dashboard',
-    'Monitor paid acquisition performance for a single Shopify store across headline metrics, campaign rows, time-based trends, and order-level attribution evidence.',
     h(ReportingDashboard, {
       filters: { startDate: '2026-04-01', endDate: '2026-04-20', source: '', campaign: '' },
       onFiltersChange() {},
@@ -192,7 +163,7 @@ test('authenticated dashboard, order details, and settings pass automated access
         { label: 'AOV', value: '$150.99', detail: '324 attributed orders' }
       ],
       summarySection: {
-        data: { visits: 12480, orders: 324, revenue: 48920, conversionRate: 0.02596, roas: 4.3 },
+        data: { visits: 12480, orders: 324, revenue: 48920, spend: 11376, conversionRate: 0.02596, roas: 4.3 },
         loading: false,
         error: null
       },
@@ -236,6 +207,22 @@ test('authenticated dashboard, order details, and settings pass automated access
         loading: false,
         error: null
       },
+      spendDetailsSection: {
+        data: [
+          {
+            source: 'google',
+            medium: 'cpc',
+            channel: 'google / cpc',
+            subtotal: 7320,
+            campaigns: [
+              { campaign: 'Spring Search', spend: 5220 },
+              { campaign: 'Brand Search', spend: 2100 }
+            ]
+          }
+        ],
+        loading: false,
+        error: null
+      },
       onOpenOrderDetails() {}
     })
   );
@@ -243,8 +230,6 @@ test('authenticated dashboard, order details, and settings pass automated access
   const orderDetailsMarkup = renderRouteShell(
     AuthenticatedAppShell,
     'order-details',
-    'Order 1105',
-    'Inspect the full stored Shopify order record, attribution credits, line items, and raw payload for one order.',
     h(OrderDetailsView, {
       selectedOrderId: '1105',
       reportingTimezone: 'America/Los_Angeles',
@@ -311,8 +296,6 @@ test('authenticated dashboard, order details, and settings pass automated access
   const settingsMarkup = renderRouteShell(
     AuthenticatedAppShell,
     'settings',
-    'Settings',
-    'Configure store integrations, ad platform connections, and dashboard user access from one place.',
     h(SettingsAdminView, {
       isAdmin: true,
       reportingTimezone: 'America/Los_Angeles',
@@ -379,6 +362,15 @@ test('authenticated dashboard, order details, and settings pass automated access
       setMetaConfigForm() {},
       googleConnection: {
         data: {
+          config: {
+            source: 'database',
+            developerTokenConfigured: true,
+            appBaseUrl: 'https://example.com',
+            appScopes: ['https://www.googleapis.com/auth/adwords'],
+            clientId: 'client-id',
+            clientSecretConfigured: true,
+            missingFields: []
+          },
           connection: {
             customer_id: '123-456-7890',
             login_customer_id: '111-222-3333',
@@ -390,6 +382,14 @@ test('authenticated dashboard, order details, and settings pass automated access
         loading: false,
         error: null
       },
+      googleConfigForm: {
+        developerToken: 'token',
+        clientId: 'client-id',
+        clientSecret: 'client-secret',
+        appBaseUrl: 'https://example.com',
+        appScopes: 'https://www.googleapis.com/auth/adwords'
+      },
+      setGoogleConfigForm() {},
       googleForm: {
         customerId: '123-456-7890',
         loginCustomerId: '111-222-3333',
@@ -461,7 +461,7 @@ test('modal traps focus, closes on escape, and restores the previous focus targe
   });
   await new Promise((resolve) => setTimeout(resolve, 0));
 
-  const dialog = dom.window.document.querySelector('[role="dialog"]') as HTMLDivElement | null;
+  const dialog = dom.window.document.querySelector('dialog') as HTMLDialogElement | null;
   assert.ok(dialog, 'dialog should render');
   const closeButton = dom.window.document.querySelector('[aria-label="Close modal"]') as HTMLButtonElement | null;
   const saveButton = Array.from(dom.window.document.querySelectorAll('button')).find(

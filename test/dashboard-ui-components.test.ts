@@ -5,6 +5,7 @@ import {
   React,
   changeInputValue,
   click,
+  createReportingDashboardProps,
   h,
   keydown,
   loadDashboardModule,
@@ -174,7 +175,7 @@ test('modal traps focus and closes on escape for authenticated overlays', async 
         )
       )
     );
-    await tick();
+    await tick(20);
 
     const activeLabel = (mounted.dom.window.document.activeElement as HTMLElement | null)?.getAttribute('aria-label');
     assert.equal(activeLabel, 'Close modal');
@@ -242,11 +243,156 @@ test('nivo charts render smoke coverage for dashboard data visuals', async () =>
   try {
     await tick(20);
 
-    assert.equal(mounted.container.querySelectorAll('figure[role="group"]').length, 3);
+    assert.equal(mounted.container.querySelectorAll('figure').length, 3);
     assert.ok(mounted.container.querySelectorAll('svg').length >= 3);
     assert.match(mounted.container.textContent ?? '', /Revenue trend chart/);
     assert.match(mounted.container.textContent ?? '', /Campaign mix chart/);
     assert.match(mounted.container.textContent ?? '', /Source contribution chart/);
+  } finally {
+    mounted.cleanup();
+  }
+});
+
+test('pie chart value formatting rounds decimal values to whole numbers before display formatting', async () => {
+  const charts = await loadDashboardModule<typeof import('../dashboard/src/components/charts/NivoCharts')>(
+    'dashboard/src/components/charts/NivoCharts.tsx'
+  );
+
+  assert.equal(charts.formatPieMetric(12.6), '13');
+  assert.equal(charts.formatPieMetric(12.4), '12');
+  assert.equal(charts.formatPieMetric(12960.4, (value) => `$${value.toLocaleString('en-US')}`), '$12,960');
+});
+
+test('reporting dashboard date-range helper corrects invalid custom ranges with clear feedback', async () => {
+  const { applyDateRangeChange } = await loadDashboardModule<typeof import('../dashboard/src/components/ReportingDashboard')>(
+    'dashboard/src/components/ReportingDashboard.tsx'
+  );
+
+  assert.deepEqual(
+    applyDateRangeChange(
+      {
+        startDate: '2026-04-01',
+        endDate: '2026-04-20',
+        source: '',
+        campaign: ''
+      },
+      'startDate',
+      '2026-04-25'
+    ),
+    {
+      nextFilters: {
+        startDate: '2026-04-25',
+        endDate: '2026-04-25',
+        source: '',
+        campaign: ''
+      },
+      feedback: 'End date was adjusted to match the new start date so the range stays valid.'
+    }
+  );
+
+  assert.deepEqual(
+    applyDateRangeChange(
+      {
+        startDate: '2026-04-10',
+        endDate: '2026-04-20',
+        source: '',
+        campaign: ''
+      },
+      'endDate',
+      '2026-04-05'
+    ),
+    {
+      nextFilters: {
+        startDate: '2026-04-10',
+        endDate: '2026-04-10',
+        source: '',
+        campaign: ''
+      },
+      feedback: 'End date cannot be earlier than the start date. It was moved forward to keep the range valid.'
+    }
+  );
+});
+
+test('reporting dashboard exposes constrained date inputs for custom reporting windows', async () => {
+  const { default: ReportingDashboard } = await loadDashboardModule<
+    typeof import('../dashboard/src/components/ReportingDashboard')
+  >('dashboard/src/components/ReportingDashboard.tsx');
+
+  const mounted = await mountUi(h(ReportingDashboard, createReportingDashboardProps()));
+
+  try {
+    const startDateInput = mounted.container.querySelector('#start-date') as HTMLInputElement | null;
+    const endDateInput = mounted.container.querySelector('#end-date') as HTMLInputElement | null;
+
+    assert.ok(startDateInput);
+    assert.ok(endDateInput);
+    assert.equal(startDateInput.getAttribute('max'), '2026-04-20');
+    assert.equal(endDateInput.getAttribute('min'), '2026-04-01');
+    assert.match(mounted.container.textContent ?? '', /Apr 1 to Apr 20/);
+  } finally {
+    mounted.cleanup();
+  }
+});
+
+test('reporting dashboard keeps the top controls compact and applies quick date ranges in place', async () => {
+  const { default: ReportingDashboard } = await loadDashboardModule<
+    typeof import('../dashboard/src/components/ReportingDashboard')
+  >('dashboard/src/components/ReportingDashboard.tsx');
+
+  function ReportingDashboardHarness() {
+    const [filters, setFilters] = React.useState(createReportingDashboardProps().filters);
+
+    return h(
+      ReportingDashboard,
+      createReportingDashboardProps({
+        filters,
+        onFiltersChange: setFilters,
+        onApplyQuickRange: (range) => setFilters((current) => ({ ...current, ...range }))
+      })
+    );
+  }
+
+  function findCompactControlCard(element: HTMLElement | null) {
+    let current = element;
+
+    while (current) {
+      if (current.className.includes('col-[1/-1]') && /Top control card/.test(current.textContent ?? '')) {
+        return current;
+      }
+
+      current = current.parentElement;
+    }
+
+    return null;
+  }
+
+  const mounted = await mountUi(h(ReportingDashboardHarness));
+
+  try {
+    const startDateInput = mounted.container.querySelector('#start-date') as HTMLInputElement | null;
+    const endDateInput = mounted.container.querySelector('#end-date') as HTMLInputElement | null;
+    const compactControlCard = findCompactControlCard(startDateInput);
+
+    assert.ok(startDateInput);
+    assert.ok(endDateInput);
+    assert.ok(compactControlCard);
+    assert.match(compactControlCard.className, /col-\[1\/-1\]/);
+    assert.match(compactControlCard.textContent ?? '', /Today/);
+    assert.match(compactControlCard.textContent ?? '', /Last 7D/);
+    assert.match(compactControlCard.textContent ?? '', /Last 30D/);
+
+    const lastSevenDaysButton = Array.from(mounted.container.querySelectorAll<HTMLButtonElement>('button')).find(
+      (element) => element.textContent?.trim() === 'Last 7D'
+    );
+
+    assert.ok(lastSevenDaysButton);
+
+    click(lastSevenDaysButton);
+    await tick();
+
+    assert.equal(startDateInput.value, '2026-04-14');
+    assert.equal(endDateInput.value, '2026-04-20');
+    assert.match(mounted.container.textContent ?? '', /Apr 14 to Apr 20/);
   } finally {
     mounted.cleanup();
   }

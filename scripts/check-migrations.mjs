@@ -38,9 +38,7 @@ async function verifyMigrations() {
   await client.connect();
 
   try {
-    const migrationCountResult = await client.query<{ count: string }>(
-      'SELECT COUNT(*)::text AS count FROM schema_migrations'
-    );
+    const migrationCountResult = await client.query('SELECT COUNT(*)::text AS count FROM schema_migrations');
     const appliedCount = Number(migrationCountResult.rows[0]?.count ?? '0');
 
     if (appliedCount !== expectedFiles.length) {

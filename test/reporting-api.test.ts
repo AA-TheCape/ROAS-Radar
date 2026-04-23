@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { type AddressInfo } from 'node:net';
+import type { AddressInfo } from 'node:net';
 import test from 'node:test';
 
 process.env.DATABASE_URL ??= 'postgres://postgres:postgres@localhost:5432/roas_radar_test';
@@ -81,10 +81,36 @@ test('reporting summary returns headline metrics from daily campaign aggregates'
         visits: 1240,
         orders: 48,
         revenue: 5210.5,
+        spend: 0,
         conversionRate: 48 / 1240,
         roas: null
       }
     });
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
+test('reporting routes reject invalid date ranges before querying aggregates', async () => {
+  let queryCalls = 0;
+  pool.query = (async () => {
+    queryCalls += 1;
+    return { rows: [] };
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(
+      server,
+      '/api/reporting/summary?startDate=2026-04-10&endDate=2026-04-01'
+    );
+
+    assert.equal(response.status, 400);
+    assert.equal(body.error, 'invalid_request');
+    assert.equal(queryCalls, 0);
+    assert.deepEqual(body.details.fieldErrors.startDate, ['startDate must be on or before endDate']);
   } finally {
     pool.query = originalPoolQuery as typeof pool.query;
     await closeServer(server);
@@ -160,6 +186,96 @@ test('reporting campaigns returns campaign rows sorted for dashboard tables', as
   }
 });
 
+test('reporting spend details return channel groups with campaign subtotals in descending order', async () => {
+  pool.query = (async (text: string, params?: unknown[]) => {
+    assert.match(text, /GROUP BY source, medium, campaign/);
+    assert.match(text, /AND spend > 0/);
+    assert.deepEqual(params, ['2026-04-01', '2026-04-10', 'last_touch']);
+
+    return {
+      rows: [
+        {
+          source: 'google',
+          medium: 'cpc',
+          campaign: 'spring-search',
+          spend: '1200.00'
+        },
+        {
+          source: 'google',
+          medium: 'cpc',
+          campaign: 'brand-search',
+          spend: '300.00'
+        },
+        {
+          source: 'meta',
+          medium: 'paid_social',
+          campaign: 'prospecting-us',
+          spend: '900.50'
+        }
+      ]
+    };
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(
+      server,
+      '/api/reporting/spend-details?startDate=2026-04-01&endDate=2026-04-10'
+    );
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(body, {
+      summary: {
+        totalSpend: 2400.5,
+        activeChannels: 2,
+        activeCampaigns: 3,
+        averageDailySpend: 240.05,
+        topChannel: {
+          source: 'google',
+          medium: 'cpc',
+          channel: 'google / cpc',
+          spend: 1500
+        }
+      },
+      groups: [
+        {
+          source: 'google',
+          medium: 'cpc',
+          channel: 'google / cpc',
+          subtotal: 1500,
+          campaigns: [
+            {
+              campaign: 'spring-search',
+              spend: 1200
+            },
+            {
+              campaign: 'brand-search',
+              spend: 300
+            }
+          ]
+        },
+        {
+          source: 'meta',
+          medium: 'paid_social',
+          channel: 'meta / paid_social',
+          subtotal: 900.5,
+          campaigns: [
+            {
+              campaign: 'prospecting-us',
+              spend: 900.5
+            }
+          ]
+        }
+      ],
+      totalSpend: 2400.5
+    });
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
 test('reporting timeseries returns grouped points for the requested dimension', async () => {
   pool.query = (async (text: string, params?: unknown[]) => {
     assert.match(text, /SELECT\s+source AS bucket/);
@@ -171,13 +287,15 @@ test('reporting timeseries returns grouped points for the requested dimension', 
           bucket: 'google',
           visits: '900',
           orders: '33',
-          revenue: '3000.00'
+          revenue: '3000.00',
+          spend: '1200.00'
         },
         {
           bucket: 'meta',
           visits: '340',
           orders: '15',
-          revenue: '2210.50'
+          revenue: '2210.50',
+          spend: '900.50'
         }
       ]
     };
@@ -206,6 +324,26 @@ test('reporting timeseries returns grouped points for the requested dimension', 
           orders: 15,
           revenue: 2210.5
         }
+      ],
+      lowestBuckets: [
+        {
+          bucket: 'meta',
+          visits: 340,
+          orders: 15,
+          revenue: 2210.5,
+          spend: 900.5,
+          conversionRate: 15 / 340,
+          roas: 2210.5 / 900.5
+        },
+        {
+          bucket: 'google',
+          visits: 900,
+          orders: 33,
+          revenue: 3000,
+          spend: 1200,
+          conversionRate: 33 / 900,
+          roas: 2.5
+        }
       ]
     });
   } finally {
@@ -216,8 +354,25 @@ test('reporting timeseries returns grouped points for the requested dimension', 
 
 test('reporting orders returns order-level attribution details for debugging', async () => {
   pool.query = (async (text: string, params?: unknown[]) => {
+    if (text.includes('INSERT INTO app_settings')) {
+      assert.deepEqual(params, ['America/Los_Angeles']);
+      return { rows: [], rowCount: 0 };
+    }
+
+    if (text.includes('SELECT reporting_timezone')) {
+      return {
+        rows: [
+          {
+            reporting_timezone: 'America/Los_Angeles',
+            updated_at: new Date('2026-04-01T00:00:00.000Z')
+          }
+        ],
+        rowCount: 1
+      };
+    }
+
     assert.match(text, /LEFT JOIN LATERAL/);
-    assert.deepEqual(params, ['2026-04-01', '2026-04-10', 'last_touch', 'facebook', 1]);
+    assert.deepEqual(params, ['2026-04-01', '2026-04-10', 'last_touch', 'facebook', 'America/Los_Angeles', 1]);
 
     return {
       rows: [

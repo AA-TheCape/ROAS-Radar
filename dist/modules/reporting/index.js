@@ -104,6 +104,14 @@ function normalizeContent(value) {
     const trimmed = value.trim();
     return trimmed.length > 0 ? trimmed : null;
 }
+function countDaysInRange(startDate, endDate) {
+    const start = Date.parse(`${startDate}T00:00:00.000Z`);
+    const end = Date.parse(`${endDate}T00:00:00.000Z`);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) {
+        return 0;
+    }
+    return Math.floor((end - start) / 86_400_000) + 1;
+}
 export function createReportingRouter() {
     const router = Router();
     router.use(attachAuthContext);
@@ -138,6 +146,7 @@ export function createReportingRouter() {
                     visits: metrics.visits,
                     orders: metrics.orders,
                     revenue: metrics.attributedRevenue,
+                    spend: metrics.spend,
                     conversionRate: metrics.conversionRate,
                     roas: metrics.roas
                 }
@@ -190,6 +199,79 @@ export function createReportingRouter() {
             next(error);
         }
     });
+    router.get('/spend-details', async (req, res, next) => {
+        try {
+            const input = parseInput(baseFiltersSchema, req.query);
+            const filters = buildMetricDimensionFilters(input.attributionModel, input.source, input.campaign);
+            const result = await query(`
+          SELECT
+            source,
+            medium,
+            campaign,
+            COALESCE(SUM(spend), 0) AS spend
+          FROM daily_reporting_metrics
+          WHERE metric_date BETWEEN $1::date AND $2::date
+            AND spend > 0
+            ${filters.sql}
+          GROUP BY source, medium, campaign
+          ORDER BY spend DESC, source ASC, medium ASC, campaign ASC
+        `, [input.startDate, input.endDate, ...filters.params]);
+            const groupMap = new Map();
+            for (const row of result.rows) {
+                const spend = Number(row.spend);
+                const source = row.source;
+                const medium = row.medium;
+                const channel = `${source} / ${medium}`;
+                const groupKey = `${source}\u0000${medium}`;
+                const existingGroup = groupMap.get(groupKey);
+                if (existingGroup) {
+                    existingGroup.subtotal += spend;
+                    existingGroup.campaigns.push({
+                        campaign: row.campaign,
+                        spend
+                    });
+                    continue;
+                }
+                groupMap.set(groupKey, {
+                    source,
+                    medium,
+                    channel,
+                    subtotal: spend,
+                    campaigns: [
+                        {
+                            campaign: row.campaign,
+                            spend
+                        }
+                    ]
+                });
+            }
+            const groups = [...groupMap.values()].sort((left, right) => right.subtotal - left.subtotal || left.channel.localeCompare(right.channel));
+            const totalSpend = groups.reduce((sum, group) => sum + group.subtotal, 0);
+            const rangeDays = countDaysInRange(input.startDate, input.endDate);
+            const topChannel = groups[0]
+                ? {
+                    source: groups[0].source,
+                    medium: groups[0].medium,
+                    channel: groups[0].channel,
+                    spend: groups[0].subtotal
+                }
+                : null;
+            res.json({
+                summary: {
+                    totalSpend,
+                    activeChannels: groups.length,
+                    activeCampaigns: result.rows.length,
+                    averageDailySpend: rangeDays > 0 ? totalSpend / rangeDays : 0,
+                    topChannel
+                },
+                groups,
+                totalSpend
+            });
+        }
+        catch (error) {
+            next(error);
+        }
+    });
     router.get('/timeseries', async (req, res, next) => {
         try {
             const input = parseInput(timeseriesQuerySchema, req.query);
@@ -200,20 +282,44 @@ export function createReportingRouter() {
             ${groupExpr} AS bucket,
             COALESCE(SUM(visits), 0) AS visits,
             COALESCE(SUM(attributed_orders), 0) AS orders,
-            COALESCE(SUM(attributed_revenue), 0) AS revenue
+            COALESCE(SUM(attributed_revenue), 0) AS revenue,
+            COALESCE(SUM(spend), 0) AS spend
           FROM daily_reporting_metrics
           WHERE metric_date BETWEEN $1::date AND $2::date
           ${filters.sql}
           GROUP BY bucket
           ORDER BY bucket ASC
         `, [input.startDate, input.endDate, ...filters.params]);
+            const bucketMetrics = result.rows.map((row) => {
+                const metrics = calculatePerformanceMetrics({
+                    visits: row.visits,
+                    orders: row.orders,
+                    attributedRevenue: row.revenue,
+                    spend: row.spend
+                });
+                return {
+                    bucket: row.bucket,
+                    visits: metrics.visits,
+                    orders: metrics.orders,
+                    revenue: metrics.attributedRevenue,
+                    spend: metrics.spend,
+                    conversionRate: metrics.conversionRate,
+                    roas: metrics.roas
+                };
+            });
             res.json({
-                points: result.rows.map((row) => ({
+                points: bucketMetrics.map((row) => ({
                     date: row.bucket,
-                    visits: Number(row.visits),
-                    orders: Number(row.orders),
-                    revenue: Number(row.revenue)
-                }))
+                    visits: row.visits,
+                    orders: row.orders,
+                    revenue: row.revenue
+                })),
+                lowestBuckets: [...bucketMetrics]
+                    .sort((left, right) => left.revenue - right.revenue ||
+                    left.orders - right.orders ||
+                    left.visits - right.visits ||
+                    left.bucket.localeCompare(right.bucket))
+                    .slice(0, 3)
             });
         }
         catch (error) {

@@ -1,4 +1,4 @@
-import {
+import React, {
   Suspense,
   lazy,
   startTransition,
@@ -21,6 +21,7 @@ import {
   fetchMetaAdsStatus,
   fetchOrderDetails,
   fetchOrders,
+  fetchSpendDetails,
   fetchShopifyConnection,
   fetchSummary,
   fetchTimeseries,
@@ -53,6 +54,7 @@ import {
   type ShopifyConnectionResponse,
   type ShopifyBackfillResponse,
   type ShopifyAttributionRecoveryResponse,
+  type SpendDetailChannelGroup,
   type SummaryTotals,
   type TimeseriesGroupBy,
   type TimeseriesPoint
@@ -68,6 +70,7 @@ import AuthenticatedAppShell, {
   type AppShellBreadcrumb,
   type AppShellNavItem
 } from './components/AuthenticatedAppShell';
+import TitleBarTimestamp from './components/TitleBarTimestamp';
 import {
   AuthGate,
   Banner,
@@ -97,6 +100,7 @@ type DashboardState = {
   campaigns: AsyncSection<CampaignRow[]>;
   timeseries: AsyncSection<TimeseriesPoint[]>;
   orders: AsyncSection<OrderRow[]>;
+  spendDetails: AsyncSection<SpendDetailChannelGroup[]>;
 };
 
 type ActionFeedback = {
@@ -164,6 +168,7 @@ const AUTHENTICATED_NAV_ITEMS: AppShellNavItem[] = [
 ];
 
 const DEFAULT_REPORTING_TIMEZONE = 'America/Los_Angeles';
+const DEFAULT_GROUP_BY: TimeseriesGroupBy = 'day';
 const REPORTING_TIMEZONE_OPTIONS = [
   'America/Los_Angeles',
   'America/Denver',
@@ -205,16 +210,6 @@ function formatDateInput(date: Date, reportingTimezone = DEFAULT_REPORTING_TIMEZ
   return `${year}-${month}-${day}`;
 }
 
-function formatDateTimeForClock(date: Date, reportingTimezone = DEFAULT_REPORTING_TIMEZONE): string {
-  return new Intl.DateTimeFormat('en-US', {
-    timeZone: reportingTimezone,
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit'
-  }).format(date);
-}
-
 function buildRange(
   days: number,
   reportingTimezone = DEFAULT_REPORTING_TIMEZONE
@@ -248,6 +243,118 @@ function buildYesterdayDateInput(reportingTimezone = DEFAULT_REPORTING_TIMEZONE)
 function buildAprilFirstDateInput(reportingTimezone = DEFAULT_REPORTING_TIMEZONE): string {
   const currentYear = formatDateInput(new Date(), reportingTimezone).slice(0, 4);
   return `${currentYear}-04-01`;
+}
+
+function normalizeReportingFilters(filters: ReportingFilters): ReportingFilters {
+  if (filters.startDate && filters.endDate && filters.startDate > filters.endDate) {
+    return {
+      ...filters,
+      endDate: filters.startDate
+    };
+  }
+
+  return filters;
+}
+
+const DASHBOARD_QUERY_PARAM_KEYS = ['startDate', 'endDate', 'source', 'campaign', 'attributionModel', 'groupBy'] as const;
+const REPORTING_FILTER_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const ATTRIBUTION_MODELS = new Set<NonNullable<ReportingFilters['attributionModel']>>([
+  'first_touch',
+  'last_touch',
+  'linear',
+  'time_decay',
+  'position_based',
+  'rule_based_weighted'
+]);
+
+export function createDefaultReportingFilters(reportingTimezone = DEFAULT_REPORTING_TIMEZONE): ReportingFilters {
+  return {
+    ...buildRange(30, reportingTimezone),
+    source: '',
+    campaign: ''
+  };
+}
+
+function isValidDateInput(value: string | null): value is string {
+  return Boolean(value && REPORTING_FILTER_DATE_PATTERN.test(value));
+}
+
+function isTimeseriesGroupBy(value: string | null): value is TimeseriesGroupBy {
+  return value === 'day' || value === 'source' || value === 'campaign';
+}
+
+function isAttributionModel(value: string | null): value is NonNullable<ReportingFilters['attributionModel']> {
+  return Boolean(value && ATTRIBUTION_MODELS.has(value as NonNullable<ReportingFilters['attributionModel']>));
+}
+
+export function readDashboardStateFromSearch(
+  search: string,
+  reportingTimezone = DEFAULT_REPORTING_TIMEZONE
+): {
+  filters: ReportingFilters;
+  groupBy: TimeseriesGroupBy;
+} {
+  const params = new URLSearchParams(search);
+  const defaults = createDefaultReportingFilters(reportingTimezone);
+  const startDate = params.get('startDate');
+  const endDate = params.get('endDate');
+  const source = params.get('source');
+  const campaign = params.get('campaign');
+  const attributionModel = params.get('attributionModel');
+  const groupBy = params.get('groupBy');
+
+  return {
+    filters: normalizeReportingFilters({
+      startDate: isValidDateInput(startDate) ? startDate : defaults.startDate,
+      endDate: isValidDateInput(endDate) ? endDate : defaults.endDate,
+      source: source ?? '',
+      campaign: campaign ?? '',
+      attributionModel: isAttributionModel(attributionModel) ? attributionModel : undefined
+    }),
+    groupBy: isTimeseriesGroupBy(groupBy) ? groupBy : DEFAULT_GROUP_BY
+  };
+}
+
+export function applyDashboardStateToSearch(
+  currentSearch: string,
+  filters: ReportingFilters,
+  groupBy: TimeseriesGroupBy
+): string {
+  const params = new URLSearchParams(currentSearch);
+
+  for (const key of DASHBOARD_QUERY_PARAM_KEYS) {
+    params.delete(key);
+  }
+
+  params.set('startDate', filters.startDate);
+  params.set('endDate', filters.endDate);
+
+  if (filters.source?.trim()) {
+    params.set('source', filters.source.trim());
+  }
+
+  if (filters.campaign?.trim()) {
+    params.set('campaign', filters.campaign.trim());
+  }
+
+  if (filters.attributionModel?.trim()) {
+    params.set('attributionModel', filters.attributionModel.trim());
+  }
+
+  params.set('groupBy', groupBy);
+
+  return params.toString();
+}
+
+function readInitialDashboardState() {
+  if (typeof window === 'undefined') {
+    return {
+      filters: createDefaultReportingFilters(DEFAULT_REPORTING_TIMEZONE),
+      groupBy: DEFAULT_GROUP_BY
+    };
+  }
+
+  return readDashboardStateFromSearch(window.location.search, DEFAULT_REPORTING_TIMEZONE);
 }
 
 function createLoadingSection<T>(): AsyncSection<T> {
@@ -284,10 +391,13 @@ function useDashboardData(
     summary: createLoadingSection(),
     campaigns: createLoadingSection(),
     timeseries: createLoadingSection(),
-    orders: createLoadingSection()
+    orders: createLoadingSection(),
+    spendDetails: createLoadingSection()
   });
 
   useEffect(() => {
+    void refreshKey;
+
     if (!enabled) {
       setState({
         summary: {
@@ -297,7 +407,8 @@ function useDashboardData(
         },
         campaigns: createResolvedSection<CampaignRow[]>([]),
         timeseries: createResolvedSection<TimeseriesPoint[]>([]),
-        orders: createResolvedSection<OrderRow[]>([])
+        orders: createResolvedSection<OrderRow[]>([]),
+        spendDetails: createResolvedSection<SpendDetailChannelGroup[]>([])
       });
       return;
     }
@@ -308,7 +419,8 @@ function useDashboardData(
       summary: createLoadingSection(),
       campaigns: createLoadingSection(),
       timeseries: createLoadingSection(),
-      orders: createLoadingSection()
+      orders: createLoadingSection(),
+      spendDetails: createLoadingSection()
     });
 
     fetchSummary(filters)
@@ -383,6 +495,24 @@ function useDashboardData(
         }
       });
 
+    fetchSpendDetails(filters)
+      .then((response) => {
+        if (!cancelled) {
+          setState((current) => ({
+            ...current,
+            spendDetails: createResolvedSection(response.groups)
+          }));
+        }
+      })
+      .catch((error: Error) => {
+        if (!cancelled) {
+          setState((current) => ({
+            ...current,
+            spendDetails: createErroredSection(error.message)
+          }));
+        }
+      });
+
     return () => {
       cancelled = true;
     };
@@ -406,6 +536,7 @@ function AuthenticatedViewFallback({ title, description }: { title: string; desc
 }
 
 function App() {
+  const initialDashboardState = readInitialDashboardState();
   const [authState, setAuthState] = useState<AuthState>({
     checking: true,
     user: null,
@@ -414,11 +545,7 @@ function App() {
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginSubmitting, setLoginSubmitting] = useState(false);
-  const [filters, setFilters] = useState<ReportingFilters>(() => ({
-    ...buildRange(30, DEFAULT_REPORTING_TIMEZONE),
-    source: '',
-    campaign: ''
-  }));
+  const [filters, setFilters] = useState<ReportingFilters>(initialDashboardState.filters);
   const [appSettings, setAppSettings] = useState<AsyncSection<AppSettings>>(createLoadingSection());
   const [settingsForm, setSettingsForm] = useState<SettingsForm>({
     reportingTimezone: DEFAULT_REPORTING_TIMEZONE
@@ -436,7 +563,7 @@ function App() {
     displayName: '',
     isAdmin: false
   });
-  const [groupBy, setGroupBy] = useState<TimeseriesGroupBy>('day');
+  const [groupBy, setGroupBy] = useState<TimeseriesGroupBy>(initialDashboardState.groupBy);
   const [currentPage, setCurrentPage] = useState<AppPage>('dashboard');
   const [dashboardRefreshKey, setDashboardRefreshKey] = useState(0);
   const [shopifyConnection, setShopifyConnection] = useState<AsyncSection<ShopifyConnectionResponse>>(createLoadingSection());
@@ -486,23 +613,8 @@ function App() {
 
   const dashboard = useDashboardData(appliedFilters, groupBy, authState.user !== null, dashboardRefreshKey);
   const reportingTimezone = appSettings.data?.reportingTimezone ?? settingsForm.reportingTimezone ?? DEFAULT_REPORTING_TIMEZONE;
-  const [currentTime, setCurrentTime] = useState(() => new Date());
-  const activeWindowTime = useMemo(
-    () => formatDateTimeForClock(currentTime, reportingTimezone),
-    [currentTime, reportingTimezone]
-  );
 
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      setCurrentTime(new Date());
-    }, 60_000);
-
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, []);
-
-  async function loadAppSettings() {
+  const loadAppSettings = useCallback(async () => {
     setAppSettings(createLoadingSection());
 
     try {
@@ -519,9 +631,9 @@ function App() {
       const message = error instanceof Error ? error.message : 'Failed to load dashboard settings';
       setAppSettings(createErroredSection(message));
     }
-  }
+  }, []);
 
-  async function loadConnections() {
+  const loadConnections = useCallback(async () => {
     setShopifyConnection(createLoadingSection());
     setMetaConnection(createLoadingSection());
     setGoogleConnection(createLoadingSection());
@@ -555,7 +667,7 @@ function App() {
       setMetaConnection(createErroredSection(message));
       setGoogleConnection(createErroredSection(message));
     }
-  }
+  }, []);
 
   useEffect(() => {
     if (authState.user) {
@@ -568,7 +680,17 @@ function App() {
     setShopifyConnection(createLoadingSection());
     setMetaConnection(createLoadingSection());
     setGoogleConnection(createLoadingSection());
-  }, [authState.user]);
+  }, [authState.user, loadAppSettings, loadConnections]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const nextSearch = applyDashboardStateToSearch(window.location.search, filters, groupBy);
+    const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`;
+    window.history.replaceState(window.history.state, '', nextUrl);
+  }, [filters, groupBy]);
 
   useEffect(() => {
     const token = getStoredAuthToken();
@@ -642,7 +764,7 @@ function App() {
     });
   }, []);
 
-  async function loadUsers() {
+  const loadUsers = useCallback(async () => {
     if (!authState.user?.isAdmin) {
       setUsersSection(createResolvedSection([]));
       return;
@@ -656,7 +778,7 @@ function App() {
     } catch (error) {
       setUsersSection(createErroredSection(error instanceof Error ? error.message : 'Failed to load users'));
     }
-  }
+  }, [authState.user?.isAdmin]);
 
   useEffect(() => {
     if (authState.user?.isAdmin) {
@@ -669,16 +791,17 @@ function App() {
       loading: false,
       error: null
     });
-  }, [authState.user]);
+  }, [authState.user, loadUsers]);
 
   const summaryCards = useMemo(() => {
     const totals = dashboard.summary.data;
+    const rangeLabel = `${formatDateLabel(filters.startDate, reportingTimezone)} to ${formatDateLabel(filters.endDate, reportingTimezone)}`;
 
     return [
       {
         label: 'Visits',
         value: formatNumber(totals?.visits),
-        detail: `${formatDateLabel(filters.startDate, reportingTimezone)} to ${formatDateLabel(filters.endDate, reportingTimezone)}`
+        detail: rangeLabel
       },
       {
         label: 'Orders',
@@ -689,6 +812,11 @@ function App() {
         label: 'Revenue',
         value: formatCurrency(totals?.revenue),
         detail: totals?.roas == null ? 'ROAS pending spend data' : `${formatNumber(totals.roas)} ROAS`
+      },
+      {
+        label: 'Spend',
+        value: formatCurrency(totals?.spend),
+        detail: rangeLabel
       },
       {
         label: 'AOV',
@@ -1207,24 +1335,6 @@ function App() {
     }
   }
 
-  const pageEyebrow =
-    currentPage === 'settings'
-      ? 'Admin settings'
-      : currentPage === 'order-details'
-        ? 'Order drill-in'
-        : 'MVP reporting dashboard';
-  const pageTitle =
-    currentPage === 'settings'
-      ? 'Configure reporting settings and platform connections'
-      : currentPage === 'order-details'
-        ? `Inspect order #${selectedOrderId ?? 'Unknown'}`
-        : 'Monitor acquisition performance across revenue, campaigns, and orders';
-  const pageDescription =
-    currentPage === 'settings'
-      ? 'Configure store integrations, ad platform connections, and dashboard user access from one place.'
-      : currentPage === 'order-details'
-        ? 'Inspect the full stored Shopify order record, attribution credits, line items, and raw payload for one order.'
-        : 'Monitor paid acquisition performance for a single Shopify store across headline metrics, campaign rows, time-based trends, and order-level attribution evidence.';
   const activeNavKey = currentPage;
   const shellNavItems: AppShellNavItem[] =
     currentPage === 'order-details'
@@ -1254,31 +1364,6 @@ function App() {
             { label: 'Dashboard', onClick: closeOrderDetails },
             { label: selectedOrderId ? `Order ${selectedOrderId}` : 'Order details', current: true }
           ];
-  const shellHeaderStatus = (
-    <div className="grid gap-4">
-      <div>
-        <p className="text-caption uppercase tracking-[0.14em] text-ink-muted">Active window</p>
-        <p className="mt-2 font-display text-display text-ink">
-          {currentPage === 'order-details' ? `#${selectedOrderId ?? '—'}` : filters.endDate}
-        </p>
-        <p className="mt-2 text-body text-ink-soft">{activeWindowTime}</p>
-      </div>
-      <dl className="grid gap-3 text-body">
-        <div className="rounded-card border border-line/70 bg-canvas-tint p-4">
-          <dt className="text-caption uppercase tracking-[0.12em] text-ink-muted">Traffic scope</dt>
-          <dd className="mt-2 text-ink-soft">
-            {(filters.source ?? '').trim() || (filters.campaign ?? '').trim()
-              ? `Filtered by ${[(filters.source ?? '').trim(), (filters.campaign ?? '').trim()].filter(Boolean).join(' / ')}`
-              : 'All attributed traffic'}
-          </dd>
-        </div>
-        <div className="rounded-card border border-line/70 bg-canvas-tint p-4">
-          <dt className="text-caption uppercase tracking-[0.12em] text-ink-muted">Reporting timezone</dt>
-          <dd className="mt-2 text-ink-soft">{reportingTimezone}</dd>
-        </div>
-      </dl>
-    </div>
-  );
   const shellHeaderActions = (
     <>
       {currentPage === 'order-details' ? (
@@ -1313,7 +1398,7 @@ function App() {
     [closeOrderDetails]
   );
   const handleDashboardFiltersChange = useCallback((next: ReportingFilters) => {
-    setFilters(next);
+    setFilters(normalizeReportingFilters(next));
   }, []);
   const handleDashboardGroupByChange = useCallback((value: TimeseriesGroupBy) => {
     setGroupBy(value);
@@ -1321,8 +1406,10 @@ function App() {
   const handleApplyQuickRange = useCallback((range: Pick<ReportingFilters, 'startDate' | 'endDate'>) => {
     startTransition(() => {
       setFilters((current) => ({
-        ...current,
-        ...range
+        ...normalizeReportingFilters({
+          ...current,
+          ...range
+        })
       }));
     });
   }, []);
@@ -1386,16 +1473,15 @@ function App() {
       activeNavKey={activeNavKey}
       onNavigate={handleAppNavigation}
       breadcrumbs={breadcrumbs}
-      eyebrow={pageEyebrow}
-      title={pageTitle}
-      description={pageDescription}
       topbarMeta={
-        <div className="space-y-1">
-          <p className="font-semibold text-ink">{authenticatedUser.displayName}</p>
-          <p>{authenticatedUser.email}</p>
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <p className="font-semibold text-ink">{authenticatedUser.displayName}</p>
+            <p>{authenticatedUser.email}</p>
+          </div>
+          <TitleBarTimestamp />
         </div>
       }
-      headerStatus={shellHeaderStatus}
       headerActions={shellHeaderActions}
     >
       {currentPage === 'dashboard' ? (
@@ -1421,6 +1507,7 @@ function App() {
             campaignsSection={dashboard.campaigns}
             timeseriesSection={dashboard.timeseries}
             ordersSection={dashboard.orders}
+            spendDetailsSection={dashboard.spendDetails}
             onOpenOrderDetails={(shopifyOrderId) => void openOrderDetails(shopifyOrderId)}
           />
         </Suspense>

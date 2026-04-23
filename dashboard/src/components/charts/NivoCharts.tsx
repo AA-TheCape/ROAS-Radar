@@ -1,10 +1,10 @@
 import React, { memo, useId, useMemo, useSyncExternalStore, type ReactNode } from 'react';
 
-import { ResponsiveBar, type BarDatum, type BarSvgProps } from '@nivo/bar';
-import { type Margin } from '@nivo/core';
+import { ResponsiveBar, type BarDatum, type BarSvgProps, type BarTooltipProps } from '@nivo/bar';
+import type { Margin } from '@nivo/core';
 import type { LegendProps } from '@nivo/legends';
-import { ResponsiveLine, type LineSeries, type LineSvgProps } from '@nivo/line';
-import { ResponsivePie, type DefaultRawDatum, type PieSvgProps } from '@nivo/pie';
+import { ResponsiveLine, type LineSeries, type LineSvgProps, type PointTooltipProps } from '@nivo/line';
+import { ResponsivePie, type DefaultRawDatum, type PieSvgProps, type PieTooltipProps } from '@nivo/pie';
 
 import { EmptyState, Skeleton } from '../AuthenticatedUi';
 
@@ -182,6 +182,10 @@ function formatMetric(value: number, formatter?: (value: number) => string) {
   return formatter ? formatter(value) : value.toLocaleString('en-US');
 }
 
+export function formatPieMetric(value: number, formatter?: (value: number) => string) {
+  return formatMetric(Math.round(value), formatter);
+}
+
 type ViewportSnapshot = {
   isCompact: boolean;
   isTablet: boolean;
@@ -194,7 +198,7 @@ const desktopViewportSnapshot: ViewportSnapshot = {
 
 let cachedViewportSnapshot = desktopViewportSnapshot;
 
-let viewportListeners = new Set<() => void>();
+const viewportListeners = new Set<() => void>();
 let viewportListening = false;
 
 function readViewportSnapshot(): ViewportSnapshot {
@@ -301,10 +305,8 @@ const ChartFrame = memo(function ChartFrame({
         'w-full rounded-card focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-brand/20 focus-visible:ring-offset-2 focus-visible:ring-offset-surface',
         className
       )}
-      role="group"
       aria-labelledby={titleId}
       aria-describedby={descriptionId}
-      tabIndex={0}
     >
       <figcaption className="sr-only">
         <span id={titleId}>{label}</span>
@@ -396,14 +398,14 @@ export const NivoLineChart = memo(function NivoLineChart({
           format: (value: number | string) => formatMetric(Number(value), yFormat)
         }}
         legends={effectiveLegends}
-        tooltip={({ point }: any) => (
+        tooltip={({ point }: PointTooltipProps<LineSeries>) => (
           <ChartTooltip
             title={String(point.data.xFormatted ?? point.data.x)}
             rows={[
               {
-                label: String(point.serieId),
+                label: String(point.seriesId),
                 value: formatMetric(Number(point.data.y), yFormat),
-                color: point.serieColor
+                color: point.seriesColor
               }
             ]}
           />
@@ -485,14 +487,14 @@ export const NivoAreaChart = memo(function NivoAreaChart({
         ]}
         fill={[{ match: '*', id: 'areaGradient' }]}
         legends={effectiveLegends}
-        tooltip={({ point }: any) => (
+        tooltip={({ point }: PointTooltipProps<LineSeries>) => (
           <ChartTooltip
             title={String(point.data.xFormatted ?? point.data.x)}
             rows={[
               {
-                label: String(point.serieId),
+                label: String(point.seriesId),
                 value: formatMetric(Number(point.data.y), props.yFormat),
-                color: point.serieColor
+                color: point.seriesColor
               }
             ]}
           />
@@ -588,7 +590,7 @@ export const NivoBarChart = memo(function NivoBarChart<Datum extends BarDatum>({
         }}
         valueFormat={(value: string | number) => formatMetric(Number(value), valueFormat)}
         legends={effectiveLegends}
-        tooltip={({ id, indexValue, value, color, data: datum }: any) => (
+        tooltip={({ id, indexValue, value, color, data: datum }: BarTooltipProps<Datum>) => (
           <ChartTooltip
             title={String(indexValue)}
             rows={[
@@ -626,6 +628,10 @@ export const NivoPieChart = memo(function NivoPieChart({
   const { isCompact, isTablet } = useChartViewport();
   const effectiveLegends = isCompact ? [] : legends;
   const effectiveHeight = isCompact ? Math.max(260, height - 20) : height;
+  const pieValueFormat = useMemo(
+    () => (value: number | string) => formatPieMetric(Number(value), valueFormat),
+    [valueFormat]
+  );
   const effectiveMargin = useMemo(
     () => ({
       ...basePieMargin,
@@ -661,15 +667,17 @@ export const NivoPieChart = memo(function NivoPieChart({
         arcLinkLabelsThickness={1}
         arcLinkLabelsColor="#627180"
         arcLabelsSkipAngle={isCompact ? 360 : 12}
+        arcLabel={(datum) => pieValueFormat(datum.value)}
         arcLabelsTextColor="#17212b"
+        valueFormat={pieValueFormat}
         legends={effectiveLegends}
-        tooltip={({ datum }: any) => (
+        tooltip={({ datum }: PieTooltipProps<SharedPieDatum>) => (
           <ChartTooltip
             title={String(datum.label ?? datum.id)}
             rows={[
               {
                 label: 'Value',
-                value: formatMetric(Number(datum.value), valueFormat),
+                value: pieValueFormat(datum.value),
                 color: datum.color
               },
               ...(datum.data?.revenueLabel ? [{ label: 'Revenue', value: String(datum.data.revenueLabel) }] : [])

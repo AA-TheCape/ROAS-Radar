@@ -1,4 +1,4 @@
-import { type PoolClient } from 'pg';
+import type { PoolClient } from 'pg';
 
 import { query, withTransaction } from '../../db/pool.js';
 import { logError } from '../../observability/index.js';

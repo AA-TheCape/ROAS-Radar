@@ -127,6 +127,7 @@ test('reporting APIs expose model-specific dashboard metrics for seeded journeys
       visits: 1,
       orders: 1,
       revenue: 120,
+      spend: 0,
       conversionRate: 1,
       roas: null
     });
@@ -134,6 +135,7 @@ test('reporting APIs expose model-specific dashboard metrics for seeded journeys
       visits: 1,
       orders: 0,
       revenue: 0,
+      spend: 0,
       conversionRate: 0,
       roas: null
     });

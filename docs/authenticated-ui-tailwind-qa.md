@@ -83,3 +83,30 @@ All authenticated surfaces now render through Tailwind-first components in `dash
 - Removed the dead post-Tailwind selector block from `dashboard/src/styles.css`.
 - Replaced the final legacy `dashboard-grid` reference in `dashboard/src/App.tsx` with Tailwind utilities.
 - Removed the unused CSS custom properties from `dashboard/src/styles.css`; remaining stylesheet rules are limited to Tailwind imports plus shared base rules still referenced by authenticated surfaces.
+
+## Dashboard Cleanup QA Sign-Off
+
+### Execution date
+
+- QA pass completed on `2026-04-23` for the dashboard cleanup workstream.
+
+### Verified acceptance criteria
+
+- Compact top controls remain present and usable across `375px`, `768px`, `1024px`, and `1440px`.
+- Top and lowest-performing bucket cards render together and preserve ranked ordering in the trend section.
+- The marketing spend report remains anchored at the bottom of the dashboard and keeps channel-first grouping with visible campaign subtotals.
+- Timestamp refresh behavior remains correct at the next minute boundary and clears timers on unmount.
+- Internal totals are validated between overview totals, campaign rows, trend buckets, order totals, and spend detail subtotals through automated fixture-based assertions.
+- No critical UI or data-consistency defects remain in the covered authenticated dashboard paths.
+
+### Evidence
+
+- `npx tsx --test test/dashboard-ui-layouts.test.ts test/dashboard-ui-components.test.ts test/dashboard-app-query-state.test.ts test/authenticated-ui-accessibility.test.ts test/authenticated-ui-snapshots.test.ts`
+- `npm --prefix dashboard run typecheck`
+- `npm --prefix dashboard run build`
+
+### Workflow checklist
+
+- `TODO` -> `IN_PROGRESS`: QA scope confirmed against responsive layout, filter workflows, timestamp behavior, and cross-surface totals.
+- `IN_PROGRESS` -> `REVIEW`: Focused authenticated dashboard QA suite passed, including breakpoint coverage and totals-consistency assertions.
+- `REVIEW` -> `DONE`: Typecheck and production build passed after restoring dashboard dev dependencies in the workspace.

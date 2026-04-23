@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, memo, useMemo, useState } from 'react';
+import React, { Suspense, lazy, memo, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   formatCompactCurrency,
@@ -12,6 +12,7 @@ import type {
   CampaignRow,
   OrderRow,
   ReportingFilters,
+  SpendDetailChannelGroup,
   SummaryTotals,
   TimeseriesGroupBy,
   TimeseriesPoint
@@ -19,7 +20,6 @@ import type {
 import {
   Badge,
   Button,
-  ButtonRow,
   Card,
   DataTableToolbar,
   CardDescription,
@@ -94,6 +94,7 @@ type ReportingDashboardProps = {
   campaignsSection: DashboardSection<CampaignRow[]>;
   timeseriesSection: DashboardSection<TimeseriesPoint[]>;
   ordersSection: DashboardSection<OrderRow[]>;
+  spendDetailsSection: DashboardSection<SpendDetailChannelGroup[]>;
   onOpenOrderDetails: (shopifyOrderId: string) => void;
 };
 
@@ -105,6 +106,7 @@ const GROUP_BY_OPTIONS: Array<{ value: TimeseriesGroupBy; label: string }> = [
 
 type CampaignSortKey = 'campaign' | 'source' | 'visits' | 'orders' | 'revenue' | 'conversionRate';
 type OrderSortKey = 'order' | 'processedAt' | 'source' | 'campaign' | 'totalPrice';
+export type DateField = 'startDate' | 'endDate';
 
 const CAMPAIGN_PAGE_SIZE = 6;
 const ORDER_PAGE_SIZE = 8;
@@ -132,6 +134,11 @@ const SUMMARY_CARD_DECOR: Record<
     pillTone: 'warning',
     pillLabel: 'Revenue'
   },
+  Spend: {
+    accent: 'from-brand/85 via-teal/75 to-success/70',
+    pillTone: 'teal',
+    pillLabel: 'Media'
+  },
   AOV: {
     accent: 'from-success/90 via-teal/80 to-brand/65',
     pillTone: 'success',
@@ -142,6 +149,43 @@ const SUMMARY_CARD_DECOR: Record<
 const chartSuspenseFallback = (
   <div className="min-h-[280px] animate-pulse rounded-card border border-line/60 bg-surface-alt/70" aria-hidden="true" />
 );
+
+function normalizeDateRange(filters: ReportingFilters): ReportingFilters {
+  if (filters.startDate && filters.endDate && filters.startDate > filters.endDate) {
+    return {
+      ...filters,
+      endDate: filters.startDate
+    };
+  }
+
+  return filters;
+}
+
+export function applyDateRangeChange(filters: ReportingFilters, field: DateField, value: string) {
+  const nextFilters = normalizeDateRange({
+    ...filters,
+    [field]: value
+  });
+
+  if (field === 'startDate' && value && filters.endDate && value > filters.endDate) {
+    return {
+      nextFilters,
+      feedback: 'End date was adjusted to match the new start date so the range stays valid.'
+    };
+  }
+
+  if (field === 'endDate' && value && filters.startDate && value < filters.startDate) {
+    return {
+      nextFilters,
+      feedback: 'End date cannot be earlier than the start date. It was moved forward to keep the range valid.'
+    };
+  }
+
+  return {
+    nextFilters,
+    feedback: null
+  };
+}
 
 const SummaryCard = memo(function SummaryCard({ label, value, detail }: SummaryCardData) {
   const decor = SUMMARY_CARD_DECOR[label] ?? SUMMARY_CARD_DECOR.Visits;
@@ -199,6 +243,18 @@ function buildSourceMixSummary(
     .slice(0, 5)
     .map((row) => `${row.id}: ${row.revenueLabel ?? formatCurrency(row.value)}.`)
     .join(' ');
+}
+
+function titleCaseToken(value: string) {
+  return value
+    .split('_')
+    .filter(Boolean)
+    .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
+    .join(' ');
+}
+
+function formatChannelLabel(source: string, medium: string) {
+  return `${titleCaseToken(source || 'unknown')} / ${titleCaseToken(medium || 'unknown')}`;
 }
 
 const DashboardOverview = memo(function DashboardOverview({
@@ -347,6 +403,10 @@ const DashboardControlPanel = memo(function DashboardControlPanel({
   onApplyQuickRange: (range: Pick<ReportingFilters, 'startDate' | 'endDate'>) => void;
   onClearFilters: () => void;
 }) {
+  const [dateFeedback, setDateFeedback] = useState<string | null>(null);
+  const preserveDateFeedbackRef = useRef(false);
+  const dateRangeKey = `${filters.startDate}:${filters.endDate}`;
+  const previousDateRangeKeyRef = useRef(dateRangeKey);
   const scopeLabel = useMemo(
     () =>
       (filters.source ?? '').trim() || (filters.campaign ?? '').trim()
@@ -354,101 +414,160 @@ const DashboardControlPanel = memo(function DashboardControlPanel({
         : 'All attributed traffic',
     [filters.campaign, filters.source]
   );
+  const formattedRange = useMemo(
+    () => `${formatDateLabel(filters.startDate, reportingTimezone)} to ${formatDateLabel(filters.endDate, reportingTimezone)}`,
+    [filters.endDate, filters.startDate, reportingTimezone]
+  );
+
+  useEffect(() => {
+    if (previousDateRangeKeyRef.current === dateRangeKey) {
+      return;
+    }
+
+    previousDateRangeKeyRef.current = dateRangeKey;
+
+    if (preserveDateFeedbackRef.current) {
+      preserveDateFeedbackRef.current = false;
+      return;
+    }
+
+    setDateFeedback(null);
+  }, [dateRangeKey]);
+
+  function handleDateChange(field: DateField, value: string) {
+    const { nextFilters, feedback } = applyDateRangeChange(filters, field, value);
+
+    if (feedback) {
+      preserveDateFeedbackRef.current = true;
+      setDateFeedback(feedback);
+      onFiltersChange(nextFilters);
+      return;
+    }
+
+    setDateFeedback(null);
+    onFiltersChange(nextFilters);
+  }
 
   return (
-    <Panel
-      title="Reporting controls"
-      description="Tune the attribution window and reshape the overview without leaving the dashboard surface."
-      wide
-      className="overflow-hidden"
+    <Card
+      padding="compact"
+      className="col-[1/-1] overflow-hidden border-line/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(237,245,242,0.78))] shadow-panel"
     >
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.45fr)_minmax(20rem,0.9fr)]">
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-          <Field label="Start date" htmlFor="start-date">
-            <Input
-              id="start-date"
-              type="date"
-              value={filters.startDate}
-              onChange={(event) => onFiltersChange({ ...filters, startDate: event.target.value })}
-            />
-          </Field>
-          <Field label="End date" htmlFor="end-date">
-            <Input
-              id="end-date"
-              type="date"
-              value={filters.endDate}
-              onChange={(event) => onFiltersChange({ ...filters, endDate: event.target.value })}
-            />
-          </Field>
-          <Field label="Source" htmlFor="source-filter">
-            <Input
-              id="source-filter"
-              type="text"
-              placeholder="google, meta, facebook"
-              value={filters.source}
-              onChange={(event) => onFiltersChange({ ...filters, source: event.target.value })}
-            />
-          </Field>
-          <Field label="Campaign" htmlFor="campaign-filter">
-            <Input
-              id="campaign-filter"
-              type="text"
-              placeholder="spring-sale"
-              value={filters.campaign}
-              onChange={(event) => onFiltersChange({ ...filters, campaign: event.target.value })}
-            />
-          </Field>
-          <Field label="Timeseries grouping" htmlFor="group-by">
-            <Select id="group-by" value={groupBy} onChange={(event) => onGroupByChange(event.target.value as TimeseriesGroupBy)}>
-              {GROUP_BY_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </Select>
-          </Field>
+      <div className="grid gap-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <Eyebrow>Reporting controls</Eyebrow>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <h2 className="font-display text-[1.35rem] leading-tight text-ink">Top control card</h2>
+              <Badge tone="teal" className="min-h-[26px] px-2.5 py-0.5 text-[0.68rem]">
+                {reportingTimezone}
+              </Badge>
+            </div>
+            <p className="mt-2 max-w-3xl text-[0.95rem] leading-6 text-ink-muted">
+              Tune dates, source filters, and chart grouping without giving the dashboard a full-height control section.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge tone="neutral" className="min-h-[26px] px-2.5 py-0.5 text-[0.68rem]">
+              {GROUP_BY_OPTIONS.find((option) => option.value === groupBy)?.label ?? groupBy}
+            </Badge>
+            <Button type="button" tone="ghost" className="min-h-[36px] px-3 py-1.5 text-label" onClick={onClearFilters}>
+              Clear filters
+            </Button>
+          </div>
         </div>
 
-        <Card padding="compact" className="border-line/60 bg-[linear-gradient(180deg,rgba(237,245,242,0.7),rgba(255,255,255,0.92))]">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <Eyebrow>Quick ranges</Eyebrow>
-              <p className="mt-3 max-w-[24ch] text-body text-ink-soft">
-                Shortcuts respect the reporting timezone and immediately re-scope the dashboard.
-              </p>
-            </div>
-            <Badge tone="teal">{reportingTimezone}</Badge>
-          </div>
-
-          <ButtonRow className="mt-5 grid-cols-2 gap-2">
-            {quickRanges.map((preset) => (
-              <Button
-                key={preset.label}
-                type="button"
-                tone="secondary"
-                className="min-w-[5.25rem] w-full sm:flex-1"
-                onClick={() => onApplyQuickRange(preset.value(reportingTimezone))}
+        <div className="grid gap-3 xl:grid-cols-[minmax(0,1.8fr)_minmax(18rem,auto)] xl:items-end">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            <Field label="Start date" htmlFor="start-date">
+              <Input
+                id="start-date"
+                type="date"
+                className="min-h-[40px] rounded-card px-3 py-2 text-[0.95rem]"
+                value={filters.startDate}
+                max={filters.endDate}
+                onChange={(event) => handleDateChange('startDate', event.target.value)}
+              />
+            </Field>
+            <Field label="End date" htmlFor="end-date">
+              <Input
+                id="end-date"
+                type="date"
+                className="min-h-[40px] rounded-card px-3 py-2 text-[0.95rem]"
+                value={filters.endDate}
+                min={filters.startDate}
+                onChange={(event) => handleDateChange('endDate', event.target.value)}
+              />
+            </Field>
+            <Field label="Source" htmlFor="source-filter">
+              <Input
+                id="source-filter"
+                type="text"
+                className="min-h-[40px] rounded-card px-3 py-2 text-[0.95rem]"
+                placeholder="google, meta, facebook"
+                value={filters.source}
+                onChange={(event) => onFiltersChange({ ...filters, source: event.target.value })}
+              />
+            </Field>
+            <Field label="Campaign" htmlFor="campaign-filter">
+              <Input
+                id="campaign-filter"
+                type="text"
+                className="min-h-[40px] rounded-card px-3 py-2 text-[0.95rem]"
+                placeholder="spring-sale"
+                value={filters.campaign}
+                onChange={(event) => onFiltersChange({ ...filters, campaign: event.target.value })}
+              />
+            </Field>
+            <Field label="Timeseries grouping" htmlFor="group-by">
+              <Select
+                id="group-by"
+                className="min-h-[40px] rounded-card px-3 py-2 text-[0.95rem]"
+                value={groupBy}
+                onChange={(event) => onGroupByChange(event.target.value as TimeseriesGroupBy)}
               >
-                {preset.label}
-              </Button>
-            ))}
-          </ButtonRow>
-
-          <div className="mt-5 rounded-card border border-line/60 bg-white/80 px-4 py-4">
-            <p className="text-label uppercase text-ink-muted">Current scope</p>
-            <p className="mt-2 text-body text-ink-soft">{scopeLabel}</p>
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-              <Badge tone="neutral">
-                {GROUP_BY_OPTIONS.find((option) => option.value === groupBy)?.label ?? groupBy}
-              </Badge>
-              <Button type="button" tone="ghost" onClick={onClearFilters}>
-                Clear filters
-              </Button>
-            </div>
+                {GROUP_BY_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
           </div>
-        </Card>
+
+          <div className="grid gap-3 rounded-card border border-line/60 bg-white/75 px-3 py-3 shadow-inset-soft">
+            <div className="flex flex-wrap items-center gap-2">
+              {quickRanges.map((preset) => (
+                <Button
+                  key={preset.label}
+                  type="button"
+                  tone="secondary"
+                  className="min-h-[34px] min-w-[4.75rem] px-3 py-1 text-label"
+                  onClick={() => onApplyQuickRange(preset.value(reportingTimezone))}
+                >
+                  {preset.label}
+                </Button>
+              ))}
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-label uppercase text-ink-muted">Current scope</p>
+                <p className="mt-1 truncate text-[0.95rem] text-ink-soft xl:max-w-[22rem]">{scopeLabel}</p>
+                <p className="mt-1 text-[0.82rem] text-ink-muted">{formattedRange}</p>
+              </div>
+            </div>
+
+            {dateFeedback ? (
+              <output className="text-[0.85rem] font-medium text-danger" aria-live="polite">
+                {dateFeedback}
+              </output>
+            ) : null}
+          </div>
+        </div>
       </div>
-    </Panel>
+    </Card>
   );
 });
 
@@ -465,7 +584,9 @@ const TimeseriesTrendPanel = memo(function TimeseriesTrendPanel({
   loading: boolean;
   error: string | null;
 }) {
-  const sortedPoints = useMemo(() => [...points].sort((left, right) => left.revenue - right.revenue).slice(-4).reverse(), [points]);
+  const rankedPoints = useMemo(() => [...points].sort((left, right) => left.revenue - right.revenue), [points]);
+  const topBuckets = useMemo(() => rankedPoints.slice(-3).reverse(), [rankedPoints]);
+  const lowestBuckets = useMemo(() => rankedPoints.slice(0, 3), [rankedPoints]);
   const totalVisits = useMemo(() => points.reduce((sum, point) => sum + point.visits, 0), [points]);
   const totalOrders = useMemo(() => points.reduce((sum, point) => sum + point.orders, 0), [points]);
   const averageBucketRevenue = useMemo(
@@ -548,33 +669,81 @@ const TimeseriesTrendPanel = memo(function TimeseriesTrendPanel({
             </div>
           </Card>
 
-          <Card padding="compact" className="border-line/60 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(220,239,237,0.5))]">
-            <Eyebrow>Top buckets</Eyebrow>
-            <div className="mt-4 grid gap-3">
-              {sortedPoints.length > 0 ? (
-                sortedPoints.map((point) => (
-                  <div
-                    key={`${point.date}-${point.revenue}`}
-                    className="flex flex-col gap-3 rounded-card border border-line/50 bg-white/80 px-4 py-3 sm:flex-row sm:items-start sm:justify-between"
-                  >
-                    <div>
-                      <p className="text-body font-semibold text-ink">
-                        {groupBy === 'day' ? formatDateLabel(point.date, reportingTimezone) : point.date}
-                      </p>
-                      <p className="mt-1 text-body text-ink-muted">
+          <div className="grid gap-3 md:grid-cols-2">
+            <Card
+              padding="compact"
+              className="border-line/60 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(220,239,237,0.5))] p-3"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <Eyebrow>Top buckets</Eyebrow>
+                  <p className="mt-2 text-body text-ink-muted">Highest revenue buckets in this view.</p>
+                </div>
+                <Badge tone="teal">{formatNumber(topBuckets.length)}</Badge>
+              </div>
+              <div className="mt-3 grid gap-2">
+                {topBuckets.length > 0 ? (
+                  topBuckets.map((point) => (
+                    <div
+                      key={`top-${point.date}-${point.revenue}`}
+                      className="rounded-card border border-line/50 bg-white/85 px-3 py-2.5"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="text-body font-semibold text-ink">
+                          {groupBy === 'day' ? formatDateLabel(point.date, reportingTimezone) : point.date}
+                        </p>
+                        <p className="font-display text-lg text-brand">{formatCompactCurrency(point.revenue)}</p>
+                      </div>
+                      <p className="mt-1 text-caption text-ink-muted">
                         {formatNumber(point.orders)} orders from {formatNumber(point.visits)} visits
                       </p>
                     </div>
-                    <p className="font-display text-title text-brand">{formatCompactCurrency(point.revenue)}</p>
-                  </div>
-                ))
-              ) : (
-                <p className="rounded-card border border-line/50 bg-white/80 px-4 py-4 text-body text-ink-muted">
-                  No peak buckets available yet.
-                </p>
-              )}
-            </div>
-          </Card>
+                  ))
+                ) : (
+                  <p className="rounded-card border border-line/50 bg-white/85 px-3 py-3 text-body text-ink-muted">
+                    No top buckets available yet.
+                  </p>
+                )}
+              </div>
+            </Card>
+
+            <Card
+              padding="compact"
+              className="border-line/60 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(246,223,211,0.55))] p-3"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <Eyebrow>Lowest-performing buckets</Eyebrow>
+                  <p className="mt-2 text-body text-ink-muted">Lowest revenue buckets in this view.</p>
+                </div>
+                <Badge tone="brand">{formatNumber(lowestBuckets.length)}</Badge>
+              </div>
+              <div className="mt-3 grid gap-2">
+                {lowestBuckets.length > 0 ? (
+                  lowestBuckets.map((point) => (
+                    <div
+                      key={`low-${point.date}-${point.revenue}`}
+                      className="rounded-card border border-line/50 bg-white/85 px-3 py-2.5"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="text-body font-semibold text-ink">
+                          {groupBy === 'day' ? formatDateLabel(point.date, reportingTimezone) : point.date}
+                        </p>
+                        <p className="font-display text-lg text-warning">{formatCompactCurrency(point.revenue)}</p>
+                      </div>
+                      <p className="mt-1 text-caption text-ink-muted">
+                        {formatNumber(point.orders)} orders from {formatNumber(point.visits)} visits
+                      </p>
+                    </div>
+                  ))
+                ) : (
+                  <p className="rounded-card border border-line/50 bg-white/85 px-3 py-3 text-body text-ink-muted">
+                    No low buckets available yet.
+                  </p>
+                )}
+              </div>
+            </Card>
+          </div>
         </div>
       </div>
     </Panel>
@@ -595,11 +764,13 @@ const ReportingDashboard = memo(function ReportingDashboard({
   campaignsSection,
   timeseriesSection,
   ordersSection,
+  spendDetailsSection,
   onOpenOrderDetails
 }: ReportingDashboardProps) {
   const campaigns = campaignsSection.data ?? [];
   const timeseriesPoints = timeseriesSection.data ?? [];
   const orders = ordersSection.data ?? [];
+  const spendGroups = spendDetailsSection.data ?? [];
   const [campaignSearch, setCampaignSearch] = useState('');
   const [campaignSort, setCampaignSort] = useState<SortState<CampaignSortKey>>({
     key: 'revenue',
@@ -699,6 +870,10 @@ const ReportingDashboard = memo(function ReportingDashboard({
   const paginatedOrders = useMemo(
     () => paginateRows(sortedOrders, orderPage, ORDER_PAGE_SIZE),
     [orderPage, sortedOrders]
+  );
+  const totalGroupedSpend = useMemo(
+    () => spendGroups.reduce((sum, group) => sum + group.subtotal, 0),
+    [spendGroups]
   );
 
   function toggleCampaignSort(key: CampaignSortKey) {
@@ -1113,6 +1288,86 @@ const ReportingDashboard = memo(function ReportingDashboard({
                 </TableBody>
               </Table>
             </TableWrap>
+          </>
+        </SectionState>
+      </Panel>
+
+      <Panel
+        title="Marketing spend detail"
+        description="Bottom report keeps spend grouped by channel first, then by campaign, with visible subtotals for each media slice."
+        wide
+      >
+        <SectionState
+          loading={spendDetailsSection.loading}
+          error={spendDetailsSection.error}
+          empty={!spendGroups.length}
+          emptyLabel="No marketing spend rows were returned for this range."
+        >
+          <>
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+              <div>
+                <Eyebrow>Spend rollup</Eyebrow>
+                <p className="mt-3 max-w-2xl text-body text-ink-soft">
+                  Channel groupings follow the same reporting window and dashboard filters as the summary totals.
+                </p>
+              </div>
+              <div className="grid gap-2 rounded-card border border-line/60 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(220,239,237,0.52))] px-4 py-4 text-right shadow-inset-soft">
+                <p className="text-label uppercase text-ink-muted">Grouped spend total</p>
+                <p className="font-display text-title text-brand">{formatCurrency(totalGroupedSpend)}</p>
+                <p className="text-body text-ink-muted">
+                  {formatNumber(spendGroups.length)} channels in the current window
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-6 grid gap-4">
+              {spendGroups.map((group) => (
+                <Card
+                  key={`${group.source}-${group.medium}`}
+                  padding="compact"
+                  className="border-line/60 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(246,223,211,0.34))]"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <Eyebrow>Channel</Eyebrow>
+                      <p className="mt-3 font-display text-title text-ink">{formatChannelLabel(group.source, group.medium)}</p>
+                      <p className="mt-2 text-body text-ink-muted">
+                        {formatNumber(group.campaigns.length)} campaigns contributing spend
+                      </p>
+                    </div>
+                    <Badge tone="teal">{formatCurrency(group.subtotal)} subtotal</Badge>
+                  </div>
+
+                  <TableWrap className="mt-5">
+                    <Table caption={`Spend detail for ${formatChannelLabel(group.source, group.medium)}`}>
+                      <TableHead>
+                        <TableRow>
+                          <TableHeaderCell>Campaign</TableHeaderCell>
+                          <TableHeaderCell>Spend</TableHeaderCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {group.campaigns.map((campaign) => (
+                          <TableRow key={`${group.source}-${group.medium}-${campaign.campaign}`}>
+                            <TableCell>
+                              <PrimaryCell>
+                                <strong>{campaign.campaign}</strong>
+                                <span>{formatChannelLabel(group.source, group.medium)}</span>
+                              </PrimaryCell>
+                            </TableCell>
+                            <TableCell>{formatCurrency(campaign.spend)}</TableCell>
+                          </TableRow>
+                        ))}
+                        <TableRow>
+                          <TableCell className="font-semibold text-ink">Channel subtotal</TableCell>
+                          <TableCell className="font-semibold text-ink">{formatCurrency(group.subtotal)}</TableCell>
+                        </TableRow>
+                      </TableBody>
+                    </Table>
+                  </TableWrap>
+                </Card>
+              ))}
+            </div>
           </>
         </SectionState>
       </Panel>

@@ -24,6 +24,7 @@ type DomOptions = {
   markup?: string;
   width?: number;
   height?: number;
+  url?: string;
 };
 
 type MountedUi = {
@@ -145,7 +146,6 @@ function installDomGlobals(dom: import('../dashboard/node_modules/jsdom').JSDOM,
   Object.assign(globalThis, {
     window,
     document: window.document,
-    navigator: window.navigator,
     HTMLElement: window.HTMLElement,
     SVGElement: window.SVGElement,
     Node: window.Node,
@@ -158,14 +158,24 @@ function installDomGlobals(dom: import('../dashboard/node_modules/jsdom').JSDOM,
     ResizeObserver
   });
 
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: window.navigator
+  });
+
   Object.defineProperty(globalThis, 'localStorage', {
     configurable: true,
     value: window.localStorage
   });
 }
 
-export function createDom({ markup = '<!doctype html><html><body></body></html>', width = 1280, height = 900 }: DomOptions = {}) {
-  const dom = new JSDOM(markup, { pretendToBeVisual: true, url: 'http://localhost/' });
+export function createDom({
+  markup = '<!doctype html><html><body></body></html>',
+  width = 1280,
+  height = 900,
+  url = 'http://localhost/'
+}: DomOptions = {}) {
+  const dom = new JSDOM(markup, { pretendToBeVisual: true, url });
   installDomGlobals(dom, width, height);
   return dom;
 }
@@ -230,36 +240,6 @@ export function normalizeHtml(value: string) {
 
 export function noop() {}
 
-export function shellHeader() {
-  return h(
-    'div',
-    { className: 'grid gap-4' },
-    h(
-      'div',
-      null,
-      h('p', { className: 'text-caption uppercase tracking-[0.14em] text-ink-muted' }, 'Active window'),
-      h('p', { className: 'mt-2 font-display text-display text-ink' }, '2026-04-20'),
-      h('p', { className: 'mt-2 text-body text-ink-soft' }, 'Apr 20, 4:30 PM')
-    ),
-    h(
-      'dl',
-      { className: 'grid gap-3 text-body' },
-      h(
-        'div',
-        { className: 'rounded-card border border-line/70 bg-canvas-tint p-4' },
-        h('dt', { className: 'text-caption uppercase tracking-[0.12em] text-ink-muted' }, 'Traffic scope'),
-        h('dd', { className: 'mt-2 text-ink-soft' }, 'All attributed traffic')
-      ),
-      h(
-        'div',
-        { className: 'rounded-card border border-line/70 bg-canvas-tint p-4' },
-        h('dt', { className: 'text-caption uppercase tracking-[0.12em] text-ink-muted' }, 'Reporting timezone'),
-        h('dd', { className: 'mt-2 text-ink-soft' }, 'America/Los_Angeles')
-      )
-    )
-  );
-}
-
 export function createShellProps(overrides: Partial<import('../dashboard/src/components/AuthenticatedAppShell').AuthenticatedAppShellProps> = {}) {
   return {
     navItems: [
@@ -280,17 +260,23 @@ export function createShellProps(overrides: Partial<import('../dashboard/src/com
       { label: 'Authenticated app' },
       { label: 'Dashboard', current: true }
     ],
-    eyebrow: 'MVP reporting dashboard',
-    title: 'Monitor acquisition performance across revenue, campaigns, and orders',
-    description:
-      'Monitor paid acquisition performance for a single Shopify store across headline metrics, campaign rows, time-based trends, and order-level attribution evidence.',
     topbarMeta: h(
       'div',
-      { className: 'space-y-1' },
-      h('p', { className: 'font-semibold text-ink' }, 'Taylor Operator'),
-      h('p', null, 'taylor@roasradar.dev')
+      { className: 'space-y-3' },
+      h(
+        'div',
+        { className: 'space-y-1' },
+        h('p', { className: 'font-semibold text-ink' }, 'Taylor Operator'),
+        h('p', null, 'taylor@roasradar.dev')
+      ),
+      h(
+        'div',
+        { 'aria-label': 'Current timestamp', className: 'space-y-1 border-t border-line/60 pt-3 text-caption text-ink-muted' },
+        h('p', { className: 'font-semibold uppercase tracking-[0.14em] text-teal' }, 'Current time'),
+        h('p', null, 'Apr 20, 12:15 PM PDT'),
+        h('p', null, 'UTC Apr 20, 7:15 PM')
+      )
     ),
-    headerStatus: shellHeader(),
     headerActions: h('button', { type: 'button' }, 'Logout'),
     children: h('div', null, 'Shell content'),
     ...overrides
@@ -322,6 +308,7 @@ export function createReportingDashboardProps(
       { label: 'Visits', value: '12,480', detail: 'Apr 1 to Apr 20' },
       { label: 'Orders', value: '324', detail: '2.6% conversion' },
       { label: 'Revenue', value: '$48,920.00', detail: '4.3 ROAS' },
+      { label: 'Spend', value: '$11,376.00', detail: 'Apr 1 to Apr 20' },
       { label: 'AOV', value: '$150.99', detail: '324 attributed orders' }
     ],
     summarySection: {
@@ -329,6 +316,7 @@ export function createReportingDashboardProps(
         visits: 12480,
         orders: 324,
         revenue: 48920,
+        spend: 11376,
         conversionRate: 0.02596,
         roas: 4.3
       },
@@ -394,6 +382,32 @@ export function createReportingDashboardProps(
       loading: false,
       error: null
     } satisfies AsyncSection<import('../dashboard/src/lib/api').OrderRow[]>,
+    spendDetailsSection: {
+      data: [
+        {
+          source: 'google',
+          medium: 'cpc',
+          channel: 'google / cpc',
+          subtotal: 7320,
+          campaigns: [
+            { campaign: 'Spring Search', spend: 5220 },
+            { campaign: 'Brand Search', spend: 2100 }
+          ]
+        },
+        {
+          source: 'meta',
+          medium: 'paid_social',
+          channel: 'meta / paid_social',
+          subtotal: 4056,
+          campaigns: [
+            { campaign: 'Prospecting Carousel', spend: 2556 },
+            { campaign: 'Retargeting Video', spend: 1500 }
+          ]
+        }
+      ],
+      loading: false,
+      error: null
+    } satisfies AsyncSection<import('../dashboard/src/lib/api').SpendDetailChannelGroup[]>,
     onOpenOrderDetails: noop
   };
 
@@ -623,6 +637,15 @@ export function createSettingsAdminProps(
     setMetaConfigForm: noop,
     googleConnection: {
       data: {
+        config: {
+          source: 'database',
+          developerTokenConfigured: true,
+          appBaseUrl: 'https://app.roasradar.dev',
+          appScopes: ['https://www.googleapis.com/auth/adwords'],
+          clientId: 'client-id',
+          clientSecretConfigured: true,
+          missingFields: []
+        },
         connection: {
           id: 3,
           customer_id: '123-456-7890',
@@ -649,6 +672,14 @@ export function createSettingsAdminProps(
       loading: false,
       error: null
     } satisfies AsyncSection<import('../dashboard/src/lib/api').GoogleAdsStatusResponse>,
+    googleConfigForm: {
+      developerToken: 'developer-token',
+      clientId: 'client-id',
+      clientSecret: 'client-secret',
+      appBaseUrl: 'https://app.roasradar.dev',
+      appScopes: 'https://www.googleapis.com/auth/adwords'
+    },
+    setGoogleConfigForm: noop,
     googleForm: {
       customerId: '123-456-7890',
       loginCustomerId: '111-222-3333',
