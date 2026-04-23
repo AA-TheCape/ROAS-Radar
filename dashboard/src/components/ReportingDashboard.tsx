@@ -576,7 +576,9 @@ const TimeseriesTrendPanel = memo(function TimeseriesTrendPanel({
   loading: boolean;
   error: string | null;
 }) {
-  const sortedPoints = useMemo(() => [...points].sort((left, right) => left.revenue - right.revenue).slice(-4).reverse(), [points]);
+  const rankedPoints = useMemo(() => [...points].sort((left, right) => left.revenue - right.revenue), [points]);
+  const topBuckets = useMemo(() => rankedPoints.slice(-3).reverse(), [rankedPoints]);
+  const lowestBuckets = useMemo(() => rankedPoints.slice(0, 3), [rankedPoints]);
   const totalVisits = useMemo(() => points.reduce((sum, point) => sum + point.visits, 0), [points]);
   const totalOrders = useMemo(() => points.reduce((sum, point) => sum + point.orders, 0), [points]);
   const averageBucketRevenue = useMemo(
@@ -659,33 +661,81 @@ const TimeseriesTrendPanel = memo(function TimeseriesTrendPanel({
             </div>
           </Card>
 
-          <Card padding="compact" className="border-line/60 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(220,239,237,0.5))]">
-            <Eyebrow>Top buckets</Eyebrow>
-            <div className="mt-4 grid gap-3">
-              {sortedPoints.length > 0 ? (
-                sortedPoints.map((point) => (
-                  <div
-                    key={`${point.date}-${point.revenue}`}
-                    className="flex flex-col gap-3 rounded-card border border-line/50 bg-white/80 px-4 py-3 sm:flex-row sm:items-start sm:justify-between"
-                  >
-                    <div>
-                      <p className="text-body font-semibold text-ink">
-                        {groupBy === 'day' ? formatDateLabel(point.date, reportingTimezone) : point.date}
-                      </p>
-                      <p className="mt-1 text-body text-ink-muted">
+          <div className="grid gap-3 md:grid-cols-2">
+            <Card
+              padding="compact"
+              className="border-line/60 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(220,239,237,0.5))] p-3"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <Eyebrow>Top buckets</Eyebrow>
+                  <p className="mt-2 text-body text-ink-muted">Highest revenue buckets in this view.</p>
+                </div>
+                <Badge tone="teal">{formatNumber(topBuckets.length)}</Badge>
+              </div>
+              <div className="mt-3 grid gap-2">
+                {topBuckets.length > 0 ? (
+                  topBuckets.map((point) => (
+                    <div
+                      key={`top-${point.date}-${point.revenue}`}
+                      className="rounded-card border border-line/50 bg-white/85 px-3 py-2.5"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="text-body font-semibold text-ink">
+                          {groupBy === 'day' ? formatDateLabel(point.date, reportingTimezone) : point.date}
+                        </p>
+                        <p className="font-display text-lg text-brand">{formatCompactCurrency(point.revenue)}</p>
+                      </div>
+                      <p className="mt-1 text-caption text-ink-muted">
                         {formatNumber(point.orders)} orders from {formatNumber(point.visits)} visits
                       </p>
                     </div>
-                    <p className="font-display text-title text-brand">{formatCompactCurrency(point.revenue)}</p>
-                  </div>
-                ))
-              ) : (
-                <p className="rounded-card border border-line/50 bg-white/80 px-4 py-4 text-body text-ink-muted">
-                  No peak buckets available yet.
-                </p>
-              )}
-            </div>
-          </Card>
+                  ))
+                ) : (
+                  <p className="rounded-card border border-line/50 bg-white/85 px-3 py-3 text-body text-ink-muted">
+                    No top buckets available yet.
+                  </p>
+                )}
+              </div>
+            </Card>
+
+            <Card
+              padding="compact"
+              className="border-line/60 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(246,223,211,0.55))] p-3"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <Eyebrow>Lowest-performing buckets</Eyebrow>
+                  <p className="mt-2 text-body text-ink-muted">Lowest revenue buckets in this view.</p>
+                </div>
+                <Badge tone="brand">{formatNumber(lowestBuckets.length)}</Badge>
+              </div>
+              <div className="mt-3 grid gap-2">
+                {lowestBuckets.length > 0 ? (
+                  lowestBuckets.map((point) => (
+                    <div
+                      key={`low-${point.date}-${point.revenue}`}
+                      className="rounded-card border border-line/50 bg-white/85 px-3 py-2.5"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="text-body font-semibold text-ink">
+                          {groupBy === 'day' ? formatDateLabel(point.date, reportingTimezone) : point.date}
+                        </p>
+                        <p className="font-display text-lg text-warning">{formatCompactCurrency(point.revenue)}</p>
+                      </div>
+                      <p className="mt-1 text-caption text-ink-muted">
+                        {formatNumber(point.orders)} orders from {formatNumber(point.visits)} visits
+                      </p>
+                    </div>
+                  ))
+                ) : (
+                  <p className="rounded-card border border-line/50 bg-white/85 px-3 py-3 text-body text-ink-muted">
+                    No low buckets available yet.
+                  </p>
+                )}
+              </div>
+            </Card>
+          </div>
         </div>
       </div>
     </Panel>

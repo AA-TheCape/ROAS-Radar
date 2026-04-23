@@ -169,6 +169,63 @@ test('reporting dashboard renders the bottom spend report grouped by channel the
   }
 });
 
+test('reporting dashboard shows top and lowest-performing bucket cards side by side with correct ranking labels', async () => {
+  const { default: ReportingDashboard } = await loadDashboardModule<
+    typeof import('../dashboard/src/components/ReportingDashboard')
+  >('dashboard/src/components/ReportingDashboard.tsx');
+
+  const mounted = await mountUi(
+    h(
+      ReportingDashboard,
+      createReportingDashboardProps({
+        timeseriesSection: {
+          data: [
+            { date: '2026-04-16', visits: 410, orders: 14, revenue: 1800 },
+            { date: '2026-04-17', visits: 390, orders: 11, revenue: 920 },
+            { date: '2026-04-18', visits: 540, orders: 21, revenue: 3210 },
+            { date: '2026-04-19', visits: 610, orders: 24, revenue: 4020 },
+            { date: '2026-04-20', visits: 575, orders: 23, revenue: 3680 }
+          ],
+          loading: false,
+          error: null
+        }
+      })
+    ),
+    { width: 1440, height: 900 }
+  );
+
+  try {
+    const text = mounted.container.textContent ?? '';
+    assert.match(text, /Top buckets/);
+    assert.match(text, /Lowest-performing buckets/);
+    assert.match(text, /Highest revenue buckets in this view\./);
+    assert.match(text, /Lowest revenue buckets in this view\./);
+    assert.match(text, /Apr 19/);
+    assert.match(text, /Apr 17/);
+
+    const compactCards = Array.from(mounted.container.querySelectorAll<HTMLElement>('article')).filter((card) =>
+      /\bp-3\b/.test(card.className)
+    );
+    const topCard = compactCards.find(
+      (card) => /Top buckets/.test(card.textContent ?? '') && /Highest revenue buckets in this view\./.test(card.textContent ?? '')
+    );
+    const lowestCard = compactCards.find(
+      (card) =>
+        /Lowest-performing buckets/.test(card.textContent ?? '') && /Lowest revenue buckets in this view\./.test(card.textContent ?? '')
+    );
+
+    assert.ok(topCard);
+    assert.ok(lowestCard);
+
+    const topText = topCard?.textContent ?? '';
+    const lowestText = lowestCard?.textContent ?? '';
+    assert.ok(topText.indexOf('Apr 19') < topText.indexOf('Apr 20'));
+    assert.ok(lowestText.indexOf('Apr 17') < lowestText.indexOf('Apr 16'));
+  } finally {
+    mounted.cleanup();
+  }
+});
+
 test('order details empty state stays explicit when no drill-in selection is active', async () => {
   const { default: OrderDetailsView } = await loadDashboardModule<typeof import('../dashboard/src/components/OrderDetailsView')>(
     'dashboard/src/components/OrderDetailsView.tsx'
