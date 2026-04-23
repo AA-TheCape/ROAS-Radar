@@ -74,6 +74,8 @@ type RequestContextAttributionCapture = {
 type AttributionCaptureInsertOptions = {
   eventType: string;
   ingestionSource: TrackingIngestionSource;
+  deduplicationKey: string;
+  mirrorTrackingEvent?: boolean;
   rawPayload: unknown;
 };
 
@@ -93,6 +95,24 @@ type ExistingSessionAttributionTouchEventRow = {
   id: number;
   captured_at: Date;
   roas_radar_session_id: string;
+};
+
+type ServerAttributionResult = {
+  ok: boolean;
+  touchEventId: number | null;
+  trackingEventId: string | null;
+  capturedAt: string | null;
+  deduplicated: boolean;
+  errorCode: string | null;
+};
+
+type BrowserTrackingIngestResult = {
+  eventId: string;
+  ingestedAt: string;
+  sessionId: string;
+  deduplicated: boolean;
+  sanitizedInput: TrackingEventInput;
+  deduplicationKey: string;
 };
 
 const sanitizedString = (maxLength: number) =>
@@ -330,15 +350,94 @@ function normalizeNullableString(value: string | null | undefined): string | nul
   return trimmed ? trimmed : null;
 }
 
-function hashTrackingFingerprint(input: TrackingEventInput): string {
-  const fingerprintSource = JSON.stringify({
+function buildTrackingAttributionCapture(input: TrackingEventInput, capturedAt: string): AttributionCaptureV1 {
+  const campaignParameters = parseCampaignParameters(input.pageUrl);
+
+  return normalizeAttributionCaptureV1({
+    schema_version: ATTRIBUTION_SCHEMA_VERSION,
+    roas_radar_session_id: input.sessionId,
+    occurred_at: input.occurredAt,
+    captured_at: capturedAt,
+    landing_url: input.pageUrl,
+    referrer_url: input.referrerUrl,
+    page_url: input.pageUrl,
+    utm_source: campaignParameters.utm_source,
+    utm_medium: campaignParameters.utm_medium,
+    utm_campaign: campaignParameters.utm_campaign,
+    utm_content: campaignParameters.utm_content,
+    utm_term: campaignParameters.utm_term,
+    gclid: campaignParameters.gclid,
+    gbraid: campaignParameters.gbraid,
+    wbraid: campaignParameters.wbraid,
+    fbclid: campaignParameters.fbclid,
+    ttclid: campaignParameters.ttclid,
+    msclkid: campaignParameters.msclkid
+  });
+}
+
+function buildUnifiedEventFingerprintSource(input: {
+  sessionId: string;
+  eventType: string;
+  occurredAt: string;
+  pageUrl: string | null;
+  referrerUrl: string | null;
+  utmSource: string | null;
+  utmMedium: string | null;
+  utmCampaign: string | null;
+  utmContent: string | null;
+  utmTerm: string | null;
+  gclid: string | null;
+  gbraid: string | null;
+  wbraid: string | null;
+  fbclid: string | null;
+  ttclid: string | null;
+  msclkid: string | null;
+  shopifyCartToken?: string | null;
+  shopifyCheckoutToken?: string | null;
+}): string {
+  return JSON.stringify({
     sessionId: input.sessionId,
     eventType: input.eventType,
     occurredAt: new Date(input.occurredAt).toISOString(),
     pageUrl: normalizeUrl(input.pageUrl),
     referrerUrl: normalizeUrl(input.referrerUrl),
+    utmSource: normalizeNullableString(input.utmSource),
+    utmMedium: normalizeNullableString(input.utmMedium),
+    utmCampaign: normalizeNullableString(input.utmCampaign),
+    utmContent: normalizeNullableString(input.utmContent),
+    utmTerm: normalizeNullableString(input.utmTerm),
+    gclid: normalizeNullableString(input.gclid),
+    gbraid: normalizeNullableString(input.gbraid),
+    wbraid: normalizeNullableString(input.wbraid),
+    fbclid: normalizeNullableString(input.fbclid),
+    ttclid: normalizeNullableString(input.ttclid),
+    msclkid: normalizeNullableString(input.msclkid),
     shopifyCartToken: normalizeNullableString(input.shopifyCartToken),
     shopifyCheckoutToken: normalizeNullableString(input.shopifyCheckoutToken)
+  });
+}
+
+function hashTrackingFingerprint(input: TrackingEventInput): string {
+  const campaignParameters = parseCampaignParameters(input.pageUrl);
+  const fingerprintSource = buildUnifiedEventFingerprintSource({
+    sessionId: input.sessionId,
+    eventType: input.eventType,
+    occurredAt: input.occurredAt,
+    pageUrl: input.pageUrl,
+    referrerUrl: input.referrerUrl,
+    utmSource: campaignParameters.utm_source,
+    utmMedium: campaignParameters.utm_medium,
+    utmCampaign: campaignParameters.utm_campaign,
+    utmContent: campaignParameters.utm_content,
+    utmTerm: campaignParameters.utm_term,
+    gclid: campaignParameters.gclid,
+    gbraid: campaignParameters.gbraid,
+    wbraid: campaignParameters.wbraid,
+    fbclid: campaignParameters.fbclid,
+    ttclid: campaignParameters.ttclid,
+    msclkid: campaignParameters.msclkid,
+    shopifyCartToken: input.shopifyCartToken,
+    shopifyCheckoutToken: input.shopifyCheckoutToken
   });
 
   return createHash('sha256').update(fingerprintSource).digest('hex');
@@ -693,6 +792,10 @@ async function persistSessionBootstrap(
       const fallbackResult = await ingestAttributionCaptureWithClient(client, requestContextCapture.input, {
         eventType: 'page_view',
         ingestionSource: requestContextCapture.ingestionSource,
+        deduplicationKey: hashRequestContextCaptureFingerprint(
+          requestContextCapture.input,
+          requestContextCapture.ingestionSource
+        ),
         rawPayload: {
           ...requestContextCapture.input,
           ingestion_source: requestContextCapture.ingestionSource,
@@ -1043,8 +1146,27 @@ async function insertTrackingEvent(
   return eventId;
 }
 
-function hashAttributionCaptureFingerprint(input: AttributionCaptureV1): string {
-  return createHash('sha256').update(JSON.stringify(input)).digest('hex');
+function hashAttributionCaptureFingerprint(input: AttributionCaptureV1, eventType: string): string {
+  const fingerprintSource = buildUnifiedEventFingerprintSource({
+    sessionId: input.roas_radar_session_id,
+    eventType,
+    occurredAt: input.occurred_at,
+    pageUrl: input.page_url,
+    referrerUrl: input.referrer_url,
+    utmSource: input.utm_source,
+    utmMedium: input.utm_medium,
+    utmCampaign: input.utm_campaign,
+    utmContent: input.utm_content,
+    utmTerm: input.utm_term,
+    gclid: input.gclid,
+    gbraid: input.gbraid,
+    wbraid: input.wbraid,
+    fbclid: input.fbclid,
+    ttclid: input.ttclid,
+    msclkid: input.msclkid
+  });
+
+  return createHash('sha256').update(fingerprintSource).digest('hex');
 }
 
 function hashRequestContextCaptureFingerprint(
@@ -1532,6 +1654,26 @@ class InMemoryRateLimiter {
 
 const trackingRateLimiter = new InMemoryRateLimiter();
 
+function logTrackingPipelineOutcome(
+  leg: 'browser' | 'server_attribution',
+  outcome: 'accepted' | 'deduplicated' | 'failed' | 'rejected',
+  fields: Record<string, unknown>
+): void {
+  const payload = {
+    pipeline: 'dual_write',
+    leg,
+    outcome,
+    ...fields
+  };
+
+  if (outcome === 'failed' || outcome === 'rejected') {
+    logWarning('tracking_pipeline_leg_outcome', payload);
+    return;
+  }
+
+  logInfo('tracking_pipeline_leg_outcome', payload);
+}
+
 function enforceAllowedOrigin(req: Request): void {
   if (!env.TRACKING_ALLOWED_ORIGINS.length) {
     return;
@@ -1632,18 +1774,13 @@ function enforceRateLimit(req: Request): void {
   }
 }
 
-async function ingestTrackingEvent(
+async function ingestTrackingEventBrowserLeg(
   input: TrackingEventInput,
   requestIp: string | undefined
-): Promise<{
-  eventId: string;
-  ingestedAt: string;
-  sessionId: string;
-  deduplicated: boolean;
-}> {
+): Promise<BrowserTrackingIngestResult> {
   const sanitizedInput = sanitizeTrackingInput(input);
   const ipHash = hashIp(requestIp);
-  const ingestionFingerprint = hashTrackingFingerprint(sanitizedInput);
+  const deduplicationKey = hashTrackingFingerprint(sanitizedInput);
 
   if (sanitizedInput.clientEventId) {
     const existing = await findExistingTrackingEventByClientEventId(sanitizedInput.clientEventId);
@@ -1653,7 +1790,9 @@ async function ingestTrackingEvent(
         eventId: existing.id,
         ingestedAt: existing.ingested_at.toISOString(),
         sessionId: existing.session_id,
-        deduplicated: true
+        deduplicated: true,
+        sanitizedInput,
+        deduplicationKey
       };
     }
   }
@@ -1665,18 +1804,22 @@ async function ingestTrackingEvent(
       eventId: matchingFallbackEvent.id,
       ingestedAt: matchingFallbackEvent.ingested_at.toISOString(),
       sessionId: matchingFallbackEvent.session_id,
-      deduplicated: true
+      deduplicated: true,
+      sanitizedInput,
+      deduplicationKey
     };
   }
 
-  const duplicatePayload = await findExistingTrackingEventByFingerprint(ingestionFingerprint);
+  const duplicatePayload = await findExistingTrackingEventByFingerprint(deduplicationKey);
 
   if (duplicatePayload) {
     return {
       eventId: duplicatePayload.id,
       ingestedAt: duplicatePayload.ingested_at.toISOString(),
       sessionId: duplicatePayload.session_id,
-      deduplicated: true
+      deduplicated: true,
+      sanitizedInput,
+      deduplicationKey
     };
   }
 
@@ -1686,7 +1829,7 @@ async function ingestTrackingEvent(
     const metricDate = formatDateInTimezone(occurredAt, await getReportingTimezone(client));
 
     await upsertTrackingSession(sanitizedInput, occurredAt, userAgent, ipHash, client);
-    const insertedEventId = await insertTrackingEvent(client, sanitizedInput, ingestionFingerprint);
+    const insertedEventId = await insertTrackingEvent(client, sanitizedInput, deduplicationKey);
     await enqueueAttributionForTrackingTouchpoint(client, {
       sessionId: sanitizedInput.sessionId,
       shopifyCheckoutToken: normalizeNullableString(sanitizedInput.shopifyCheckoutToken),
@@ -1701,8 +1844,58 @@ async function ingestTrackingEvent(
     eventId,
     ingestedAt: new Date().toISOString(),
     sessionId: sanitizedInput.sessionId,
-    deduplicated: false
+    deduplicated: false,
+    sanitizedInput,
+    deduplicationKey
   };
+}
+
+async function emitServerAttributionFromTrackingEvent(input: TrackingEventInput): Promise<ServerAttributionResult> {
+  const attributionCapture = buildTrackingAttributionCapture(input, new Date().toISOString());
+
+  try {
+    const result = await withTransaction(async (client) => {
+      await upsertSessionAttributionIdentityFromCapture(attributionCapture, client);
+      await upsertTrackingSessionFromAttributionCapture(attributionCapture, client);
+
+      return ingestAttributionCaptureWithClient(client, attributionCapture, {
+        eventType: input.eventType,
+        ingestionSource: 'server',
+        deduplicationKey: hashAttributionCaptureFingerprint(attributionCapture, input.eventType),
+        mirrorTrackingEvent: false,
+        rawPayload: {
+          ...attributionCapture,
+          event_type: input.eventType,
+          client_event_id: input.clientEventId,
+          ingestion_source: 'server',
+          capture_origin: 'browser_dual_write'
+        }
+      });
+    });
+
+    return {
+      ok: true,
+      touchEventId: result.touchEvent.id,
+      trackingEventId: result.trackingEventId,
+      capturedAt: result.touchEvent.captured_at.toISOString(),
+      deduplicated: result.deduplicated,
+      errorCode: null
+    };
+  } catch (error) {
+    logError('tracking_server_attribution_emit_failed', error, {
+      sessionId: input.sessionId,
+      eventType: input.eventType
+    });
+
+    return {
+      ok: false,
+      touchEventId: null,
+      trackingEventId: null,
+      capturedAt: null,
+      deduplicated: false,
+      errorCode: 'server_attribution_emit_failed'
+    };
+  }
 }
 
 async function ingestAttributionCaptureWithClient(
@@ -1714,16 +1907,11 @@ async function ingestAttributionCaptureWithClient(
   deduplicated: boolean;
   trackingEventId: string | null;
 }> {
-  const ingestionFingerprint =
-    options.ingestionSource === 'request_query' || options.ingestionSource === 'request_referrer'
-      ? hashRequestContextCaptureFingerprint(input, options.ingestionSource)
-      : hashAttributionCaptureFingerprint(input);
-
-  const touchEventInsert = await insertSessionAttributionTouchEvent(client, input, ingestionFingerprint, options);
+  const touchEventInsert = await insertSessionAttributionTouchEvent(client, input, options.deduplicationKey, options);
   let trackingEventId: string | null = null;
 
-  if (!touchEventInsert.deduplicated) {
-    trackingEventId = await insertTrackingEventFromAttributionCapture(client, input, ingestionFingerprint, options);
+  if (!touchEventInsert.deduplicated && options.mirrorTrackingEvent !== false) {
+    trackingEventId = await insertTrackingEventFromAttributionCapture(client, input, options.deduplicationKey, options);
   }
 
   return {
@@ -1742,8 +1930,8 @@ async function ingestAttributionCapture(
   sessionId: string;
   deduplicated: boolean;
 }> {
-  const ingestionFingerprint = hashAttributionCaptureFingerprint(input);
-  const existingTouchEvent = await findExistingSessionAttributionTouchEventByFingerprint(ingestionFingerprint);
+  const deduplicationKey = hashAttributionCaptureFingerprint(input, 'page_view');
+  const existingTouchEvent = await findExistingSessionAttributionTouchEventByFingerprint(deduplicationKey);
 
   if (existingTouchEvent) {
     return {
@@ -1759,8 +1947,9 @@ async function ingestAttributionCapture(
     await upsertSessionAttributionIdentityFromCapture(input, client);
     await upsertTrackingSessionFromAttributionCapture(input, client);
     return ingestAttributionCaptureWithClient(client, input, {
-      eventType: 'server_capture',
+      eventType: 'page_view',
       ingestionSource: 'server',
+      deduplicationKey,
       rawPayload: {
         ...input,
         schema_version: ATTRIBUTION_SCHEMA_VERSION,
@@ -1868,20 +2057,44 @@ export function createTrackingRouter(): Router {
 
       const body = parseTrackingRequestBody(req.body as TrackingRequestBody);
       const input = parseInput(trackingEventSchema, body);
-      const result = await ingestTrackingEvent(input, resolveRequestIp(req));
-      logInfo(result.deduplicated ? 'tracking_ingest_duplicate' : 'tracking_ingest_accepted', {
-        sessionId: result.sessionId,
-        eventId: result.eventId,
-        eventType: input.eventType,
-        deduplicated: result.deduplicated
-      });
+      const browserResult = await ingestTrackingEventBrowserLeg(input, resolveRequestIp(req));
+      const serverAttributionResult = await emitServerAttributionFromTrackingEvent(browserResult.sanitizedInput);
 
-      appendTrackingSessionCookies(req, res, result.sessionId);
+      logInfo(browserResult.deduplicated ? 'tracking_ingest_duplicate' : 'tracking_ingest_accepted', {
+        sessionId: browserResult.sessionId,
+        eventId: browserResult.eventId,
+        eventType: input.eventType,
+        deduplicated: browserResult.deduplicated
+      });
+      logTrackingPipelineOutcome('browser', browserResult.deduplicated ? 'deduplicated' : 'accepted', {
+        sessionId: browserResult.sessionId,
+        eventId: browserResult.eventId,
+        eventType: input.eventType
+      });
+      logTrackingPipelineOutcome(
+        'server_attribution',
+        serverAttributionResult.ok
+          ? serverAttributionResult.deduplicated
+            ? 'deduplicated'
+            : 'accepted'
+          : 'failed',
+        {
+          sessionId: browserResult.sessionId,
+          eventId: browserResult.eventId,
+          eventType: input.eventType,
+          touchEventId: serverAttributionResult.touchEventId,
+          errorCode: serverAttributionResult.errorCode
+        }
+      );
+
+      appendTrackingSessionCookies(req, res, browserResult.sessionId);
       res.status(200).json({
         ok: true,
-        eventId: result.eventId,
-        ingestedAt: result.ingestedAt,
-        sessionId: result.sessionId
+        eventId: browserResult.eventId,
+        ingestedAt: browserResult.ingestedAt,
+        sessionId: browserResult.sessionId,
+        deduplicated: browserResult.deduplicated,
+        attribution: serverAttributionResult
       });
     } catch (error) {
       if (error instanceof TrackingHttpError) {
@@ -1890,8 +2103,22 @@ export function createTrackingRouter(): Router {
           statusCode: error.statusCode,
           details: error.details
         });
+        logTrackingPipelineOutcome('browser', 'rejected', {
+          code: error.code,
+          statusCode: error.statusCode
+        });
+        logTrackingPipelineOutcome('server_attribution', 'rejected', {
+          code: error.code,
+          statusCode: error.statusCode
+        });
       } else {
         logError('tracking_ingest_failed', error, {
+          path: req.baseUrl ? `${req.baseUrl}${req.path}` : req.path
+        });
+        logTrackingPipelineOutcome('browser', 'failed', {
+          path: req.baseUrl ? `${req.baseUrl}${req.path}` : req.path
+        });
+        logTrackingPipelineOutcome('server_attribution', 'failed', {
           path: req.baseUrl ? `${req.baseUrl}${req.path}` : req.path
         });
       }
