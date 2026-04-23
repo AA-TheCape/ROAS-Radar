@@ -132,6 +132,11 @@ const SUMMARY_CARD_DECOR: Record<
     pillTone: 'warning',
     pillLabel: 'Revenue'
   },
+  Spend: {
+    accent: 'from-brand/85 via-teal/75 to-success/70',
+    pillTone: 'teal',
+    pillLabel: 'Media'
+  },
   AOV: {
     accent: 'from-success/90 via-teal/80 to-brand/65',
     pillTone: 'success',

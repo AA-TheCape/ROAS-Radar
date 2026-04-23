@@ -81,6 +81,7 @@ test('reporting summary returns headline metrics from daily campaign aggregates'
         visits: 1240,
         orders: 48,
         revenue: 5210.5,
+        spend: 0,
         conversionRate: 48 / 1240,
         roas: null
       }

@@ -116,6 +116,7 @@ function createFetchStub(calls: FetchCall[]) {
           visits: 1200,
           orders: 48,
           revenue: 5210.5,
+          spend: 0,
           conversionRate: 0.04,
           roas: null
         }

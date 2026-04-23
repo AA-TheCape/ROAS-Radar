@@ -420,7 +420,7 @@ async function exchangeLongLivedAccessToken(config, accessToken) {
 async function fetchMetaAdsAccount(accessToken, adAccountId) {
     const url = new URL(`${META_GRAPH_BASE_URL}/${env.META_ADS_API_VERSION}/act_${adAccountId}`);
     url.searchParams.set('access_token', accessToken);
-    url.searchParams.set('fields', 'id,name,account_currency');
+    url.searchParams.set('fields', 'id,name,currency');
     return metaFetchJson(url);
 }
 async function insertOAuthState(redirectPath) {
@@ -494,7 +494,7 @@ async function upsertMetaAdsConnection(params) {
         params.grantedScopes,
         params.tokenExpiresAt,
         params.account.name ?? null,
-        params.account.account_currency ?? null,
+        params.account.currency ?? params.account.account_currency ?? null,
         JSON.stringify(params.account)
     ]);
 }

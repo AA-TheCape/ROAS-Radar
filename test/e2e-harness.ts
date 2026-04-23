@@ -44,6 +44,7 @@ type ReportingSummaryResponse = {
     visits: number;
     orders: number;
     revenue: number;
+    spend: number;
     conversionRate: number;
     roas: number | null;
   };

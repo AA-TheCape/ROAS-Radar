@@ -169,6 +169,7 @@ async function renderSnapshots() {
           visits: 12480,
           orders: 324,
           revenue: 48920,
+          spend: 11376,
           conversionRate: 0.02596,
           roas: 4.3
         },

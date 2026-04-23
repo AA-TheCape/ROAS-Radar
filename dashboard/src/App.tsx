@@ -769,12 +769,13 @@ function App() {
 
   const summaryCards = useMemo(() => {
     const totals = dashboard.summary.data;
+    const rangeLabel = `${formatDateLabel(filters.startDate, reportingTimezone)} to ${formatDateLabel(filters.endDate, reportingTimezone)}`;
 
     return [
       {
         label: 'Visits',
         value: formatNumber(totals?.visits),
-        detail: `${formatDateLabel(filters.startDate, reportingTimezone)} to ${formatDateLabel(filters.endDate, reportingTimezone)}`
+        detail: rangeLabel
       },
       {
         label: 'Orders',
@@ -785,6 +786,11 @@ function App() {
         label: 'Revenue',
         value: formatCurrency(totals?.revenue),
         detail: totals?.roas == null ? 'ROAS pending spend data' : `${formatNumber(totals.roas)} ROAS`
+      },
+      {
+        label: 'Spend',
+        value: formatCurrency(totals?.spend),
+        detail: rangeLabel
       },
       {
         label: 'AOV',

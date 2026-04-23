@@ -273,6 +273,7 @@ export function createReportingRouter(): Router {
           visits: metrics.visits,
           orders: metrics.orders,
           revenue: metrics.attributedRevenue,
+          spend: metrics.spend,
           conversionRate: metrics.conversionRate,
           roas: metrics.roas
         }

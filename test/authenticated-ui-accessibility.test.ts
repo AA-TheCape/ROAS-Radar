@@ -160,7 +160,7 @@ test('authenticated dashboard, order details, and settings pass automated access
         { label: 'AOV', value: '$150.99', detail: '324 attributed orders' }
       ],
       summarySection: {
-        data: { visits: 12480, orders: 324, revenue: 48920, conversionRate: 0.02596, roas: 4.3 },
+        data: { visits: 12480, orders: 324, revenue: 48920, spend: 11376, conversionRate: 0.02596, roas: 4.3 },
         loading: false,
         error: null
       },

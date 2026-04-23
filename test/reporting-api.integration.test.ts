@@ -71,6 +71,7 @@ test('reporting summary reads persisted daily aggregates from PostgreSQL', async
         visits: 42,
         orders: 3,
         revenue: 390,
+        spend: 0,
         conversionRate: 3 / 42,
         roas: null
       }
