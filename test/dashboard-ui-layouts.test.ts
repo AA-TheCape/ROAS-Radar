@@ -151,6 +151,25 @@ test('reporting dashboard search and order drill-in stay wired for high-traffic 
   }
 });
 
+test('reporting dashboard summary cards keep spend visible alongside the overview KPIs', async () => {
+  const { default: ReportingDashboard } = await loadDashboardModule<
+    typeof import('../dashboard/src/components/ReportingDashboard')
+  >('dashboard/src/components/ReportingDashboard.tsx');
+
+  const mounted = await mountUi(h(ReportingDashboard, createReportingDashboardProps()));
+
+  try {
+    const text = mounted.container.textContent ?? '';
+    assert.match(text, /Overview command center/);
+    assert.match(text, /Revenue captured/);
+    assert.match(text, /Spend/);
+    assert.match(text, /\$11,376\.00/);
+    assert.match(text, /Media/);
+  } finally {
+    mounted.cleanup();
+  }
+});
+
 test('reporting dashboard renders the bottom spend report grouped by channel then campaign', async () => {
   const { default: ReportingDashboard } = await loadDashboardModule<
     typeof import('../dashboard/src/components/ReportingDashboard')

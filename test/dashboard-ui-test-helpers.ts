@@ -304,6 +304,7 @@ export function createReportingDashboardProps(
       { label: 'Visits', value: '12,480', detail: 'Apr 1 to Apr 20' },
       { label: 'Orders', value: '324', detail: '2.6% conversion' },
       { label: 'Revenue', value: '$48,920.00', detail: '4.3 ROAS' },
+      { label: 'Spend', value: '$11,376.00', detail: 'Apr 1 to Apr 20' },
       { label: 'AOV', value: '$150.99', detail: '324 attributed orders' }
     ],
     summarySection: {

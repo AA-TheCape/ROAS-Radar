@@ -333,3 +333,67 @@ test('reporting dashboard exposes constrained date inputs for custom reporting w
     mounted.cleanup();
   }
 });
+
+test('reporting dashboard keeps the top controls compact and applies quick date ranges in place', async () => {
+  const { default: ReportingDashboard } = await loadDashboardModule<
+    typeof import('../dashboard/src/components/ReportingDashboard')
+  >('dashboard/src/components/ReportingDashboard.tsx');
+
+  function ReportingDashboardHarness() {
+    const [filters, setFilters] = React.useState(createReportingDashboardProps().filters);
+
+    return h(
+      ReportingDashboard,
+      createReportingDashboardProps({
+        filters,
+        onFiltersChange: setFilters,
+        onApplyQuickRange: (range) => setFilters((current) => ({ ...current, ...range }))
+      })
+    );
+  }
+
+  function findCompactControlCard(element: HTMLElement | null) {
+    let current = element;
+
+    while (current) {
+      if (current.className.includes('col-[1/-1]') && /Top control card/.test(current.textContent ?? '')) {
+        return current;
+      }
+
+      current = current.parentElement;
+    }
+
+    return null;
+  }
+
+  const mounted = await mountUi(h(ReportingDashboardHarness));
+
+  try {
+    const startDateInput = mounted.container.querySelector('#start-date') as HTMLInputElement | null;
+    const endDateInput = mounted.container.querySelector('#end-date') as HTMLInputElement | null;
+    const compactControlCard = findCompactControlCard(startDateInput);
+
+    assert.ok(startDateInput);
+    assert.ok(endDateInput);
+    assert.ok(compactControlCard);
+    assert.match(compactControlCard.className, /col-\[1\/-1\]/);
+    assert.match(compactControlCard.textContent ?? '', /Today/);
+    assert.match(compactControlCard.textContent ?? '', /Last 7D/);
+    assert.match(compactControlCard.textContent ?? '', /Last 30D/);
+
+    const lastSevenDaysButton = Array.from(mounted.container.querySelectorAll<HTMLButtonElement>('button')).find(
+      (element) => element.textContent?.trim() === 'Last 7D'
+    );
+
+    assert.ok(lastSevenDaysButton);
+
+    click(lastSevenDaysButton);
+    await tick();
+
+    assert.equal(startDateInput.value, '2026-04-14');
+    assert.equal(endDateInput.value, '2026-04-20');
+    assert.match(mounted.container.textContent ?? '', /Apr 14 to Apr 20/);
+  } finally {
+    mounted.cleanup();
+  }
+});

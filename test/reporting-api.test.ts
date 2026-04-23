@@ -92,6 +92,31 @@ test('reporting summary returns headline metrics from daily campaign aggregates'
   }
 });
 
+test('reporting routes reject invalid date ranges before querying aggregates', async () => {
+  let queryCalls = 0;
+  pool.query = (async () => {
+    queryCalls += 1;
+    return { rows: [] };
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(
+      server,
+      '/api/reporting/summary?startDate=2026-04-10&endDate=2026-04-01'
+    );
+
+    assert.equal(response.status, 400);
+    assert.equal(body.error, 'invalid_request');
+    assert.equal(queryCalls, 0);
+    assert.deepEqual(body.details.fieldErrors.startDate, ['startDate must be on or before endDate']);
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
 test('reporting campaigns returns campaign rows sorted for dashboard tables', async () => {
   pool.query = (async (text: string, params?: unknown[]) => {
     assert.match(text, /GROUP BY source, medium, campaign, content/);
