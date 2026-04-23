@@ -58,7 +58,21 @@ export type SpendDetailChannelGroup = {
   campaigns: SpendDetailCampaignRow[];
 };
 
+export type SpendDetailsSummary = {
+  totalSpend: number;
+  activeChannels: number;
+  activeCampaigns: number;
+  averageDailySpend: number;
+  topChannel: {
+    source: string;
+    medium: string;
+    channel: string;
+    spend: number;
+  } | null;
+};
+
 export type SpendDetailsResponse = {
+  summary: SpendDetailsSummary;
   groups: SpendDetailChannelGroup[];
   totalSpend: number;
 };
@@ -74,6 +88,15 @@ export type TimeseriesPoint = {
 
 export type TimeseriesResponse = {
   points: TimeseriesPoint[];
+  lowestBuckets: Array<{
+    bucket: string;
+    visits: number;
+    orders: number;
+    revenue: number;
+    spend: number;
+    conversionRate: number;
+    roas: number | null;
+  }>;
 };
 
 export type OrderRow = {

@@ -201,6 +201,18 @@ test('reporting spend details return channel groups with campaign subtotals in d
 
     assert.equal(response.status, 200);
     assert.deepEqual(body, {
+      summary: {
+        totalSpend: 2400.5,
+        activeChannels: 2,
+        activeCampaigns: 3,
+        averageDailySpend: 240.05,
+        topChannel: {
+          source: 'google',
+          medium: 'cpc',
+          channel: 'google / cpc',
+          spend: 1500
+        }
+      },
       groups: [
         {
           source: 'google',
@@ -250,13 +262,15 @@ test('reporting timeseries returns grouped points for the requested dimension', 
           bucket: 'google',
           visits: '900',
           orders: '33',
-          revenue: '3000.00'
+          revenue: '3000.00',
+          spend: '1200.00'
         },
         {
           bucket: 'meta',
           visits: '340',
           orders: '15',
-          revenue: '2210.50'
+          revenue: '2210.50',
+          spend: '900.50'
         }
       ]
     };
@@ -284,6 +298,26 @@ test('reporting timeseries returns grouped points for the requested dimension', 
           visits: 340,
           orders: 15,
           revenue: 2210.5
+        }
+      ],
+      lowestBuckets: [
+        {
+          bucket: 'meta',
+          visits: 340,
+          orders: 15,
+          revenue: 2210.5,
+          spend: 900.5,
+          conversionRate: 15 / 340,
+          roas: 2210.5 / 900.5
+        },
+        {
+          bucket: 'google',
+          visits: 900,
+          orders: 33,
+          revenue: 3000,
+          spend: 1200,
+          conversionRate: 33 / 900,
+          roas: 2.5
         }
       ]
     });
