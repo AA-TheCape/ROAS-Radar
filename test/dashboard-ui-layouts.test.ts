@@ -39,6 +39,24 @@ test('authenticated shell mobile navigation opens and closes on route change', a
   }
 });
 
+test('authenticated shell removes deprecated workspace and header cards without leaving layout gaps', async () => {
+  const { default: AuthenticatedAppShell } = await loadDashboardModule<
+    typeof import('../dashboard/src/components/AuthenticatedAppShell')
+  >('dashboard/src/components/AuthenticatedAppShell.tsx');
+
+  const mounted = await mountUi(h(AuthenticatedAppShell, createShellProps()), { width: 1440, height: 900 });
+
+  try {
+    assert.doesNotMatch(mounted.container.textContent ?? '', /Workspace/);
+    assert.doesNotMatch(mounted.container.textContent ?? '', /Active window/);
+    assert.equal(mounted.container.querySelector('aside[aria-label="Section navigation"]'), null);
+    assert.equal(mounted.container.querySelector('[aria-label="Current workspace status"]'), null);
+    assert.ok(mounted.container.querySelector('#app-shell-main'));
+  } finally {
+    mounted.cleanup();
+  }
+});
+
 test('reporting dashboard search and order drill-in stay wired for high-traffic workflows', async () => {
   const { default: ReportingDashboard } = await loadDashboardModule<
     typeof import('../dashboard/src/components/ReportingDashboard')

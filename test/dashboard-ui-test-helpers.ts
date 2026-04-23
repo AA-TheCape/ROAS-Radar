@@ -230,36 +230,6 @@ export function normalizeHtml(value: string) {
 
 export function noop() {}
 
-export function shellHeader() {
-  return h(
-    'div',
-    { className: 'grid gap-4' },
-    h(
-      'div',
-      null,
-      h('p', { className: 'text-caption uppercase tracking-[0.14em] text-ink-muted' }, 'Active window'),
-      h('p', { className: 'mt-2 font-display text-display text-ink' }, '2026-04-20'),
-      h('p', { className: 'mt-2 text-body text-ink-soft' }, 'Apr 20, 4:30 PM')
-    ),
-    h(
-      'dl',
-      { className: 'grid gap-3 text-body' },
-      h(
-        'div',
-        { className: 'rounded-card border border-line/70 bg-canvas-tint p-4' },
-        h('dt', { className: 'text-caption uppercase tracking-[0.12em] text-ink-muted' }, 'Traffic scope'),
-        h('dd', { className: 'mt-2 text-ink-soft' }, 'All attributed traffic')
-      ),
-      h(
-        'div',
-        { className: 'rounded-card border border-line/70 bg-canvas-tint p-4' },
-        h('dt', { className: 'text-caption uppercase tracking-[0.12em] text-ink-muted' }, 'Reporting timezone'),
-        h('dd', { className: 'mt-2 text-ink-soft' }, 'America/Los_Angeles')
-      )
-    )
-  );
-}
-
 export function createShellProps(overrides: Partial<import('../dashboard/src/components/AuthenticatedAppShell').AuthenticatedAppShellProps> = {}) {
   return {
     navItems: [
@@ -280,17 +250,12 @@ export function createShellProps(overrides: Partial<import('../dashboard/src/com
       { label: 'Authenticated app' },
       { label: 'Dashboard', current: true }
     ],
-    eyebrow: 'MVP reporting dashboard',
-    title: 'Monitor acquisition performance across revenue, campaigns, and orders',
-    description:
-      'Monitor paid acquisition performance for a single Shopify store across headline metrics, campaign rows, time-based trends, and order-level attribution evidence.',
     topbarMeta: h(
       'div',
       { className: 'space-y-1' },
       h('p', { className: 'font-semibold text-ink' }, 'Taylor Operator'),
       h('p', null, 'taylor@roasradar.dev')
     ),
-    headerStatus: shellHeader(),
     headerActions: h('button', { type: 'button' }, 'Logout'),
     children: h('div', null, 'Shell content'),
     ...overrides
@@ -623,6 +588,15 @@ export function createSettingsAdminProps(
     setMetaConfigForm: noop,
     googleConnection: {
       data: {
+        config: {
+          source: 'database',
+          developerTokenConfigured: true,
+          appBaseUrl: 'https://app.roasradar.dev',
+          appScopes: ['https://www.googleapis.com/auth/adwords'],
+          clientId: 'client-id',
+          clientSecretConfigured: true,
+          missingFields: []
+        },
         connection: {
           id: 3,
           customer_id: '123-456-7890',
@@ -649,6 +623,14 @@ export function createSettingsAdminProps(
       loading: false,
       error: null
     } satisfies AsyncSection<import('../dashboard/src/lib/api').GoogleAdsStatusResponse>,
+    googleConfigForm: {
+      developerToken: 'developer-token',
+      clientId: 'client-id',
+      clientSecret: 'client-secret',
+      appBaseUrl: 'https://app.roasradar.dev',
+      appScopes: 'https://www.googleapis.com/auth/adwords'
+    },
+    setGoogleConfigForm: noop,
     googleForm: {
       customerId: '123-456-7890',
       loginCustomerId: '111-222-3333',

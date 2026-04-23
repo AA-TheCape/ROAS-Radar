@@ -17,24 +17,12 @@ type BreadcrumbsProps = {
   items: AppShellBreadcrumb[];
 };
 
-type PageHeaderProps = {
-  eyebrow: string;
-  title: string;
-  description: string;
-  statusPanel?: ReactNode;
-  actions?: ReactNode;
-};
-
 export type AuthenticatedAppShellProps = {
   navItems: AppShellNavItem[];
   activeNavKey: string;
   onNavigate: (key: string) => void;
   breadcrumbs: AppShellBreadcrumb[];
-  eyebrow: string;
-  title: string;
-  description: string;
   topbarMeta?: ReactNode;
-  headerStatus?: ReactNode;
   headerActions?: ReactNode;
   children: ReactNode;
 };
@@ -110,43 +98,12 @@ export function AppShellBreadcrumbs({ items }: BreadcrumbsProps) {
   );
 }
 
-export function AppShellPageHeader({
-  eyebrow,
-  title,
-  description,
-  statusPanel,
-  actions
-}: PageHeaderProps) {
-  return (
-    <section className="grid gap-panel xl:grid-cols-[minmax(0,1.5fr)_minmax(18rem,22rem)]">
-      <article className="rounded-shell border border-line/80 bg-surface/90 p-card shadow-lift backdrop-blur">
-        <p className="text-caption font-semibold uppercase tracking-[0.14em] text-teal">{eyebrow}</p>
-        <h1 className="mt-4 font-display text-display text-ink sm:text-hero">ROAS Radar</h1>
-        <h2 className="mt-4 max-w-[16ch] font-display text-title text-ink-soft sm:text-display">{title}</h2>
-        <p className="mt-5 max-w-3xl text-lead text-ink-soft">{description}</p>
-        {actions ? <div className="mt-card flex flex-wrap gap-3">{actions}</div> : null}
-      </article>
-
-      <div
-        className="rounded-shell border border-line/80 bg-surface/90 p-panel shadow-panel backdrop-blur"
-        aria-label="Current workspace status"
-      >
-        {statusPanel}
-      </div>
-    </section>
-  );
-}
-
 export default function AuthenticatedAppShell({
   navItems,
   activeNavKey,
   onNavigate,
   breadcrumbs,
-  eyebrow,
-  title,
-  description,
   topbarMeta,
-  headerStatus,
   headerActions,
   children
 }: AuthenticatedAppShellProps) {
@@ -206,7 +163,10 @@ export default function AuthenticatedAppShell({
             })}
           </nav>
 
-          <div className="hidden max-w-[28rem] text-right text-body text-ink-muted sm:block">{topbarMeta}</div>
+          <div className="ml-auto flex items-center gap-3 sm:gap-4">
+            <div className="hidden max-w-[28rem] text-right text-body text-ink-muted sm:block">{topbarMeta}</div>
+            {headerActions ? <div className="flex flex-wrap items-center justify-end gap-2">{headerActions}</div> : null}
+          </div>
         </div>
       </header>
 
@@ -229,34 +189,14 @@ export default function AuthenticatedAppShell({
         </div>
       ) : null}
 
-      <div className="mx-auto flex w-full max-w-[92rem] gap-section px-gutter py-gutter sm:px-section sm:py-section lg:px-section-lg lg:py-section-lg">
-        <aside className="sticky top-24 hidden h-fit w-[17.5rem] shrink-0 lg:block" aria-label="Section navigation">
-          <div className="rounded-shell border border-line/80 bg-surface/92 p-panel shadow-panel backdrop-blur">
-            <p className="text-caption font-semibold uppercase tracking-[0.14em] text-teal">Workspace</p>
-            <h2 className="mt-3 font-display text-title text-ink">Authenticated shell</h2>
-            <p className="mt-3 text-body text-ink-soft">
-              Shared nav, breadcrumbs, and header chrome for all post-login surfaces.
-            </p>
-            <div className="mt-panel">
-              <ShellNavigation navItems={navItems} activeNavKey={activeNavKey} onNavigate={onNavigate} />
-            </div>
-          </div>
-        </aside>
-
-        <main id="app-shell-main" className="min-w-0 flex-1" tabIndex={-1}>
+      <main id="app-shell-main" className="mx-auto w-full max-w-[92rem] px-gutter py-gutter sm:px-section sm:py-section lg:px-section-lg lg:py-section-lg" tabIndex={-1}>
+        <div className="min-w-0">
           <div className="grid gap-section">
             <AppShellBreadcrumbs items={breadcrumbs} />
-            <AppShellPageHeader
-              eyebrow={eyebrow}
-              title={title}
-              description={description}
-              statusPanel={headerStatus}
-              actions={headerActions}
-            />
             <div className="grid gap-section">{children}</div>
           </div>
-        </main>
-      </div>
+        </div>
+      </main>
     </div>
   );
 }

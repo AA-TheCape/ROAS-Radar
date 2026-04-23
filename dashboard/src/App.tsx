@@ -1,14 +1,4 @@
-import {
-  Suspense,
-  lazy,
-  startTransition,
-  useCallback,
-  useDeferredValue,
-  useEffect,
-  useMemo,
-  useState,
-  type FormEvent
-} from 'react';
+import { Suspense, lazy, startTransition, useCallback, useDeferredValue, useEffect, useMemo, useState, type FormEvent } from 'react';
 
 import {
   backfillShopifyOrders,
@@ -203,16 +193,6 @@ function formatDateInput(date: Date, reportingTimezone = DEFAULT_REPORTING_TIMEZ
   }
 
   return `${year}-${month}-${day}`;
-}
-
-function formatDateTimeForClock(date: Date, reportingTimezone = DEFAULT_REPORTING_TIMEZONE): string {
-  return new Intl.DateTimeFormat('en-US', {
-    timeZone: reportingTimezone,
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit'
-  }).format(date);
 }
 
 function buildRange(
@@ -486,21 +466,6 @@ function App() {
 
   const dashboard = useDashboardData(appliedFilters, groupBy, authState.user !== null, dashboardRefreshKey);
   const reportingTimezone = appSettings.data?.reportingTimezone ?? settingsForm.reportingTimezone ?? DEFAULT_REPORTING_TIMEZONE;
-  const [currentTime, setCurrentTime] = useState(() => new Date());
-  const activeWindowTime = useMemo(
-    () => formatDateTimeForClock(currentTime, reportingTimezone),
-    [currentTime, reportingTimezone]
-  );
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      setCurrentTime(new Date());
-    }, 60_000);
-
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, []);
 
   async function loadAppSettings() {
     setAppSettings(createLoadingSection());
@@ -1207,24 +1172,6 @@ function App() {
     }
   }
 
-  const pageEyebrow =
-    currentPage === 'settings'
-      ? 'Admin settings'
-      : currentPage === 'order-details'
-        ? 'Order drill-in'
-        : 'MVP reporting dashboard';
-  const pageTitle =
-    currentPage === 'settings'
-      ? 'Configure reporting settings and platform connections'
-      : currentPage === 'order-details'
-        ? `Inspect order #${selectedOrderId ?? 'Unknown'}`
-        : 'Monitor acquisition performance across revenue, campaigns, and orders';
-  const pageDescription =
-    currentPage === 'settings'
-      ? 'Configure store integrations, ad platform connections, and dashboard user access from one place.'
-      : currentPage === 'order-details'
-        ? 'Inspect the full stored Shopify order record, attribution credits, line items, and raw payload for one order.'
-        : 'Monitor paid acquisition performance for a single Shopify store across headline metrics, campaign rows, time-based trends, and order-level attribution evidence.';
   const activeNavKey = currentPage;
   const shellNavItems: AppShellNavItem[] =
     currentPage === 'order-details'
@@ -1254,31 +1201,6 @@ function App() {
             { label: 'Dashboard', onClick: closeOrderDetails },
             { label: selectedOrderId ? `Order ${selectedOrderId}` : 'Order details', current: true }
           ];
-  const shellHeaderStatus = (
-    <div className="grid gap-4">
-      <div>
-        <p className="text-caption uppercase tracking-[0.14em] text-ink-muted">Active window</p>
-        <p className="mt-2 font-display text-display text-ink">
-          {currentPage === 'order-details' ? `#${selectedOrderId ?? '—'}` : filters.endDate}
-        </p>
-        <p className="mt-2 text-body text-ink-soft">{activeWindowTime}</p>
-      </div>
-      <dl className="grid gap-3 text-body">
-        <div className="rounded-card border border-line/70 bg-canvas-tint p-4">
-          <dt className="text-caption uppercase tracking-[0.12em] text-ink-muted">Traffic scope</dt>
-          <dd className="mt-2 text-ink-soft">
-            {(filters.source ?? '').trim() || (filters.campaign ?? '').trim()
-              ? `Filtered by ${[(filters.source ?? '').trim(), (filters.campaign ?? '').trim()].filter(Boolean).join(' / ')}`
-              : 'All attributed traffic'}
-          </dd>
-        </div>
-        <div className="rounded-card border border-line/70 bg-canvas-tint p-4">
-          <dt className="text-caption uppercase tracking-[0.12em] text-ink-muted">Reporting timezone</dt>
-          <dd className="mt-2 text-ink-soft">{reportingTimezone}</dd>
-        </div>
-      </dl>
-    </div>
-  );
   const shellHeaderActions = (
     <>
       {currentPage === 'order-details' ? (
@@ -1386,16 +1308,12 @@ function App() {
       activeNavKey={activeNavKey}
       onNavigate={handleAppNavigation}
       breadcrumbs={breadcrumbs}
-      eyebrow={pageEyebrow}
-      title={pageTitle}
-      description={pageDescription}
       topbarMeta={
         <div className="space-y-1">
           <p className="font-semibold text-ink">{authenticatedUser.displayName}</p>
           <p>{authenticatedUser.email}</p>
         </div>
       }
-      headerStatus={shellHeaderStatus}
       headerActions={shellHeaderActions}
     >
       {currentPage === 'dashboard' ? (

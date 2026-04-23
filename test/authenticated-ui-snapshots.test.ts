@@ -46,36 +46,6 @@ async function loadModule<T>(relativePath: string): Promise<T> {
   return import(moduleUrl) as Promise<T>;
 }
 
-function shellHeader() {
-  return h(
-    'div',
-    { className: 'grid gap-4' },
-    h(
-      'div',
-      null,
-      h('p', { className: 'text-caption uppercase tracking-[0.14em] text-ink-muted' }, 'Active window'),
-      h('p', { className: 'mt-2 font-display text-display text-ink' }, '2026-04-20'),
-      h('p', { className: 'mt-2 text-body text-ink-soft' }, 'Apr 20, 4:30 PM')
-    ),
-    h(
-      'dl',
-      { className: 'grid gap-3 text-body' },
-      h(
-        'div',
-        { className: 'rounded-card border border-line/70 bg-canvas-tint p-4' },
-        h('dt', { className: 'text-caption uppercase tracking-[0.12em] text-ink-muted' }, 'Traffic scope'),
-        h('dd', { className: 'mt-2 text-ink-soft' }, 'All attributed traffic')
-      ),
-      h(
-        'div',
-        { className: 'rounded-card border border-line/70 bg-canvas-tint p-4' },
-        h('dt', { className: 'text-caption uppercase tracking-[0.12em] text-ink-muted' }, 'Reporting timezone'),
-        h('dd', { className: 'mt-2 text-ink-soft' }, 'America/Los_Angeles')
-      )
-    )
-  );
-}
-
 async function renderSnapshots() {
   const [
     { default: AuthenticatedAppShell },
@@ -113,16 +83,10 @@ async function renderSnapshots() {
   function renderRoute({
     activeNavKey,
     breadcrumbs,
-    eyebrow,
-    title,
-    description,
     children
   }: {
     activeNavKey: string;
     breadcrumbs: Array<{ label: string; current?: boolean }>;
-    eyebrow: string;
-    title: string;
-    description: string;
     children: unknown;
   }) {
     return normalizeHtml(
@@ -141,20 +105,16 @@ async function renderSnapshots() {
                       description: 'Contextual drill-in for a selected attributed Shopify order.'
                     }
                   ]
-                : navItems,
+            : navItems,
             activeNavKey,
             onNavigate: noop,
             breadcrumbs,
-            eyebrow,
-            title,
-            description,
             topbarMeta: h(
               'div',
               { className: 'space-y-1' },
               h('p', { className: 'font-semibold text-ink' }, 'Taylor Operator'),
               h('p', null, 'taylor@roasradar.dev')
             ),
-            headerStatus: shellHeader(),
             headerActions: h('button', { type: 'button' }, 'Logout')
           },
           children
@@ -169,10 +129,6 @@ async function renderSnapshots() {
       { label: 'Authenticated app' },
       { label: 'Dashboard', current: true }
     ],
-    eyebrow: 'MVP reporting dashboard',
-    title: 'Monitor acquisition performance across revenue, campaigns, and orders',
-    description:
-      'Monitor paid acquisition performance for a single Shopify store across headline metrics, campaign rows, time-based trends, and order-level attribution evidence.',
     children: h(ReportingDashboard, {
       filters: {
         startDate: '2026-04-01',
@@ -222,10 +178,6 @@ async function renderSnapshots() {
       { label: 'Dashboard' },
       { label: 'Order 1105', current: true }
     ],
-    eyebrow: 'Order drill-in',
-    title: 'Inspect order #1105',
-    description:
-      'Inspect the full stored Shopify order record, attribution credits, line items, and raw payload for one order.',
     children: h(OrderDetailsView, {
       selectedOrderId: '1105',
       reportingTimezone: 'America/Los_Angeles',
@@ -306,9 +258,6 @@ async function renderSnapshots() {
       { label: 'Authenticated app' },
       { label: 'Settings', current: true }
     ],
-    eyebrow: 'Admin settings',
-    title: 'Configure reporting settings and platform connections',
-    description: 'Configure store integrations, ad platform connections, and dashboard user access from one place.',
     children: h(SettingsAdminView, {
       isAdmin: true,
       reportingTimezone: 'America/Los_Angeles',
@@ -405,6 +354,15 @@ async function renderSnapshots() {
       setMetaConfigForm: noop,
       googleConnection: {
         data: {
+          config: {
+            source: 'database',
+            developerTokenConfigured: true,
+            appBaseUrl: 'https://app.roasradar.dev',
+            appScopes: ['https://www.googleapis.com/auth/adwords'],
+            clientId: 'client-id',
+            clientSecretConfigured: true,
+            missingFields: []
+          },
           connection: {
             id: 3,
             customer_id: '123-456-7890',
@@ -431,6 +389,14 @@ async function renderSnapshots() {
         loading: false,
         error: null
       },
+      googleConfigForm: {
+        developerToken: 'developer-token',
+        clientId: 'client-id',
+        clientSecret: 'client-secret',
+        appBaseUrl: 'https://app.roasradar.dev',
+        appScopes: 'https://www.googleapis.com/auth/adwords'
+      },
+      setGoogleConfigForm: noop,
       googleForm: {
         customerId: '123-456-7890',
         loginCustomerId: '111-222-3333',

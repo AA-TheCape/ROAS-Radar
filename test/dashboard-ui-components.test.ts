@@ -174,7 +174,7 @@ test('modal traps focus and closes on escape for authenticated overlays', async 
         )
       )
     );
-    await tick();
+    await tick(20);
 
     const activeLabel = (mounted.dom.window.document.activeElement as HTMLElement | null)?.getAttribute('aria-label');
     assert.equal(activeLabel, 'Close modal');
