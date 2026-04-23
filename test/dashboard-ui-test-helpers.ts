@@ -24,6 +24,7 @@ type DomOptions = {
   markup?: string;
   width?: number;
   height?: number;
+  url?: string;
 };
 
 type MountedUi = {
@@ -164,8 +165,13 @@ function installDomGlobals(dom: import('../dashboard/node_modules/jsdom').JSDOM,
   });
 }
 
-export function createDom({ markup = '<!doctype html><html><body></body></html>', width = 1280, height = 900 }: DomOptions = {}) {
-  const dom = new JSDOM(markup, { pretendToBeVisual: true, url: 'http://localhost/' });
+export function createDom({
+  markup = '<!doctype html><html><body></body></html>',
+  width = 1280,
+  height = 900,
+  url = 'http://localhost/'
+}: DomOptions = {}) {
+  const dom = new JSDOM(markup, { pretendToBeVisual: true, url });
   installDomGlobals(dom, width, height);
   return dom;
 }

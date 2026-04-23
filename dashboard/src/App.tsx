@@ -1,4 +1,14 @@
-import { Suspense, lazy, startTransition, useCallback, useDeferredValue, useEffect, useMemo, useState, type FormEvent } from 'react';
+import React, {
+  Suspense,
+  lazy,
+  startTransition,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useState,
+  type FormEvent
+} from 'react';
 
 import {
   backfillShopifyOrders,
@@ -155,6 +165,7 @@ const AUTHENTICATED_NAV_ITEMS: AppShellNavItem[] = [
 ];
 
 const DEFAULT_REPORTING_TIMEZONE = 'America/Los_Angeles';
+const DEFAULT_GROUP_BY: TimeseriesGroupBy = 'day';
 const REPORTING_TIMEZONE_OPTIONS = [
   'America/Los_Angeles',
   'America/Denver',
@@ -240,6 +251,107 @@ function normalizeReportingFilters(filters: ReportingFilters): ReportingFilters 
   }
 
   return filters;
+}
+
+const DASHBOARD_QUERY_PARAM_KEYS = ['startDate', 'endDate', 'source', 'campaign', 'attributionModel', 'groupBy'] as const;
+const REPORTING_FILTER_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const ATTRIBUTION_MODELS = new Set<NonNullable<ReportingFilters['attributionModel']>>([
+  'first_touch',
+  'last_touch',
+  'linear',
+  'time_decay',
+  'position_based',
+  'rule_based_weighted'
+]);
+
+export function createDefaultReportingFilters(reportingTimezone = DEFAULT_REPORTING_TIMEZONE): ReportingFilters {
+  return {
+    ...buildRange(30, reportingTimezone),
+    source: '',
+    campaign: ''
+  };
+}
+
+function isValidDateInput(value: string | null): value is string {
+  return Boolean(value && REPORTING_FILTER_DATE_PATTERN.test(value));
+}
+
+function isTimeseriesGroupBy(value: string | null): value is TimeseriesGroupBy {
+  return value === 'day' || value === 'source' || value === 'campaign';
+}
+
+function isAttributionModel(value: string | null): value is NonNullable<ReportingFilters['attributionModel']> {
+  return Boolean(value && ATTRIBUTION_MODELS.has(value as NonNullable<ReportingFilters['attributionModel']>));
+}
+
+export function readDashboardStateFromSearch(
+  search: string,
+  reportingTimezone = DEFAULT_REPORTING_TIMEZONE
+): {
+  filters: ReportingFilters;
+  groupBy: TimeseriesGroupBy;
+} {
+  const params = new URLSearchParams(search);
+  const defaults = createDefaultReportingFilters(reportingTimezone);
+  const startDate = params.get('startDate');
+  const endDate = params.get('endDate');
+  const source = params.get('source');
+  const campaign = params.get('campaign');
+  const attributionModel = params.get('attributionModel');
+  const groupBy = params.get('groupBy');
+
+  return {
+    filters: normalizeReportingFilters({
+      startDate: isValidDateInput(startDate) ? startDate : defaults.startDate,
+      endDate: isValidDateInput(endDate) ? endDate : defaults.endDate,
+      source: source ?? '',
+      campaign: campaign ?? '',
+      attributionModel: isAttributionModel(attributionModel) ? attributionModel : undefined
+    }),
+    groupBy: isTimeseriesGroupBy(groupBy) ? groupBy : DEFAULT_GROUP_BY
+  };
+}
+
+export function applyDashboardStateToSearch(
+  currentSearch: string,
+  filters: ReportingFilters,
+  groupBy: TimeseriesGroupBy
+): string {
+  const params = new URLSearchParams(currentSearch);
+
+  for (const key of DASHBOARD_QUERY_PARAM_KEYS) {
+    params.delete(key);
+  }
+
+  params.set('startDate', filters.startDate);
+  params.set('endDate', filters.endDate);
+
+  if (filters.source?.trim()) {
+    params.set('source', filters.source.trim());
+  }
+
+  if (filters.campaign?.trim()) {
+    params.set('campaign', filters.campaign.trim());
+  }
+
+  if (filters.attributionModel?.trim()) {
+    params.set('attributionModel', filters.attributionModel.trim());
+  }
+
+  params.set('groupBy', groupBy);
+
+  return params.toString();
+}
+
+function readInitialDashboardState() {
+  if (typeof window === 'undefined') {
+    return {
+      filters: createDefaultReportingFilters(DEFAULT_REPORTING_TIMEZONE),
+      groupBy: DEFAULT_GROUP_BY
+    };
+  }
+
+  return readDashboardStateFromSearch(window.location.search, DEFAULT_REPORTING_TIMEZONE);
 }
 
 function createLoadingSection<T>(): AsyncSection<T> {
@@ -398,6 +510,7 @@ function AuthenticatedViewFallback({ title, description }: { title: string; desc
 }
 
 function App() {
+  const initialDashboardState = readInitialDashboardState();
   const [authState, setAuthState] = useState<AuthState>({
     checking: true,
     user: null,
@@ -406,11 +519,7 @@ function App() {
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginSubmitting, setLoginSubmitting] = useState(false);
-  const [filters, setFilters] = useState<ReportingFilters>(() => ({
-    ...buildRange(30, DEFAULT_REPORTING_TIMEZONE),
-    source: '',
-    campaign: ''
-  }));
+  const [filters, setFilters] = useState<ReportingFilters>(initialDashboardState.filters);
   const [appSettings, setAppSettings] = useState<AsyncSection<AppSettings>>(createLoadingSection());
   const [settingsForm, setSettingsForm] = useState<SettingsForm>({
     reportingTimezone: DEFAULT_REPORTING_TIMEZONE
@@ -428,7 +537,7 @@ function App() {
     displayName: '',
     isAdmin: false
   });
-  const [groupBy, setGroupBy] = useState<TimeseriesGroupBy>('day');
+  const [groupBy, setGroupBy] = useState<TimeseriesGroupBy>(initialDashboardState.groupBy);
   const [currentPage, setCurrentPage] = useState<AppPage>('dashboard');
   const [dashboardRefreshKey, setDashboardRefreshKey] = useState(0);
   const [shopifyConnection, setShopifyConnection] = useState<AsyncSection<ShopifyConnectionResponse>>(createLoadingSection());
@@ -546,6 +655,16 @@ function App() {
     setMetaConnection(createLoadingSection());
     setGoogleConnection(createLoadingSection());
   }, [authState.user]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const nextSearch = applyDashboardStateToSearch(window.location.search, filters, groupBy);
+    const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`;
+    window.history.replaceState(window.history.state, '', nextUrl);
+  }, [filters, groupBy]);
 
   useEffect(() => {
     const token = getStoredAuthToken();
