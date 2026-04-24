@@ -71,3 +71,36 @@ test('extractShopifyHintAttribution normalizes UTM hints and uses non-click synt
     confidenceScore: 0.4
   });
 });
+
+test('extractShopifyHintAttribution reads canonical landing/page keys, strips fragments, and ignores referrer-only keys', async () => {
+  const shopifyTestUtils = await getShopifyTestUtils();
+  const attribution = shopifyTestUtils.extractShopifyHintAttribution({
+    id: 'order-canonical-url-hint',
+    customer: null,
+    email: null,
+    source_name: 'web',
+    landing_site: 'https://store.example/products/widget',
+    note_attributes: [
+      {
+        name: 'page_url',
+        value: 'https://store.example/products/widget?utm_source=Google&utm_medium=CPC&gbraid=GBRAID-123#section'
+      },
+      {
+        name: 'referrer_url',
+        value: 'https://www.google.com/search?q=widget&utm_source=should-not-win'
+      }
+    ],
+    line_items: []
+  });
+
+  assert.deepEqual(attribution, {
+    source: 'google',
+    medium: 'cpc',
+    campaign: null,
+    content: null,
+    term: null,
+    clickIdType: 'gbraid',
+    clickIdValue: 'GBRAID-123',
+    confidenceScore: 0.55
+  });
+});

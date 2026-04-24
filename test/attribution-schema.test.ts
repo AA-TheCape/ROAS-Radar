@@ -40,3 +40,38 @@ test('attribution capture normalization keeps marketing identifiers under denied
   assert.equal(capture.gbraid, 'GB-123');
   assert.equal(capture.wbraid, 'WB-456');
 });
+
+test('attribution capture normalization converts empty strings to null and removes URL fragments', () => {
+  const capture = normalizeAttributionCaptureV1({
+    schema_version: 1,
+    roas_radar_session_id: '123e4567-e89b-42d3-a456-426614174000',
+    occurred_at: '2026-04-23T12:00:00Z',
+    captured_at: '2026-04-23T12:00:05Z',
+    landing_url: ' https://example.com/landing?utm_source=Email#hero ',
+    referrer_url: '   ',
+    page_url: 'https://example.com/products/widget?gbraid=GB-123#wrapper',
+    utm_source: ' Email ',
+    utm_medium: ' Newsletter ',
+    utm_campaign: '',
+    utm_content: '   ',
+    utm_term: undefined,
+    gclid: '',
+    gbraid: ' GB-123 ',
+    wbraid: '   ',
+    fbclid: null,
+    ttclid: undefined,
+    msclkid: ''
+  });
+
+  assert.equal(capture.landing_url, 'https://example.com/landing?utm_source=Email');
+  assert.equal(capture.referrer_url, null);
+  assert.equal(capture.page_url, 'https://example.com/products/widget?gbraid=GB-123');
+  assert.equal(capture.utm_source, 'email');
+  assert.equal(capture.utm_medium, 'newsletter');
+  assert.equal(capture.utm_campaign, null);
+  assert.equal(capture.utm_content, null);
+  assert.equal(capture.gclid, null);
+  assert.equal(capture.gbraid, 'GB-123');
+  assert.equal(capture.wbraid, null);
+  assert.equal(capture.msclkid, null);
+});

@@ -4,6 +4,7 @@ import { type RequestHandler, Router } from 'express';
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
 
+import { normalizeAttributionString, normalizeAttributionUrl } from '../../../packages/attribution-schema/index.js';
 import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
 import { logError, logInfo, logWarning } from '../../observability/index.js';
@@ -1135,8 +1136,7 @@ function toNullableUuid(value: string | null): string | null {
 }
 
 function normalizeNullableString(value: string | null | undefined): string | null {
-  const normalized = value?.trim();
-  return normalized ? normalized : null;
+  return normalizeAttributionString(value);
 }
 
 function isEligibleOnlineStoreOrder(sourceName: string | null | undefined): boolean {
@@ -1217,14 +1217,13 @@ function extractShopifyHintAttribution(payload: ShopifyOrderPayload): ShopifyHin
 
   const hintCandidates = [
     payload.landing_site,
-    payload.referring_site,
-    getAttributeValueFromKeys(noteAttributes, ['landing_url', 'page_url', 'referrer_url', 'roas_radar_landing_path', 'landing_site', 'referring_site']),
-    getAttributeValueFromKeys(legacyAttributes, ['landing_url', 'page_url', 'referrer_url', 'roas_radar_landing_path', 'landing_site', 'referring_site'])
+    getAttributeValueFromKeys(noteAttributes, ['landing_url', 'page_url', 'roas_radar_landing_path', 'landing_site']),
+    getAttributeValueFromKeys(legacyAttributes, ['landing_url', 'page_url', 'roas_radar_landing_path', 'landing_site'])
   ].filter((value): value is string => Boolean(value));
 
   for (const candidate of hintCandidates) {
     try {
-      const url = new URL(candidate, 'https://shopify-hint.local');
+      const url = new URL(normalizeAttributionUrl(candidate, 'https://shopify-hint.local') ?? candidate);
       rawDimensions.source ??= normalizeNullableString(url.searchParams.get('utm_source'));
       rawDimensions.medium ??= normalizeNullableString(url.searchParams.get('utm_medium'));
       rawDimensions.campaign ??= normalizeNullableString(url.searchParams.get('utm_campaign'));
