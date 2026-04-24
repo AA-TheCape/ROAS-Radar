@@ -39,6 +39,10 @@ for var in \
   DASHBOARD_SERVICE_NAME \
   WORKER_SERVICE_NAME \
   MIGRATOR_JOB_NAME \
+  META_ADS_JOB_NAME \
+  GOOGLE_ADS_JOB_NAME \
+  META_ADS_SCHEDULER_JOB_NAME \
+  GOOGLE_ADS_SCHEDULER_JOB_NAME \
   API_SERVICE_ACCOUNT_NAME \
   DASHBOARD_SERVICE_ACCOUNT_NAME \
   WORKER_SERVICE_ACCOUNT_NAME \
@@ -53,9 +57,13 @@ for var in \
   WORKER_MAX_INSTANCES \
   DATABASE_POOL_MAX \
   WORKER_DATABASE_POOL_MAX \
+  ADS_SYNC_DATABASE_POOL_MAX \
   DASHBOARD_API_BASE_URL \
   TRACKING_ALLOWED_ORIGINS \
-  SHOPIFY_APP_BASE_URL
+  SHOPIFY_APP_BASE_URL \
+  ADS_SYNC_TIME_ZONE \
+  META_ADS_SYNC_SCHEDULE \
+  GOOGLE_ADS_SYNC_SCHEDULE
 do
   require_var "$var"
 done
@@ -71,6 +79,37 @@ MIGRATOR_SA="$MIGRATOR_JOB_SERVICE_ACCOUNT_NAME@$GCP_PROJECT_ID.iam.gserviceacco
 
 COMMON_SECRET_FLAGS="DATABASE_URL=DATABASE_URL:latest,REPORTING_API_TOKEN=REPORTING_API_TOKEN:latest,SHOPIFY_WEBHOOK_SECRET=SHOPIFY_WEBHOOK_SECRET:latest,SHOPIFY_APP_API_KEY=SHOPIFY_APP_API_KEY:latest,SHOPIFY_APP_API_SECRET=SHOPIFY_APP_API_SECRET:latest,SHOPIFY_APP_ENCRYPTION_KEY=SHOPIFY_APP_ENCRYPTION_KEY:latest,META_ADS_APP_SECRET=META_ADS_APP_SECRET:latest,META_ADS_ENCRYPTION_KEY=META_ADS_ENCRYPTION_KEY:latest,GOOGLE_ADS_ENCRYPTION_KEY=GOOGLE_ADS_ENCRYPTION_KEY:latest"
 COMMON_ENV_VARS="^@^NODE_ENV=production@DATABASE_POOL_MIN=0@DATABASE_SSL=false@TRACKING_ALLOWED_ORIGINS=$TRACKING_ALLOWED_ORIGINS@SHOPIFY_APP_BASE_URL=$SHOPIFY_APP_BASE_URL@SHOPIFY_APP_API_VERSION=${SHOPIFY_APP_API_VERSION:-2026-01}@SHOPIFY_APP_SCOPES=${SHOPIFY_APP_SCOPES:-read_orders}@SHOPIFY_APP_POST_INSTALL_REDIRECT_URL=${SHOPIFY_APP_POST_INSTALL_REDIRECT_URL:-}@META_ADS_APP_ID=${META_ADS_APP_ID:-}@META_ADS_APP_BASE_URL=${META_ADS_APP_BASE_URL:-$SHOPIFY_APP_BASE_URL}@META_ADS_APP_SCOPES=${META_ADS_APP_SCOPES:-ads_read}@META_ADS_AD_ACCOUNT_ID=${META_ADS_AD_ACCOUNT_ID:-}@GOOGLE_ADS_API_VERSION=${GOOGLE_ADS_API_VERSION:-v19}"
+ADS_JOB_ENDPOINT_BASE="https://$GCP_REGION-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/$GCP_PROJECT_ID/jobs"
+
+upsert_scheduler_job() {
+  SCHEDULER_JOB_NAME="$1"
+  TARGET_JOB_NAME="$2"
+  CRON_SCHEDULE="$3"
+
+  if gcloud scheduler jobs describe "$SCHEDULER_JOB_NAME" \
+    --project="$GCP_PROJECT_ID" \
+    --location="$GCP_REGION" >/dev/null 2>&1; then
+    gcloud scheduler jobs update http "$SCHEDULER_JOB_NAME" \
+      --project="$GCP_PROJECT_ID" \
+      --location="$GCP_REGION" \
+      --schedule="$CRON_SCHEDULE" \
+      --time-zone="$ADS_SYNC_TIME_ZONE" \
+      --uri="$ADS_JOB_ENDPOINT_BASE/$TARGET_JOB_NAME:run" \
+      --http-method=POST \
+      --oauth-service-account-email="$WORKER_SA" \
+      --oauth-token-scope="https://www.googleapis.com/auth/cloud-platform"
+  else
+    gcloud scheduler jobs create http "$SCHEDULER_JOB_NAME" \
+      --project="$GCP_PROJECT_ID" \
+      --location="$GCP_REGION" \
+      --schedule="$CRON_SCHEDULE" \
+      --time-zone="$ADS_SYNC_TIME_ZONE" \
+      --uri="$ADS_JOB_ENDPOINT_BASE/$TARGET_JOB_NAME:run" \
+      --http-method=POST \
+      --oauth-service-account-email="$WORKER_SA" \
+      --oauth-token-scope="https://www.googleapis.com/auth/cloud-platform"
+  fi
+}
 
 if [ "${SKIP_BUILDS:-false}" != "true" ]; then
   echo "Building image $IMAGE_URI"
@@ -160,6 +199,48 @@ gcloud run jobs deploy "$MIGRATOR_JOB_NAME" \
   --set-env-vars="NODE_ENV=production,DATABASE_POOL_MAX=1,DATABASE_POOL_MIN=0,DATABASE_SSL=false" \
   --set-secrets="DATABASE_URL=MIGRATOR_DATABASE_URL:latest" \
   --set-cloudsql-instances="$CLOUD_SQL_CONNECTION_NAME"
+
+echo "Deploying Meta Ads sync job $META_ADS_JOB_NAME"
+gcloud run jobs deploy "$META_ADS_JOB_NAME" \
+  --project="$GCP_PROJECT_ID" \
+  --region="$GCP_REGION" \
+  --image="$IMAGE_URI" \
+  --service-account="$WORKER_SA" \
+  --cpu=1 \
+  --memory=512Mi \
+  --max-retries=1 \
+  --task-timeout=1800 \
+  --parallelism=1 \
+  --tasks=1 \
+  --command=npm \
+  --args=run,meta-ads:sync:start \
+  --set-env-vars="${COMMON_ENV_VARS}@DATABASE_POOL_MAX=$ADS_SYNC_DATABASE_POOL_MAX@META_ADS_WORKER_LOOP=false" \
+  --set-secrets="$COMMON_SECRET_FLAGS" \
+  --set-cloudsql-instances="$CLOUD_SQL_CONNECTION_NAME"
+
+echo "Deploying Google Ads sync job $GOOGLE_ADS_JOB_NAME"
+gcloud run jobs deploy "$GOOGLE_ADS_JOB_NAME" \
+  --project="$GCP_PROJECT_ID" \
+  --region="$GCP_REGION" \
+  --image="$IMAGE_URI" \
+  --service-account="$WORKER_SA" \
+  --cpu=1 \
+  --memory=512Mi \
+  --max-retries=1 \
+  --task-timeout=1800 \
+  --parallelism=1 \
+  --tasks=1 \
+  --command=npm \
+  --args=run,google-ads:sync:start \
+  --set-env-vars="${COMMON_ENV_VARS}@DATABASE_POOL_MAX=$ADS_SYNC_DATABASE_POOL_MAX@GOOGLE_ADS_WORKER_LOOP=false" \
+  --set-secrets="$COMMON_SECRET_FLAGS" \
+  --set-cloudsql-instances="$CLOUD_SQL_CONNECTION_NAME"
+
+echo "Configuring Meta Ads scheduler job $META_ADS_SCHEDULER_JOB_NAME"
+upsert_scheduler_job "$META_ADS_SCHEDULER_JOB_NAME" "$META_ADS_JOB_NAME" "$META_ADS_SYNC_SCHEDULE"
+
+echo "Configuring Google Ads scheduler job $GOOGLE_ADS_SCHEDULER_JOB_NAME"
+upsert_scheduler_job "$GOOGLE_ADS_SCHEDULER_JOB_NAME" "$GOOGLE_ADS_JOB_NAME" "$GOOGLE_ADS_SYNC_SCHEDULE"
 
 if [ "${RUN_MIGRATIONS_ON_DEPLOY:-true}" = "true" ]; then
   echo "Executing migration job $MIGRATOR_JOB_NAME"

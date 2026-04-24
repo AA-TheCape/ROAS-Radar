@@ -99,6 +99,8 @@ for SA in "$API_SA" "$DASHBOARD_SA" "$WORKER_SA" "$MIGRATOR_SA"; do
   grant_project_role "serviceAccount:$SA" "roles/monitoring.metricWriter"
 done
 
+grant_project_role "serviceAccount:$WORKER_SA" "roles/run.invoker"
+
 grant_project_role "serviceAccount:$DEPLOYER_SA" "roles/artifactregistry.writer"
 grant_project_role "serviceAccount:$DEPLOYER_SA" "roles/cloudbuild.builds.editor"
 grant_project_role "serviceAccount:$DEPLOYER_SA" "roles/logging.logWriter"

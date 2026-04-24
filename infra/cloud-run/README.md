@@ -1,15 +1,19 @@
 # Cloud Run Deployment
 
-This directory contains the operational scripts and environment definitions for deploying the ROAS Radar API, dashboard, attribution worker, and migration job to Google Cloud Run.
+This directory contains the operational scripts and environment definitions for deploying the ROAS Radar API, dashboard, attribution worker, migration job, and scheduled ad spend sync jobs to Google Cloud Run.
 
 ## Topology
 
-The deployment flow assumes four deployable workloads:
+The deployment flow assumes six deployable workloads plus two Cloud Scheduler triggers:
 
 - `roas-radar-api`: public Cloud Run service for `/track`, Shopify webhooks, and authenticated reporting APIs.
 - `roas-radar-dashboard`: public Cloud Run service for the React reporting dashboard.
 - `roas-radar-attribution-worker`: internal Cloud Run service for attribution and asynchronous processing.
 - `roas-radar-migrate`: Cloud Run Job that runs `npm run db:migrate:start` with elevated database credentials.
+- `roas-radar-meta-ads-sync`: Cloud Run Job that runs `npm run meta-ads:sync:start` once per invocation.
+- `roas-radar-google-ads-sync`: Cloud Run Job that runs `npm run google-ads:sync:start` once per invocation.
+- `roas-radar-meta-ads-sync-scheduler`: Cloud Scheduler job that invokes the Meta Ads Cloud Run Job.
+- `roas-radar-google-ads-sync-scheduler`: Cloud Scheduler job that invokes the Google Ads Cloud Run Job.
 
 The API and worker use the `roas_app` PostgreSQL login. The migration job uses the `roas_migrator` PostgreSQL login. Do not reuse the migrator credential in long-lived application services.
 
@@ -36,6 +40,14 @@ The environment files also carry non-secret runtime settings that must be popula
 - `SHOPIFY_APP_SCOPES`
 - `SHOPIFY_APP_POST_INSTALL_REDIRECT_URL`
 - `DASHBOARD_API_BASE_URL`
+- `META_ADS_JOB_NAME`
+- `GOOGLE_ADS_JOB_NAME`
+- `META_ADS_SCHEDULER_JOB_NAME`
+- `GOOGLE_ADS_SCHEDULER_JOB_NAME`
+- `ADS_SYNC_DATABASE_POOL_MAX`
+- `ADS_SYNC_TIME_ZONE`
+- `META_ADS_SYNC_SCHEDULE`
+- `GOOGLE_ADS_SYNC_SCHEDULE`
 
 ## First-Time Setup
 

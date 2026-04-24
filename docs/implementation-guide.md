@@ -80,6 +80,8 @@ The current deployment docs in `infra/cloud-run/README.md` assume:
 - `roas-radar-api`: public service
 - `roas-radar-attribution-worker`: internal worker service
 - `roas-radar-migrate`: migration job
+- `roas-radar-meta-ads-sync`: scheduled spend sync job
+- `roas-radar-google-ads-sync`: scheduled spend sync job
 
 That topology matches the current Node.js codebase and should remain the reference when preparing Cloud Run manifests or deployment scripts.
 
