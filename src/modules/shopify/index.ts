@@ -1198,6 +1198,12 @@ function extractShopifyHintAttribution(payload: ShopifyOrderPayload): ShopifyHin
     gclid:
       getAttributeValueFromKeys(noteAttributes, ['gclid', 'roas_radar_gclid']) ??
       getAttributeValueFromKeys(legacyAttributes, ['gclid', 'roas_radar_gclid']),
+    gbraid:
+      getAttributeValueFromKeys(noteAttributes, ['gbraid', 'roas_radar_gbraid']) ??
+      getAttributeValueFromKeys(legacyAttributes, ['gbraid', 'roas_radar_gbraid']),
+    wbraid:
+      getAttributeValueFromKeys(noteAttributes, ['wbraid', 'roas_radar_wbraid']) ??
+      getAttributeValueFromKeys(legacyAttributes, ['wbraid', 'roas_radar_wbraid']),
     fbclid:
       getAttributeValueFromKeys(noteAttributes, ['fbclid', 'roas_radar_fbclid']) ??
       getAttributeValueFromKeys(legacyAttributes, ['fbclid', 'roas_radar_fbclid']),
@@ -1212,8 +1218,8 @@ function extractShopifyHintAttribution(payload: ShopifyOrderPayload): ShopifyHin
   const hintCandidates = [
     payload.landing_site,
     payload.referring_site,
-    getAttributeValueFromKeys(noteAttributes, ['roas_radar_landing_path', 'landing_site', 'referring_site']),
-    getAttributeValueFromKeys(legacyAttributes, ['roas_radar_landing_path', 'landing_site', 'referring_site'])
+    getAttributeValueFromKeys(noteAttributes, ['landing_url', 'page_url', 'referrer_url', 'roas_radar_landing_path', 'landing_site', 'referring_site']),
+    getAttributeValueFromKeys(legacyAttributes, ['landing_url', 'page_url', 'referrer_url', 'roas_radar_landing_path', 'landing_site', 'referring_site'])
   ].filter((value): value is string => Boolean(value));
 
   for (const candidate of hintCandidates) {
@@ -1225,6 +1231,8 @@ function extractShopifyHintAttribution(payload: ShopifyOrderPayload): ShopifyHin
       rawDimensions.content ??= normalizeNullableString(url.searchParams.get('utm_content'));
       rawDimensions.term ??= normalizeNullableString(url.searchParams.get('utm_term'));
       rawDimensions.gclid ??= normalizeNullableString(url.searchParams.get('gclid'));
+      rawDimensions.gbraid ??= normalizeNullableString(url.searchParams.get('gbraid'));
+      rawDimensions.wbraid ??= normalizeNullableString(url.searchParams.get('wbraid'));
       rawDimensions.fbclid ??= normalizeNullableString(url.searchParams.get('fbclid'));
       rawDimensions.ttclid ??= normalizeNullableString(url.searchParams.get('ttclid'));
       rawDimensions.msclkid ??= normalizeNullableString(url.searchParams.get('msclkid'));
@@ -1238,6 +1246,8 @@ function extractShopifyHintAttribution(payload: ShopifyOrderPayload): ShopifyHin
     content: rawDimensions.content,
     term: rawDimensions.term,
     gclid: rawDimensions.gclid,
+    gbraid: rawDimensions.gbraid,
+    wbraid: rawDimensions.wbraid,
     fbclid: rawDimensions.fbclid,
     ttclid: rawDimensions.ttclid,
     msclkid: rawDimensions.msclkid

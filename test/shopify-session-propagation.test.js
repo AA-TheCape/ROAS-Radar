@@ -192,12 +192,15 @@ async function runPropagation(overrides = {}) {
 
   const windowObject = {
     ROASRadarConfig: overrides.config || {},
-    location: {
-      origin: "https://store.example.com",
-      pathname: "/products/widget",
-      search: "?utm_source=google&utm_medium=cpc",
-      protocol: "https:"
-    },
+    location: Object.assign(
+      {
+        origin: "https://store.example.com",
+        pathname: "/products/widget",
+        search: "?utm_source=google&utm_medium=cpc",
+        protocol: "https:"
+      },
+      overrides.location || {}
+    ),
     document,
     localStorage,
     sessionStorage,
@@ -273,8 +276,10 @@ function createJsonResponse(body, ok = true, statusCode = 200) {
 test("writes cart attributes when the first cart mutation request is observed", async () => {
   const calls = [];
   let bootstrapAttempts = 0;
+  const form = createForm("/cart");
 
   const run = await runPropagation({
+    forms: [form],
     documentReadyState: "loading",
     fetch: async function (url, options) {
       calls.push({ url, options });
@@ -309,6 +314,21 @@ test("writes cart attributes when the first cart mutation request is observed", 
   assert.ok(syncCall, "expected cart attribute sync to run after first cart mutation");
   assert.equal(syncCall.options.headers["X-ROAS-Radar-Cart-Sync"], "1");
   assert.equal(run.localStorageData.get("roas_radar_session_id"), "123e4567-e89b-42d3-a456-426614174111");
+  const body = JSON.parse(syncCall.options.body);
+  assert.deepEqual(body.attributes, {
+    schema_version: "1",
+    roas_radar_session_id: "123e4567-e89b-42d3-a456-426614174111",
+    landing_url: "https://store.example.com/products/widget?utm_source=google&utm_medium=cpc",
+    referrer_url: "https://www.google.com/search?q=roas",
+    page_url: "https://store.example.com/products/widget?utm_source=google&utm_medium=cpc",
+    utm_source: "google",
+    utm_medium: "cpc"
+  });
+  assert.equal(form.querySelector('input[type="hidden"][name="attributes[schema_version]"]').value, "1");
+  assert.equal(
+    form.querySelector('input[type="hidden"][name="attributes[roas_radar_session_id]"]').value,
+    "123e4567-e89b-42d3-a456-426614174111"
+  );
 });
 
 test("retries transient Shopify failures with backoff and stable correlation IDs", async () => {
@@ -354,7 +374,15 @@ test("retries transient Shopify failures with backoff and stable correlation IDs
 test("avoids duplicate cart sync writes for an already-synced session fingerprint", async () => {
   const syncCalls = [];
   const syncedSessionId = "123e4567-e89b-42d3-a456-426614174333";
-  const syncedFingerprint = syncedSessionId + "::/products/widget?utm_source=google&utm_medium=cpc";
+  const syncedFingerprint = JSON.stringify({
+    schema_version: "1",
+    roas_radar_session_id: syncedSessionId,
+    landing_url: "https://store.example.com/products/widget?utm_source=google&utm_medium=cpc",
+    referrer_url: "https://www.google.com/search?q=roas",
+    page_url: "https://store.example.com/products/widget?utm_source=google&utm_medium=cpc",
+    utm_source: "google",
+    utm_medium: "cpc"
+  });
 
   const run = await runPropagation({
     localStorageData: new Map([
@@ -391,4 +419,55 @@ test("avoids duplicate cart sync writes for an already-synced session fingerprin
   await flushAsyncWork();
 
   assert.equal(syncCalls.length, 0);
+});
+
+test("reuses stored canonical attribution fields when later pages lose campaign params", async () => {
+  const sessionId = "123e4567-e89b-42d3-a456-426614174444";
+  const run = await runPropagation({
+    localStorageData: new Map([
+      [
+        "roas_radar_attribution_capture_v1",
+        JSON.stringify({
+          schema_version: 1,
+          roas_radar_session_id: sessionId,
+          landing_url:
+            "https://store.example.com/products/widget?utm_source=google&utm_medium=cpc&utm_campaign=spring-sale&gbraid=GBRAID-123",
+          referrer_url: "https://www.google.com/search?q=roas",
+          page_url:
+            "https://store.example.com/products/widget?utm_source=google&utm_medium=cpc&utm_campaign=spring-sale&gbraid=GBRAID-123",
+          utm_source: "google",
+          utm_medium: "cpc",
+          utm_campaign: "spring-sale",
+          gbraid: "GBRAID-123"
+        })
+      ]
+    ]),
+    location: {
+      pathname: "/collections/sale",
+      search: ""
+    },
+    fetch: async function (url, options) {
+      if (String(url).startsWith("/track/session")) {
+        return createJsonResponse({
+          sessionId: sessionId
+        });
+      }
+
+      if (url === "/cart/update.js") {
+        return createJsonResponse({}, true, 200);
+      }
+
+      return createJsonResponse({}, true, 200);
+    }
+  });
+
+  const syncCall = run.fetchCalls.find((call) => call.url === "/cart/update.js");
+  const body = JSON.parse(syncCall.options.body);
+  assert.equal(
+    body.attributes.landing_url,
+    "https://store.example.com/products/widget?utm_source=google&utm_medium=cpc&utm_campaign=spring-sale&gbraid=GBRAID-123"
+  );
+  assert.equal(body.attributes.page_url, "https://store.example.com/collections/sale");
+  assert.equal(body.attributes.utm_campaign, "spring-sale");
+  assert.equal(body.attributes.gbraid, "GBRAID-123");
 });

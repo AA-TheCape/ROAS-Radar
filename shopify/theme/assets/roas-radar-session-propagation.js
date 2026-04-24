@@ -2,12 +2,13 @@
   "use strict";
 
   var DEFAULTS = {
+    attributionSchemaVersion: 1,
     cookieName: "roas_radar_session_id",
     trackingCookieName: "_hba_id",
     cartAttributeKey: "roas_radar_session_id",
-    landingPathAttributeKey: "roas_radar_landing_path",
     sessionStorageKey: "roas_radar_session_id",
     trackingSessionStorageKey: "_hba_id",
+    attributionStorageKey: "roas_radar_attribution_capture_v1",
     sessionBootstrapEndpoint: "/track/session",
     syncEndpoint: "/cart/update.js",
     syncStateStorageKey: "roas_radar_cart_attribute_sync_state",
@@ -76,6 +77,39 @@
       return JSON.parse(value);
     } catch (error) {
       return fallback;
+    }
+  }
+
+  function normalizeString(value) {
+    if (typeof value !== "string") {
+      return null;
+    }
+
+    var trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  }
+
+  function normalizeLowercaseString(value) {
+    var normalized = normalizeString(value);
+    return normalized ? normalized.toLowerCase() : null;
+  }
+
+  function normalizeUrl(value, baseUrl) {
+    var normalized = normalizeString(value);
+    if (!normalized) {
+      return null;
+    }
+
+    try {
+      var url = baseUrl ? new URL(normalized, baseUrl) : new URL(normalized);
+      if (url.protocol !== "http:" && url.protocol !== "https:") {
+        return null;
+      }
+
+      url.hash = "";
+      return url.toString();
+    } catch (error) {
+      return null;
     }
   }
 
@@ -185,28 +219,175 @@
     return window.location.pathname + window.location.search;
   }
 
-  function updateCartForms(sessionId) {
-    var forms = document.querySelectorAll(config.cartFormSelectors.join(","));
-    var sessionFieldName = buildAttributeName(config.cartAttributeKey);
-    var landingPathFieldName = buildAttributeName(config.landingPathAttributeKey);
-    var landingPath = getLandingPath();
+  function getPageUrl() {
+    return window.location.origin + window.location.pathname + window.location.search;
+  }
 
-    for (var i = 0; i < forms.length; i += 1) {
-      upsertHiddenInput(forms[i], sessionFieldName, sessionId);
-      upsertHiddenInput(forms[i], landingPathFieldName, landingPath);
+  function parseAttributionParameters(urlValue) {
+    var pageUrl = normalizeUrl(urlValue);
+    var empty = {
+      utm_source: null,
+      utm_medium: null,
+      utm_campaign: null,
+      utm_content: null,
+      utm_term: null,
+      gclid: null,
+      gbraid: null,
+      wbraid: null,
+      fbclid: null,
+      ttclid: null,
+      msclkid: null
+    };
+
+    if (!pageUrl) {
+      return empty;
+    }
+
+    try {
+      var url = new URL(pageUrl);
+      return {
+        utm_source: normalizeLowercaseString(url.searchParams.get("utm_source")),
+        utm_medium: normalizeLowercaseString(url.searchParams.get("utm_medium")),
+        utm_campaign: normalizeLowercaseString(url.searchParams.get("utm_campaign")),
+        utm_content: normalizeLowercaseString(url.searchParams.get("utm_content")),
+        utm_term: normalizeLowercaseString(url.searchParams.get("utm_term")),
+        gclid: normalizeString(url.searchParams.get("gclid")),
+        gbraid: normalizeString(url.searchParams.get("gbraid")),
+        wbraid: normalizeString(url.searchParams.get("wbraid")),
+        fbclid: normalizeString(url.searchParams.get("fbclid")),
+        ttclid: normalizeString(url.searchParams.get("ttclid")),
+        msclkid: normalizeString(url.searchParams.get("msclkid"))
+      };
+    } catch (error) {
+      return empty;
     }
   }
 
-  function buildPayload(sessionId) {
-    var attributes = {};
-    attributes[config.cartAttributeKey] = sessionId;
-    attributes[config.landingPathAttributeKey] = getLandingPath();
+  function readStoredAttributionCapture() {
+    var storedCapture =
+      window.__ROAS_RADAR_ATTRIBUTION_CAPTURE_V1 ||
+      safeParseJson(readStorage(config.attributionStorageKey, window.localStorage), null) ||
+      safeParseJson(readStorage(config.attributionStorageKey, window.sessionStorage), null);
 
+    return storedCapture && typeof storedCapture === "object" ? storedCapture : null;
+  }
+
+  function persistAttributionCapture(capture) {
+    if (!capture || !capture.roas_radar_session_id) {
+      return null;
+    }
+
+    var serialized = JSON.stringify(capture);
+    window.__ROAS_RADAR_ATTRIBUTION_CAPTURE_V1 = capture;
+    writeStorage(config.attributionStorageKey, serialized, window.localStorage);
+    writeStorage(config.attributionStorageKey, serialized, window.sessionStorage);
+    return capture;
+  }
+
+  function buildAttributionCapture(sessionId, attribution) {
+    var storedCapture = readStoredAttributionCapture() || {};
+    var currentPageUrl = normalizeUrl(getPageUrl());
+    var currentReferrerUrl = normalizeUrl(document.referrer || "");
+    var currentParameters = parseAttributionParameters(currentPageUrl);
+    var incomingCapture = attribution && typeof attribution === "object" ? attribution : {};
+    var storedLandingUrl = normalizeUrl(incomingCapture.landing_url) || normalizeUrl(storedCapture.landing_url);
+    var landingUrl = storedLandingUrl || currentPageUrl;
+    var landingParameters = parseAttributionParameters(landingUrl);
+
+    return {
+      schema_version: config.attributionSchemaVersion,
+      roas_radar_session_id: sessionId,
+      landing_url: landingUrl,
+      referrer_url:
+        normalizeUrl(incomingCapture.referrer_url) || normalizeUrl(storedCapture.referrer_url) || currentReferrerUrl,
+      page_url: currentPageUrl,
+      utm_source:
+        normalizeLowercaseString(incomingCapture.utm_source) ||
+        normalizeLowercaseString(storedCapture.utm_source) ||
+        currentParameters.utm_source ||
+        landingParameters.utm_source,
+      utm_medium:
+        normalizeLowercaseString(incomingCapture.utm_medium) ||
+        normalizeLowercaseString(storedCapture.utm_medium) ||
+        currentParameters.utm_medium ||
+        landingParameters.utm_medium,
+      utm_campaign:
+        normalizeLowercaseString(incomingCapture.utm_campaign) ||
+        normalizeLowercaseString(storedCapture.utm_campaign) ||
+        currentParameters.utm_campaign ||
+        landingParameters.utm_campaign,
+      utm_content:
+        normalizeLowercaseString(incomingCapture.utm_content) ||
+        normalizeLowercaseString(storedCapture.utm_content) ||
+        currentParameters.utm_content ||
+        landingParameters.utm_content,
+      utm_term:
+        normalizeLowercaseString(incomingCapture.utm_term) ||
+        normalizeLowercaseString(storedCapture.utm_term) ||
+        currentParameters.utm_term ||
+        landingParameters.utm_term,
+      gclid: normalizeString(incomingCapture.gclid) || normalizeString(storedCapture.gclid) || currentParameters.gclid || landingParameters.gclid,
+      gbraid: normalizeString(incomingCapture.gbraid) || normalizeString(storedCapture.gbraid) || currentParameters.gbraid || landingParameters.gbraid,
+      wbraid: normalizeString(incomingCapture.wbraid) || normalizeString(storedCapture.wbraid) || currentParameters.wbraid || landingParameters.wbraid,
+      fbclid: normalizeString(incomingCapture.fbclid) || normalizeString(storedCapture.fbclid) || currentParameters.fbclid || landingParameters.fbclid,
+      ttclid: normalizeString(incomingCapture.ttclid) || normalizeString(storedCapture.ttclid) || currentParameters.ttclid || landingParameters.ttclid,
+      msclkid: normalizeString(incomingCapture.msclkid) || normalizeString(storedCapture.msclkid) || currentParameters.msclkid || landingParameters.msclkid
+    };
+  }
+
+  function buildCartAttributes(sessionId, attribution) {
+    var capture = persistAttributionCapture(buildAttributionCapture(sessionId, attribution));
+    var attributes = {
+      schema_version: String(capture.schema_version),
+      roas_radar_session_id: capture.roas_radar_session_id
+    };
+    var keys = [
+      "landing_url",
+      "referrer_url",
+      "page_url",
+      "utm_source",
+      "utm_medium",
+      "utm_campaign",
+      "utm_content",
+      "utm_term",
+      "gclid",
+      "gbraid",
+      "wbraid",
+      "fbclid",
+      "ttclid",
+      "msclkid"
+    ];
+
+    for (var index = 0; index < keys.length; index += 1) {
+      var key = keys[index];
+      if (capture[key]) {
+        attributes[key] = capture[key];
+      }
+    }
+
+    return attributes;
+  }
+
+  function updateCartForms(sessionId, attribution) {
+    var forms = document.querySelectorAll(config.cartFormSelectors.join(","));
+    var attributes = buildCartAttributes(sessionId, attribution);
+    var attributeKeys = Object.keys(attributes);
+
+    for (var i = 0; i < forms.length; i += 1) {
+      for (var attributeIndex = 0; attributeIndex < attributeKeys.length; attributeIndex += 1) {
+        var attributeKey = attributeKeys[attributeIndex];
+        upsertHiddenInput(forms[i], buildAttributeName(attributeKey), attributes[attributeKey]);
+      }
+    }
+  }
+
+  function buildPayload(sessionId, attribution) {
+    var attributes = buildCartAttributes(sessionId, attribution);
     return JSON.stringify({ attributes: attributes });
   }
 
-  function buildSyncFingerprint(sessionId) {
-    return sessionId + "::" + getLandingPath();
+  function buildSyncFingerprint(sessionId, attribution) {
+    return JSON.stringify(buildCartAttributes(sessionId, attribution));
   }
 
   function readSyncState() {
@@ -223,9 +404,9 @@
     writeStorage(config.syncStateStorageKey, JSON.stringify(state), window.localStorage);
   }
 
-  function isAlreadySynced(sessionId) {
+  function isAlreadySynced(sessionId, attribution) {
     var state = readSyncState();
-    return state.fingerprint === buildSyncFingerprint(sessionId);
+    return state.fingerprint === buildSyncFingerprint(sessionId, attribution);
   }
 
   function createCorrelationId() {
@@ -346,13 +527,13 @@
     return true;
   }
 
-  function syncCartAttributesWithRetry(sessionId, reason) {
+  function syncCartAttributesWithRetry(sessionId, reason, attribution) {
     if (!sessionId) {
       return Promise.resolve(false);
     }
 
-    var fingerprint = buildSyncFingerprint(sessionId);
-    if (isAlreadySynced(sessionId)) {
+    var fingerprint = buildSyncFingerprint(sessionId, attribution);
+    if (isAlreadySynced(sessionId, attribution)) {
       return Promise.resolve(true);
     }
 
@@ -381,7 +562,7 @@
           "X-ROAS-Radar-Correlation-Id": correlationId,
           "X-ROAS-Radar-Cart-Sync": "1"
         },
-        body: buildPayload(sessionId)
+        body: buildPayload(sessionId, attribution)
       })
         .then(function (response) {
           if (!response.ok) {
@@ -518,6 +699,9 @@
         }
 
         persistSessionId(sessionId);
+        if (payload && payload.attribution && typeof payload.attribution === "object") {
+          persistAttributionCapture(buildAttributionCapture(sessionId, payload.attribution));
+        }
         return sessionId;
       })
       .catch(function () {
@@ -530,19 +714,19 @@
     return sessionBootstrapPromise;
   }
 
-  function ensureCartSessionSync(sessionId, reason) {
+  function ensureCartSessionSync(sessionId, reason, attribution) {
     if (!sessionId) {
       return Promise.resolve(false);
     }
 
     persistSessionId(sessionId);
-    updateCartForms(sessionId);
-    return syncCartAttributesWithRetry(sessionId, reason || "unknown");
+    updateCartForms(sessionId, attribution);
+    return syncCartAttributesWithRetry(sessionId, reason || "unknown", attribution);
   }
 
   function syncFromFirstMutation(reason) {
     return bootstrapSessionId().then(function (sessionId) {
-      return ensureCartSessionSync(sessionId, reason);
+      return ensureCartSessionSync(sessionId, reason, null);
     });
   }
 
@@ -577,7 +761,11 @@
 
     document.addEventListener("roas-radar:session-ready", function (event) {
       var detail = event && event.detail ? event.detail : null;
-      ensureCartSessionSync(sanitizeSessionId(detail && detail.sessionId), "session_ready");
+      ensureCartSessionSync(
+        sanitizeSessionId(detail && detail.sessionId),
+        "session_ready",
+        detail && detail.attribution ? detail.attribution : null
+      );
     });
   }
 

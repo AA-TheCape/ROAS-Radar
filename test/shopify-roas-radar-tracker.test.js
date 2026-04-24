@@ -140,12 +140,15 @@ async function runTracker(overrides = {}) {
   };
   const windowObject = {
     ROASRadarConfig: overrides.config || {},
-    location: {
-      origin: "https://store.example.com",
-      pathname: "/products/widget",
-      search: "?utm_source=google&utm_medium=cpc&utm_campaign=spring-sale&gclid=abc123",
-      protocol: "https:"
-    },
+    location: Object.assign(
+      {
+        origin: "https://store.example.com",
+        pathname: "/products/widget",
+        search: "?utm_source=google&utm_medium=cpc&utm_campaign=spring-sale&gclid=abc123",
+        protocol: "https:"
+      },
+      overrides.location || {}
+    ),
     document,
     navigator,
     localStorage,
@@ -168,6 +171,7 @@ async function runTracker(overrides = {}) {
       this.type = type;
       this.detail = init ? init.detail : undefined;
     },
+    URL,
     setTimeout,
     clearTimeout,
     Promise,
@@ -187,6 +191,7 @@ async function runTracker(overrides = {}) {
     localStorage,
     sessionStorage,
     console,
+    URL,
     setTimeout,
     clearTimeout,
     Promise,
@@ -305,9 +310,34 @@ test("emits the required tracking payload fields on page load", async () => {
   assert.equal(payload.shopifyCheckoutToken, null);
   assert.match(payload.clientEventId, /^[0-9a-f-]{36}$/i);
   assert.equal(payload.consentState, "unknown");
+  assert.equal(payload.schema_version, 1);
+  assert.equal(payload.roas_radar_session_id, sessionId);
+  assert.equal(
+    payload.landing_url,
+    "https://store.example.com/products/widget?utm_source=google&utm_medium=cpc&utm_campaign=spring-sale&gclid=abc123"
+  );
+  assert.equal(payload.referrer_url, "https://www.google.com/search?q=roas");
+  assert.equal(
+    payload.page_url,
+    "https://store.example.com/products/widget?utm_source=google&utm_medium=cpc&utm_campaign=spring-sale&gclid=abc123"
+  );
+  assert.equal(payload.utm_source, "google");
+  assert.equal(payload.utm_medium, "cpc");
+  assert.equal(payload.utm_campaign, "spring-sale");
+  assert.equal(payload.utm_content, null);
+  assert.equal(payload.utm_term, null);
+  assert.equal(payload.gclid, "abc123");
+  assert.equal(payload.gbraid, null);
+  assert.equal(payload.wbraid, null);
+  assert.equal(payload.fbclid, null);
+  assert.equal(payload.ttclid, null);
+  assert.equal(payload.msclkid, null);
   assert.equal(payload.context.userAgent, "Mozilla/5.0 Test Browser");
   assert.equal(payload.context.screen, "1440x900");
   assert.equal(payload.context.language, "en-US");
+  const storedCapture = JSON.parse(run.localStorageData.get("roas_radar_attribution_capture_v1"));
+  assert.equal(storedCapture.roas_radar_session_id, sessionId);
+  assert.equal(storedCapture.utm_source, "google");
 });
 
 test("captures explicit consent state without suppressing the tracking payload", async () => {
@@ -406,4 +436,37 @@ test("falls back to a client-generated session when the bootstrap endpoint is un
   assert.equal(payload.consentState, "unknown");
   assert.equal(run.localStorageData.get("_hba_id"), payload.sessionId);
   assert.match(run.localStorageData.get("roas_radar_session_created_at"), /^\d{4}-\d{2}-\d{2}T/);
+});
+
+test("preserves first-touch canonical attribution fields across later page views", async () => {
+  const cookieJar = new Map();
+  const sessionId = "123e4567-e89b-42d3-a456-426614174000";
+  const firstRun = await runTracker({
+    cookieJar,
+    fetch: createBootstrapFetch(sessionId, "2026-04-23T12:00:00.000Z"),
+    sendBeacon: () => true,
+    location: {
+      search: "?utm_source=google&utm_medium=cpc&utm_campaign=spring-sale&gbraid=GBRAID-123"
+    }
+  });
+
+  const secondRun = await runTracker({
+    cookieJar,
+    localStorageData: firstRun.localStorageData,
+    sessionStorageData: firstRun.sessionStorageData,
+    fetch: createBootstrapFetch(sessionId, "2026-04-23T12:00:00.000Z"),
+    sendBeacon: () => true,
+    location: {
+      pathname: "/collections/sale",
+      search: ""
+    }
+  });
+
+  const payload = JSON.parse(secondRun.beaconCalls[0].body);
+  assert.equal(payload.landing_url, "https://store.example.com/products/widget?utm_source=google&utm_medium=cpc&utm_campaign=spring-sale&gbraid=GBRAID-123");
+  assert.equal(payload.page_url, "https://store.example.com/collections/sale");
+  assert.equal(payload.utm_source, "google");
+  assert.equal(payload.utm_medium, "cpc");
+  assert.equal(payload.utm_campaign, "spring-sale");
+  assert.equal(payload.gbraid, "GBRAID-123");
 });
