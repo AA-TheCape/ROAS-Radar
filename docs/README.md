@@ -7,6 +7,7 @@
 - [Shopify App Setup](shopify-app-setup.md): Shopify app install flow, OAuth, and webhook provisioning.
 - [Visitor Identity Stitching](visitor-identity-stitching.md): deterministic identity-linking behavior for Shopify customers, orders, and tracked sessions.
 - [Analytics Playbook](analytics-playbook.md): reporting, attribution, and analytics operating model.
+- [Last Non-Direct Touch Approval Matrix](last-non-direct-touch-approval-matrix.md): approved primary-winner rules, deterministic precedence, and Shopify synthetic fallback caveats.
 - [Marketing Dimensions](marketing-dimensions.md): canonical source, medium, campaign, and click-ID interpretation rules.
 - [Reporting Metrics](reporting-metrics.md): dashboard and reporting metric definitions.
 - [Database Operations](database-operations.md): migration, backup, and operational DB guidance.
