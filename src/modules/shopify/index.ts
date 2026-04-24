@@ -2009,5 +2009,7 @@ export const __shopifyTestUtils = {
   buildShopifyInstallUrl,
   verifyWebhookSignature,
   isEligibleOnlineStoreOrder,
-  buildLineItemExternalId
+  buildLineItemExternalId,
+  extractShopifyHintAttribution,
+  recoverShopifyAttributionHints
 };
