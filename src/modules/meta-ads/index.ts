@@ -16,6 +16,7 @@ const META_GRAPH_BASE_URL = 'https://graph.facebook.com';
 const META_SYNC_JOB_STATUSES = ['pending', 'processing', 'retry', 'completed', 'failed'] as const;
 const META_SPEND_LEVELS = ['account', 'campaign', 'adset', 'ad'] as const;
 const META_SPEND_GRANULARITIES = ['account', 'campaign', 'adset', 'ad', 'creative'] as const;
+const META_ADS_SYNC_TIME_ZONE = 'America/Los_Angeles';
 
 const oauthStartQuerySchema = z.object({
   redirectPath: z.string().optional()
@@ -466,15 +467,15 @@ function listDateRangeInclusive(startDate: string, endDate: string): string[] {
 }
 
 function buildPlanningDates(now = new Date(), lastSyncCompletedAt: Date | null = null): string[] {
-  const yesterday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1));
+  const currentBusinessDate = parseDateOnly(formatDateInTimeZone(now, META_ADS_SYNC_TIME_ZONE));
   const lookbackDays = lastSyncCompletedAt ? env.META_ADS_SYNC_LOOKBACK_DAYS : env.META_ADS_SYNC_INITIAL_LOOKBACK_DAYS;
-  const firstDate = new Date(yesterday.getTime() - (lookbackDays - 1) * 24 * 60 * 60 * 1000);
+  const firstDate = new Date(currentBusinessDate.getTime() - (lookbackDays - 1) * 24 * 60 * 60 * 1000);
 
-  if (yesterday.getTime() < firstDate.getTime()) {
+  if (currentBusinessDate.getTime() < firstDate.getTime()) {
     return [];
   }
 
-  return listDateRangeInclusive(formatDateOnly(firstDate), formatDateOnly(yesterday));
+  return listDateRangeInclusive(formatDateOnly(firstDate), formatDateOnly(currentBusinessDate));
 }
 
 function buildInsightsEntityId(level: MetaSpendLevel, row: MetaAdsInsightRow): string {
@@ -498,6 +499,17 @@ function parseMetricInteger(value: string | undefined): number {
 function parseMetricDecimal(value: string | undefined): string {
   const parsed = Number.parseFloat(value ?? '0');
   return Number.isFinite(parsed) ? parsed.toFixed(2) : '0.00';
+}
+
+function formatDateInTimeZone(value: Date, timeZone: string): string {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+
+  return formatter.format(value);
 }
 
 function normalizeInsightRows(
@@ -894,7 +906,7 @@ async function planIncrementalSyncs(now = new Date()): Promise<number> {
   );
 
   let plannedJobs = 0;
-  const today = formatDateOnly(now);
+  const today = formatDateInTimeZone(now, META_ADS_SYNC_TIME_ZONE);
 
   for (const row of result.rows) {
     if (row.last_sync_planned_for === today) {

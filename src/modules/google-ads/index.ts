@@ -17,6 +17,7 @@ const GOOGLE_ADS_API_BASE_URL = 'https://googleads.googleapis.com';
 const GOOGLE_ADS_OAUTH_STATE_TTL_MINUTES = 10;
 const GOOGLE_ADS_SYNC_JOB_STATUSES = ['pending', 'processing', 'retry', 'completed', 'failed'] as const;
 const GOOGLE_ADS_SPEND_GRANULARITIES = ['account', 'campaign', 'adset', 'ad', 'creative'] as const;
+const GOOGLE_ADS_SYNC_TIME_ZONE = 'America/Los_Angeles';
 
 const oauthStartQuerySchema = z.object({
   customerId: z.string().min(1),
@@ -523,6 +524,17 @@ function parseDateOnly(value: string): Date {
   return new Date(`${value}T00:00:00.000Z`);
 }
 
+function formatDateInTimeZone(value: Date, timeZone: string): string {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+
+  return formatter.format(value);
+}
+
 function listDateRangeInclusive(startDate: string, endDate: string): string[] {
   const start = parseDateOnly(startDate);
   const end = parseDateOnly(endDate);
@@ -541,17 +553,17 @@ function listDateRangeInclusive(startDate: string, endDate: string): string[] {
 }
 
 function buildPlanningDates(now = new Date(), lastSyncCompletedAt: Date | null = null): string[] {
-  const yesterday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1));
+  const currentBusinessDate = parseDateOnly(formatDateInTimeZone(now, GOOGLE_ADS_SYNC_TIME_ZONE));
   const lookbackDays = lastSyncCompletedAt
     ? env.GOOGLE_ADS_SYNC_LOOKBACK_DAYS
     : env.GOOGLE_ADS_SYNC_INITIAL_LOOKBACK_DAYS;
-  const firstDate = new Date(yesterday.getTime() - (lookbackDays - 1) * 24 * 60 * 60 * 1000);
+  const firstDate = new Date(currentBusinessDate.getTime() - (lookbackDays - 1) * 24 * 60 * 60 * 1000);
 
-  if (yesterday.getTime() < firstDate.getTime()) {
+  if (currentBusinessDate.getTime() < firstDate.getTime()) {
     return [];
   }
 
-  return listDateRangeInclusive(formatDateOnly(firstDate), formatDateOnly(yesterday));
+  return listDateRangeInclusive(formatDateOnly(firstDate), formatDateOnly(currentBusinessDate));
 }
 
 function buildReconciliationWindow(now = new Date(), lastSyncCompletedAt: Date | null = null): {
@@ -1238,7 +1250,7 @@ async function planIncrementalSyncs(now = new Date()): Promise<number> {
   );
 
   let plannedJobs = 0;
-  const today = formatDateOnly(now);
+  const today = formatDateInTimeZone(now, GOOGLE_ADS_SYNC_TIME_ZONE);
 
   for (const row of result.rows) {
     if (row.last_sync_planned_for !== today) {

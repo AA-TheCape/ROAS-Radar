@@ -22,7 +22,7 @@ test('computeRetryDelaySeconds backs off exponentially and caps at one hour', ()
 test('buildPlanningDates uses the initial lookback before the first successful sync', () => {
   const dates = __googleAdsTestUtils.buildPlanningDates(new Date('2026-04-11T12:00:00.000Z'), null);
 
-  assert.deepEqual(dates, ['2026-04-06', '2026-04-07', '2026-04-08', '2026-04-09', '2026-04-10']);
+  assert.deepEqual(dates, ['2026-04-07', '2026-04-08', '2026-04-09', '2026-04-10', '2026-04-11']);
 });
 
 test('buildPlanningDates switches to the rolling lookback after at least one successful sync', () => {
@@ -31,7 +31,7 @@ test('buildPlanningDates switches to the rolling lookback after at least one suc
     new Date('2026-04-10T06:00:00.000Z')
   );
 
-  assert.deepEqual(dates, ['2026-04-08', '2026-04-09', '2026-04-10']);
+  assert.deepEqual(dates, ['2026-04-09', '2026-04-10', '2026-04-11']);
 });
 
 test('buildReconciliationWindow mirrors the rolling planning window', () => {
@@ -41,9 +41,9 @@ test('buildReconciliationWindow mirrors the rolling planning window', () => {
   );
 
   assert.deepEqual(window, {
-    startDate: '2026-04-08',
-    endDate: '2026-04-10',
-    dates: ['2026-04-08', '2026-04-09', '2026-04-10']
+    startDate: '2026-04-09',
+    endDate: '2026-04-11',
+    dates: ['2026-04-09', '2026-04-10', '2026-04-11']
   });
 });
 
