@@ -1,4 +1,6 @@
-const CLICK_ID_TYPES = ['gclid', 'gbraid', 'wbraid', 'fbclid', 'ttclid', 'msclkid'] as const;
+import type { AttributionCaptureV1, AttributionClickIdField } from '../../../packages/attribution-schema/index.js';
+
+const CLICK_ID_TYPES = ['gclid', 'gbraid', 'wbraid', 'fbclid', 'ttclid', 'msclkid'] as const satisfies readonly AttributionClickIdField[];
 
 const SOURCE_ALIASES: Record<string, string> = {
   google: 'google',
@@ -92,7 +94,7 @@ const CLICK_ID_SOURCE_MEDIUM_MAP: Record<CanonicalClickIdType, { source: string;
 export const CANONICAL_UNKNOWN_VALUE = 'unknown';
 export const CANONICAL_UNMAPPED_VALUE = 'unmapped';
 
-export type CanonicalClickIdType = (typeof CLICK_ID_TYPES)[number];
+export type CanonicalClickIdType = AttributionClickIdField;
 
 export type CanonicalTouchpointDimensions = {
   source: string | null;
@@ -112,7 +114,24 @@ export type CanonicalSpendDimensions = {
   term: string;
 };
 
-type CanonicalTouchpointInput = {
+type AttributionMarketingFields = Partial<
+  Pick<
+  AttributionCaptureV1,
+  | 'utm_source'
+  | 'utm_medium'
+  | 'utm_campaign'
+  | 'utm_content'
+  | 'utm_term'
+  | 'gclid'
+  | 'gbraid'
+  | 'wbraid'
+  | 'fbclid'
+  | 'ttclid'
+  | 'msclkid'
+  >
+>;
+
+type CanonicalTouchpointInput = AttributionMarketingFields & {
   source?: string | null;
   medium?: string | null;
   campaign?: string | null;
@@ -120,12 +139,6 @@ type CanonicalTouchpointInput = {
   term?: string | null;
   clickIdType?: string | null;
   clickIdValue?: string | null;
-  gclid?: string | null;
-  gbraid?: string | null;
-  wbraid?: string | null;
-  fbclid?: string | null;
-  ttclid?: string | null;
-  msclkid?: string | null;
 };
 
 type CanonicalSpendInput = {

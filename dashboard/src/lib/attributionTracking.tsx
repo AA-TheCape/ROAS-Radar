@@ -1,4 +1,9 @@
 import { useEffect } from 'react';
+import {
+  isAttributionSessionId,
+  normalizeAttributionUrl,
+  type AttributionConsentState
+} from '../../../packages/attribution-schema/index.js';
 
 type RuntimeConfig = {
   apiBaseUrl?: string;
@@ -10,7 +15,7 @@ type TrackerConfig = {
   retryBaseDelayMs?: number;
   maxRetryDelayMs?: number;
   queueStorageKey?: string;
-  consentState?: 'granted' | 'denied' | 'unknown';
+  consentState?: AttributionConsentState;
 };
 
 type SessionInfo = {
@@ -27,7 +32,7 @@ type TrackingEventPayload = {
   shopifyCartToken: null;
   shopifyCheckoutToken: null;
   clientEventId: string;
-  consentState: 'granted' | 'denied' | 'unknown';
+  consentState: AttributionConsentState;
   context: {
     userAgent: string | null;
     screen: string | null;
@@ -101,28 +106,11 @@ function safeSetStorage(key: string, value: string): void {
 }
 
 function normalizeUrl(rawValue: string | null | undefined): string | null {
-  const value = rawValue?.trim();
-
-  if (!value) {
-    return null;
-  }
-
   try {
-    const url = new URL(value, window.location.origin);
-
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-      return null;
-    }
-
-    url.hash = '';
-    return url.toString();
+    return normalizeAttributionUrl(rawValue, window.location.origin);
   } catch {
     return null;
   }
-}
-
-function isUuid(value: string | null | undefined): value is string {
-  return Boolean(value && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value));
 }
 
 function generateUuid(): string {
@@ -149,7 +137,7 @@ function generateUuid(): string {
 function readSessionInfo(): SessionInfo | null {
   const sessionId = safeGetStorage(SESSION_ID_STORAGE_KEY);
 
-  if (!isUuid(sessionId)) {
+  if (!isAttributionSessionId(sessionId)) {
     return null;
   }
 
@@ -287,7 +275,7 @@ async function requestSession(
     createdAt?: string | null;
   };
 
-  if (!isUuid(body.sessionId)) {
+  if (!isAttributionSessionId(body.sessionId)) {
     throw new Error('Session bootstrap returned an invalid session id');
   }
 
@@ -359,7 +347,7 @@ async function deliverPayload(payload: TrackingEventPayload): Promise<{ delivere
     if (response.ok) {
       const body = (await response.json()) as { sessionId?: string };
 
-      if (isUuid(body.sessionId)) {
+      if (isAttributionSessionId(body.sessionId)) {
         persistSessionInfo({
           sessionId: body.sessionId,
           createdAt: readSessionInfo()?.createdAt ?? null
