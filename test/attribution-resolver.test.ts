@@ -133,3 +133,51 @@ test('same-timestamp winner selection prefers stronger source, then click id, th
 
   assert.equal(winnerFromLexicalSession?.sessionId, 'session-a');
 });
+
+test('click-id-only touches remain non-direct and beat later direct revisits', async () => {
+  const testUtils = await getTestUtils();
+  const winner = testUtils.selectLastNonDirectWinner(
+    testUtils.dedupeDeterministicCandidates([
+      buildTouchpoint('session-paid', '2026-04-02T14:00:00.000Z', {
+        source: null,
+        medium: null,
+        campaign: null,
+        clickIdType: 'fbclid',
+        clickIdValue: 'fbclid-abc',
+        isDirect: false
+      }),
+      buildTouchpoint('session-direct', '2026-04-03T11:00:00.000Z', {
+        source: null,
+        medium: null,
+        campaign: null,
+        clickIdType: null,
+        clickIdValue: null,
+        isDirect: true
+      })
+    ])
+  );
+
+  assert.equal(winner?.sessionId, 'session-paid');
+});
+
+test('latest non-direct wins even when the newer touch has UTMs and no click id', async () => {
+  const testUtils = await getTestUtils();
+  const winner = testUtils.selectLastNonDirectWinner(
+    testUtils.dedupeDeterministicCandidates([
+      buildTouchpoint('session-older-click-id', '2026-04-01T10:00:00.000Z', {
+        clickIdType: 'gclid',
+        clickIdValue: 'gclid-123'
+      }),
+      buildTouchpoint('session-newer-utm', '2026-04-04T08:00:00.000Z', {
+        clickIdType: null,
+        clickIdValue: null,
+        source: 'google',
+        medium: 'cpc',
+        campaign: 'spring-search',
+        isDirect: false
+      })
+    ])
+  );
+
+  assert.equal(winner?.sessionId, 'session-newer-utm');
+});
