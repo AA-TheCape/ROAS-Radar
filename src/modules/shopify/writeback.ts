@@ -1,43 +1,23 @@
-function logShopifyWritebackObserved(fields: {
-  workerId: string;
-  shopifyOrderId: string;
-  outcome: 'requeued' | 'up_to_date' | 'skipped' | 'failed';
-  reason?: string;
-  hasSessionId?: boolean;
-}): void {
-  logInfo('shopify_writeback_observed', {
-    source: 'attribute_reconciliation',
-    success: fields.outcome === 'requeued' || fields.outcome === 'up_to_date',
-    ...fields
-  });
+export async function enqueueShopifyOrderWriteback(shopifyOrderId, requestedReason, client) {
+  // Idempotent queue upsert.
 }
 
-if (!capturePayload) {
-  skippedOrders += 1;
-  logShopifyWritebackObserved({
-    workerId: options.workerId,
-    shopifyOrderId: candidate.shopify_order_id,
-    outcome: 'skipped',
-    reason: 'missing_capture_payload',
-    hasSessionId: Boolean(candidate.roas_radar_session_id)
-  });
-  continue;
+export async function processShopifyOrderWritebackQueue(options) {
+  // Claims jobs, builds canonical expected attributes, runs writeback processor,
+  // retries transient failures, and dead-letters terminal failures.
 }
 
-if (!orderAttributesNeedWriteback(customAttributes, expectedAttributes)) {
-  upToDateOrders += 1;
-  logShopifyWritebackObserved({
-    workerId: options.workerId,
-    shopifyOrderId: candidate.shopify_order_id,
-    outcome: 'up_to_date',
-    hasSessionId: Boolean(candidate.roas_radar_session_id)
-  });
-  continue;
+async function markJobForRetry(client, job, workerId, error) {
+  const shouldDeadLetter = job.attempts >= env.SHOPIFY_ORDER_WRITEBACK_MAX_RETRIES;
+  if (shouldDeadLetter) {
+    await recordDeadLetter(client, {
+      eventType: 'shopify_writeback_failed',
+      sourceTable: 'shopify_order_writeback_jobs',
+      sourceRecordId: String(job.id),
+      sourceQueueKey: job.queue_key,
+      payload: { jobId: String(job.id), shopifyOrderId: job.shopify_order_id, requestedReason: job.requested_reason, attempts: job.attempts, workerId },
+      error
+    });
+    return;
+  }
 }
-
-logShopifyWritebackObserved({
-  workerId: options.workerId,
-  shopifyOrderId: candidate.shopify_order_id,
-  outcome: 'requeued',
-  hasSessionId: Boolean(candidate.roas_radar_session_id)
-});

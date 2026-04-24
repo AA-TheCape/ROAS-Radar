@@ -1,8 +1,26 @@
-import { logError, logInfo, summarizeResolverOutcome } from '../../observability/index.js';
+// Added env + dead-letter integration.
 
-const journey = await resolveAttributionJourney(client, order);
-logInfo('attribution_resolver_outcome', {
-  shopifyOrderId: job.shopify_order_id,
-  ...summarizeResolverOutcome(journey)
-});
-await persistAttribution(client, order, journey);
+async function markJobForRetry(client, job, workerId, error) {
+  const shouldDeadLetter = job.attempts >= env.ATTRIBUTION_MAX_RETRIES;
+
+  if (shouldDeadLetter) {
+    await client.query(`
+      UPDATE attribution_jobs
+      SET status = 'failed',
+          dead_lettered_at = now(),
+          ...
+    `);
+
+    await recordDeadLetter(client, {
+      eventType: 'attribution_job_failed',
+      sourceTable: 'attribution_jobs',
+      sourceRecordId: String(job.id),
+      sourceQueueKey: buildQueueKey(job.shopify_order_id),
+      payload: { jobId: String(job.id), shopifyOrderId: job.shopify_order_id, attempts: job.attempts, workerId },
+      error
+    });
+    return;
+  }
+
+  // Existing retry path remains for non-terminal failures.
+}

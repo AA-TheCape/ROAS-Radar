@@ -1,6 +1,8 @@
 {
   "scripts": {
-    "session-attribution:retention": "tsx src/session-attribution-retention-worker.ts",
-    "session-attribution:retention:start": "node dist/session-attribution-retention-worker.js"
+    "build": "tsc -p tsconfig.json",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "dead-letters:replay": "tsx src/admin/replay-dead-letters.ts",
+    "test:dead-letters": "node --import tsx --test test/dead-letter-replay.test.ts"
   }
 }
