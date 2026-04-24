@@ -568,6 +568,7 @@ Use these docs when local symptoms match production behavior:
 - Attribution backlog: `docs/runbooks/attribution-worker-backlog.md`
 - API latency: `docs/runbooks/api-latency.md`
 - Database operations: `docs/database-operations.md`
+- Attribution Schema V1 reference: `docs/attribution-schema-v1.md`
 - Shopify app setup: `docs/shopify-app-setup.md`
 - Visitor identity stitching: `docs/visitor-identity-stitching.md`
 - Reporting metrics definitions: `docs/reporting-metrics.md`
