@@ -77,6 +77,12 @@ test('direct-only timelines resolve to the latest direct touch', async () => {
   assert.equal(winner?.sessionId, 'session-b');
 });
 
+test('winner selection returns null when there are no deterministic candidates', async () => {
+  const testUtils = await getTestUtils();
+
+  assert.equal(testUtils.selectLastNonDirectWinner([]), null);
+});
+
 test('dedupe keeps the strongest evidence when the same session is visible multiple ways', async () => {
   const testUtils = await getTestUtils();
   const deduped = testUtils.dedupeDeterministicCandidates([
@@ -93,6 +99,29 @@ test('dedupe keeps the strongest evidence when the same session is visible multi
   assert.equal(deduped.length, 1);
   assert.equal(deduped[0].ingestionSource, 'landing_session_id');
   assert.equal(deduped[0].attributionReason, 'matched_by_landing_session');
+});
+
+test('dedupe breaks same-session ties by later occurredAt, then click id presence', async () => {
+  const testUtils = await getTestUtils();
+  const winnerFromLaterOccurredAt = testUtils.dedupeDeterministicCandidates([
+    buildTouchpoint('session-a', '2026-04-01T10:00:00.000Z'),
+    buildTouchpoint('session-a', '2026-04-01T11:00:00.000Z')
+  ]);
+
+  assert.equal(winnerFromLaterOccurredAt.length, 1);
+  assert.equal(winnerFromLaterOccurredAt[0].occurredAt.toISOString(), '2026-04-01T11:00:00.000Z');
+
+  const winnerFromClickId = testUtils.dedupeDeterministicCandidates([
+    buildTouchpoint('session-a', '2026-04-01T10:00:00.000Z'),
+    buildTouchpoint('session-a', '2026-04-01T10:00:00.000Z', {
+      clickIdType: 'gclid',
+      clickIdValue: 'gclid-123'
+    })
+  ]);
+
+  assert.equal(winnerFromClickId.length, 1);
+  assert.equal(winnerFromClickId[0].clickIdType, 'gclid');
+  assert.equal(winnerFromClickId[0].clickIdValue, 'gclid-123');
 });
 
 test('same-timestamp winner selection prefers stronger source, then click id, then lexical session id', async () => {
