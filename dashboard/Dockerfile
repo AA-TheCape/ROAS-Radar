@@ -1,19 +1,22 @@
 FROM node:22-bookworm-slim AS deps
-WORKDIR /app
+WORKDIR /app/dashboard
 
-COPY package.json package-lock.json ./
+COPY dashboard/package.json dashboard/package-lock.json ./
 RUN npm ci
 
 FROM deps AS build
-COPY . ./
+WORKDIR /app
+COPY packages ./packages
+COPY dashboard ./dashboard
+WORKDIR /app/dashboard
 RUN npm run build
 
 FROM node:22-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
-COPY --from=build /app/dist ./dist
-COPY server.mjs ./
+COPY --from=build /app/dashboard/dist ./dist
+COPY --from=build /app/dashboard/server.mjs ./
 
 EXPOSE 8080
 CMD ["node", "server.mjs"]
