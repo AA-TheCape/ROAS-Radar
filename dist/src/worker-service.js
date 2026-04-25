@@ -1,3 +1,2 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
+export {};
 // Restored service wrapper around the worker loop with the same queue/reconciliation wiring.

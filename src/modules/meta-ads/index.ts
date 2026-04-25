@@ -16,6 +16,7 @@ const META_GRAPH_BASE_URL = 'https://graph.facebook.com';
 const META_SYNC_JOB_STATUSES = ['pending', 'processing', 'retry', 'completed', 'failed'] as const;
 const META_SPEND_LEVELS = ['account', 'campaign', 'adset', 'ad'] as const;
 const META_SPEND_GRANULARITIES = ['account', 'campaign', 'adset', 'ad', 'creative'] as const;
+const META_ADS_SYNC_TIME_ZONE = 'America/Los_Angeles';
 
 const oauthStartQuerySchema = z.object({
   redirectPath: z.string().optional()
@@ -166,6 +167,11 @@ type MetaAdsNormalizedSpendRow = {
   impressions: number;
   clicks: number;
   rawPayload: Record<string, unknown>;
+};
+
+type MetaAdsPersistableSpendRow = {
+  rawRecordId: number | null;
+  normalizedRow: MetaAdsNormalizedSpendRow;
 };
 
 export type MetaAdsQueueProcessOptions = {
@@ -466,15 +472,15 @@ function listDateRangeInclusive(startDate: string, endDate: string): string[] {
 }
 
 function buildPlanningDates(now = new Date(), lastSyncCompletedAt: Date | null = null): string[] {
-  const yesterday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1));
+  const currentBusinessDate = parseDateOnly(formatDateInTimeZone(now, META_ADS_SYNC_TIME_ZONE));
   const lookbackDays = lastSyncCompletedAt ? env.META_ADS_SYNC_LOOKBACK_DAYS : env.META_ADS_SYNC_INITIAL_LOOKBACK_DAYS;
-  const firstDate = new Date(yesterday.getTime() - (lookbackDays - 1) * 24 * 60 * 60 * 1000);
+  const firstDate = new Date(currentBusinessDate.getTime() - (lookbackDays - 1) * 24 * 60 * 60 * 1000);
 
-  if (yesterday.getTime() < firstDate.getTime()) {
+  if (currentBusinessDate.getTime() < firstDate.getTime()) {
     return [];
   }
 
-  return listDateRangeInclusive(formatDateOnly(firstDate), formatDateOnly(yesterday));
+  return listDateRangeInclusive(formatDateOnly(firstDate), formatDateOnly(currentBusinessDate));
 }
 
 function buildInsightsEntityId(level: MetaSpendLevel, row: MetaAdsInsightRow): string {
@@ -498,6 +504,17 @@ function parseMetricInteger(value: string | undefined): number {
 function parseMetricDecimal(value: string | undefined): string {
   const parsed = Number.parseFloat(value ?? '0');
   return Number.isFinite(parsed) ? parsed.toFixed(2) : '0.00';
+}
+
+function formatDateInTimeZone(value: Date, timeZone: string): string {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+
+  return formatter.format(value);
 }
 
 function normalizeInsightRows(
@@ -599,6 +616,55 @@ function normalizeInsightRows(
   }
 
   return normalized;
+}
+
+function rollupNormalizedSpendRows(rows: MetaAdsNormalizedSpendRow[]): MetaAdsNormalizedSpendRow[] {
+  const rollup = new Map<string, MetaAdsNormalizedSpendRow>();
+
+  for (const row of rows) {
+    const key = `${row.granularity}:${row.entityKey}`;
+    const existing = rollup.get(key);
+
+    if (!existing) {
+      rollup.set(key, { ...row });
+      continue;
+    }
+
+    existing.spend = (Number(existing.spend) + Number(row.spend)).toFixed(2);
+    existing.impressions += row.impressions;
+    existing.clicks += row.clicks;
+  }
+
+  return [...rollup.values()];
+}
+
+function rollupPersistableSpendRows(rows: MetaAdsPersistableSpendRow[]): MetaAdsPersistableSpendRow[] {
+  const rollup = new Map<string, MetaAdsPersistableSpendRow>();
+
+  for (const row of rows) {
+    const key = `${row.normalizedRow.granularity}:${row.normalizedRow.entityKey}`;
+    const existing = rollup.get(key);
+
+    if (!existing) {
+      rollup.set(key, {
+        rawRecordId: row.rawRecordId,
+        normalizedRow: { ...row.normalizedRow }
+      });
+      continue;
+    }
+
+    existing.normalizedRow.spend = (
+      Number(existing.normalizedRow.spend) + Number(row.normalizedRow.spend)
+    ).toFixed(2);
+    existing.normalizedRow.impressions += row.normalizedRow.impressions;
+    existing.normalizedRow.clicks += row.normalizedRow.clicks;
+
+    if (existing.rawRecordId === null) {
+      existing.rawRecordId = row.rawRecordId;
+    }
+  }
+
+  return [...rollup.values()];
 }
 
 function buildMetaLog(event: string, payload: Record<string, unknown>): string {
@@ -894,7 +960,7 @@ async function planIncrementalSyncs(now = new Date()): Promise<number> {
   );
 
   let plannedJobs = 0;
-  const today = formatDateOnly(now);
+  const today = formatDateInTimeZone(now, META_ADS_SYNC_TIME_ZONE);
 
   for (const row of result.rows) {
     if (row.last_sync_planned_for === today) {
@@ -1019,6 +1085,8 @@ async function persistDailySpendSnapshot(
     creativeMap: MetaAdsCreativeMap;
   }
 ): Promise<void> {
+  const normalizedRowsToInsert: MetaAdsPersistableSpendRow[] = [];
+
   await client.query(
     'DELETE FROM meta_ads_daily_spend WHERE connection_id = $1 AND report_date = $2::date',
     [params.connectionId, params.syncDate]
@@ -1072,74 +1140,83 @@ async function persistDailySpendSnapshot(
       const normalizedRows = normalizeInsightRows(row, params.creativeMap, params.currency);
 
       for (const normalizedRow of normalizedRows) {
-        await client.query(
-          `
-            INSERT INTO meta_ads_daily_spend (
-              connection_id,
-              raw_record_id,
-              sync_job_id,
-              report_date,
-              granularity,
-              entity_key,
-              account_id,
-              account_name,
-              campaign_id,
-              campaign_name,
-              adset_id,
-              adset_name,
-              ad_id,
-              ad_name,
-              creative_id,
-              creative_name,
-              canonical_source,
-              canonical_medium,
-              canonical_campaign,
-              canonical_content,
-              canonical_term,
-              currency,
-              spend,
-              impressions,
-              clicks,
-              raw_payload,
-              updated_at
-            )
-            VALUES (
-              $1, $2, $3, $4::date, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-              $18, $19, $20, $21, $22,
-              $23::numeric, $24, $25, $26::jsonb, now()
-            )
-          `,
-          [
-            params.connectionId,
-            rawRecordId,
-            params.syncJobId,
-            params.syncDate,
-            normalizedRow.granularity,
-            normalizedRow.entityKey,
-            normalizedRow.accountId,
-            normalizedRow.accountName,
-            normalizedRow.campaignId,
-            normalizedRow.campaignName,
-            normalizedRow.adsetId,
-            normalizedRow.adsetName,
-            normalizedRow.adId,
-            normalizedRow.adName,
-            normalizedRow.creativeId,
-            normalizedRow.creativeName,
-            normalizedRow.canonicalSource,
-            normalizedRow.canonicalMedium,
-            normalizedRow.canonicalCampaign,
-            normalizedRow.canonicalContent,
-            normalizedRow.canonicalTerm,
-            normalizedRow.currency,
-            normalizedRow.spend,
-            normalizedRow.impressions,
-            normalizedRow.clicks,
-            JSON.stringify(normalizedRow.rawPayload)
-          ]
-        );
+        normalizedRowsToInsert.push({
+          rawRecordId,
+          normalizedRow
+        });
       }
     }
+  }
+
+  for (const row of rollupPersistableSpendRows(normalizedRowsToInsert)) {
+    const normalizedRow = row.normalizedRow;
+
+    await client.query(
+      `
+        INSERT INTO meta_ads_daily_spend (
+          connection_id,
+          raw_record_id,
+          sync_job_id,
+          report_date,
+          granularity,
+          entity_key,
+          account_id,
+          account_name,
+          campaign_id,
+          campaign_name,
+          adset_id,
+          adset_name,
+          ad_id,
+          ad_name,
+          creative_id,
+          creative_name,
+          canonical_source,
+          canonical_medium,
+          canonical_campaign,
+          canonical_content,
+          canonical_term,
+          currency,
+          spend,
+          impressions,
+          clicks,
+          raw_payload,
+          updated_at
+        )
+        VALUES (
+          $1, $2, $3, $4::date, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
+          $18, $19, $20, $21, $22,
+          $23::numeric, $24, $25, $26::jsonb, now()
+        )
+      `,
+      [
+        params.connectionId,
+        row.rawRecordId,
+        params.syncJobId,
+        params.syncDate,
+        normalizedRow.granularity,
+        normalizedRow.entityKey,
+        normalizedRow.accountId,
+        normalizedRow.accountName,
+        normalizedRow.campaignId,
+        normalizedRow.campaignName,
+        normalizedRow.adsetId,
+        normalizedRow.adsetName,
+        normalizedRow.adId,
+        normalizedRow.adName,
+        normalizedRow.creativeId,
+        normalizedRow.creativeName,
+        normalizedRow.canonicalSource,
+        normalizedRow.canonicalMedium,
+        normalizedRow.canonicalCampaign,
+        normalizedRow.canonicalContent,
+        normalizedRow.canonicalTerm,
+        normalizedRow.currency,
+        normalizedRow.spend,
+        normalizedRow.impressions,
+        normalizedRow.clicks,
+        JSON.stringify(normalizedRow.rawPayload)
+      ]
+    );
   }
 
   await refreshDailyReportingMetrics(client, [params.syncDate]);
@@ -1524,5 +1601,7 @@ export const __metaAdsTestUtils = {
   shouldRefreshToken,
   buildPlanningDates,
   listDateRangeInclusive,
-  normalizeInsightRows
+  normalizeInsightRows,
+  rollupNormalizedSpendRows,
+  rollupPersistableSpendRows
 };

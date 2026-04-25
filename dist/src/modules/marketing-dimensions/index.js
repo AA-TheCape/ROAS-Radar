@@ -1,8 +1,3 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.CANONICAL_UNMAPPED_VALUE = exports.CANONICAL_UNKNOWN_VALUE = void 0;
-exports.buildCanonicalTouchpointDimensions = buildCanonicalTouchpointDimensions;
-exports.buildCanonicalSpendDimensions = buildCanonicalSpendDimensions;
 const CLICK_ID_TYPES = ['gclid', 'gbraid', 'wbraid', 'fbclid', 'ttclid', 'msclkid'];
 const SOURCE_ALIASES = {
     google: 'google',
@@ -90,8 +85,8 @@ const CLICK_ID_SOURCE_MEDIUM_MAP = {
         medium: 'cpc'
     }
 };
-exports.CANONICAL_UNKNOWN_VALUE = 'unknown';
-exports.CANONICAL_UNMAPPED_VALUE = 'unmapped';
+export const CANONICAL_UNKNOWN_VALUE = 'unknown';
+export const CANONICAL_UNMAPPED_VALUE = 'unmapped';
 function normalizeNullableString(value) {
     const trimmed = value?.trim();
     return trimmed ? trimmed : null;
@@ -173,7 +168,7 @@ function resolveCanonicalClickId(input) {
 function canonicalizeSource(rawSource, clickIdType) {
     const normalizedKey = normalizeLookupKey(rawSource);
     if (normalizedKey) {
-        return SOURCE_ALIASES[normalizedKey] ?? exports.CANONICAL_UNMAPPED_VALUE;
+        return SOURCE_ALIASES[normalizedKey] ?? CANONICAL_UNMAPPED_VALUE;
     }
     if (clickIdType) {
         return CLICK_ID_SOURCE_MEDIUM_MAP[clickIdType].source;
@@ -183,14 +178,14 @@ function canonicalizeSource(rawSource, clickIdType) {
 function canonicalizeMedium(rawMedium, clickIdType) {
     const normalizedKey = normalizeLookupKey(rawMedium);
     if (normalizedKey) {
-        return MEDIUM_ALIASES[normalizedKey] ?? exports.CANONICAL_UNMAPPED_VALUE;
+        return MEDIUM_ALIASES[normalizedKey] ?? CANONICAL_UNMAPPED_VALUE;
     }
     if (clickIdType) {
         return CLICK_ID_SOURCE_MEDIUM_MAP[clickIdType].medium;
     }
     return null;
 }
-function buildCanonicalTouchpointDimensions(input) {
+export function buildCanonicalTouchpointDimensions(input) {
     const resolvedClickId = resolveCanonicalClickId(input);
     return {
         source: canonicalizeSource(normalizeNullableString(input.source), resolvedClickId.clickIdType),
@@ -202,13 +197,13 @@ function buildCanonicalTouchpointDimensions(input) {
         clickIdValue: resolvedClickId.clickIdValue
     };
 }
-function buildCanonicalSpendDimensions(input) {
+export function buildCanonicalSpendDimensions(input) {
     const touchpointDimensions = buildCanonicalTouchpointDimensions(input);
     return {
-        source: touchpointDimensions.source ?? exports.CANONICAL_UNKNOWN_VALUE,
-        medium: touchpointDimensions.medium ?? exports.CANONICAL_UNKNOWN_VALUE,
-        campaign: touchpointDimensions.campaign ?? exports.CANONICAL_UNKNOWN_VALUE,
-        content: touchpointDimensions.content ?? exports.CANONICAL_UNKNOWN_VALUE,
-        term: touchpointDimensions.term ?? exports.CANONICAL_UNKNOWN_VALUE
+        source: touchpointDimensions.source ?? CANONICAL_UNKNOWN_VALUE,
+        medium: touchpointDimensions.medium ?? CANONICAL_UNKNOWN_VALUE,
+        campaign: touchpointDimensions.campaign ?? CANONICAL_UNKNOWN_VALUE,
+        content: touchpointDimensions.content ?? CANONICAL_UNKNOWN_VALUE,
+        term: touchpointDimensions.term ?? CANONICAL_UNKNOWN_VALUE
     };
 }

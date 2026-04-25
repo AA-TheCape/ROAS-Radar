@@ -1,10 +1,6 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.runSessionAttributionRetention = runSessionAttributionRetention;
-exports.runSessionAttributionRetentionJob = runSessionAttributionRetentionJob;
-const env_js_1 = require("../../config/env.js");
-const pool_js_1 = require("../../db/pool.js");
-const index_js_1 = require("../../observability/index.js");
+import { env } from '../../config/env.js';
+import { withTransaction } from '../../db/pool.js';
+import { logError, logInfo } from '../../observability/index.js';
 const DEFAULT_RETENTION_BATCH_SIZE = 100;
 const DEFAULT_RETENTION_MAX_BATCHES = 50;
 function normalizePositiveInteger(value, fallback) {
@@ -15,14 +11,14 @@ function normalizePositiveInteger(value, fallback) {
 }
 function resolveCutoffAt(asOf) {
     const referenceTime = asOf ? new Date(asOf) : new Date();
-    referenceTime.setUTCDate(referenceTime.getUTCDate() - env_js_1.env.SESSION_ATTRIBUTION_RETENTION_DAYS);
+    referenceTime.setUTCDate(referenceTime.getUTCDate() - env.SESSION_ATTRIBUTION_RETENTION_DAYS);
     return referenceTime;
 }
 async function execute(client, callback) {
     if (client) {
         return callback(client);
     }
-    return (0, pool_js_1.withTransaction)(callback);
+    return withTransaction(callback);
 }
 async function countProtectedRows(client, cutoffAt) {
     const result = await client.query(`
@@ -97,7 +93,7 @@ async function deleteExpiredSessions(client, cutoffAt, batchSize) {
     `, [cutoffAt, batchSize]);
     return result.rowCount ?? 0;
 }
-async function runSessionAttributionRetention(options = {}) {
+export async function runSessionAttributionRetention(options = {}) {
     const batchSize = normalizePositiveInteger(options.batchSize, DEFAULT_RETENTION_BATCH_SIZE);
     const maxBatches = normalizePositiveInteger(options.maxBatches, DEFAULT_RETENTION_MAX_BATCHES);
     const cutoffAt = resolveCutoffAt(options.asOf);
@@ -117,7 +113,7 @@ async function runSessionAttributionRetention(options = {}) {
             deletedTouchEvents += deletedTouchEventsInBatch;
             deletedSessions += deletedSessionsInBatch;
             if (emitLogs) {
-                (0, index_js_1.logInfo)('session_attribution_retention_batch_completed', {
+                logInfo('session_attribution_retention_batch_completed', {
                     batchNumber,
                     cutoffAt: cutoffAt.toISOString(),
                     batchSize,
@@ -137,17 +133,17 @@ async function runSessionAttributionRetention(options = {}) {
             protectedTouchEventsSkipped: Number(protectedCounts.protected_touch_events ?? '0')
         };
         if (emitLogs) {
-            (0, index_js_1.logInfo)('session_attribution_retention_completed', result);
+            logInfo('session_attribution_retention_completed', result);
         }
         return result;
     });
 }
-async function runSessionAttributionRetentionJob(options = {}) {
+export async function runSessionAttributionRetentionJob(options = {}) {
     try {
         return await runSessionAttributionRetention(options);
     }
     catch (error) {
-        (0, index_js_1.logError)('session_attribution_retention_failed', error, {
+        logError('session_attribution_retention_failed', error, {
             batchSize: options.batchSize ?? DEFAULT_RETENTION_BATCH_SIZE,
             maxBatches: options.maxBatches ?? DEFAULT_RETENTION_MAX_BATCHES,
             hasCustomAsOf: Boolean(options.asOf)

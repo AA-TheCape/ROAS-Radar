@@ -1,13 +1,5 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.__dataQualityTestUtils = void 0;
-exports.resolveRunDate = resolveRunDate;
-exports.buildLookbackDates = buildLookbackDates;
-exports.detectAnomalyFlags = detectAnomalyFlags;
-exports.fetchDataQualityReport = fetchDataQualityReport;
-exports.runDailyDataQualityChecks = runDailyDataQualityChecks;
-const env_js_1 = require("../../config/env.js");
-const pool_js_1 = require("../../db/pool.js");
+import { env } from '../../config/env.js';
+import { query, withTransaction } from '../../db/pool.js';
 function toDateString(value) {
     return value.toISOString().slice(0, 10);
 }
@@ -19,11 +11,11 @@ function addUtcDays(date, days) {
 function toNumber(value) {
     return typeof value === 'number' ? value : Number(value);
 }
-function resolveRunDate(now = new Date()) {
-    const target = addUtcDays(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())), -env_js_1.env.DATA_QUALITY_TARGET_LAG_DAYS);
+export function resolveRunDate(now = new Date()) {
+    const target = addUtcDays(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())), -env.DATA_QUALITY_TARGET_LAG_DAYS);
     return toDateString(target);
 }
-function buildLookbackDates(runDate, lookbackDays) {
+export function buildLookbackDates(runDate, lookbackDays) {
     const end = new Date(`${runDate}T00:00:00.000Z`);
     const days = Math.max(lookbackDays, 1);
     const dates = [];
@@ -32,7 +24,7 @@ function buildLookbackDates(runDate, lookbackDays) {
     }
     return dates;
 }
-function detectAnomalyFlags(rows, runDate) {
+export function detectAnomalyFlags(rows, runDate) {
     const current = rows.find((row) => row.metric_date === runDate);
     if (!current) {
         return [];
@@ -56,12 +48,12 @@ function detectAnomalyFlags(rows, runDate) {
             relativeDelta
         };
     })
-        .filter((flag) => flag.baselineValue >= env_js_1.env.DATA_QUALITY_ANOMALY_MIN_BASELINE &&
+        .filter((flag) => flag.baselineValue >= env.DATA_QUALITY_ANOMALY_MIN_BASELINE &&
         flag.absoluteDelta > 0 &&
-        (flag.relativeDelta ?? 0) >= env_js_1.env.DATA_QUALITY_ANOMALY_THRESHOLD_RATIO);
+        (flag.relativeDelta ?? 0) >= env.DATA_QUALITY_ANOMALY_THRESHOLD_RATIO);
 }
-async function fetchDataQualityReport(runDate) {
-    const result = await (0, pool_js_1.query)(`
+export async function fetchDataQualityReport(runDate) {
+    const result = await query(`
       SELECT
         run_date::text,
         check_key,
@@ -103,9 +95,9 @@ async function fetchDataQualityReport(runDate) {
         checks
     };
 }
-async function runDailyDataQualityChecks(runDate = resolveRunDate()) {
-    const lookbackDates = buildLookbackDates(runDate, env_js_1.env.DATA_QUALITY_ANOMALY_LOOKBACK_DAYS + 1);
-    const metricsResult = await (0, pool_js_1.query)(`
+export async function runDailyDataQualityChecks(runDate = resolveRunDate()) {
+    const lookbackDates = buildLookbackDates(runDate, env.DATA_QUALITY_ANOMALY_LOOKBACK_DAYS + 1);
+    const metricsResult = await query(`
       SELECT
         metric_date::text,
         COALESCE(SUM(visits), 0)::text AS visits,
@@ -118,7 +110,7 @@ async function runDailyDataQualityChecks(runDate = resolveRunDate()) {
       ORDER BY metric_date ASC
     `, [lookbackDates]);
     const anomalyFlags = detectAnomalyFlags(metricsResult.rows, runDate);
-    await (0, pool_js_1.withTransaction)(async (client) => {
+    await withTransaction(async (client) => {
         const discrepancyCount = anomalyFlags.length;
         const status = discrepancyCount > 0 ? 'warning' : 'healthy';
         const summary = discrepancyCount > 0
@@ -164,7 +156,7 @@ async function runDailyDataQualityChecks(runDate = resolveRunDate()) {
         totals: report.totals
     };
 }
-exports.__dataQualityTestUtils = {
+export const __dataQualityTestUtils = {
     resolveRunDate,
     buildLookbackDates,
     detectAnomalyFlags

@@ -1,17 +1,14 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.createTrackingRouter = createTrackingRouter;
-const node_crypto_1 = require("node:crypto");
-const express_1 = require("express");
-const zod_1 = require("zod");
-const index_js_1 = require("../../../packages/attribution-schema/index.js");
-const env_js_1 = require("../../config/env.js");
-const pool_js_1 = require("../../db/pool.js");
-const index_js_2 = require("../../observability/index.js");
-const index_js_3 = require("../attribution/index.js");
-const index_js_4 = require("../marketing-dimensions/index.js");
-const aggregates_js_1 = require("../reporting/aggregates.js");
-const index_js_5 = require("../settings/index.js");
+import { createHash, randomUUID } from 'node:crypto';
+import { Router } from 'express';
+import { z } from 'zod';
+import { ATTRIBUTION_SCHEMA_VERSION, MAX_ATTRIBUTION_URL_LENGTH, attributionConsentStateSchema, normalizeAttributionCaptureV1, normalizeAttributionConsentState, normalizeAttributionString, normalizeAttributionUrl } from '../../../packages/attribution-schema/index.js';
+import { env } from '../../config/env.js';
+import { query, withTransaction } from '../../db/pool.js';
+import { logError, logInfo, logWarning, summarizeAttributionObservation, summarizeDualWriteConsistency } from '../../observability/index.js';
+import { enqueueAttributionForTrackingTouchpoint } from '../attribution/index.js';
+import { buildCanonicalTouchpointDimensions } from '../marketing-dimensions/index.js';
+import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
+import { formatDateInTimezone, getReportingTimezone } from '../settings/index.js';
 const EVENT_TYPES = ['page_view', 'product_view', 'add_to_cart', 'checkout_started'];
 const MAX_TOKEN_LENGTH = 255;
 const MAX_USER_AGENT_LENGTH = 1024;
@@ -30,29 +27,29 @@ class TrackingHttpError extends Error {
         this.details = details;
     }
 }
-const trimmedStringSchema = (maxLength) => zod_1.z
+const trimmedStringSchema = (maxLength) => z
     .string()
     .trim()
     .min(1)
     .max(maxLength);
-const nullableTrimmedStringSchema = (maxLength) => zod_1.z
-    .union([zod_1.z.string(), zod_1.z.null(), zod_1.z.undefined()])
-    .transform((value) => (0, index_js_1.normalizeAttributionString)(value))
+const nullableTrimmedStringSchema = (maxLength) => z
+    .union([z.string(), z.null(), z.undefined()])
+    .transform((value) => normalizeAttributionString(value))
     .refine((value) => value === null || value.length <= maxLength, {
     message: `String must contain at most ${maxLength} character(s)`
 });
-const trackingEventSchema = zod_1.z
+const trackingEventSchema = z
     .object({
-    eventType: zod_1.z.enum(EVENT_TYPES),
-    occurredAt: zod_1.z.string().datetime({ offset: true }),
-    sessionId: zod_1.z.string().uuid(),
-    pageUrl: trimmedStringSchema(index_js_1.MAX_ATTRIBUTION_URL_LENGTH),
-    referrerUrl: nullableTrimmedStringSchema(index_js_1.MAX_ATTRIBUTION_URL_LENGTH),
+    eventType: z.enum(EVENT_TYPES),
+    occurredAt: z.string().datetime({ offset: true }),
+    sessionId: z.string().uuid(),
+    pageUrl: trimmedStringSchema(MAX_ATTRIBUTION_URL_LENGTH),
+    referrerUrl: nullableTrimmedStringSchema(MAX_ATTRIBUTION_URL_LENGTH),
     shopifyCartToken: nullableTrimmedStringSchema(MAX_TOKEN_LENGTH),
     shopifyCheckoutToken: nullableTrimmedStringSchema(MAX_TOKEN_LENGTH),
     clientEventId: nullableTrimmedStringSchema(MAX_CLIENT_EVENT_ID_LENGTH),
-    consentState: index_js_1.attributionConsentStateSchema.optional(),
-    context: zod_1.z
+    consentState: attributionConsentStateSchema.optional(),
+    context: z
         .object({
         userAgent: nullableTrimmedStringSchema(MAX_USER_AGENT_LENGTH),
         screen: nullableTrimmedStringSchema(MAX_SCREEN_LENGTH),
@@ -67,74 +64,74 @@ const trackingEventSchema = zod_1.z
         validateHttpUrl(value.referrerUrl, 'referrerUrl', ctx);
     }
 });
-const attributionCaptureRequestSchema = zod_1.z
+const attributionCaptureRequestSchema = z
     .object({
-    schema_version: zod_1.z.literal(index_js_1.ATTRIBUTION_SCHEMA_VERSION),
-    roas_radar_session_id: zod_1.z.string(),
-    occurred_at: zod_1.z.string(),
-    captured_at: zod_1.z.string(),
-    landing_url: zod_1.z.union([zod_1.z.string(), zod_1.z.null(), zod_1.z.undefined()]).optional(),
-    referrer_url: zod_1.z.union([zod_1.z.string(), zod_1.z.null(), zod_1.z.undefined()]).optional(),
-    page_url: zod_1.z.union([zod_1.z.string(), zod_1.z.null(), zod_1.z.undefined()]).optional(),
-    utm_source: zod_1.z.union([zod_1.z.string(), zod_1.z.null(), zod_1.z.undefined()]).optional(),
-    utm_medium: zod_1.z.union([zod_1.z.string(), zod_1.z.null(), zod_1.z.undefined()]).optional(),
-    utm_campaign: zod_1.z.union([zod_1.z.string(), zod_1.z.null(), zod_1.z.undefined()]).optional(),
-    utm_content: zod_1.z.union([zod_1.z.string(), zod_1.z.null(), zod_1.z.undefined()]).optional(),
-    utm_term: zod_1.z.union([zod_1.z.string(), zod_1.z.null(), zod_1.z.undefined()]).optional(),
-    gclid: zod_1.z.union([zod_1.z.string(), zod_1.z.null(), zod_1.z.undefined()]).optional(),
-    gbraid: zod_1.z.union([zod_1.z.string(), zod_1.z.null(), zod_1.z.undefined()]).optional(),
-    wbraid: zod_1.z.union([zod_1.z.string(), zod_1.z.null(), zod_1.z.undefined()]).optional(),
-    fbclid: zod_1.z.union([zod_1.z.string(), zod_1.z.null(), zod_1.z.undefined()]).optional(),
-    ttclid: zod_1.z.union([zod_1.z.string(), zod_1.z.null(), zod_1.z.undefined()]).optional(),
-    msclkid: zod_1.z.union([zod_1.z.string(), zod_1.z.null(), zod_1.z.undefined()]).optional(),
-    consent_state: index_js_1.attributionConsentStateSchema.optional()
+    schema_version: z.literal(ATTRIBUTION_SCHEMA_VERSION),
+    roas_radar_session_id: z.string(),
+    occurred_at: z.string(),
+    captured_at: z.string(),
+    landing_url: z.union([z.string(), z.null(), z.undefined()]).optional(),
+    referrer_url: z.union([z.string(), z.null(), z.undefined()]).optional(),
+    page_url: z.union([z.string(), z.null(), z.undefined()]).optional(),
+    utm_source: z.union([z.string(), z.null(), z.undefined()]).optional(),
+    utm_medium: z.union([z.string(), z.null(), z.undefined()]).optional(),
+    utm_campaign: z.union([z.string(), z.null(), z.undefined()]).optional(),
+    utm_content: z.union([z.string(), z.null(), z.undefined()]).optional(),
+    utm_term: z.union([z.string(), z.null(), z.undefined()]).optional(),
+    gclid: z.union([z.string(), z.null(), z.undefined()]).optional(),
+    gbraid: z.union([z.string(), z.null(), z.undefined()]).optional(),
+    wbraid: z.union([z.string(), z.null(), z.undefined()]).optional(),
+    fbclid: z.union([z.string(), z.null(), z.undefined()]).optional(),
+    ttclid: z.union([z.string(), z.null(), z.undefined()]).optional(),
+    msclkid: z.union([z.string(), z.null(), z.undefined()]).optional(),
+    consent_state: attributionConsentStateSchema.optional()
 })
     .transform((value) => ({
-    capture: (0, index_js_1.normalizeAttributionCaptureV1)(value),
-    consentState: (0, index_js_1.normalizeAttributionConsentState)(value.consent_state)
+    capture: normalizeAttributionCaptureV1(value),
+    consentState: normalizeAttributionConsentState(value.consent_state)
 }));
-const sessionBootstrapQuerySchema = zod_1.z.object({
-    pageUrl: trimmedStringSchema(index_js_1.MAX_ATTRIBUTION_URL_LENGTH),
-    landingUrl: nullableTrimmedStringSchema(index_js_1.MAX_ATTRIBUTION_URL_LENGTH),
-    referrerUrl: nullableTrimmedStringSchema(index_js_1.MAX_ATTRIBUTION_URL_LENGTH)
+const sessionBootstrapQuerySchema = z.object({
+    pageUrl: trimmedStringSchema(MAX_ATTRIBUTION_URL_LENGTH),
+    landingUrl: nullableTrimmedStringSchema(MAX_ATTRIBUTION_URL_LENGTH),
+    referrerUrl: nullableTrimmedStringSchema(MAX_ATTRIBUTION_URL_LENGTH)
 });
 function logAttributionCaptureObserved(source, payload, fields) {
-    (0, index_js_2.logInfo)('attribution_capture_observed', {
+    logInfo('attribution_capture_observed', {
         source,
-        ...(0, index_js_2.summarizeAttributionObservation)(payload),
+        ...summarizeAttributionObservation(payload),
         ...fields
     });
 }
 function validateTrackingTimestamp(value, ctx) {
     const occurredAt = new Date(value);
     const now = Date.now();
-    const maxAgeMs = env_js_1.env.TRACKING_MAX_EVENT_AGE_HOURS * 60 * 60 * 1000;
-    const maxFutureSkewMs = env_js_1.env.TRACKING_MAX_FUTURE_SKEW_SECONDS * 1000;
+    const maxAgeMs = env.TRACKING_MAX_EVENT_AGE_HOURS * 60 * 60 * 1000;
+    const maxFutureSkewMs = env.TRACKING_MAX_FUTURE_SKEW_SECONDS * 1000;
     if (Number.isNaN(occurredAt.getTime())) {
         return;
     }
     if (occurredAt.getTime() < now - maxAgeMs) {
         ctx.addIssue({
-            code: zod_1.z.ZodIssueCode.custom,
-            message: `occurredAt must be within the last ${env_js_1.env.TRACKING_MAX_EVENT_AGE_HOURS} hours`,
+            code: z.ZodIssueCode.custom,
+            message: `occurredAt must be within the last ${env.TRACKING_MAX_EVENT_AGE_HOURS} hours`,
             path: ['occurredAt']
         });
     }
     if (occurredAt.getTime() > now + maxFutureSkewMs) {
         ctx.addIssue({
-            code: zod_1.z.ZodIssueCode.custom,
-            message: `occurredAt cannot be more than ${env_js_1.env.TRACKING_MAX_FUTURE_SKEW_SECONDS} seconds in the future`,
+            code: z.ZodIssueCode.custom,
+            message: `occurredAt cannot be more than ${env.TRACKING_MAX_FUTURE_SKEW_SECONDS} seconds in the future`,
             path: ['occurredAt']
         });
     }
 }
 function validateHttpUrl(value, field, ctx) {
     try {
-        (0, index_js_1.normalizeAttributionUrl)(value);
+        normalizeAttributionUrl(value);
     }
     catch (error) {
         ctx.addIssue({
-            code: zod_1.z.ZodIssueCode.custom,
+            code: z.ZodIssueCode.custom,
             message: error instanceof Error && error.message === 'invalid_protocol' ? `${field} must use http or https` : `${field} must be a valid URL`,
             path: [field]
         });
@@ -142,14 +139,14 @@ function validateHttpUrl(value, field, ctx) {
 }
 function normalizeTrackingUrl(rawUrl) {
     try {
-        return (0, index_js_1.normalizeAttributionUrl)(rawUrl);
+        return normalizeAttributionUrl(rawUrl);
     }
     catch {
         return null;
     }
 }
 function normalizeNullableString(value) {
-    return (0, index_js_1.normalizeAttributionString)(value);
+    return normalizeAttributionString(value);
 }
 function resolveRequestIp(req) {
     const forwardedFor = req.header('x-forwarded-for');
@@ -163,10 +160,10 @@ function hashIp(value) {
     if (!normalized) {
         return null;
     }
-    return (0, node_crypto_1.createHash)('sha256').update(normalized).digest('hex');
+    return createHash('sha256').update(normalized).digest('hex');
 }
 function hashTrackingFingerprint(input) {
-    return (0, node_crypto_1.createHash)('sha256')
+    return createHash('sha256')
         .update(JSON.stringify({
         sessionId: input.sessionId,
         eventType: input.eventType,
@@ -180,7 +177,7 @@ function hashTrackingFingerprint(input) {
         .digest('hex');
 }
 function hashAttributionFingerprint(capture, eventType, ingestionSource) {
-    return (0, node_crypto_1.createHash)('sha256')
+    return createHash('sha256')
         .update(JSON.stringify({
         schemaVersion: capture.schema_version,
         sessionId: capture.roas_radar_session_id,
@@ -223,8 +220,8 @@ function parseCampaignParameters(pageUrl) {
 }
 function buildCaptureFromTrackingEvent(input) {
     const marketingDimensions = parseCampaignParameters(input.pageUrl);
-    return (0, index_js_1.normalizeAttributionCaptureV1)({
-        schema_version: index_js_1.ATTRIBUTION_SCHEMA_VERSION,
+    return normalizeAttributionCaptureV1({
+        schema_version: ATTRIBUTION_SCHEMA_VERSION,
         roas_radar_session_id: input.sessionId,
         occurred_at: input.occurredAt,
         captured_at: new Date().toISOString(),
@@ -244,7 +241,7 @@ function sanitizeTrackingInput(input) {
         shopifyCartToken: normalizeNullableString(input.shopifyCartToken),
         shopifyCheckoutToken: normalizeNullableString(input.shopifyCheckoutToken),
         clientEventId: normalizeNullableString(input.clientEventId),
-        consentState: (0, index_js_1.normalizeAttributionConsentState)(input.consentState),
+        consentState: normalizeAttributionConsentState(input.consentState),
         context: {
             userAgent: normalizeNullableString(input.context.userAgent),
             screen: normalizeNullableString(input.context.screen),
@@ -253,7 +250,7 @@ function sanitizeTrackingInput(input) {
     };
 }
 async function findExistingTrackingEventByClientEventId(clientEventId) {
-    const result = await (0, pool_js_1.query)(`
+    const result = await query(`
       SELECT
         id::text AS id,
         occurred_at,
@@ -266,7 +263,7 @@ async function findExistingTrackingEventByClientEventId(clientEventId) {
     return result.rows[0] ?? null;
 }
 async function findExistingTrackingEventByFingerprint(ingestionFingerprint) {
-    const result = await (0, pool_js_1.query)(`
+    const result = await query(`
       SELECT
         id::text AS id,
         occurred_at,
@@ -279,7 +276,7 @@ async function findExistingTrackingEventByFingerprint(ingestionFingerprint) {
     return result.rows[0] ?? null;
 }
 async function findExistingAttributionTouchEventByFingerprint(ingestionFingerprint) {
-    const result = await (0, pool_js_1.query)(`
+    const result = await query(`
       SELECT
         id,
         captured_at,
@@ -291,7 +288,7 @@ async function findExistingAttributionTouchEventByFingerprint(ingestionFingerpri
     return result.rows[0] ?? null;
 }
 async function upsertTrackingSessionForCapture(client, capture, occurredAt, userAgent, ipHash) {
-    const canonicalDimensions = (0, index_js_4.buildCanonicalTouchpointDimensions)({
+    const canonicalDimensions = buildCanonicalTouchpointDimensions({
         source: capture.utm_source,
         medium: capture.utm_medium,
         campaign: capture.utm_campaign,
@@ -468,7 +465,7 @@ async function upsertSessionAttributionIdentity(client, capture) {
     ]);
 }
 async function insertTrackingEventForCapture(client, input) {
-    const eventId = (0, node_crypto_1.randomUUID)();
+    const eventId = randomUUID();
     try {
         await client.query(`
         INSERT INTO tracking_events (
@@ -576,7 +573,7 @@ async function insertTrackingEventForCapture(client, input) {
 }
 async function insertTrackingBrowserEvent(client, input, ingestionFingerprint) {
     const capture = buildCaptureFromTrackingEvent(input);
-    const eventId = (0, node_crypto_1.randomUUID)();
+    const eventId = randomUUID();
     try {
         await client.query(`
         INSERT INTO tracking_events (
@@ -657,7 +654,7 @@ async function insertTrackingBrowserEvent(client, input, ingestionFingerprint) {
             'browser',
             JSON.stringify({
                 ...input,
-                schema_version: index_js_1.ATTRIBUTION_SCHEMA_VERSION,
+                schema_version: ATTRIBUTION_SCHEMA_VERSION,
                 marketing_dimensions: {
                     utm_source: capture.utm_source,
                     utm_medium: capture.utm_medium,
@@ -802,7 +799,7 @@ async function ingestAttributionCapture(input, options) {
         }
     }
     const ipHash = hashIp(input.requestIp);
-    const result = await (0, pool_js_1.withTransaction)(async (client) => {
+    const result = await withTransaction(async (client) => {
         await upsertSessionAttributionIdentity(client, input.capture);
         await upsertTrackingSessionForCapture(client, input.capture, new Date(input.capture.occurred_at), normalizeNullableString(input.userAgent), ipHash);
         const touchEvent = await insertAttributionTouchEvent(client, {
@@ -859,19 +856,19 @@ async function ingestTrackingEvent(input, requestIp) {
     }
     const derivedCapture = buildCaptureFromTrackingEvent(sanitizedInput);
     const ipHash = hashIp(requestIp);
-    const eventId = await (0, pool_js_1.withTransaction)(async (client) => {
+    const eventId = await withTransaction(async (client) => {
         await upsertTrackingSessionForCapture(client, {
             ...derivedCapture,
             landing_url: sanitizedInput.pageUrl
         }, new Date(sanitizedInput.occurredAt), sanitizedInput.context.userAgent, ipHash);
         const insertedEventId = await insertTrackingBrowserEvent(client, sanitizedInput, ingestionFingerprint);
-        await (0, index_js_3.enqueueAttributionForTrackingTouchpoint)(client, {
+        await enqueueAttributionForTrackingTouchpoint(client, {
             sessionId: sanitizedInput.sessionId,
             shopifyCheckoutToken: sanitizedInput.shopifyCheckoutToken,
             shopifyCartToken: sanitizedInput.shopifyCartToken
         });
-        await (0, aggregates_js_1.refreshDailyReportingMetrics)(client, [
-            (0, index_js_5.formatDateInTimezone)(new Date(sanitizedInput.occurredAt), await (0, index_js_5.getReportingTimezone)(client))
+        await refreshDailyReportingMetrics(client, [
+            formatDateInTimezone(new Date(sanitizedInput.occurredAt), await getReportingTimezone(client))
         ]);
         return insertedEventId;
     });
@@ -884,10 +881,10 @@ async function ingestTrackingEvent(input, requestIp) {
     };
 }
 async function bootstrapSession(pageUrl, landingUrl, referrerUrl, requestIp, userAgent, requestContextSource) {
-    const sessionId = (0, node_crypto_1.randomUUID)();
+    const sessionId = randomUUID();
     const now = new Date().toISOString();
-    const capture = (0, index_js_1.normalizeAttributionCaptureV1)({
-        schema_version: index_js_1.ATTRIBUTION_SCHEMA_VERSION,
+    const capture = normalizeAttributionCaptureV1({
+        schema_version: ATTRIBUTION_SCHEMA_VERSION,
         roas_radar_session_id: sessionId,
         occurred_at: now,
         captured_at: now,
@@ -920,21 +917,21 @@ class InMemoryRateLimiter {
         if (!existing || existing.resetAt <= now) {
             const nextEntry = {
                 count: 1,
-                resetAt: now + env_js_1.env.TRACKING_RATE_LIMIT_WINDOW_MS
+                resetAt: now + env.TRACKING_RATE_LIMIT_WINDOW_MS
             };
             this.entries.set(key, nextEntry);
             this.prune(now);
             return {
                 allowed: true,
-                remaining: Math.max(env_js_1.env.TRACKING_RATE_LIMIT_MAX - nextEntry.count, 0),
+                remaining: Math.max(env.TRACKING_RATE_LIMIT_MAX - nextEntry.count, 0),
                 resetAt: nextEntry.resetAt
             };
         }
         existing.count += 1;
         this.entries.set(key, existing);
         return {
-            allowed: existing.count <= env_js_1.env.TRACKING_RATE_LIMIT_MAX,
-            remaining: Math.max(env_js_1.env.TRACKING_RATE_LIMIT_MAX - existing.count, 0),
+            allowed: existing.count <= env.TRACKING_RATE_LIMIT_MAX,
+            remaining: Math.max(env.TRACKING_RATE_LIMIT_MAX - existing.count, 0),
             resetAt: existing.resetAt
         };
     }
@@ -951,13 +948,13 @@ class InMemoryRateLimiter {
 }
 const trackingRateLimiter = new InMemoryRateLimiter();
 function enforceAllowedOrigin(req) {
-    if (!env_js_1.env.TRACKING_ALLOWED_ORIGINS.length) {
+    if (!env.TRACKING_ALLOWED_ORIGINS.length) {
         return;
     }
     const origin = req.header('origin');
-    if (!origin || !env_js_1.env.TRACKING_ALLOWED_ORIGINS.includes(origin)) {
+    if (!origin || !env.TRACKING_ALLOWED_ORIGINS.includes(origin)) {
         throw new TrackingHttpError(403, 'origin_not_allowed', 'Request origin is not allowed', {
-            allowedOrigins: env_js_1.env.TRACKING_ALLOWED_ORIGINS
+            allowedOrigins: env.TRACKING_ALLOWED_ORIGINS
         });
     }
 }
@@ -994,8 +991,8 @@ function parseTrackingRequestBody(body) {
 function enforceRateLimit(req) {
     const requestIp = resolveRequestIp(req);
     const body = typeof req.body === 'object' && req.body !== null ? req.body : {};
-    const sessionHint = typeof body['sessionId'] === 'string' ? body['sessionId'] : 'anonymous';
-    const key = (0, node_crypto_1.createHash)('sha256').update(`${requestIp ?? 'unknown'}:${sessionHint}`).digest('hex');
+    const sessionHint = typeof body.sessionId === 'string' ? body.sessionId : 'anonymous';
+    const key = createHash('sha256').update(`${requestIp ?? 'unknown'}:${sessionHint}`).digest('hex');
     const result = trackingRateLimiter.check(key);
     if (!result.allowed) {
         throw new TrackingHttpError(429, 'rate_limit_exceeded', 'Too many tracking requests', {
@@ -1008,7 +1005,7 @@ function parseAttributionCaptureRequest(body) {
         return attributionCaptureRequestSchema.parse(body);
     }
     catch (error) {
-        if (error instanceof zod_1.z.ZodError) {
+        if (error instanceof z.ZodError) {
             throw new TrackingHttpError(400, 'invalid_request', 'Invalid attribution capture payload', error.flatten());
         }
         throw error;
@@ -1019,7 +1016,7 @@ function parseTrackingEventRequest(body) {
         return trackingEventSchema.parse(body);
     }
     catch (error) {
-        if (error instanceof zod_1.z.ZodError) {
+        if (error instanceof z.ZodError) {
             throw new TrackingHttpError(400, 'invalid_request', 'Invalid tracking payload', error.flatten());
         }
         throw error;
@@ -1044,7 +1041,7 @@ async function emitDerivedAttributionFromBrowserEvent(input, requestIp) {
         };
     }
     catch (error) {
-        (0, index_js_2.logError)('tracking_dual_write_server_emit_failed', error, {
+        logError('tracking_dual_write_server_emit_failed', error, {
             sessionId: input.sessionId,
             eventType: input.eventType
         });
@@ -1056,15 +1053,15 @@ async function emitDerivedAttributionFromBrowserEvent(input, requestIp) {
         };
     }
 }
-function createTrackingRouter() {
-    const router = (0, express_1.Router)();
+export function createTrackingRouter() {
+    const router = Router();
     router.get('/session', async (req, res, next) => {
         try {
             enforceAllowedOrigin(req);
             const parsedQuery = sessionBootstrapQuerySchema.parse({
-                pageUrl: req.query['pageUrl'],
-                landingUrl: req.query['landingUrl'],
-                referrerUrl: req.query['referrerUrl']
+                pageUrl: req.query.pageUrl,
+                landingUrl: req.query.landingUrl,
+                referrerUrl: req.query.referrerUrl
             });
             const normalizedPageUrl = normalizeTrackingUrl(parsedQuery.pageUrl);
             const normalizedLandingUrl = normalizeTrackingUrl(parsedQuery.landingUrl);
@@ -1099,18 +1096,18 @@ function createTrackingRouter() {
         }
         catch (error) {
             if (error instanceof TrackingHttpError) {
-                (0, index_js_2.logWarning)('tracking_session_bootstrap_rejected', {
+                logWarning('tracking_session_bootstrap_rejected', {
                     code: error.code,
                     statusCode: error.statusCode,
                     details: error.details
                 });
             }
-            else if (error instanceof zod_1.z.ZodError) {
+            else if (error instanceof z.ZodError) {
                 next(new TrackingHttpError(400, 'invalid_request', 'Invalid session bootstrap request', error.flatten()));
                 return;
             }
             else {
-                (0, index_js_2.logError)('tracking_session_bootstrap_failed', error, {
+                logError('tracking_session_bootstrap_failed', error, {
                     path: req.baseUrl ? `${req.baseUrl}${req.path}` : req.path
                 });
             }
@@ -1151,14 +1148,14 @@ function createTrackingRouter() {
                     rejectionCode: error.code,
                     statusCode: error.statusCode
                 });
-                (0, index_js_2.logWarning)('tracking_attribution_rejected', {
+                logWarning('tracking_attribution_rejected', {
                     code: error.code,
                     statusCode: error.statusCode,
                     details: error.details
                 });
             }
             else {
-                (0, index_js_2.logError)('tracking_attribution_failed', error, {
+                logError('tracking_attribution_failed', error, {
                     path: req.baseUrl ? `${req.baseUrl}${req.path}` : req.path
                 });
             }
@@ -1179,8 +1176,8 @@ function createTrackingRouter() {
                 deduplicated: browserResult.deduplicated,
                 eventType: input.eventType
             });
-            (0, index_js_2.logInfo)('tracking_dual_write_consistency', {
-                ...(0, index_js_2.summarizeDualWriteConsistency)({
+            logInfo('tracking_dual_write_consistency', {
+                ...summarizeDualWriteConsistency({
                     browserOutcome: browserResult.deduplicated ? 'deduplicated' : 'accepted',
                     serverOutcome: serverAttributionResult.ok
                         ? serverAttributionResult.deduplicated
@@ -1205,14 +1202,14 @@ function createTrackingRouter() {
         }
         catch (error) {
             if (error instanceof TrackingHttpError) {
-                (0, index_js_2.logWarning)('tracking_ingest_rejected', {
+                logWarning('tracking_ingest_rejected', {
                     code: error.code,
                     statusCode: error.statusCode,
                     details: error.details
                 });
             }
             else {
-                (0, index_js_2.logError)('tracking_ingest_failed', error, {
+                logError('tracking_ingest_failed', error, {
                     path: req.baseUrl ? `${req.baseUrl}${req.path}` : req.path
                 });
             }

@@ -1,19 +1,9 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.__attributionTestUtils = void 0;
-exports.buildQueueKey = buildQueueKey;
-exports.computeRetryDelaySeconds = computeRetryDelaySeconds;
-exports.buildProcessingMetricsLog = buildProcessingMetricsLog;
-exports.enqueueAttributionForOrder = enqueueAttributionForOrder;
-exports.enqueueAttributionForTrackingTouchpoint = enqueueAttributionForTrackingTouchpoint;
-exports.applySyntheticAttributionForOrder = applySyntheticAttributionForOrder;
-exports.processAttributionQueue = processAttributionQueue;
-const pool_js_1 = require("../../db/pool.js");
-const index_js_1 = require("../../observability/index.js");
-const aggregates_js_1 = require("../reporting/aggregates.js");
-const index_js_2 = require("../settings/index.js");
-const engine_js_1 = require("./engine.js");
-const resolver_js_1 = require("./resolver.js");
+import { withTransaction } from '../../db/pool.js';
+import { logError } from '../../observability/index.js';
+import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
+import { getReportingTimezone, formatDateInTimezone } from '../settings/index.js';
+import { ATTRIBUTION_MODELS, computeAttributionOutputs, computeSingleWinnerCredits } from './engine.js';
+import { confidenceScoreForWinner, dedupeDeterministicCandidates, isDirectTouchpoint, selectLastNonDirectWinner } from './resolver.js';
 const ATTRIBUTION_MODEL_VERSION = 1;
 const ATTRIBUTION_WINDOW_DAYS = 7;
 const JOB_STALE_AFTER_MINUTES = 15;
@@ -22,14 +12,14 @@ function normalizeNullableString(value) {
     const normalized = value?.trim();
     return normalized ? normalized : null;
 }
-function buildQueueKey(shopifyOrderId) {
+export function buildQueueKey(shopifyOrderId) {
     return `order:${shopifyOrderId}`;
 }
-function computeRetryDelaySeconds(attempts) {
+export function computeRetryDelaySeconds(attempts) {
     const normalizedAttempts = Number.isFinite(attempts) ? Math.max(Math.trunc(attempts), 1) : 1;
     return Math.min(30 * 2 ** (normalizedAttempts - 1), MAX_RETRY_DELAY_SECONDS);
 }
-function buildProcessingMetricsLog(result) {
+export function buildProcessingMetricsLog(result) {
     return JSON.stringify({
         severity: 'INFO',
         event: 'attribution_queue_run',
@@ -55,9 +45,9 @@ async function execute(client, callback) {
     if (client) {
         return callback(client);
     }
-    return (0, pool_js_1.withTransaction)(callback);
+    return withTransaction(callback);
 }
-async function enqueueAttributionForOrder(shopifyOrderId, requestedReason, client) {
+export async function enqueueAttributionForOrder(shopifyOrderId, requestedReason, client) {
     await execute(client, async (db) => {
         await db.query(`
         INSERT INTO attribution_jobs (
@@ -90,7 +80,7 @@ async function enqueueAttributionForOrder(shopifyOrderId, requestedReason, clien
       `, [buildQueueKey(shopifyOrderId), shopifyOrderId, requestedReason, ATTRIBUTION_MODEL_VERSION]);
     });
 }
-async function enqueueAttributionForTrackingTouchpoint(client, input) {
+export async function enqueueAttributionForTrackingTouchpoint(client, input) {
     const result = await client.query(`
       SELECT DISTINCT o.shopify_order_id
       FROM shopify_orders o
@@ -198,7 +188,7 @@ function buildResolvedTouchpoint(row, ingestionSource, attributionReason, isForc
         clickIdValue: row.click_id_value,
         attributionReason,
         ingestionSource,
-        isDirect: (0, resolver_js_1.isDirectTouchpoint)({
+        isDirect: isDirectTouchpoint({
             source: row.source,
             medium: row.medium,
             campaign: row.campaign,
@@ -401,12 +391,12 @@ async function collectDeterministicCandidates(client, order) {
 }
 async function resolveAttributionJourney(client, order) {
     const candidates = await collectDeterministicCandidates(client, order);
-    const touchpoints = (0, resolver_js_1.dedupeDeterministicCandidates)(candidates);
-    const winner = (0, resolver_js_1.selectLastNonDirectWinner)(touchpoints);
+    const touchpoints = dedupeDeterministicCandidates(candidates);
+    const winner = selectLastNonDirectWinner(touchpoints);
     return {
         touchpoints,
         winner,
-        confidenceScore: (0, resolver_js_1.confidenceScoreForWinner)(winner)
+        confidenceScore: confidenceScoreForWinner(winner)
     };
 }
 function selectPrimaryCredit(credits) {
@@ -414,14 +404,14 @@ function selectPrimaryCredit(credits) {
 }
 async function persistAttribution(client, order, journey) {
     const orderOccurredAt = resolveOrderOccurredAt(order);
-    const outputs = (0, engine_js_1.computeAttributionOutputs)(journey.touchpoints, {
+    const outputs = computeAttributionOutputs(journey.touchpoints, {
         orderOccurredAt,
         orderRevenue: order.total_price
     });
     if (journey.winner) {
         const winnerIndex = journey.touchpoints.findIndex((touchpoint) => touchpoint.sessionId === journey.winner?.sessionId);
         if (winnerIndex >= 0) {
-            outputs.last_touch = (0, engine_js_1.computeSingleWinnerCredits)('last_touch', journey.touchpoints, winnerIndex, order.total_price);
+            outputs.last_touch = computeSingleWinnerCredits('last_touch', journey.touchpoints, winnerIndex, order.total_price);
         }
     }
     const primaryCredit = selectPrimaryCredit(outputs.last_touch);
@@ -429,7 +419,7 @@ async function persistAttribution(client, order, journey) {
         throw new Error(`Failed to compute attribution credits for Shopify order ${order.shopify_order_id}`);
     }
     await client.query('DELETE FROM attribution_order_credits WHERE shopify_order_id = $1', [order.shopify_order_id]);
-    for (const model of engine_js_1.ATTRIBUTION_MODELS) {
+    for (const model of ATTRIBUTION_MODELS) {
         const modelCredits = outputs[model];
         for (const credit of modelCredits) {
             await client.query(`
@@ -601,8 +591,8 @@ async function processClaimedJob(client, job, workerId) {
     }
     const journey = await resolveAttributionJourney(client, order);
     await persistAttribution(client, order, journey);
-    const metricDate = (0, index_js_2.formatDateInTimezone)(resolveOrderOccurredAt(order), await (0, index_js_2.getReportingTimezone)(client));
-    await (0, aggregates_js_1.refreshDailyReportingMetrics)(client, [metricDate]);
+    const metricDate = formatDateInTimezone(resolveOrderOccurredAt(order), await getReportingTimezone(client));
+    await refreshDailyReportingMetrics(client, [metricDate]);
     await client.query(`
       UPDATE attribution_jobs
       SET
@@ -627,7 +617,7 @@ async function processClaimedJob(client, job, workerId) {
         attributionReason: primaryCreditReason(journey)
     })}\n`);
 }
-async function applySyntheticAttributionForOrder(shopifyOrderId, input, client) {
+export async function applySyntheticAttributionForOrder(shopifyOrderId, input, client) {
     await execute(client, async (db) => {
         const order = await fetchOrder(db, shopifyOrderId);
         if (!order) {
@@ -647,7 +637,7 @@ async function applySyntheticAttributionForOrder(shopifyOrderId, input, client) 
             clickIdValue: normalizeNullableString(input.clickIdValue),
             attributionReason: input.attributionReason,
             ingestionSource: 'customer_identity',
-            isDirect: (0, resolver_js_1.isDirectTouchpoint)({
+            isDirect: isDirectTouchpoint({
                 source: normalizeNullableString(input.source),
                 medium: normalizeNullableString(input.medium),
                 campaign: normalizeNullableString(input.campaign),
@@ -662,8 +652,8 @@ async function applySyntheticAttributionForOrder(shopifyOrderId, input, client) 
             winner: touchpoint,
             confidenceScore: input.confidenceScore ?? 0.35
         });
-        const metricDate = (0, index_js_2.formatDateInTimezone)(orderOccurredAt, await (0, index_js_2.getReportingTimezone)(db));
-        await (0, aggregates_js_1.refreshDailyReportingMetrics)(db, [metricDate]);
+        const metricDate = formatDateInTimezone(orderOccurredAt, await getReportingTimezone(db));
+        await refreshDailyReportingMetrics(db, [metricDate]);
     });
 }
 async function markJobForRetry(client, job, workerId, error) {
@@ -685,9 +675,9 @@ async function markJobForRetry(client, job, workerId, error) {
         error instanceof Error ? error.message.slice(0, 1000) : String(error).slice(0, 1000)
     ]);
 }
-async function processAttributionQueue(options) {
+export async function processAttributionQueue(options) {
     const startedAt = Date.now();
-    const result = await (0, pool_js_1.withTransaction)(async (client) => {
+    const result = await withTransaction(async (client) => {
         const staleJobsEnqueued = await requeueStaleJobs(client, options.staleScanLimit ?? 0);
         const claimedJobs = await claimJobs(client, options.workerId, options.limit);
         return {
@@ -699,19 +689,19 @@ async function processAttributionQueue(options) {
     let failedJobs = 0;
     for (const job of result.claimedJobs) {
         try {
-            await (0, pool_js_1.withTransaction)(async (client) => {
+            await withTransaction(async (client) => {
                 await processClaimedJob(client, job, options.workerId);
             });
             succeededJobs += 1;
         }
         catch (error) {
             failedJobs += 1;
-            (0, index_js_1.logError)('attribution_job_failed', error, {
+            logError('attribution_job_failed', error, {
                 workerId: options.workerId,
                 shopifyOrderId: job.shopify_order_id,
                 attempts: job.attempts
             });
-            await (0, pool_js_1.withTransaction)(async (client) => {
+            await withTransaction(async (client) => {
                 await markJobForRetry(client, job, options.workerId, error);
             });
         }
@@ -733,11 +723,11 @@ async function processAttributionQueue(options) {
     }
     return summary;
 }
-exports.__attributionTestUtils = {
+export const __attributionTestUtils = {
     buildQueueKey,
     computeRetryDelaySeconds,
     buildProcessingMetricsLog,
-    dedupeDeterministicCandidates: resolver_js_1.dedupeDeterministicCandidates,
-    selectLastNonDirectWinner: resolver_js_1.selectLastNonDirectWinner,
-    confidenceScoreForWinner: resolver_js_1.confidenceScoreForWinner
+    dedupeDeterministicCandidates,
+    selectLastNonDirectWinner,
+    confidenceScoreForWinner
 };

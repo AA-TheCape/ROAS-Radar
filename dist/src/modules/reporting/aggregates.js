@@ -1,18 +1,14 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.refreshDailyReportingMetrics = refreshDailyReportingMetrics;
-exports.refreshAllDailyReportingMetrics = refreshAllDailyReportingMetrics;
-const engine_js_1 = require("../attribution/engine.js");
-const index_js_1 = require("../settings/index.js");
+import { ATTRIBUTION_MODELS } from '../attribution/engine.js';
+import { getReportingTimezone } from '../settings/index.js';
 function normalizeMetricDates(metricDates) {
     return [...new Set(metricDates.map((value) => value.trim()).filter((value) => /^\d{4}-\d{2}-\d{2}$/.test(value)))].sort();
 }
-async function refreshDailyReportingMetrics(client, metricDates) {
+export async function refreshDailyReportingMetrics(client, metricDates) {
     const normalizedMetricDates = normalizeMetricDates(metricDates);
     if (normalizedMetricDates.length === 0) {
         return;
     }
-    const reportingTimezone = await (0, index_js_1.getReportingTimezone)(client);
+    const reportingTimezone = await getReportingTimezone(client);
     await client.query('SELECT pg_advisory_xact_lock($1)', [82134721]);
     await client.query('DELETE FROM daily_reporting_metrics WHERE metric_date = ANY($1::date[])', [normalizedMetricDates]);
     await client.query(`
@@ -114,6 +110,30 @@ async function refreshDailyReportingMetrics(client, metricDates) {
         FROM google_ads_daily_spend
         WHERE report_date = ANY($1::date[])
           AND granularity = 'creative'
+
+        UNION ALL
+
+        SELECT
+          campaign_row.report_date AS metric_date,
+          campaign_row.canonical_source AS source,
+          campaign_row.canonical_medium AS medium,
+          campaign_row.canonical_campaign AS campaign,
+          campaign_row.canonical_content AS content,
+          campaign_row.canonical_term AS term,
+          campaign_row.spend,
+          campaign_row.impressions,
+          campaign_row.clicks
+        FROM google_ads_daily_spend campaign_row
+        WHERE campaign_row.report_date = ANY($1::date[])
+          AND campaign_row.granularity = 'campaign'
+          AND NOT EXISTS (
+            SELECT 1
+            FROM google_ads_daily_spend creative_row
+            WHERE creative_row.report_date = campaign_row.report_date
+              AND creative_row.granularity = 'creative'
+              AND creative_row.connection_id = campaign_row.connection_id
+              AND creative_row.campaign_id IS NOT DISTINCT FROM campaign_row.campaign_id
+          )
       ),
       spend_rows AS (
         SELECT
@@ -185,10 +205,10 @@ async function refreshDailyReportingMetrics(client, metricDates) {
         SELECT * FROM spend_rows
       ) combined
       GROUP BY 1, 2, 3, 4, 5, 6, 7
-    `, [normalizedMetricDates, reportingTimezone, engine_js_1.ATTRIBUTION_MODELS]);
+    `, [normalizedMetricDates, reportingTimezone, ATTRIBUTION_MODELS]);
 }
-async function refreshAllDailyReportingMetrics(client) {
-    const reportingTimezone = await (0, index_js_1.getReportingTimezone)(client);
+export async function refreshAllDailyReportingMetrics(client) {
+    const reportingTimezone = await getReportingTimezone(client);
     const result = await client.query(`
       SELECT DISTINCT metric_date::text
       FROM (

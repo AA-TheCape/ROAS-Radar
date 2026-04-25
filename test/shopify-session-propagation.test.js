@@ -95,7 +95,7 @@ function createDocument(cookieJar, forms, state) {
   Object.defineProperty(document, "cookie", {
     get() {
       return Array.from(cookieJar.entries())
-        .map(([key, value]) => key + "=" + encodeURIComponent(value))
+        .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
         .join("; ");
     },
     set(value) {
@@ -166,7 +166,7 @@ async function runPropagation(overrides = {}) {
   const fetchCalls = [];
   const fetchImpl =
     overrides.fetch ||
-    (async function (url) {
+    (async (url) => {
       if (String(url).startsWith("/track/session")) {
         return createJsonResponse({
           sessionId: "123e4567-e89b-42d3-a456-426614174000"
@@ -182,10 +182,10 @@ async function runPropagation(overrides = {}) {
   }
 
   function MockXMLHttpRequest() {
-    this.open = function () {
+    this.open = () => {
       return;
     };
-    this.send = function () {
+    this.send = () => {
       return;
     };
   }
@@ -267,9 +267,7 @@ function createJsonResponse(body, ok = true, statusCode = 200) {
   return {
     ok,
     status: statusCode,
-    json: async function () {
-      return body;
-    }
+    json: async () => body
   };
 }
 
@@ -281,7 +279,7 @@ test("writes cart attributes when the first cart mutation request is observed", 
   const run = await runPropagation({
     forms: [form],
     documentReadyState: "loading",
-    fetch: async function (url, options) {
+    fetch: async (url, options) => {
       calls.push({ url, options });
 
       if (String(url).startsWith("/track/session")) {
@@ -336,7 +334,7 @@ test("retries transient Shopify failures with backoff and stable correlation IDs
   let syncAttempts = 0;
 
   const run = await runPropagation({
-    fetch: async function (url, options) {
+    fetch: async (url, options) => {
       if (String(url).startsWith("/track/session")) {
         return createJsonResponse({
           sessionId: "123e4567-e89b-42d3-a456-426614174222"
@@ -395,7 +393,7 @@ test("avoids duplicate cart sync writes for an already-synced session fingerprin
         })
       ]
     ]),
-    fetch: async function (url, options) {
+    fetch: async (url, options) => {
       if (String(url).startsWith("/track/session")) {
         return createJsonResponse({
           sessionId: syncedSessionId
@@ -446,7 +444,7 @@ test("reuses stored canonical attribution fields when later pages lose campaign 
       pathname: "/collections/sale",
       search: ""
     },
-    fetch: async function (url, options) {
+    fetch: async (url, options) => {
       if (String(url).startsWith("/track/session")) {
         return createJsonResponse({
           sessionId: sessionId

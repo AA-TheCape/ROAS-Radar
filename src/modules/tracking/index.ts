@@ -1303,7 +1303,7 @@ function parseTrackingRequestBody(body: unknown): Record<string, unknown> {
 function enforceRateLimit(req: Request): void {
   const requestIp = resolveRequestIp(req);
   const body = typeof req.body === 'object' && req.body !== null ? (req.body as Record<string, unknown>) : {};
-  const sessionHint = typeof body['sessionId'] === 'string' ? body['sessionId'] : 'anonymous';
+  const sessionHint = typeof body.sessionId === 'string' ? body.sessionId : 'anonymous';
   const key = createHash('sha256').update(`${requestIp ?? 'unknown'}:${sessionHint}`).digest('hex');
   const result = trackingRateLimiter.check(key);
 
@@ -1385,9 +1385,9 @@ export function createTrackingRouter() {
       enforceAllowedOrigin(req);
 
       const parsedQuery = sessionBootstrapQuerySchema.parse({
-        pageUrl: req.query['pageUrl'],
-        landingUrl: req.query['landingUrl'],
-        referrerUrl: req.query['referrerUrl']
+        pageUrl: req.query.pageUrl,
+        landingUrl: req.query.landingUrl,
+        referrerUrl: req.query.referrerUrl
       });
 
       const normalizedPageUrl = normalizeTrackingUrl(parsedQuery.pageUrl);

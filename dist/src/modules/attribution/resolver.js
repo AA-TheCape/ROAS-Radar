@@ -1,11 +1,4 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.DETERMINISTIC_INGESTION_SOURCES = void 0;
-exports.isDirectTouchpoint = isDirectTouchpoint;
-exports.dedupeDeterministicCandidates = dedupeDeterministicCandidates;
-exports.selectLastNonDirectWinner = selectLastNonDirectWinner;
-exports.confidenceScoreForWinner = confidenceScoreForWinner;
-exports.DETERMINISTIC_INGESTION_SOURCES = [
+export const DETERMINISTIC_INGESTION_SOURCES = [
     'landing_session_id',
     'checkout_token',
     'cart_token',
@@ -32,7 +25,7 @@ function compareIngestionSource(left, right) {
 function compareLexical(left, right) {
     return (left ?? '').localeCompare(right ?? '');
 }
-function isDirectTouchpoint(touchpoint) {
+export function isDirectTouchpoint(touchpoint) {
     return !touchpoint.source &&
         !touchpoint.medium &&
         !touchpoint.campaign &&
@@ -85,7 +78,7 @@ function compareTimelineOrder(left, right) {
     }
     return compareLexical(left.sessionId, right.sessionId);
 }
-function dedupeDeterministicCandidates(candidates) {
+export function dedupeDeterministicCandidates(candidates) {
     const deduped = new Map();
     for (const candidate of candidates) {
         if (!candidate.sessionId) {
@@ -98,7 +91,7 @@ function dedupeDeterministicCandidates(candidates) {
     }
     return Array.from(deduped.values()).sort(compareTimelineOrder);
 }
-function selectLastNonDirectWinner(candidates) {
+export function selectLastNonDirectWinner(candidates) {
     const nonDirectCandidates = candidates.filter((candidate) => !candidate.isDirect);
     const directCandidates = candidates.filter((candidate) => candidate.isDirect);
     const selectionPool = nonDirectCandidates.length > 0 ? nonDirectCandidates : directCandidates;
@@ -107,7 +100,7 @@ function selectLastNonDirectWinner(candidates) {
     }
     return selectionPool.slice().sort(compareWinnerPriority)[0] ?? null;
 }
-function confidenceScoreForWinner(winner) {
+export function confidenceScoreForWinner(winner) {
     if (!winner) {
         return 0;
     }

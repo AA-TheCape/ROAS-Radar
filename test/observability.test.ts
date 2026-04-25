@@ -1,3 +1,8 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+const { __observabilityTestUtils } = await import('../src/observability/index.js');
+
 test('summarizeAttributionObservation classifies complete captures and missing session ids', () => {
   const complete = __observabilityTestUtils.summarizeAttributionObservation({
     roas_radar_session_id: '123e4567-e89b-42d3-a456-426614174000',

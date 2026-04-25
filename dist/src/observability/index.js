@@ -1,20 +1,6 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.__observabilityTestUtils = void 0;
-exports.summarizeAttributionObservation = summarizeAttributionObservation;
-exports.summarizeDualWriteConsistency = summarizeDualWriteConsistency;
-exports.summarizeResolverOutcome = summarizeResolverOutcome;
-exports.runWithRequestContext = runWithRequestContext;
-exports.getRequestContext = getRequestContext;
-exports.logInfo = logInfo;
-exports.logWarning = logWarning;
-exports.logError = logError;
-exports.createRequestLoggingMiddleware = createRequestLoggingMiddleware;
-exports.logHttpError = logHttpError;
-exports.buildAttributionBacklogLog = buildAttributionBacklogLog;
-const node_async_hooks_1 = require("node:async_hooks");
-const node_crypto_1 = require("node:crypto");
-const requestContextStorage = new node_async_hooks_1.AsyncLocalStorage();
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { randomUUID } from 'node:crypto';
+const requestContextStorage = new AsyncLocalStorage();
 function isRecord(value) {
     return typeof value === 'object' && value !== null;
 }
@@ -101,7 +87,7 @@ function buildCaptureStatus(payload) {
     const hasUrls = [payload.landing_url, payload.referrer_url, payload.page_url].some(hasMeaningfulValue);
     return hasMarketingDimensions && hasUrls ? 'complete' : 'partial';
 }
-function summarizeAttributionObservation(payload) {
+export function summarizeAttributionObservation(payload) {
     const observation = isRecord(payload) ? payload : {};
     return {
         captureStatus: buildCaptureStatus(observation),
@@ -119,7 +105,7 @@ function summarizeAttributionObservation(payload) {
         ].some(hasMeaningfulValue)
     };
 }
-function summarizeDualWriteConsistency(input) {
+export function summarizeDualWriteConsistency(input) {
     const consistencyStatus = input.browserOutcome === input.serverOutcome &&
         (input.browserOutcome === 'accepted' || input.browserOutcome === 'deduplicated')
         ? 'matched'
@@ -130,7 +116,7 @@ function summarizeDualWriteConsistency(input) {
         serverOutcome: input.serverOutcome
     };
 }
-function summarizeResolverOutcome(input) {
+export function summarizeResolverOutcome(input) {
     if (!input.winner) {
         return {
             resolverOutcome: 'unattributed',
@@ -144,25 +130,25 @@ function summarizeResolverOutcome(input) {
         winningSessionId: input.winner.sessionId ?? null
     };
 }
-function runWithRequestContext(context, callback) {
+export function runWithRequestContext(context, callback) {
     return requestContextStorage.run(context, callback);
 }
-function getRequestContext() {
+export function getRequestContext() {
     return requestContextStorage.getStore();
 }
-function logInfo(event, fields = {}) {
+export function logInfo(event, fields = {}) {
     writeLog('INFO', event, fields, process.stdout);
 }
-function logWarning(event, fields = {}) {
+export function logWarning(event, fields = {}) {
     writeLog('WARNING', event, fields, process.stdout);
 }
-function logError(event, error, fields = {}) {
+export function logError(event, error, fields = {}) {
     writeLog('ERROR', event, { ...fields, error: serializeError(error) }, process.stderr);
 }
-function createRequestLoggingMiddleware(service) {
+export function createRequestLoggingMiddleware(service) {
     return (req, res, next) => {
         const startedAt = process.hrtime.bigint();
-        const requestId = normalizeString(req.header('x-request-id')) ?? (0, node_crypto_1.randomUUID)();
+        const requestId = normalizeString(req.header('x-request-id')) ?? randomUUID();
         const traceContext = parseCloudTraceContext(req.header('x-cloud-trace-context') ?? undefined);
         res.setHeader('x-request-id', requestId);
         runWithRequestContext({
@@ -194,7 +180,7 @@ function createRequestLoggingMiddleware(service) {
         });
     };
 }
-function logHttpError(event, error, req, extra = {}) {
+export function logHttpError(event, error, req, extra = {}) {
     const details = isRecord(error) && 'details' in error ? { details: error.details } : {};
     const code = isRecord(error) && typeof error.code === 'string' ? { code: error.code } : {};
     const statusCode = isRecord(error) && typeof error.statusCode === 'number' ? { statusCode: error.statusCode } : {};
@@ -208,7 +194,7 @@ function logHttpError(event, error, req, extra = {}) {
         ...extra
     });
 }
-function buildAttributionBacklogLog(snapshot) {
+export function buildAttributionBacklogLog(snapshot) {
     return JSON.stringify({
         severity: 'INFO',
         event: 'attribution_backlog_snapshot',
@@ -218,7 +204,7 @@ function buildAttributionBacklogLog(snapshot) {
         ...snapshot
     });
 }
-exports.__observabilityTestUtils = {
+export const __observabilityTestUtils = {
     buildAttributionBacklogLog,
     parseCloudTraceContext,
     summarizeAttributionObservation,

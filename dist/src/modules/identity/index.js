@@ -1,22 +1,16 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.normalizeIdentityEmail = normalizeIdentityEmail;
-exports.hashIdentityEmail = hashIdentityEmail;
-exports.resolveIdentityStitch = resolveIdentityStitch;
-exports.stitchKnownCustomerIdentity = stitchKnownCustomerIdentity;
-const node_crypto_1 = require("node:crypto");
-function normalizeIdentityEmail(email) {
+import { createHash, randomUUID } from 'node:crypto';
+export function normalizeIdentityEmail(email) {
     const normalized = email?.trim().toLowerCase();
     return normalized ? normalized : null;
 }
-function hashIdentityEmail(email) {
+export function hashIdentityEmail(email) {
     const normalized = normalizeIdentityEmail(email);
     if (!normalized) {
         return null;
     }
-    return (0, node_crypto_1.createHash)('sha256').update(normalized).digest('hex');
+    return createHash('sha256').update(normalized).digest('hex');
 }
-function resolveIdentityStitch(existingIdentities, input) {
+export function resolveIdentityStitch(existingIdentities, input) {
     const shopifyCustomerId = normalizeNullableString(input.shopifyCustomerId);
     const emailHash = input.emailHash ?? hashIdentityEmail(input.email);
     if (!shopifyCustomerId && !emailHash) {
@@ -71,7 +65,7 @@ function resolveIdentityStitch(existingIdentities, input) {
         operation: 'create'
     };
 }
-async function stitchKnownCustomerIdentity(client, input) {
+export async function stitchKnownCustomerIdentity(client, input) {
     const emailHash = hashIdentityEmail(input.email);
     const existingIdentities = await findExistingIdentities(client, input.shopifyCustomerId, emailHash);
     const decision = resolveIdentityStitch(existingIdentities, {
@@ -128,7 +122,7 @@ async function findExistingIdentities(client, shopifyCustomerId, emailHash) {
     return result.rows;
 }
 async function upsertCustomerIdentity(client, decision) {
-    const identityId = decision.identityId ?? (0, node_crypto_1.randomUUID)();
+    const identityId = decision.identityId ?? randomUUID();
     try {
         await client.query(`
         INSERT INTO customer_identities (

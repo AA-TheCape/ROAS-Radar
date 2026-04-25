@@ -1,20 +1,14 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.DEFAULT_REPORTING_TIMEZONE = void 0;
-exports.getReportingTimezone = getReportingTimezone;
-exports.formatDateInTimezone = formatDateInTimezone;
-exports.createSettingsRouter = createSettingsRouter;
-const express_1 = require("express");
-const zod_1 = require("zod");
-const pool_js_1 = require("../../db/pool.js");
-const index_js_1 = require("../auth/index.js");
-const aggregates_js_1 = require("../reporting/aggregates.js");
+import { Router } from 'express';
+import { z } from 'zod';
+import { withTransaction, query } from '../../db/pool.js';
+import { attachAuthContext, requireAdmin, requireAuthenticated } from '../auth/index.js';
+import { refreshAllDailyReportingMetrics } from '../reporting/aggregates.js';
 const REPORTING_TIMEZONE_ALIASES = {
     PST: 'America/Los_Angeles',
     PDT: 'America/Los_Angeles',
     PT: 'America/Los_Angeles'
 };
-exports.DEFAULT_REPORTING_TIMEZONE = 'America/Los_Angeles';
+export const DEFAULT_REPORTING_TIMEZONE = 'America/Los_Angeles';
 class SettingsHttpError extends Error {
     statusCode;
     code;
@@ -37,8 +31,8 @@ function normalizeReportingTimezone(input) {
         throw new SettingsHttpError(400, 'invalid_timezone', 'Timezone must be a valid IANA timezone or supported alias');
     }
 }
-const updateSettingsSchema = zod_1.z.object({
-    reportingTimezone: zod_1.z.string().min(1).transform(normalizeReportingTimezone)
+const updateSettingsSchema = z.object({
+    reportingTimezone: z.string().min(1).transform(normalizeReportingTimezone)
 });
 function executeQuery(executor, sql, params) {
     if (typeof executor === 'function') {
@@ -51,7 +45,7 @@ async function ensureAppSettingsRow(executor) {
       INSERT INTO app_settings (singleton, reporting_timezone)
       VALUES (true, $1)
       ON CONFLICT (singleton) DO NOTHING
-    `, [exports.DEFAULT_REPORTING_TIMEZONE]);
+    `, [DEFAULT_REPORTING_TIMEZONE]);
 }
 async function fetchAppSettingsRow(executor) {
     await ensureAppSettingsRow(executor);
@@ -63,17 +57,17 @@ async function fetchAppSettingsRow(executor) {
     `);
     if (!result.rowCount) {
         return {
-            reporting_timezone: exports.DEFAULT_REPORTING_TIMEZONE,
+            reporting_timezone: DEFAULT_REPORTING_TIMEZONE,
             updated_at: new Date()
         };
     }
     return result.rows[0];
 }
-async function getReportingTimezone(executor = pool_js_1.query) {
+export async function getReportingTimezone(executor = query) {
     const row = await fetchAppSettingsRow(executor);
-    return normalizeReportingTimezone(row.reporting_timezone || exports.DEFAULT_REPORTING_TIMEZONE);
+    return normalizeReportingTimezone(row.reporting_timezone || DEFAULT_REPORTING_TIMEZONE);
 }
-function formatDateInTimezone(date, reportingTimezone) {
+export function formatDateInTimezone(date, reportingTimezone) {
     const formatter = new Intl.DateTimeFormat('en-CA', {
         timeZone: reportingTimezone,
         year: 'numeric',
@@ -91,27 +85,27 @@ function formatDateInTimezone(date, reportingTimezone) {
 }
 function serializeSettings(row) {
     return {
-        reportingTimezone: normalizeReportingTimezone(row.reporting_timezone || exports.DEFAULT_REPORTING_TIMEZONE),
+        reportingTimezone: normalizeReportingTimezone(row.reporting_timezone || DEFAULT_REPORTING_TIMEZONE),
         updatedAt: row.updated_at.toISOString()
     };
 }
-function createSettingsRouter() {
-    const router = (0, express_1.Router)();
-    router.use(index_js_1.attachAuthContext);
-    router.use(index_js_1.requireAuthenticated);
+export function createSettingsRouter() {
+    const router = Router();
+    router.use(attachAuthContext);
+    router.use(requireAuthenticated);
     router.get('/', async (_req, res, next) => {
         try {
-            const settings = await fetchAppSettingsRow(pool_js_1.query);
+            const settings = await fetchAppSettingsRow(query);
             res.json(serializeSettings(settings));
         }
         catch (error) {
             next(error);
         }
     });
-    router.put('/', index_js_1.requireAdmin, async (req, res, next) => {
+    router.put('/', requireAdmin, async (req, res, next) => {
         try {
             const input = updateSettingsSchema.parse(req.body ?? {});
-            const settings = await (0, pool_js_1.withTransaction)(async (client) => {
+            const settings = await withTransaction(async (client) => {
                 await ensureAppSettingsRow(client);
                 const result = await client.query(`
             UPDATE app_settings
@@ -121,7 +115,7 @@ function createSettingsRouter() {
             WHERE singleton = true
             RETURNING reporting_timezone, updated_at
           `, [input.reportingTimezone]);
-                await (0, aggregates_js_1.refreshAllDailyReportingMetrics)(client);
+                await refreshAllDailyReportingMetrics(client);
                 return result.rows[0];
             });
             res.json({

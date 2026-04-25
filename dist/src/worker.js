@@ -1,4 +1,3 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
+export {};
 // Restored worker loop and included Shopify reconciliation + writeback queue processing
 // alongside attribution queue processing.
