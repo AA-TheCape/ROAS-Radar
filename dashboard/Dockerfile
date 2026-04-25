@@ -3,6 +3,7 @@ WORKDIR /app/dashboard
 
 COPY dashboard/package.json dashboard/package-lock.json ./
 RUN npm ci
+RUN ln -s /app/dashboard/node_modules /app/node_modules
 
 FROM deps AS build
 WORKDIR /app
