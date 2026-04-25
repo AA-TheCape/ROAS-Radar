@@ -2,6 +2,23 @@
 
 This guide is for engineers who need to run the ROAS Radar MVP locally, understand how the backend and dashboard fit together, and validate the ingestion, attribution, and reporting flow end to end.
 
+## Short Onboarding Path
+
+Use this sequence when you are new to the repository and want the shortest path to productive local work:
+
+1. Read `docs/README.md` to see the current doc map and the operator-facing runbooks.
+2. Skim this guide through `Local Setup` so you know which services to start and which env vars matter.
+3. Read `docs/attribution-schema-v1.md` before changing capture fields, Shopify attribute keys, or normalization logic.
+4. Read `docs/operational-attribution-contracts.md` before changing resolver precedence, Shopify writeback, retention, or recovery flows.
+5. Read `docs/analytics-playbook.md` and `docs/reporting-metrics.md` before changing dashboard-facing metrics or attribution interpretation.
+
+If you only need a starting point for one area:
+
+- capture and ingestion: `src/modules/tracking/index.ts` plus `docs/attribution-schema-v1.md`
+- Shopify ingestion and writeback: `src/modules/shopify/index.ts`, `src/modules/shopify/writeback.ts`, and `docs/operational-attribution-contracts.md`
+- attribution resolution: `src/modules/attribution/index.ts`, `src/modules/attribution/resolver.ts`, and `docs/last-non-direct-touch-approval-matrix.md`
+- dashboard and reporting: `src/modules/reporting/index.ts`, `dashboard/`, `docs/analytics-playbook.md`, and `docs/reporting-metrics.md`
+
 ## What Runs In The MVP
 
 The repository currently contains one Node.js backend, one React dashboard, and several worker entrypoints:
@@ -63,6 +80,8 @@ The worker claims jobs from `attribution_jobs`, resolves the winning journey, pe
 4. stitched customer identity / email fallback
 5. unattributed fallback
 
+The operational contract for resolver precedence, Shopify writeback, reconciliation, and retention is documented in `docs/operational-attribution-contracts.md`.
+
 ### React dashboard
 
 The dashboard in `dashboard/src/App.tsx` calls the reporting API only. It does not write directly to the database and does not own attribution logic. API configuration is read from:
@@ -109,6 +128,17 @@ Default is `dev-reporting-token`, but set it explicitly in local shells so your 
 - `TRACKING_RATE_LIMIT_WINDOW_MS`
 
 For local testing, set `TRACKING_ALLOWED_ORIGINS=http://localhost:5173,https://store.example.com` so browser-based dashboard or synthetic requests are not rejected on origin checks.
+
+### Tracking Consent Policy
+
+Tracking capture is opt-out-compatible for attribution storage. UTM parameters, click IDs, landing URL, referrer URL, page URL, and `roas_radar_session_id` are persisted even when the client reports consent opt-out.
+
+The governing rule is:
+
+- capture storage is not suppressed by consent state
+- every tracking event and mirrored attribution touch stores a `consent_state` of `granted`, `denied`, or `unknown`
+- downstream reporting, governance, or activation logic must filter on `consent_state` instead of assuming missing attribution data means opt-out
+- request-context fallback captures default `consent_state` to `unknown` when no explicit browser consent signal is available
 
 ### Database Pooling
 
@@ -538,6 +568,8 @@ If the dashboard fails immediately, check `dashboard/src/lib/api.ts` first for m
 
 ## Troubleshooting
 
+Use this section as the first stop for local setup problems. If the symptom looks like a production contract issue rather than a local shell issue, jump directly to the linked runbook or contract doc instead of debugging from source first.
+
 ### Common local issues
 
 - `401 Unauthorized` on reporting routes:
@@ -555,14 +587,26 @@ If the dashboard fails immediately, check `dashboard/src/lib/api.ts` first for m
 
 Use these docs when local symptoms match production behavior:
 
+- Attribution completeness and missing session capture: `docs/runbooks/attribution-completeness.md`
 - Ingestion failures: `docs/runbooks/ingestion-failures.md`
 - Attribution backlog: `docs/runbooks/attribution-worker-backlog.md`
 - API latency: `docs/runbooks/api-latency.md`
 - Database operations: `docs/database-operations.md`
+- Operational attribution contracts: `docs/operational-attribution-contracts.md`
+- Attribution Schema V1 reference: `docs/attribution-schema-v1.md`
 - Shopify app setup: `docs/shopify-app-setup.md`
 - Visitor identity stitching: `docs/visitor-identity-stitching.md`
 - Reporting metrics definitions: `docs/reporting-metrics.md`
 - Marketing dimensions: `docs/marketing-dimensions.md`
+
+### Dashboard interpretation quick links
+
+When the local dashboard is loading but the numbers look wrong, use this map before tracing requests by hand:
+
+- card and KPI formulas: `docs/reporting-metrics.md`
+- order-to-session matching semantics: `docs/analytics-playbook.md`
+- field naming, null handling, and canonical Shopify keys: `docs/attribution-schema-v1.md`
+- writeback, reconciliation, retention, and dead-letter behavior: `docs/operational-attribution-contracts.md`
 
 ## Recommended Engineer Workflow
 

@@ -17,6 +17,9 @@ export default defineConfig({
     }
   },
   server: {
+    fs: {
+      allow: ['..']
+    },
     port: 4173
   }
 });

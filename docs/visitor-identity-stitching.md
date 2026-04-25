@@ -48,3 +48,29 @@ Attribution still prefers direct evidence first:
 3. `cart_token`
 
 If none of those match, the worker can now fall back to recent sessions already stitched to the order's `customer_identity_id`. It chooses the most recent eligible non-direct session first, then a direct fallback session only if no tagged session exists.
+
+## Primary Winner Semantics
+
+Identity stitching affects candidate collection, but it does not change the approved primary-winner contract.
+
+Published rules:
+
+- if any eligible deterministic non-direct candidate exists, later direct revisits are ignored for primary winner selection
+- a touch with no UTMs but a supported click ID still counts as non-direct
+- same-timestamp deterministic ties resolve by source precedence: `landing_session_id`, then `checkout_token`, then `cart_token`, then `customer_identity`
+- if precedence also ties, click-ID presence wins, then the lexicographically smaller `sessionId`
+
+This means stitched identity fallback can contribute the winning touch only when stronger deterministic evidence is absent or when it is the latest eligible non-direct candidate after the winner rules are applied.
+
+## Shopify Hint Fallback Boundary
+
+Shopify-hint-derived attribution is not part of deterministic identity stitching.
+
+Boundary rules:
+
+- it is considered only when deterministic resolution fails to recover a landing session match
+- it is recovery-only fallback behavior and must not override a deterministic winner
+- it writes synthetic attribution with `attribution_reason = shopify_hint_derived`
+- the fallback row can carry attributed marketing dimensions while still having `session_id = null`
+
+Refer to `docs/last-non-direct-touch-approval-matrix.md` for the full approved matrix and caveats.

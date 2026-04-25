@@ -1,52 +1,41 @@
-# ROAS Radar Documentation
-
-Use this index to find the right starting point without reading source first.
+# Docs Index
 
 ## Start Here
 
-- Engineers setting up or validating the MVP should start with [Implementation Guide](implementation-guide.md).
-- Analysts interpreting attribution and reporting outputs should start with [Analytics Playbook](analytics-playbook.md).
-- Operators checking system freshness, health, or incident response should start with [Operations And Freshness Guide](operations-and-freshness.md).
+### Engineers
 
-## Core Guides
+1. Read [Implementation Guide](implementation-guide.md) for local setup, service topology, validation flow, and troubleshooting.
+2. Read [Attribution Schema V1](attribution-schema-v1.md) for canonical field names, normalization rules, DB mappings, and Shopify attribute keys.
+3. Read [Operational Attribution Contracts](operational-attribution-contracts.md) for resolver precedence, Shopify writeback, retention, and recovery semantics.
 
-- [Implementation Guide](implementation-guide.md): local setup, service topology, environment variables, API surface, worker entrypoints, and engineer validation flow.
-- [Analytics Playbook](analytics-playbook.md): event contract, warehouse objects, attribution resolution order, attribution models, reporting interpretation, and MVP limitations.
-- [Operations And Freshness Guide](operations-and-freshness.md): freshness targets, worker cadences, health checks, logging signals, alert-to-runbook mapping, and troubleshooting.
+### Analysts
 
-## Reference Docs
+1. Read [Analytics Playbook](analytics-playbook.md) for how ROAS Radar stores attribution, resolves orders, and exposes reporting outputs.
+2. Read [Reporting Metrics](reporting-metrics.md) for KPI formulas used by the dashboard and reporting API.
+3. Read [Marketing Dimensions](marketing-dimensions.md) and [Attribution Schema V1](attribution-schema-v1.md) when channel naming or field semantics matter.
 
-- [Marketing Dimensions](marketing-dimensions.md): canonical source, medium, campaign, and click-ID normalization rules.
-- [Visitor Identity Stitching](visitor-identity-stitching.md): deterministic identity linking and session-to-order stitching behavior.
-- [Reporting Metrics](reporting-metrics.md): KPI definitions and reporting semantics.
-- [Shopify App Setup](shopify-app-setup.md): install flow, webhook provisioning, and Shopify integration requirements.
-- [Database Operations](database-operations.md): database administration and operational checks.
+### Troubleshooting
+
+- Start with [Implementation Guide](implementation-guide.md#troubleshooting) for local setup and validation issues.
+- Use [Operational Attribution Contracts](operational-attribution-contracts.md) when you need resolver, writeback, retention, or dead-letter behavior.
+- Use [Attribution Completeness](runbooks/attribution-completeness.md), [Ingestion Failures](runbooks/ingestion-failures.md), and [Attribution Worker Backlog](runbooks/attribution-worker-backlog.md) for incident response.
+
+## Core References
+
+- [Implementation Guide](implementation-guide.md): local setup, service responsibilities, and end-to-end validation.
+- [Attribution Schema V1](attribution-schema-v1.md): shared attribution contract, normalization rules, DB mappings, Shopify keys, and rollout expectations.
+- [Operational Attribution Contracts](operational-attribution-contracts.md): resolver precedence, Shopify writeback lifecycle, retention rules, and incident-routing links.
+- [Shopify App Setup](shopify-app-setup.md): Shopify app install flow, OAuth, and webhook provisioning.
+- [Visitor Identity Stitching](visitor-identity-stitching.md): deterministic identity-linking behavior for Shopify customers, orders, and tracked sessions.
+- [Analytics Playbook](analytics-playbook.md): reporting, attribution, and analytics operating model.
+- [Last Non-Direct Touch Approval Matrix](last-non-direct-touch-approval-matrix.md): approved primary-winner rules, deterministic precedence, and Shopify synthetic fallback caveats.
+- [Marketing Dimensions](marketing-dimensions.md): canonical source, medium, campaign, and click-ID interpretation rules.
+- [Reporting Metrics](reporting-metrics.md): dashboard and reporting metric definitions.
+- [Database Operations](database-operations.md): migration, backup, and operational DB guidance.
 
 ## Runbooks
 
-- [Ingestion Failures](runbooks/ingestion-failures.md): `/track` and Shopify webhook troubleshooting.
-- [Attribution Worker Backlog](runbooks/attribution-worker-backlog.md): queue growth, failed jobs, and stale lock recovery.
-- [API Latency](runbooks/api-latency.md): API performance incident response.
-
-## Recommended Reading Paths
-
-### New engineer
-
-1. [Implementation Guide](implementation-guide.md)
-2. [Analytics Playbook](analytics-playbook.md)
-3. [Visitor Identity Stitching](visitor-identity-stitching.md)
-4. [Reporting Metrics](reporting-metrics.md)
-
-### Analyst validating attribution
-
-1. [Analytics Playbook](analytics-playbook.md)
-2. [Marketing Dimensions](marketing-dimensions.md)
-3. [Reporting Metrics](reporting-metrics.md)
-4. [Operations And Freshness Guide](operations-and-freshness.md)
-
-### Operator troubleshooting production
-
-1. [Operations And Freshness Guide](operations-and-freshness.md)
-2. [Ingestion Failures](runbooks/ingestion-failures.md)
-3. [Attribution Worker Backlog](runbooks/attribution-worker-backlog.md)
-4. [API Latency](runbooks/api-latency.md)
+- [Attribution Completeness](runbooks/attribution-completeness.md): capture-rate, session-id, dual-write, writeback, and resolver incident response.
+- [Attribution Worker Backlog](runbooks/attribution-worker-backlog.md): worker lag investigation and recovery steps.
+- [Ingestion Failures](runbooks/ingestion-failures.md): failed ingestion triage and remediation.
+- [API Latency](runbooks/api-latency.md): API latency investigation and recovery.

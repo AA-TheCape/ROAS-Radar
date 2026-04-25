@@ -27,6 +27,25 @@ test('buildCanonicalTouchpointDimensions infers google paid search from gclid wh
   });
 });
 
+test('buildCanonicalTouchpointDimensions treats gbraid-only touches as google paid search', () => {
+  const dimensions = buildCanonicalTouchpointDimensions({
+    source: null,
+    medium: null,
+    campaign: null,
+    gbraid: 'GBRAID-123'
+  });
+
+  assert.deepEqual(dimensions, {
+    source: 'google',
+    medium: 'cpc',
+    campaign: null,
+    content: null,
+    term: null,
+    clickIdType: 'gbraid',
+    clickIdValue: 'GBRAID-123'
+  });
+});
+
 test('buildCanonicalTouchpointDimensions categorizes present-but-unknown source and medium as unmapped', () => {
   const dimensions = buildCanonicalTouchpointDimensions({
     source: 'Reddit',

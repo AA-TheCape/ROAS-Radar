@@ -1,24 +1,116 @@
 import { createHash, randomUUID } from 'node:crypto';
 
 import { type Request, Router } from 'express';
-import type { PoolClient } from 'pg';
 import { z } from 'zod';
 
+import {
+  ATTRIBUTION_SCHEMA_VERSION,
+  MAX_ATTRIBUTION_TEXT_LENGTH,
+  MAX_ATTRIBUTION_URL_LENGTH,
+  attributionConsentStateSchema,
+  normalizeAttributionCaptureV1,
+  normalizeAttributionConsentState,
+  normalizeAttributionString,
+  normalizeAttributionUrl,
+  type AttributionCaptureV1,
+  type AttributionConsentState
+} from '../../../packages/attribution-schema/index.js';
 import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
-import { logError, logInfo, logWarning } from '../../observability/index.js';
+import {
+  logError,
+  logInfo,
+  logWarning,
+  summarizeAttributionObservation,
+  summarizeDualWriteConsistency
+} from '../../observability/index.js';
 import { enqueueAttributionForTrackingTouchpoint } from '../attribution/index.js';
 import { buildCanonicalTouchpointDimensions } from '../marketing-dimensions/index.js';
 import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
-import { getReportingTimezone, formatDateInTimezone } from '../settings/index.js';
+import { formatDateInTimezone, getReportingTimezone } from '../settings/index.js';
 
 const EVENT_TYPES = ['page_view', 'product_view', 'add_to_cart', 'checkout_started'] as const;
-const MAX_URL_LENGTH = 2048;
 const MAX_TOKEN_LENGTH = 255;
 const MAX_USER_AGENT_LENGTH = 1024;
 const MAX_LANGUAGE_LENGTH = 64;
 const MAX_SCREEN_LENGTH = 64;
 const MAX_CLIENT_EVENT_ID_LENGTH = 128;
+type TrackingEventType = (typeof EVENT_TYPES)[number];
+
+type TrackingEventInput = {
+  eventType: TrackingEventType;
+  occurredAt: string;
+  sessionId: string;
+  pageUrl: string;
+  referrerUrl: string | null;
+  shopifyCartToken: string | null;
+  shopifyCheckoutToken: string | null;
+  clientEventId: string | null;
+  consentState: AttributionConsentState;
+  context: {
+    userAgent: string | null;
+    screen: string | null;
+    language: string | null;
+  };
+};
+
+type SanitizedTrackingEventInput = TrackingEventInput;
+
+type TrackingRequestBody = z.infer<typeof trackingEventSchema>;
+
+type AttributionCaptureRequest = {
+  capture: AttributionCaptureV1;
+  consentState: AttributionConsentState;
+};
+
+type AttributionTouchEventRow = {
+  id: number;
+  captured_at: Date;
+  roas_radar_session_id: string;
+};
+
+type TrackingEventRow = {
+  id: string;
+  occurred_at: Date;
+  ingested_at: Date;
+  session_id: string;
+};
+
+type TrackingIngestResult = {
+  eventId: string;
+  ingestedAt: string;
+  sessionId: string;
+  deduplicated: boolean;
+  sanitizedInput: SanitizedTrackingEventInput;
+};
+
+type AttributionIngestResult = {
+  touchEventId: number;
+  capturedAt: string;
+  sessionId: string;
+  deduplicated: boolean;
+};
+
+type SessionBootstrapResult = {
+  sessionId: string;
+  createdAt: string;
+  isNewSession: boolean;
+  requestContextCaptured: boolean;
+  requestContextSource: 'query' | 'header' | 'none';
+};
+
+type BrowserDerivedAttributionResult =
+  | {
+      ok: true;
+      touchEventId: number;
+      deduplicated: boolean;
+    }
+  | {
+      ok: false;
+      touchEventId: null;
+      deduplicated: false;
+      errorCode: 'server_attribution_emit_failed';
+    };
 
 class TrackingHttpError extends Error {
   statusCode: number;
@@ -34,55 +126,37 @@ class TrackingHttpError extends Error {
   }
 }
 
-type TrackingRequestBody = TrackingEventInput | Record<string, unknown> | string | undefined;
-
-type NormalizedCampaignParameters = Record<
-  'utm_source' | 'utm_medium' | 'utm_campaign' | 'utm_content' | 'utm_term' | 'gclid' | 'fbclid' | 'ttclid' | 'msclkid',
-  string | null
->;
-
-type TrackingEventInput = z.infer<typeof trackingEventSchema>;
-
-type ExistingTrackingEventRow = {
-  id: string;
-  occurred_at: Date;
-  ingested_at: Date;
-  session_id: string;
-};
-
-const sanitizedString = (maxLength: number) =>
+const trimmedStringSchema = (maxLength: number) =>
   z
     .string()
     .trim()
-    .max(maxLength)
-    .transform((value) => value);
+    .min(1)
+    .max(maxLength);
 
-const nullableSanitizedString = (maxLength: number) =>
+const nullableTrimmedStringSchema = (maxLength: number) =>
   z
-    .union([sanitizedString(maxLength), z.null(), z.undefined()])
-    .transform((value) => {
-      if (typeof value !== 'string') {
-        return null;
-      }
-
-      return value.length > 0 ? value : null;
+    .union([z.string(), z.null(), z.undefined()])
+    .transform((value) => normalizeAttributionString(value))
+    .refine((value) => value === null || value.length <= maxLength, {
+      message: `String must contain at most ${maxLength} character(s)`
     });
 
 const trackingEventSchema = z
   .object({
     eventType: z.enum(EVENT_TYPES),
-    occurredAt: z.string().datetime(),
+    occurredAt: z.string().datetime({ offset: true }),
     sessionId: z.string().uuid(),
-    pageUrl: sanitizedString(MAX_URL_LENGTH),
-    referrerUrl: nullableSanitizedString(MAX_URL_LENGTH),
-    shopifyCartToken: nullableSanitizedString(MAX_TOKEN_LENGTH),
-    shopifyCheckoutToken: nullableSanitizedString(MAX_TOKEN_LENGTH),
-    clientEventId: nullableSanitizedString(MAX_CLIENT_EVENT_ID_LENGTH),
+    pageUrl: trimmedStringSchema(MAX_ATTRIBUTION_URL_LENGTH),
+    referrerUrl: nullableTrimmedStringSchema(MAX_ATTRIBUTION_URL_LENGTH),
+    shopifyCartToken: nullableTrimmedStringSchema(MAX_TOKEN_LENGTH),
+    shopifyCheckoutToken: nullableTrimmedStringSchema(MAX_TOKEN_LENGTH),
+    clientEventId: nullableTrimmedStringSchema(MAX_CLIENT_EVENT_ID_LENGTH),
+    consentState: attributionConsentStateSchema.optional(),
     context: z
       .object({
-        userAgent: nullableSanitizedString(MAX_USER_AGENT_LENGTH),
-        screen: nullableSanitizedString(MAX_SCREEN_LENGTH),
-        language: nullableSanitizedString(MAX_LANGUAGE_LENGTH)
+        userAgent: nullableTrimmedStringSchema(MAX_USER_AGENT_LENGTH),
+        screen: nullableTrimmedStringSchema(MAX_SCREEN_LENGTH),
+        language: nullableTrimmedStringSchema(MAX_LANGUAGE_LENGTH)
       })
       .default({})
   })
@@ -94,6 +168,51 @@ const trackingEventSchema = z
       validateHttpUrl(value.referrerUrl, 'referrerUrl', ctx);
     }
   });
+
+const attributionCaptureRequestSchema = z
+  .object({
+    schema_version: z.literal(ATTRIBUTION_SCHEMA_VERSION),
+    roas_radar_session_id: z.string(),
+    occurred_at: z.string(),
+    captured_at: z.string(),
+    landing_url: z.union([z.string(), z.null(), z.undefined()]).optional(),
+    referrer_url: z.union([z.string(), z.null(), z.undefined()]).optional(),
+    page_url: z.union([z.string(), z.null(), z.undefined()]).optional(),
+    utm_source: z.union([z.string(), z.null(), z.undefined()]).optional(),
+    utm_medium: z.union([z.string(), z.null(), z.undefined()]).optional(),
+    utm_campaign: z.union([z.string(), z.null(), z.undefined()]).optional(),
+    utm_content: z.union([z.string(), z.null(), z.undefined()]).optional(),
+    utm_term: z.union([z.string(), z.null(), z.undefined()]).optional(),
+    gclid: z.union([z.string(), z.null(), z.undefined()]).optional(),
+    gbraid: z.union([z.string(), z.null(), z.undefined()]).optional(),
+    wbraid: z.union([z.string(), z.null(), z.undefined()]).optional(),
+    fbclid: z.union([z.string(), z.null(), z.undefined()]).optional(),
+    ttclid: z.union([z.string(), z.null(), z.undefined()]).optional(),
+    msclkid: z.union([z.string(), z.null(), z.undefined()]).optional(),
+    consent_state: attributionConsentStateSchema.optional()
+  })
+  .transform((value) => ({
+    capture: normalizeAttributionCaptureV1(value),
+    consentState: normalizeAttributionConsentState(value.consent_state)
+  }));
+
+const sessionBootstrapQuerySchema = z.object({
+  pageUrl: trimmedStringSchema(MAX_ATTRIBUTION_URL_LENGTH),
+  landingUrl: nullableTrimmedStringSchema(MAX_ATTRIBUTION_URL_LENGTH),
+  referrerUrl: nullableTrimmedStringSchema(MAX_ATTRIBUTION_URL_LENGTH)
+});
+
+function logAttributionCaptureObserved(
+  source: 'session_bootstrap' | 'browser_event' | 'attribution_capture',
+  payload: unknown,
+  fields: Record<string, unknown>
+): void {
+  logInfo('attribution_capture_observed', {
+    source,
+    ...summarizeAttributionObservation(payload),
+    ...fields
+  });
+}
 
 function validateTrackingTimestamp(value: string, ctx: z.RefinementCtx): void {
   const occurredAt = new Date(value);
@@ -122,88 +241,157 @@ function validateTrackingTimestamp(value: string, ctx: z.RefinementCtx): void {
   }
 }
 
-function validateHttpUrl(value: string, field: 'pageUrl' | 'referrerUrl', ctx: z.RefinementCtx): void {
+function validateHttpUrl(value: string, field: string, ctx: z.RefinementCtx): void {
   try {
-    const url = new URL(value);
-
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: `${field} must use http or https`,
-        path: [field]
-      });
-    }
-  } catch {
+    normalizeAttributionUrl(value);
+  } catch (error) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: `${field} must be a valid URL`,
+      message: error instanceof Error && error.message === 'invalid_protocol' ? `${field} must use http or https` : `${field} must be a valid URL`,
       path: [field]
     });
   }
 }
 
-function normalizeUrl(rawUrl: string | null): string | null {
-  if (!rawUrl) {
+function normalizeTrackingUrl(rawUrl: string | null | undefined): string | null {
+  try {
+    return normalizeAttributionUrl(rawUrl);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeNullableString(value: string | null | undefined): string | null {
+  return normalizeAttributionString(value);
+}
+
+function resolveRequestIp(req: Request): string | null {
+  const forwardedFor = req.header('x-forwarded-for');
+
+  if (forwardedFor) {
+    return normalizeNullableString(forwardedFor.split(',')[0]);
+  }
+
+  return normalizeNullableString(req.ip);
+}
+
+function hashIp(value: string | null | undefined): string | null {
+  const normalized = normalizeNullableString(value);
+
+  if (!normalized) {
     return null;
   }
 
-  const url = new URL(rawUrl);
-  url.hash = '';
-  return url.toString();
+  return createHash('sha256').update(normalized).digest('hex');
 }
 
-function parseCampaignParameters(pageUrl: string): NormalizedCampaignParameters {
+function hashTrackingFingerprint(input: SanitizedTrackingEventInput): string {
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        sessionId: input.sessionId,
+        eventType: input.eventType,
+        occurredAt: input.occurredAt,
+        pageUrl: input.pageUrl,
+        referrerUrl: input.referrerUrl,
+        shopifyCartToken: input.shopifyCartToken,
+        shopifyCheckoutToken: input.shopifyCheckoutToken,
+        clientEventId: input.clientEventId
+      })
+    )
+    .digest('hex');
+}
+
+function hashAttributionFingerprint(
+  capture: AttributionCaptureV1,
+  eventType: TrackingEventType,
+  ingestionSource: 'server' | 'request_query'
+): string {
+  return createHash('sha256')
+    .update(
+      JSON.stringify({
+        schemaVersion: capture.schema_version,
+        sessionId: capture.roas_radar_session_id,
+        eventType,
+        occurredAt: capture.occurred_at,
+        capturedAt: capture.captured_at,
+        landingUrl: capture.landing_url,
+        referrerUrl: capture.referrer_url,
+        pageUrl: capture.page_url,
+        utmSource: capture.utm_source,
+        utmMedium: capture.utm_medium,
+        utmCampaign: capture.utm_campaign,
+        utmContent: capture.utm_content,
+        utmTerm: capture.utm_term,
+        gclid: capture.gclid,
+        gbraid: capture.gbraid,
+        wbraid: capture.wbraid,
+        fbclid: capture.fbclid,
+        ttclid: capture.ttclid,
+        msclkid: capture.msclkid,
+        ingestionSource
+      })
+    )
+    .digest('hex');
+}
+
+function parseCampaignParameters(pageUrl: string): Pick<
+  AttributionCaptureV1,
+  | 'utm_source'
+  | 'utm_medium'
+  | 'utm_campaign'
+  | 'utm_content'
+  | 'utm_term'
+  | 'gclid'
+  | 'gbraid'
+  | 'wbraid'
+  | 'fbclid'
+  | 'ttclid'
+  | 'msclkid'
+> {
   const url = new URL(pageUrl);
 
   return {
-    utm_source: normalizeNullableString(url.searchParams.get('utm_source')),
-    utm_medium: normalizeNullableString(url.searchParams.get('utm_medium')),
-    utm_campaign: normalizeNullableString(url.searchParams.get('utm_campaign')),
-    utm_content: normalizeNullableString(url.searchParams.get('utm_content')),
-    utm_term: normalizeNullableString(url.searchParams.get('utm_term')),
+    utm_source: normalizeNullableString(url.searchParams.get('utm_source'))?.toLowerCase() ?? null,
+    utm_medium: normalizeNullableString(url.searchParams.get('utm_medium'))?.toLowerCase() ?? null,
+    utm_campaign: normalizeNullableString(url.searchParams.get('utm_campaign'))?.toLowerCase() ?? null,
+    utm_content: normalizeNullableString(url.searchParams.get('utm_content'))?.toLowerCase() ?? null,
+    utm_term: normalizeNullableString(url.searchParams.get('utm_term'))?.toLowerCase() ?? null,
     gclid: normalizeNullableString(url.searchParams.get('gclid')),
+    gbraid: normalizeNullableString(url.searchParams.get('gbraid')),
+    wbraid: normalizeNullableString(url.searchParams.get('wbraid')),
     fbclid: normalizeNullableString(url.searchParams.get('fbclid')),
     ttclid: normalizeNullableString(url.searchParams.get('ttclid')),
     msclkid: normalizeNullableString(url.searchParams.get('msclkid'))
   };
 }
 
-function hashIp(value: string | undefined): string | null {
-  if (!value) {
-    return null;
-  }
+function buildCaptureFromTrackingEvent(input: SanitizedTrackingEventInput): AttributionCaptureV1 {
+  const marketingDimensions = parseCampaignParameters(input.pageUrl);
 
-  return createHash('sha256').update(value).digest('hex');
+  return normalizeAttributionCaptureV1({
+    schema_version: ATTRIBUTION_SCHEMA_VERSION,
+    roas_radar_session_id: input.sessionId,
+    occurred_at: input.occurredAt,
+    captured_at: new Date().toISOString(),
+    landing_url: null,
+    referrer_url: input.referrerUrl,
+    page_url: input.pageUrl,
+    ...marketingDimensions
+  });
 }
 
-function normalizeNullableString(value: string | null | undefined): string | null {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : null;
-}
-
-function hashTrackingFingerprint(input: TrackingEventInput): string {
-  const fingerprintSource = JSON.stringify({
-    sessionId: input.sessionId,
+function sanitizeTrackingInput(input: TrackingRequestBody): SanitizedTrackingEventInput {
+  return {
     eventType: input.eventType,
     occurredAt: new Date(input.occurredAt).toISOString(),
-    pageUrl: normalizeUrl(input.pageUrl),
-    referrerUrl: normalizeUrl(input.referrerUrl),
-    shopifyCartToken: normalizeNullableString(input.shopifyCartToken),
-    shopifyCheckoutToken: normalizeNullableString(input.shopifyCheckoutToken)
-  });
-
-  return createHash('sha256').update(fingerprintSource).digest('hex');
-}
-
-function sanitizeTrackingInput(input: TrackingEventInput): TrackingEventInput {
-  return {
-    ...input,
-    occurredAt: new Date(input.occurredAt).toISOString(),
-    pageUrl: normalizeUrl(input.pageUrl) ?? input.pageUrl,
-    referrerUrl: normalizeUrl(input.referrerUrl),
+    sessionId: input.sessionId,
+    pageUrl: normalizeTrackingUrl(input.pageUrl) ?? input.pageUrl,
+    referrerUrl: normalizeTrackingUrl(input.referrerUrl),
     shopifyCartToken: normalizeNullableString(input.shopifyCartToken),
     shopifyCheckoutToken: normalizeNullableString(input.shopifyCheckoutToken),
     clientEventId: normalizeNullableString(input.clientEventId),
+    consentState: normalizeAttributionConsentState(input.consentState),
     context: {
       userAgent: normalizeNullableString(input.context.userAgent),
       screen: normalizeNullableString(input.context.screen),
@@ -212,14 +400,14 @@ function sanitizeTrackingInput(input: TrackingEventInput): TrackingEventInput {
   };
 }
 
-async function findExistingTrackingEventByClientEventId(clientEventId: string): Promise<ExistingTrackingEventRow | null> {
-  const result = await query<ExistingTrackingEventRow>(
+async function findExistingTrackingEventByClientEventId(clientEventId: string): Promise<TrackingEventRow | null> {
+  const result = await query<TrackingEventRow>(
     `
       SELECT
-        id,
+        id::text AS id,
         occurred_at,
         ingested_at,
-        session_id
+        session_id::text AS session_id
       FROM tracking_events
       WHERE client_event_id = $1
       LIMIT 1
@@ -230,14 +418,14 @@ async function findExistingTrackingEventByClientEventId(clientEventId: string): 
   return result.rows[0] ?? null;
 }
 
-async function findExistingTrackingEventByFingerprint(ingestionFingerprint: string): Promise<ExistingTrackingEventRow | null> {
-  const result = await query<ExistingTrackingEventRow>(
+async function findExistingTrackingEventByFingerprint(ingestionFingerprint: string): Promise<TrackingEventRow | null> {
+  const result = await query<TrackingEventRow>(
     `
       SELECT
-        id,
+        id::text AS id,
         occurred_at,
         ingested_at,
-        session_id
+        session_id::text AS session_id
       FROM tracking_events
       WHERE ingestion_fingerprint = $1
       LIMIT 1
@@ -248,24 +436,44 @@ async function findExistingTrackingEventByFingerprint(ingestionFingerprint: stri
   return result.rows[0] ?? null;
 }
 
-async function upsertTrackingSession(
-  input: TrackingEventInput,
+async function findExistingAttributionTouchEventByFingerprint(
+  ingestionFingerprint: string
+): Promise<AttributionTouchEventRow | null> {
+  const result = await query<AttributionTouchEventRow>(
+    `
+      SELECT
+        id,
+        captured_at,
+        roas_radar_session_id::text AS roas_radar_session_id
+      FROM session_attribution_touch_events
+      WHERE ingestion_fingerprint = $1
+      LIMIT 1
+    `,
+    [ingestionFingerprint]
+  );
+
+  return result.rows[0] ?? null;
+}
+
+async function upsertTrackingSessionForCapture(
+  client: Parameters<typeof withTransaction>[0] extends (client: infer T) => Promise<unknown> ? T : never,
+  capture: AttributionCaptureV1,
   occurredAt: Date,
   userAgent: string | null,
-  ipHash: string | null,
-  client: PoolClient
+  ipHash: string | null
 ): Promise<void> {
-  const params = parseCampaignParameters(input.pageUrl);
   const canonicalDimensions = buildCanonicalTouchpointDimensions({
-    source: params.utm_source,
-    medium: params.utm_medium,
-    campaign: params.utm_campaign,
-    content: params.utm_content,
-    term: params.utm_term,
-    gclid: params.gclid,
-    fbclid: params.fbclid,
-    ttclid: params.ttclid,
-    msclkid: params.msclkid
+    source: capture.utm_source,
+    medium: capture.utm_medium,
+    campaign: capture.utm_campaign,
+    content: capture.utm_content,
+    term: capture.utm_term,
+    gclid: capture.gclid,
+    gbraid: capture.gbraid,
+    wbraid: capture.wbraid,
+    fbclid: capture.fbclid,
+    ttclid: capture.ttclid,
+    msclkid: capture.msclkid
   });
 
   await client.query(
@@ -284,6 +492,8 @@ async function upsertTrackingSession(
         initial_utm_content,
         initial_utm_term,
         initial_gclid,
+        initial_gbraid,
+        initial_wbraid,
         initial_fbclid,
         initial_ttclid,
         initial_msclkid,
@@ -291,7 +501,7 @@ async function upsertTrackingSession(
         ip_hash
       )
       VALUES (
-        $1,
+        $1::uuid,
         now(),
         now(),
         $2,
@@ -308,7 +518,9 @@ async function upsertTrackingSession(
         $12,
         $13,
         $14,
-        $15
+        $15,
+        $16,
+        $17
       )
       ON CONFLICT (id)
       DO UPDATE SET
@@ -322,6 +534,8 @@ async function upsertTrackingSession(
         initial_utm_content = COALESCE(tracking_sessions.initial_utm_content, EXCLUDED.initial_utm_content),
         initial_utm_term = COALESCE(tracking_sessions.initial_utm_term, EXCLUDED.initial_utm_term),
         initial_gclid = COALESCE(tracking_sessions.initial_gclid, EXCLUDED.initial_gclid),
+        initial_gbraid = COALESCE(tracking_sessions.initial_gbraid, EXCLUDED.initial_gbraid),
+        initial_wbraid = COALESCE(tracking_sessions.initial_wbraid, EXCLUDED.initial_wbraid),
         initial_fbclid = COALESCE(tracking_sessions.initial_fbclid, EXCLUDED.initial_fbclid),
         initial_ttclid = COALESCE(tracking_sessions.initial_ttclid, EXCLUDED.initial_ttclid),
         initial_msclkid = COALESCE(tracking_sessions.initial_msclkid, EXCLUDED.initial_msclkid),
@@ -329,42 +543,125 @@ async function upsertTrackingSession(
         ip_hash = COALESCE(tracking_sessions.ip_hash, EXCLUDED.ip_hash)
     `,
     [
-      input.sessionId,
+      capture.roas_radar_session_id,
       occurredAt,
-      input.pageUrl,
-      input.referrerUrl ?? null,
+      capture.landing_url ?? capture.page_url,
+      capture.referrer_url,
       canonicalDimensions.source,
       canonicalDimensions.medium,
       canonicalDimensions.campaign,
       canonicalDimensions.content,
       canonicalDimensions.term,
-      canonicalDimensions.clickIdType === 'gclid' ? canonicalDimensions.clickIdValue : null,
-      canonicalDimensions.clickIdType === 'fbclid' ? canonicalDimensions.clickIdValue : null,
-      canonicalDimensions.clickIdType === 'ttclid' ? canonicalDimensions.clickIdValue : null,
-      canonicalDimensions.clickIdType === 'msclkid' ? canonicalDimensions.clickIdValue : null,
+      capture.gclid,
+      capture.gbraid,
+      capture.wbraid,
+      capture.fbclid,
+      capture.ttclid,
+      capture.msclkid,
       userAgent,
       ipHash
     ]
   );
 }
 
-async function insertTrackingEvent(
-  client: PoolClient,
-  input: TrackingEventInput,
-  ingestionFingerprint: string
+async function upsertSessionAttributionIdentity(
+  client: Parameters<typeof withTransaction>[0] extends (client: infer T) => Promise<unknown> ? T : never,
+  capture: AttributionCaptureV1
+): Promise<void> {
+  await client.query(
+    `
+      INSERT INTO session_attribution_identities (
+        roas_radar_session_id,
+        created_at,
+        updated_at,
+        first_captured_at,
+        last_captured_at,
+        landing_url,
+        referrer_url,
+        initial_utm_source,
+        initial_utm_medium,
+        initial_utm_campaign,
+        initial_utm_content,
+        initial_utm_term,
+        initial_gclid,
+        initial_gbraid,
+        initial_wbraid,
+        initial_fbclid,
+        initial_ttclid,
+        initial_msclkid
+      )
+      VALUES (
+        $1::uuid,
+        now(),
+        now(),
+        $2::timestamptz,
+        $3::timestamptz,
+        $4,
+        $5,
+        $6,
+        $7,
+        $8,
+        $9,
+        $10,
+        $11,
+        $12,
+        $13,
+        $14,
+        $15,
+        $16
+      )
+      ON CONFLICT (roas_radar_session_id)
+      DO UPDATE SET
+        updated_at = now(),
+        first_captured_at = LEAST(session_attribution_identities.first_captured_at, EXCLUDED.first_captured_at),
+        last_captured_at = GREATEST(session_attribution_identities.last_captured_at, EXCLUDED.last_captured_at),
+        landing_url = COALESCE(session_attribution_identities.landing_url, EXCLUDED.landing_url),
+        referrer_url = COALESCE(session_attribution_identities.referrer_url, EXCLUDED.referrer_url),
+        initial_utm_source = COALESCE(session_attribution_identities.initial_utm_source, EXCLUDED.initial_utm_source),
+        initial_utm_medium = COALESCE(session_attribution_identities.initial_utm_medium, EXCLUDED.initial_utm_medium),
+        initial_utm_campaign = COALESCE(session_attribution_identities.initial_utm_campaign, EXCLUDED.initial_utm_campaign),
+        initial_utm_content = COALESCE(session_attribution_identities.initial_utm_content, EXCLUDED.initial_utm_content),
+        initial_utm_term = COALESCE(session_attribution_identities.initial_utm_term, EXCLUDED.initial_utm_term),
+        initial_gclid = COALESCE(session_attribution_identities.initial_gclid, EXCLUDED.initial_gclid),
+        initial_gbraid = COALESCE(session_attribution_identities.initial_gbraid, EXCLUDED.initial_gbraid),
+        initial_wbraid = COALESCE(session_attribution_identities.initial_wbraid, EXCLUDED.initial_wbraid),
+        initial_fbclid = COALESCE(session_attribution_identities.initial_fbclid, EXCLUDED.initial_fbclid),
+        initial_ttclid = COALESCE(session_attribution_identities.initial_ttclid, EXCLUDED.initial_ttclid),
+        initial_msclkid = COALESCE(session_attribution_identities.initial_msclkid, EXCLUDED.initial_msclkid)
+    `,
+    [
+      capture.roas_radar_session_id,
+      capture.occurred_at,
+      capture.captured_at,
+      capture.landing_url,
+      capture.referrer_url,
+      capture.utm_source,
+      capture.utm_medium,
+      capture.utm_campaign,
+      capture.utm_content,
+      capture.utm_term,
+      capture.gclid,
+      capture.gbraid,
+      capture.wbraid,
+      capture.fbclid,
+      capture.ttclid,
+      capture.msclkid
+    ]
+  );
+}
+
+async function insertTrackingEventForCapture(
+  client: Parameters<typeof withTransaction>[0] extends (client: infer T) => Promise<unknown> ? T : never,
+  input: {
+    capture: AttributionCaptureV1;
+    eventType: TrackingEventType;
+    consentState: AttributionConsentState;
+    ingestionSource: 'server' | 'request_query';
+    ingestionFingerprint: string;
+    shopifyCartToken?: string | null;
+    shopifyCheckoutToken?: string | null;
+  }
 ): Promise<string> {
-  const params = parseCampaignParameters(input.pageUrl);
-  const canonicalDimensions = buildCanonicalTouchpointDimensions({
-    source: params.utm_source,
-    medium: params.utm_medium,
-    campaign: params.utm_campaign,
-    content: params.utm_content,
-    term: params.utm_term,
-    gclid: params.gclid,
-    fbclid: params.fbclid,
-    ttclid: params.ttclid,
-    msclkid: params.msclkid
-  });
   const eventId = randomUUID();
 
   try {
@@ -383,21 +680,21 @@ async function insertTrackingEvent(
           utm_content,
           utm_term,
           gclid,
+          gbraid,
+          wbraid,
           fbclid,
           ttclid,
           msclkid,
-          shopify_cart_token,
-          shopify_checkout_token,
-          client_event_id,
+          consent_state,
           ingestion_fingerprint,
-          ingested_at,
+          ingestion_source,
           raw_payload
         )
         VALUES (
-          $1,
-          $2,
+          $1::uuid,
+          $2::uuid,
           $3,
-          $4,
+          $4::timestamptz,
           $5,
           $6,
           $7,
@@ -413,33 +710,175 @@ async function insertTrackingEvent(
           $17,
           $18,
           $19,
-          now(),
-          $20::jsonb
+          $20,
+          $21::jsonb
+        )
+      `,
+      [
+        eventId,
+        input.capture.roas_radar_session_id,
+        input.eventType,
+        input.capture.occurred_at,
+        input.capture.page_url,
+        input.capture.referrer_url,
+        input.capture.utm_source,
+        input.capture.utm_medium,
+        input.capture.utm_campaign,
+        input.capture.utm_content,
+        input.capture.utm_term,
+        input.capture.gclid,
+        input.capture.gbraid,
+        input.capture.wbraid,
+        input.capture.fbclid,
+        input.capture.ttclid,
+        input.capture.msclkid,
+        input.consentState,
+        input.ingestionFingerprint,
+        input.ingestionSource,
+        JSON.stringify({
+          schema_version: input.capture.schema_version,
+          roas_radar_session_id: input.capture.roas_radar_session_id,
+          occurred_at: input.capture.occurred_at,
+          captured_at: input.capture.captured_at,
+          landing_url: input.capture.landing_url,
+          referrer_url: input.capture.referrer_url,
+          page_url: input.capture.page_url,
+          utm_source: input.capture.utm_source,
+          utm_medium: input.capture.utm_medium,
+          utm_campaign: input.capture.utm_campaign,
+          utm_content: input.capture.utm_content,
+          utm_term: input.capture.utm_term,
+          gclid: input.capture.gclid,
+          gbraid: input.capture.gbraid,
+          wbraid: input.capture.wbraid,
+          fbclid: input.capture.fbclid,
+          ttclid: input.capture.ttclid,
+          msclkid: input.capture.msclkid,
+          consent_state: input.consentState,
+          shopify_cart_token: input.shopifyCartToken ?? null,
+          shopify_checkout_token: input.shopifyCheckoutToken ?? null
+        })
+      ]
+    );
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === '23505') {
+      const existing = await findExistingTrackingEventByFingerprint(input.ingestionFingerprint);
+
+      if (existing) {
+        return existing.id;
+      }
+    }
+
+    throw error;
+  }
+
+  return eventId;
+}
+
+async function insertTrackingBrowserEvent(
+  client: Parameters<typeof withTransaction>[0] extends (client: infer T) => Promise<unknown> ? T : never,
+  input: SanitizedTrackingEventInput,
+  ingestionFingerprint: string
+): Promise<string> {
+  const capture = buildCaptureFromTrackingEvent(input);
+  const eventId = randomUUID();
+
+  try {
+    await client.query(
+      `
+        INSERT INTO tracking_events (
+          id,
+          session_id,
+          event_type,
+          occurred_at,
+          page_url,
+          referrer_url,
+          utm_source,
+          utm_medium,
+          utm_campaign,
+          utm_content,
+          utm_term,
+          gclid,
+          gbraid,
+          wbraid,
+          fbclid,
+          ttclid,
+          msclkid,
+          shopify_cart_token,
+          shopify_checkout_token,
+          client_event_id,
+          consent_state,
+          ingestion_fingerprint,
+          ingestion_source,
+          raw_payload
+        )
+        VALUES (
+          $1::uuid,
+          $2::uuid,
+          $3,
+          $4::timestamptz,
+          $5,
+          $6,
+          $7,
+          $8,
+          $9,
+          $10,
+          $11,
+          $12,
+          $13,
+          $14,
+          $15,
+          $16,
+          $17,
+          $18,
+          $19,
+          $20,
+          $21,
+          $22,
+          $23,
+          $24::jsonb
         )
       `,
       [
         eventId,
         input.sessionId,
         input.eventType,
-        new Date(input.occurredAt),
+        input.occurredAt,
         input.pageUrl,
-        input.referrerUrl ?? null,
-        canonicalDimensions.source,
-        canonicalDimensions.medium,
-        canonicalDimensions.campaign,
-        canonicalDimensions.content,
-        canonicalDimensions.term,
-        canonicalDimensions.clickIdType === 'gclid' ? canonicalDimensions.clickIdValue : null,
-        canonicalDimensions.clickIdType === 'fbclid' ? canonicalDimensions.clickIdValue : null,
-        canonicalDimensions.clickIdType === 'ttclid' ? canonicalDimensions.clickIdValue : null,
-        canonicalDimensions.clickIdType === 'msclkid' ? canonicalDimensions.clickIdValue : null,
-        normalizeNullableString(input.shopifyCartToken),
-        normalizeNullableString(input.shopifyCheckoutToken),
-        input.clientEventId ?? null,
+        input.referrerUrl,
+        capture.utm_source,
+        capture.utm_medium,
+        capture.utm_campaign,
+        capture.utm_content,
+        capture.utm_term,
+        capture.gclid,
+        capture.gbraid,
+        capture.wbraid,
+        capture.fbclid,
+        capture.ttclid,
+        capture.msclkid,
+        input.shopifyCartToken,
+        input.shopifyCheckoutToken,
+        input.clientEventId,
+        input.consentState,
         ingestionFingerprint,
+        'browser',
         JSON.stringify({
           ...input,
-          marketingDimensions: canonicalDimensions
+          schema_version: ATTRIBUTION_SCHEMA_VERSION,
+          marketing_dimensions: {
+            utm_source: capture.utm_source,
+            utm_medium: capture.utm_medium,
+            utm_campaign: capture.utm_campaign,
+            utm_content: capture.utm_content,
+            utm_term: capture.utm_term,
+            gclid: capture.gclid,
+            gbraid: capture.gbraid,
+            wbraid: capture.wbraid,
+            fbclid: capture.fbclid,
+            ttclid: capture.ttclid,
+            msclkid: capture.msclkid
+          }
         })
       ]
     );
@@ -460,23 +899,309 @@ async function insertTrackingEvent(
   return eventId;
 }
 
-function resolveRequestIp(req: Request): string | undefined {
-  const forwardedFor = req.header('x-forwarded-for');
-
-  if (forwardedFor) {
-    return forwardedFor.split(',')[0]?.trim();
+async function insertAttributionTouchEvent(
+  client: Parameters<typeof withTransaction>[0] extends (client: infer T) => Promise<unknown> ? T : never,
+  input: {
+    capture: AttributionCaptureV1;
+    eventType: TrackingEventType;
+    consentState: AttributionConsentState;
+    ingestionSource: 'server' | 'request_query';
+    ingestionFingerprint: string;
+    shopifyCartToken?: string | null;
+    shopifyCheckoutToken?: string | null;
   }
+): Promise<{ id: number; deduplicated: boolean }> {
+  try {
+    const result = await client.query<{ id: number }>(
+      `
+        INSERT INTO session_attribution_touch_events (
+          roas_radar_session_id,
+          event_type,
+          occurred_at,
+          captured_at,
+          page_url,
+          referrer_url,
+          utm_source,
+          utm_medium,
+          utm_campaign,
+          utm_content,
+          utm_term,
+          gclid,
+          gbraid,
+          wbraid,
+          fbclid,
+          ttclid,
+          msclkid,
+          consent_state,
+          ingestion_source,
+          ingestion_fingerprint,
+          raw_payload,
+          shopify_cart_token,
+          shopify_checkout_token
+        )
+        VALUES (
+          $1::uuid,
+          $2,
+          $3::timestamptz,
+          $4::timestamptz,
+          $5,
+          $6,
+          $7,
+          $8,
+          $9,
+          $10,
+          $11,
+          $12,
+          $13,
+          $14,
+          $15,
+          $16,
+          $17,
+          $18,
+          $19,
+          $20,
+          $21::jsonb,
+          $22,
+          $23
+        )
+        RETURNING id
+      `,
+      [
+        input.capture.roas_radar_session_id,
+        input.eventType,
+        input.capture.occurred_at,
+        input.capture.captured_at,
+        input.capture.page_url,
+        input.capture.referrer_url,
+        input.capture.utm_source,
+        input.capture.utm_medium,
+        input.capture.utm_campaign,
+        input.capture.utm_content,
+        input.capture.utm_term,
+        input.capture.gclid,
+        input.capture.gbraid,
+        input.capture.wbraid,
+        input.capture.fbclid,
+        input.capture.ttclid,
+        input.capture.msclkid,
+        input.consentState,
+        input.ingestionSource,
+        input.ingestionFingerprint,
+        JSON.stringify({
+          ...input.capture,
+          consent_state: input.consentState,
+          shopify_cart_token: input.shopifyCartToken ?? null,
+          shopify_checkout_token: input.shopifyCheckoutToken ?? null
+        }),
+        input.shopifyCartToken ?? null,
+        input.shopifyCheckoutToken ?? null
+      ]
+    );
 
-  return req.ip;
+    return {
+      id: result.rows[0].id,
+      deduplicated: false
+    };
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === '23505') {
+      const existing = await findExistingAttributionTouchEventByFingerprint(input.ingestionFingerprint);
+
+      if (existing) {
+        return {
+          id: existing.id,
+          deduplicated: true
+        };
+      }
+    }
+
+    throw error;
+  }
 }
 
-type RateLimitEntry = {
-  count: number;
-  resetAt: number;
-};
+async function ingestAttributionCapture(
+  input: {
+    capture: AttributionCaptureV1;
+    eventType: TrackingEventType;
+    consentState: AttributionConsentState;
+    ingestionSource: 'server' | 'request_query';
+    requestIp?: string | null;
+    userAgent?: string | null;
+    shopifyCartToken?: string | null;
+    shopifyCheckoutToken?: string | null;
+  },
+  options: {
+    precheckDuplicates: boolean;
+  }
+): Promise<AttributionIngestResult> {
+  const ingestionFingerprint = hashAttributionFingerprint(input.capture, input.eventType, input.ingestionSource);
+
+  if (options.precheckDuplicates) {
+    const existing = await findExistingAttributionTouchEventByFingerprint(ingestionFingerprint);
+
+    if (existing) {
+      return {
+        touchEventId: existing.id,
+        capturedAt: existing.captured_at.toISOString(),
+        sessionId: existing.roas_radar_session_id,
+        deduplicated: true
+      };
+    }
+  }
+  const ipHash = hashIp(input.requestIp);
+
+  const result = await withTransaction(async (client) => {
+    await upsertSessionAttributionIdentity(client, input.capture);
+    await upsertTrackingSessionForCapture(
+      client,
+      input.capture,
+      new Date(input.capture.occurred_at),
+      normalizeNullableString(input.userAgent),
+      ipHash
+    );
+
+    const touchEvent = await insertAttributionTouchEvent(client, {
+      capture: input.capture,
+      eventType: input.eventType,
+      consentState: input.consentState,
+      ingestionSource: input.ingestionSource,
+      ingestionFingerprint,
+      shopifyCartToken: input.shopifyCartToken,
+      shopifyCheckoutToken: input.shopifyCheckoutToken
+    });
+
+    await insertTrackingEventForCapture(client, {
+      capture: input.capture,
+      eventType: input.eventType,
+      consentState: input.consentState,
+      ingestionSource: input.ingestionSource,
+      ingestionFingerprint,
+      shopifyCartToken: input.shopifyCartToken,
+      shopifyCheckoutToken: input.shopifyCheckoutToken
+    });
+
+    return touchEvent;
+  });
+
+  return {
+    touchEventId: result.id,
+    capturedAt: input.capture.captured_at,
+    sessionId: input.capture.roas_radar_session_id,
+    deduplicated: result.deduplicated
+  };
+}
+
+async function ingestTrackingEvent(input: TrackingRequestBody, requestIp: string | null): Promise<TrackingIngestResult> {
+  const sanitizedInput = sanitizeTrackingInput(input);
+  const ingestionFingerprint = hashTrackingFingerprint(sanitizedInput);
+
+  if (sanitizedInput.clientEventId) {
+    const existingByClientEventId = await findExistingTrackingEventByClientEventId(sanitizedInput.clientEventId);
+
+    if (existingByClientEventId) {
+      return {
+        eventId: existingByClientEventId.id,
+        ingestedAt: existingByClientEventId.ingested_at.toISOString(),
+        sessionId: existingByClientEventId.session_id,
+        deduplicated: true,
+        sanitizedInput
+      };
+    }
+  }
+
+  const existingByFingerprint = await findExistingTrackingEventByFingerprint(ingestionFingerprint);
+
+  if (existingByFingerprint) {
+    return {
+      eventId: existingByFingerprint.id,
+      ingestedAt: existingByFingerprint.ingested_at.toISOString(),
+      sessionId: existingByFingerprint.session_id,
+      deduplicated: true,
+      sanitizedInput
+    };
+  }
+
+  const derivedCapture = buildCaptureFromTrackingEvent(sanitizedInput);
+  const ipHash = hashIp(requestIp);
+  const eventId = await withTransaction(async (client) => {
+    await upsertTrackingSessionForCapture(
+      client,
+      {
+        ...derivedCapture,
+        landing_url: sanitizedInput.pageUrl
+      },
+      new Date(sanitizedInput.occurredAt),
+      sanitizedInput.context.userAgent,
+      ipHash
+    );
+
+    const insertedEventId = await insertTrackingBrowserEvent(client, sanitizedInput, ingestionFingerprint);
+
+    await enqueueAttributionForTrackingTouchpoint(client, {
+      sessionId: sanitizedInput.sessionId,
+      shopifyCheckoutToken: sanitizedInput.shopifyCheckoutToken,
+      shopifyCartToken: sanitizedInput.shopifyCartToken
+    });
+
+    await refreshDailyReportingMetrics(client, [
+      formatDateInTimezone(new Date(sanitizedInput.occurredAt), await getReportingTimezone(client))
+    ]);
+
+    return insertedEventId;
+  });
+
+  return {
+    eventId,
+    ingestedAt: new Date().toISOString(),
+    sessionId: sanitizedInput.sessionId,
+    deduplicated: false,
+    sanitizedInput
+  };
+}
+
+async function bootstrapSession(
+  pageUrl: string,
+  landingUrl: string | null,
+  referrerUrl: string | null,
+  requestIp: string | null,
+  userAgent: string | null,
+  requestContextSource: 'query' | 'header' | 'none'
+): Promise<SessionBootstrapResult> {
+  const sessionId = randomUUID();
+  const now = new Date().toISOString();
+  const capture = normalizeAttributionCaptureV1({
+    schema_version: ATTRIBUTION_SCHEMA_VERSION,
+    roas_radar_session_id: sessionId,
+    occurred_at: now,
+    captured_at: now,
+    landing_url: landingUrl ?? pageUrl,
+    referrer_url: referrerUrl,
+    page_url: pageUrl,
+    ...parseCampaignParameters(landingUrl ?? pageUrl)
+  });
+
+  await ingestAttributionCapture(
+    {
+      capture,
+      eventType: 'page_view',
+      consentState: 'unknown',
+      ingestionSource: 'request_query',
+      requestIp,
+      userAgent
+    },
+    { precheckDuplicates: false }
+  );
+
+  return {
+    sessionId,
+    createdAt: now,
+    isNewSession: true,
+    requestContextCaptured: requestContextSource !== 'none',
+    requestContextSource
+  };
+}
 
 class InMemoryRateLimiter {
-  private readonly entries = new Map<string, RateLimitEntry>();
+  private entries = new Map<string, { count: number; resetAt: number }>();
 
   check(key: string): { allowed: boolean; remaining: number; resetAt: number } {
     const now = Date.now();
@@ -539,15 +1264,11 @@ function enforceAllowedOrigin(req: Request): void {
 
 function enforceSupportedContentType(req: Request): void {
   if (!req.is(['application/json', 'text/plain'])) {
-    throw new TrackingHttpError(
-      415,
-      'unsupported_media_type',
-      'Tracking endpoint requires application/json or text/plain JSON'
-    );
+    throw new TrackingHttpError(415, 'unsupported_media_type', 'Tracking endpoint requires application/json or text/plain JSON');
   }
 }
 
-function parseTrackingRequestBody(body: TrackingRequestBody): Record<string, unknown> {
+function parseTrackingRequestBody(body: unknown): Record<string, unknown> {
   if (typeof body === 'string') {
     const trimmed = body.trim();
 
@@ -556,7 +1277,7 @@ function parseTrackingRequestBody(body: TrackingRequestBody): Record<string, unk
     }
 
     try {
-      const parsed = JSON.parse(trimmed) as unknown;
+      const parsed = JSON.parse(trimmed);
 
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
         throw new TrackingHttpError(400, 'invalid_json', 'Tracking payload must be a JSON object');
@@ -576,12 +1297,13 @@ function parseTrackingRequestBody(body: TrackingRequestBody): Record<string, unk
     throw new TrackingHttpError(400, 'invalid_json', 'Tracking payload must be a JSON object');
   }
 
-  return body;
+  return body as Record<string, unknown>;
 }
 
 function enforceRateLimit(req: Request): void {
   const requestIp = resolveRequestIp(req);
-  const sessionHint = typeof req.body?.sessionId === 'string' ? req.body.sessionId : 'anonymous';
+  const body = typeof req.body === 'object' && req.body !== null ? (req.body as Record<string, unknown>) : {};
+  const sessionHint = typeof body.sessionId === 'string' ? body.sessionId : 'anonymous';
   const key = createHash('sha256').update(`${requestIp ?? 'unknown'}:${sessionHint}`).digest('hex');
   const result = trackingRateLimiter.check(key);
 
@@ -592,70 +1314,201 @@ function enforceRateLimit(req: Request): void {
   }
 }
 
-async function ingestTrackingEvent(
-  input: TrackingEventInput,
-  requestIp: string | undefined
-): Promise<{
-  eventId: string;
-  ingestedAt: string;
-  sessionId: string;
-  deduplicated: boolean;
-}> {
-  const sanitizedInput = sanitizeTrackingInput(input);
-  const ipHash = hashIp(requestIp);
-  const ingestionFingerprint = hashTrackingFingerprint(sanitizedInput);
-
-  if (sanitizedInput.clientEventId) {
-    const existing = await findExistingTrackingEventByClientEventId(sanitizedInput.clientEventId);
-
-    if (existing) {
-      return {
-        eventId: existing.id,
-        ingestedAt: existing.ingested_at.toISOString(),
-        sessionId: existing.session_id,
-        deduplicated: true
-      };
+function parseAttributionCaptureRequest(body: unknown): AttributionCaptureRequest {
+  try {
+    return attributionCaptureRequestSchema.parse(body);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      throw new TrackingHttpError(400, 'invalid_request', 'Invalid attribution capture payload', error.flatten());
     }
+
+    throw error;
   }
-
-  const duplicatePayload = await findExistingTrackingEventByFingerprint(ingestionFingerprint);
-
-  if (duplicatePayload) {
-    return {
-      eventId: duplicatePayload.id,
-      ingestedAt: duplicatePayload.ingested_at.toISOString(),
-      sessionId: duplicatePayload.session_id,
-      deduplicated: true
-    };
-  }
-
-  const eventId = await withTransaction(async (client) => {
-    const occurredAt = new Date(sanitizedInput.occurredAt);
-    const userAgent = sanitizedInput.context.userAgent ?? null;
-    const metricDate = formatDateInTimezone(occurredAt, await getReportingTimezone(client));
-
-    await upsertTrackingSession(sanitizedInput, occurredAt, userAgent, ipHash, client);
-    const insertedEventId = await insertTrackingEvent(client, sanitizedInput, ingestionFingerprint);
-    await enqueueAttributionForTrackingTouchpoint(client, {
-      sessionId: sanitizedInput.sessionId,
-      shopifyCheckoutToken: normalizeNullableString(sanitizedInput.shopifyCheckoutToken),
-      shopifyCartToken: normalizeNullableString(sanitizedInput.shopifyCartToken)
-    });
-    await refreshDailyReportingMetrics(client, [metricDate]);
-
-    return insertedEventId;
-  });
-
-  return {
-    eventId,
-    ingestedAt: new Date().toISOString(),
-    sessionId: sanitizedInput.sessionId,
-    deduplicated: false
-  };
 }
 
-export function createTrackingRouter(): Router {
+function parseTrackingEventRequest(body: unknown): TrackingRequestBody {
+  try {
+    return trackingEventSchema.parse(body);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      throw new TrackingHttpError(400, 'invalid_request', 'Invalid tracking payload', error.flatten());
+    }
+
+    throw error;
+  }
+}
+
+async function emitDerivedAttributionFromBrowserEvent(
+  input: SanitizedTrackingEventInput,
+  requestIp: string | null
+): Promise<BrowserDerivedAttributionResult> {
+  try {
+    const result = await ingestAttributionCapture(
+      {
+        capture: buildCaptureFromTrackingEvent(input),
+        eventType: input.eventType,
+        consentState: input.consentState,
+        ingestionSource: 'server',
+        requestIp,
+        userAgent: input.context.userAgent,
+        shopifyCartToken: input.shopifyCartToken,
+        shopifyCheckoutToken: input.shopifyCheckoutToken
+      },
+      { precheckDuplicates: false }
+    );
+
+    return {
+      ok: true,
+      touchEventId: result.touchEventId,
+      deduplicated: result.deduplicated
+    };
+  } catch (error) {
+    logError('tracking_dual_write_server_emit_failed', error, {
+      sessionId: input.sessionId,
+      eventType: input.eventType
+    });
+
+    return {
+      ok: false,
+      touchEventId: null,
+      deduplicated: false,
+      errorCode: 'server_attribution_emit_failed'
+    };
+  }
+}
+
+export function createTrackingRouter() {
   const router = Router();
+
+  router.get('/session', async (req, res, next) => {
+    try {
+      enforceAllowedOrigin(req);
+
+      const parsedQuery = sessionBootstrapQuerySchema.parse({
+        pageUrl: req.query.pageUrl,
+        landingUrl: req.query.landingUrl,
+        referrerUrl: req.query.referrerUrl
+      });
+
+      const normalizedPageUrl = normalizeTrackingUrl(parsedQuery.pageUrl);
+      const normalizedLandingUrl = normalizeTrackingUrl(parsedQuery.landingUrl);
+      const headerReferrerUrl = normalizeTrackingUrl(req.header('referer') ?? null);
+      const normalizedReferrerUrl = normalizeTrackingUrl(parsedQuery.referrerUrl) ?? headerReferrerUrl;
+
+      if (!normalizedPageUrl) {
+        throw new TrackingHttpError(400, 'invalid_request', 'pageUrl must be a valid http(s) URL');
+      }
+
+      const requestContextSource = parsedQuery.referrerUrl
+        ? 'query'
+        : headerReferrerUrl
+          ? 'header'
+          : 'none';
+
+      const result = await bootstrapSession(
+        normalizedPageUrl,
+        normalizedLandingUrl,
+        normalizedReferrerUrl,
+        resolveRequestIp(req),
+        normalizeNullableString(req.header('user-agent')),
+        requestContextSource
+      );
+
+      logAttributionCaptureObserved(
+        'session_bootstrap',
+        {
+          roas_radar_session_id: result.sessionId,
+          landing_url: normalizedLandingUrl ?? normalizedPageUrl,
+          referrer_url: normalizedReferrerUrl,
+          page_url: normalizedPageUrl
+        },
+        {
+          accepted: true,
+          deduplicated: !result.isNewSession,
+          requestContextCaptured: result.requestContextCaptured,
+          requestContextSource: result.requestContextSource
+        }
+      );
+
+      res.status(200).json({
+        ok: true,
+        sessionId: result.sessionId,
+        createdAt: result.createdAt,
+        isNewSession: result.isNewSession
+      });
+    } catch (error) {
+      if (error instanceof TrackingHttpError) {
+        logWarning('tracking_session_bootstrap_rejected', {
+          code: error.code,
+          statusCode: error.statusCode,
+          details: error.details
+        });
+      } else if (error instanceof z.ZodError) {
+        next(new TrackingHttpError(400, 'invalid_request', 'Invalid session bootstrap request', error.flatten()));
+        return;
+      } else {
+        logError('tracking_session_bootstrap_failed', error, {
+          path: req.baseUrl ? `${req.baseUrl}${req.path}` : req.path
+        });
+      }
+
+      next(error);
+    }
+  });
+
+  router.post('/attribution', async (req, res, next) => {
+    try {
+      enforceSupportedContentType(req);
+      enforceAllowedOrigin(req);
+      enforceRateLimit(req);
+
+      const parsed = parseAttributionCaptureRequest(parseTrackingRequestBody(req.body));
+      const result = await ingestAttributionCapture(
+        {
+          capture: parsed.capture,
+          eventType: 'page_view',
+          consentState: parsed.consentState,
+          ingestionSource: 'server',
+          requestIp: resolveRequestIp(req),
+          userAgent: normalizeNullableString(req.header('user-agent'))
+        },
+        { precheckDuplicates: true }
+      );
+
+      logAttributionCaptureObserved('attribution_capture', parsed.capture, {
+        accepted: true,
+        deduplicated: result.deduplicated,
+        touchEventId: result.touchEventId
+      });
+
+      res.status(200).json({
+        ok: true,
+        sessionId: result.sessionId,
+        touchEventId: result.touchEventId,
+        capturedAt: result.capturedAt,
+        deduplicated: result.deduplicated
+      });
+    } catch (error) {
+      if (error instanceof TrackingHttpError) {
+        logAttributionCaptureObserved('attribution_capture', req.body as TrackingRequestBody, {
+          accepted: false,
+          rejectionCode: error.code,
+          statusCode: error.statusCode
+        });
+        logWarning('tracking_attribution_rejected', {
+          code: error.code,
+          statusCode: error.statusCode,
+          details: error.details
+        });
+      } else {
+        logError('tracking_attribution_failed', error, {
+          path: req.baseUrl ? `${req.baseUrl}${req.path}` : req.path
+        });
+      }
+
+      next(error);
+    }
+  });
 
   router.post('/', async (req, res, next) => {
     try {
@@ -663,21 +1516,40 @@ export function createTrackingRouter(): Router {
       enforceAllowedOrigin(req);
       enforceRateLimit(req);
 
-      const body = parseTrackingRequestBody(req.body as TrackingRequestBody);
-      const input = trackingEventSchema.parse(body);
-      const result = await ingestTrackingEvent(input, resolveRequestIp(req));
-      logInfo(result.deduplicated ? 'tracking_ingest_duplicate' : 'tracking_ingest_accepted', {
-        sessionId: result.sessionId,
-        eventId: result.eventId,
+      const input = parseTrackingEventRequest(parseTrackingRequestBody(req.body));
+      const requestIp = resolveRequestIp(req);
+      const browserResult = await ingestTrackingEvent(input, requestIp);
+      const serverAttributionResult = await emitDerivedAttributionFromBrowserEvent(browserResult.sanitizedInput, requestIp);
+
+      logAttributionCaptureObserved('browser_event', browserResult.sanitizedInput, {
+        accepted: true,
+        deduplicated: browserResult.deduplicated,
+        eventType: input.eventType
+      });
+
+      logInfo('tracking_dual_write_consistency', {
+        ...summarizeDualWriteConsistency({
+          browserOutcome: browserResult.deduplicated ? 'deduplicated' : 'accepted',
+          serverOutcome: serverAttributionResult.ok
+            ? serverAttributionResult.deduplicated
+              ? 'deduplicated'
+              : 'accepted'
+            : 'failed'
+        }),
+        sessionId: browserResult.sessionId,
+        eventId: browserResult.eventId,
         eventType: input.eventType,
-        deduplicated: result.deduplicated
+        touchEventId: serverAttributionResult.touchEventId,
+        errorCode: serverAttributionResult.ok ? null : serverAttributionResult.errorCode
       });
 
       res.status(200).json({
         ok: true,
-        eventId: result.eventId,
-        ingestedAt: result.ingestedAt,
-        sessionId: result.sessionId
+        eventId: browserResult.eventId,
+        ingestedAt: browserResult.ingestedAt,
+        sessionId: browserResult.sessionId,
+        deduplicated: browserResult.deduplicated,
+        attribution: serverAttributionResult
       });
     } catch (error) {
       if (error instanceof TrackingHttpError) {
@@ -691,6 +1563,7 @@ export function createTrackingRouter(): Router {
           path: req.baseUrl ? `${req.baseUrl}${req.path}` : req.path
         });
       }
+
       next(error);
     }
   });

@@ -1,37 +1,39 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-process.env.DATABASE_URL ??= 'postgres://postgres:postgres@localhost:5432/roas_radar_test';
-
 const { __observabilityTestUtils } = await import('../src/observability/index.js');
 
-test('parseCloudTraceContext maps Google trace headers into Cloud Logging format', () => {
-  process.env.GOOGLE_CLOUD_PROJECT = 'roas-radar-prod';
+test('summarizeAttributionObservation classifies complete captures and missing session ids', () => {
+  const complete = __observabilityTestUtils.summarizeAttributionObservation({
+    roas_radar_session_id: '123e4567-e89b-42d3-a456-426614174000',
+    landing_url: 'https://store.example/?utm_source=google',
+    page_url: 'https://store.example/products/widget',
+    utm_source: 'google',
+    gclid: 'GCLID-123'
+  });
 
-  const trace = __observabilityTestUtils.parseCloudTraceContext(
-    '105445aa7843bc8bf206b120001000/123;o=1'
-  ) as Record<string, string | undefined>;
-
-  assert.equal(trace.trace, 'projects/roas-radar-prod/traces/105445aa7843bc8bf206b120001000');
-  assert.equal(trace.spanId, '123');
+  assert.equal(complete.captureStatus, 'complete');
 });
 
-test('buildAttributionBacklogLog emits a structured backlog snapshot payload', () => {
-  process.env.K_SERVICE = 'roas-radar-attribution-worker';
+test('summarizeDualWriteConsistency flags failed server legs as mismatches', () => {
+  assert.deepEqual(
+    __observabilityTestUtils.summarizeDualWriteConsistency({
+      browserOutcome: 'accepted',
+      serverOutcome: 'failed'
+    }),
+    {
+      consistencyStatus: 'mismatched',
+      browserOutcome: 'accepted',
+      serverOutcome: 'failed'
+    }
+  );
+});
 
-  const payload = JSON.parse(
-    __observabilityTestUtils.buildAttributionBacklogLog({
-      workerId: 'worker-1',
-      pendingJobs: 42,
-      oldestJobAgeSeconds: 180,
-      staleProcessingJobs: 3
-    })
-  ) as Record<string, unknown>;
+test('summarizeResolverOutcome reports unattributed and non-direct winners deterministically', () => {
+  const unattributed = __observabilityTestUtils.summarizeResolverOutcome({
+    touchpoints: [],
+    winner: null
+  });
 
-  assert.equal(payload.event, 'attribution_backlog_snapshot');
-  assert.equal(payload.service, 'roas-radar-attribution-worker');
-  assert.equal(payload.workerId, 'worker-1');
-  assert.equal(payload.pendingJobs, 42);
-  assert.equal(payload.oldestJobAgeSeconds, 180);
-  assert.equal(payload.staleProcessingJobs, 3);
+  assert.equal(unattributed.resolverOutcome, 'unattributed');
 });

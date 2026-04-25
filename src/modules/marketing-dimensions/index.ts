@@ -1,4 +1,6 @@
-const CLICK_ID_TYPES = ['gclid', 'fbclid', 'ttclid', 'msclkid'] as const;
+import type { AttributionCaptureV1, AttributionClickIdField } from '../../../packages/attribution-schema/index.js';
+
+const CLICK_ID_TYPES = ['gclid', 'gbraid', 'wbraid', 'fbclid', 'ttclid', 'msclkid'] as const satisfies readonly AttributionClickIdField[];
 
 const SOURCE_ALIASES: Record<string, string> = {
   google: 'google',
@@ -67,6 +69,14 @@ const CLICK_ID_SOURCE_MEDIUM_MAP: Record<CanonicalClickIdType, { source: string;
     source: 'google',
     medium: 'cpc'
   },
+  gbraid: {
+    source: 'google',
+    medium: 'cpc'
+  },
+  wbraid: {
+    source: 'google',
+    medium: 'cpc'
+  },
   fbclid: {
     source: 'meta',
     medium: 'paid_social'
@@ -84,7 +94,7 @@ const CLICK_ID_SOURCE_MEDIUM_MAP: Record<CanonicalClickIdType, { source: string;
 export const CANONICAL_UNKNOWN_VALUE = 'unknown';
 export const CANONICAL_UNMAPPED_VALUE = 'unmapped';
 
-export type CanonicalClickIdType = (typeof CLICK_ID_TYPES)[number];
+export type CanonicalClickIdType = AttributionClickIdField;
 
 export type CanonicalTouchpointDimensions = {
   source: string | null;
@@ -104,7 +114,24 @@ export type CanonicalSpendDimensions = {
   term: string;
 };
 
-type CanonicalTouchpointInput = {
+type AttributionMarketingFields = Partial<
+  Pick<
+  AttributionCaptureV1,
+  | 'utm_source'
+  | 'utm_medium'
+  | 'utm_campaign'
+  | 'utm_content'
+  | 'utm_term'
+  | 'gclid'
+  | 'gbraid'
+  | 'wbraid'
+  | 'fbclid'
+  | 'ttclid'
+  | 'msclkid'
+  >
+>;
+
+type CanonicalTouchpointInput = AttributionMarketingFields & {
   source?: string | null;
   medium?: string | null;
   campaign?: string | null;
@@ -112,10 +139,6 @@ type CanonicalTouchpointInput = {
   term?: string | null;
   clickIdType?: string | null;
   clickIdValue?: string | null;
-  gclid?: string | null;
-  fbclid?: string | null;
-  ttclid?: string | null;
-  msclkid?: string | null;
 };
 
 type CanonicalSpendInput = {
@@ -177,6 +200,22 @@ function resolveCanonicalClickId(input: CanonicalTouchpointInput | CanonicalSpen
     return {
       clickIdType: 'gclid',
       clickIdValue: gclid
+    };
+  }
+
+  const gbraid = 'gbraid' in input ? normalizeNullableString(input.gbraid) : null;
+  if (gbraid) {
+    return {
+      clickIdType: 'gbraid',
+      clickIdValue: gbraid
+    };
+  }
+
+  const wbraid = 'wbraid' in input ? normalizeNullableString(input.wbraid) : null;
+  if (wbraid) {
+    return {
+      clickIdType: 'wbraid',
+      clickIdValue: wbraid
     };
   }
 

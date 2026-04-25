@@ -1,0 +1,5 @@
+{
+  "name": "roas_attribution_missing_session_id",
+  "description": "Counts attribution capture observations where the session id was missing.",
+  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"attribution_capture_observed\" AND jsonPayload.captureStatus=\"missing_session_id\""
+}

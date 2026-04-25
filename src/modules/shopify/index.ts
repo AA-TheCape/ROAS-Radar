@@ -4,6 +4,7 @@ import { type RequestHandler, Router } from 'express';
 import type { PoolClient } from 'pg';
 import { z } from 'zod';
 
+import { normalizeAttributionString, normalizeAttributionUrl } from '../../../packages/attribution-schema/index.js';
 import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
 import { logError, logInfo, logWarning } from '../../observability/index.js';
@@ -12,6 +13,7 @@ import { attachAuthContext, requireAdmin } from '../auth/index.js';
 import { hashIdentityEmail, stitchKnownCustomerIdentity } from '../identity/index.js';
 import { buildCanonicalTouchpointDimensions } from '../marketing-dimensions/index.js';
 import { getReportingTimezone } from '../settings/index.js';
+import { enqueueShopifyOrderWriteback } from './writeback.js';
 
 const OAUTH_STATE_TTL_MINUTES = 10;
 
@@ -220,7 +222,7 @@ class ShopifyHttpError extends Error {
 }
 
 function getShopifySharedSecret(): string {
-  return env.SHOPIFY_APP_API_SECRET || env.SHOPIFY_WEBHOOK_SECRET;
+  return env.SHOPIFY_WEBHOOK_SECRET || env.SHOPIFY_APP_API_SECRET;
 }
 
 function normalizeShopDomain(rawShop: string): string {
@@ -1134,8 +1136,7 @@ function toNullableUuid(value: string | null): string | null {
 }
 
 function normalizeNullableString(value: string | null | undefined): string | null {
-  const normalized = value?.trim();
-  return normalized ? normalized : null;
+  return normalizeAttributionString(value);
 }
 
 function isEligibleOnlineStoreOrder(sourceName: string | null | undefined): boolean {
@@ -1197,6 +1198,12 @@ function extractShopifyHintAttribution(payload: ShopifyOrderPayload): ShopifyHin
     gclid:
       getAttributeValueFromKeys(noteAttributes, ['gclid', 'roas_radar_gclid']) ??
       getAttributeValueFromKeys(legacyAttributes, ['gclid', 'roas_radar_gclid']),
+    gbraid:
+      getAttributeValueFromKeys(noteAttributes, ['gbraid', 'roas_radar_gbraid']) ??
+      getAttributeValueFromKeys(legacyAttributes, ['gbraid', 'roas_radar_gbraid']),
+    wbraid:
+      getAttributeValueFromKeys(noteAttributes, ['wbraid', 'roas_radar_wbraid']) ??
+      getAttributeValueFromKeys(legacyAttributes, ['wbraid', 'roas_radar_wbraid']),
     fbclid:
       getAttributeValueFromKeys(noteAttributes, ['fbclid', 'roas_radar_fbclid']) ??
       getAttributeValueFromKeys(legacyAttributes, ['fbclid', 'roas_radar_fbclid']),
@@ -1210,20 +1217,21 @@ function extractShopifyHintAttribution(payload: ShopifyOrderPayload): ShopifyHin
 
   const hintCandidates = [
     payload.landing_site,
-    payload.referring_site,
-    getAttributeValueFromKeys(noteAttributes, ['roas_radar_landing_path', 'landing_site', 'referring_site']),
-    getAttributeValueFromKeys(legacyAttributes, ['roas_radar_landing_path', 'landing_site', 'referring_site'])
+    getAttributeValueFromKeys(noteAttributes, ['landing_url', 'page_url', 'roas_radar_landing_path', 'landing_site']),
+    getAttributeValueFromKeys(legacyAttributes, ['landing_url', 'page_url', 'roas_radar_landing_path', 'landing_site'])
   ].filter((value): value is string => Boolean(value));
 
   for (const candidate of hintCandidates) {
     try {
-      const url = new URL(candidate, 'https://shopify-hint.local');
+      const url = new URL(normalizeAttributionUrl(candidate, 'https://shopify-hint.local') ?? candidate);
       rawDimensions.source ??= normalizeNullableString(url.searchParams.get('utm_source'));
       rawDimensions.medium ??= normalizeNullableString(url.searchParams.get('utm_medium'));
       rawDimensions.campaign ??= normalizeNullableString(url.searchParams.get('utm_campaign'));
       rawDimensions.content ??= normalizeNullableString(url.searchParams.get('utm_content'));
       rawDimensions.term ??= normalizeNullableString(url.searchParams.get('utm_term'));
       rawDimensions.gclid ??= normalizeNullableString(url.searchParams.get('gclid'));
+      rawDimensions.gbraid ??= normalizeNullableString(url.searchParams.get('gbraid'));
+      rawDimensions.wbraid ??= normalizeNullableString(url.searchParams.get('wbraid'));
       rawDimensions.fbclid ??= normalizeNullableString(url.searchParams.get('fbclid'));
       rawDimensions.ttclid ??= normalizeNullableString(url.searchParams.get('ttclid'));
       rawDimensions.msclkid ??= normalizeNullableString(url.searchParams.get('msclkid'));
@@ -1237,6 +1245,8 @@ function extractShopifyHintAttribution(payload: ShopifyOrderPayload): ShopifyHin
     content: rawDimensions.content,
     term: rawDimensions.term,
     gclid: rawDimensions.gclid,
+    gbraid: rawDimensions.gbraid,
+    wbraid: rawDimensions.wbraid,
     fbclid: rawDimensions.fbclid,
     ttclid: rawDimensions.ttclid,
     msclkid: rawDimensions.msclkid
@@ -1587,6 +1597,7 @@ async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPay
     });
 
     await enqueueAttributionForOrder(shopifyOrderId, 'shopify_order_upserted', client);
+    await enqueueShopifyOrderWriteback(shopifyOrderId, 'shopify_order_upserted', client);
 
     await client.query(
       `
@@ -1997,5 +2008,7 @@ export const __shopifyTestUtils = {
   buildShopifyInstallUrl,
   verifyWebhookSignature,
   isEligibleOnlineStoreOrder,
-  buildLineItemExternalId
+  buildLineItemExternalId,
+  extractShopifyHintAttribution,
+  recoverShopifyAttributionHints
 };

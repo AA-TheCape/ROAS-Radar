@@ -3,9 +3,6 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": {
-    "node": ">=22"
-  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "build:dashboard": "npm --prefix dashboard run build",
@@ -25,9 +22,17 @@
     "google-ads:sync:start": "node dist/google-ads-worker.js",
     "data-quality:check": "tsx src/data-quality-worker.ts",
     "data-quality:check:start": "node dist/data-quality-worker.js",
+    "session-attribution:retention": "tsx src/session-attribution-retention-worker.ts",
+    "session-attribution:retention:start": "node dist/session-attribution-retention-worker.js",
+    "attribution:backfill-orders": "tsx src/admin/backfill-order-attribution.ts",
+    "dead-letters:replay": "tsx src/admin/replay-dead-letters.ts",
     "test": "node scripts/run-tests.mjs all",
+    "test:all": "node scripts/run-tests.mjs all",
     "test:unit": "node scripts/run-tests.mjs unit",
-    "test:integration": "node scripts/run-tests.mjs integration"
+    "test:integration": "node scripts/run-tests.mjs integration",
+    "test:attribution": "node scripts/run-attribution-tests.mjs critical",
+    "test:attribution:coverage": "node scripts/run-attribution-tests.mjs coverage",
+    "test:dead-letters": "node --import tsx --test test/dead-letter-replay.test.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
@@ -42,5 +47,8 @@
     "@types/pg": "^8.20.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

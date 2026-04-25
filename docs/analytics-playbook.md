@@ -6,7 +6,23 @@ Use this document alongside:
 
 - `docs/marketing-dimensions.md` for channel taxonomy and canonicalization rules
 - `docs/visitor-identity-stitching.md` for deterministic identity-linking behavior
+- `docs/last-non-direct-touch-approval-matrix.md` for the approved primary-winner rule matrix and Shopify fallback caveats
 - `docs/reporting-metrics.md` for KPI formulas used by the reporting APIs and dashboard
+
+## Dashboard Interpretation Quick Start
+
+Use this sequence when validating the dashboard or answering analytics questions without reopening the whole codebase:
+
+1. Start with `docs/reporting-metrics.md` to confirm KPI formulas and null-versus-zero behavior.
+2. Use this playbook for what each reporting table means, how attribution models differ, and why orders can move between channels.
+3. Use `docs/attribution-schema-v1.md` when a mismatch looks like a field-naming, normalization, or Shopify-attribute problem.
+4. Use `docs/operational-attribution-contracts.md` when a mismatch looks like resolver precedence, writeback, reconciliation, retention, or dead-letter behavior.
+
+Practical rule:
+
+- schema doc explains what the captured values mean
+- operational contract explains how capture and recovery behave
+- analytics playbook explains how those persisted values should be interpreted in reports
 
 ## What ROAS Radar Measures
 
@@ -309,6 +325,25 @@ When multiple identity-linked sessions are eligible:
 - the attribution models then decide how credit is allocated across those touchpoints
 - direct or untagged sessions can still appear, but rule-based weighting discounts them
 
+### Approved primary-winner semantics
+
+For the primary deterministic winner used by `last_touch` and `attribution_results`, ROAS Radar uses an approved last-non-direct-touch contract.
+
+Key rules:
+
+- if any eligible non-direct deterministic candidate exists, direct candidates are ignored for primary winner selection
+- a click-ID-only touch is non-direct even when every UTM field is missing
+- same-timestamp ties break by deterministic source precedence: `landing_session_id`, then `checkout_token`, then `cart_token`, then `customer_identity`
+- if timestamp and source precedence still tie, click-ID presence wins, then the lexicographically smaller `sessionId`
+
+Practical effect:
+
+- a later direct revisit does not overwrite an earlier paid or otherwise non-direct touch
+- a later non-direct touch still beats an earlier non-direct touch, even if the newer touch has UTMs and no click ID
+- direct traffic only becomes the primary winner when every eligible deterministic candidate is direct
+
+For the full approval matrix and change-discipline expectations, refer to `docs/last-non-direct-touch-approval-matrix.md`.
+
 ## Attribution Models
 
 ROAS Radar currently computes six attribution models for every resolved journey.
@@ -388,8 +423,22 @@ That is not a bug. It is how multi-touch credit allocation works in `attribution
 - checkout/cart token evidence
 - stitched identity fallback
 - unattributed fallback
+- synthetic Shopify-hint fallback in recovery-only flows
 
 It does not tell you that a campaign is “better” or that one model is more correct than another.
+
+### Shopify synthetic fallback is recovery-only
+
+When deterministic session resolution fails for an eligible web order, ROAS Radar may apply synthetic Shopify-hint attribution as a recovery step.
+
+Analyst expectations:
+
+- this fallback uses `attribution_reason = shopify_hint_derived`
+- it does not resolve to a real ROAS Radar session, so `session_id` can remain `null`
+- it must not overwrite a resolved deterministic winner
+- current confidence is lower than deterministic matching: `0.55` with a click ID, `0.40` without one
+
+Treat this as recovered attribution signal, not as evidence that a real tracked session was stitched successfully.
 
 ### `confidence_score` is about match strength
 
@@ -421,6 +470,26 @@ It is not a measure of channel performance, campaign quality, or model superiori
 
 - returns one row per order using the primary credit row for the selected model
 - useful for debugging why a particular order appears under a channel or campaign
+
+## Dashboard Reading Guide
+
+Use the dashboard in this order when sanity-checking performance:
+
+1. Summary cards
+   Confirm the selected date range and attribution model first. Card totals are model-scoped, so a model switch can legitimately move revenue and order counts even when raw orders did not change.
+2. Campaign table
+   Treat this as the best view for channel mix. `conversionRate`, `roas`, and `cac` are computed from the grouped slice, not from global totals.
+3. Timeseries chart
+   Use this to spot timing shifts, worker lag, or reconciliation effects. A recent date can look incomplete while attribution jobs or writeback jobs are still catching up.
+4. Orders view
+   Use this as the debugging surface for a specific order. It shows the primary credit row for the selected model, so it is the fastest place to confirm whether the disagreement is attribution logic or aggregate math.
+
+When a dashboard value looks wrong, ask these questions in order:
+
+- Is the selected attribution model the one you expect?
+- Is the issue a metric formula question? If so, use `docs/reporting-metrics.md`.
+- Is the issue a field capture or normalization question? If so, use `docs/attribution-schema-v1.md`.
+- Is the issue a resolver, Shopify writeback, retry, or reconciliation question? If so, use `docs/operational-attribution-contracts.md`.
 
 ## Identity Stitching Impact
 

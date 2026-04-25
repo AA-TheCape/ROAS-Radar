@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 
 import App from './App';
+import { AttributionTracker } from './lib/attributionTracking';
 import './styles.css';
 
 declare global {
@@ -35,6 +36,7 @@ async function bootstrap() {
 
   ReactDOM.createRoot(rootContainer).render(
     <React.StrictMode>
+      <AttributionTracker />
       <App />
     </React.StrictMode>
   );

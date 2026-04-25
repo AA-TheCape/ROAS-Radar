@@ -4,7 +4,7 @@ This directory contains the operational scripts and environment definitions for 
 
 ## Topology
 
-The deployment flow assumes six deployable workloads plus two Cloud Scheduler triggers:
+The deployment flow assumes seven deployable workloads plus three Cloud Scheduler triggers:
 
 - `roas-radar-api`: public Cloud Run service for `/track`, Shopify webhooks, and authenticated reporting APIs.
 - `roas-radar-dashboard`: public Cloud Run service for the React reporting dashboard.
@@ -12,8 +12,10 @@ The deployment flow assumes six deployable workloads plus two Cloud Scheduler tr
 - `roas-radar-migrate`: Cloud Run Job that runs `npm run db:migrate:start` with elevated database credentials.
 - `roas-radar-meta-ads-sync`: Cloud Run Job that runs `npm run meta-ads:sync:start` once per invocation.
 - `roas-radar-google-ads-sync`: Cloud Run Job that runs `npm run google-ads:sync:start` once per invocation.
+- `roas-radar-session-retention`: Cloud Run Job that runs `npm run session-attribution:retention:start` to prune expired attribution-session records.
 - `roas-radar-meta-ads-sync-scheduler`: Cloud Scheduler job that invokes the Meta Ads Cloud Run Job.
 - `roas-radar-google-ads-sync-scheduler`: Cloud Scheduler job that invokes the Google Ads Cloud Run Job.
+- `roas-radar-session-retention-scheduler`: Cloud Scheduler job that invokes the session-retention Cloud Run Job.
 
 The API and worker use the `roas_app` PostgreSQL login. The migration job uses the `roas_migrator` PostgreSQL login. Do not reuse the migrator credential in long-lived application services.
 
@@ -44,10 +46,17 @@ The environment files also carry non-secret runtime settings that must be popula
 - `GOOGLE_ADS_JOB_NAME`
 - `META_ADS_SCHEDULER_JOB_NAME`
 - `GOOGLE_ADS_SCHEDULER_JOB_NAME`
+- `RETENTION_JOB_NAME`
+- `RETENTION_SCHEDULER_JOB_NAME`
+- `RETENTION_JOB_SERVICE_ACCOUNT_NAME`
 - `ADS_SYNC_DATABASE_POOL_MAX`
 - `ADS_SYNC_TIME_ZONE`
 - `META_ADS_SYNC_SCHEDULE`
 - `GOOGLE_ADS_SYNC_SCHEDULE`
+- `RETENTION_SCHEDULE`
+- `SESSION_ATTRIBUTION_RETENTION_DAYS`
+- `SESSION_ATTRIBUTION_RETENTION_BATCH_SIZE`
+- `SESSION_ATTRIBUTION_RETENTION_MAX_BATCHES`
 
 ## First-Time Setup
 

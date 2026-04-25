@@ -8,14 +8,14 @@ const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
 const testDir = path.join(repoRoot, 'test');
 const mode = process.argv[2] ?? 'all';
+const validModes = new Set(['all', 'unit', 'integration']);
+const integrationTestPattern = /\.integration\.test\.[cm]?[jt]s$/;
+const explicitIntegrationTests = new Set(['dead-letter-replay.test.ts', 'shopify-writeback.test.ts']);
 
-const integrationTests = new Set([
-  'attribution-e2e.integration.test.ts',
-  'reporting-aggregates.integration.test.ts',
-  'reporting-api.integration.test.ts'
-]);
-const unitTests = [];
-const selectedTests = [];
+if (!validModes.has(mode)) {
+  process.stderr.write(`Unknown test mode: ${mode}\n`);
+  process.exit(1);
+}
 
 function ensureDashboardDependencies() {
   const dashboardNodeModules = path.join(repoRoot, 'dashboard', 'node_modules');
@@ -47,29 +47,24 @@ function runMigrations() {
   }
 }
 
-for (const file of readdirSync(testDir).sort()) {
-  if (!file.endsWith('.test.ts') && !file.endsWith('.test.js')) {
-    continue;
-  }
+const allTests = readdirSync(testDir)
+  .filter((file) => file.endsWith('.test.ts') || file.endsWith('.test.js'))
+  .sort();
 
-  if (integrationTests.has(file)) {
-    continue;
-  }
+const integrationTests = allTests
+  .filter((file) => integrationTestPattern.test(file) || explicitIntegrationTests.has(file))
+  .map((file) => path.join('test', file));
 
-  unitTests.push(path.join('test', file));
-}
+const unitTests = allTests
+  .filter((file) => !integrationTestPattern.test(file) && !explicitIntegrationTests.has(file))
+  .map((file) => path.join('test', file));
 
-if (mode === 'unit') {
-  selectedTests.push(...unitTests);
-} else if (mode === 'integration') {
-  selectedTests.push(...Array.from(integrationTests, (file) => path.join('test', file)));
-} else if (mode === 'all') {
-  selectedTests.push(...unitTests);
-  selectedTests.push(...Array.from(integrationTests, (file) => path.join('test', file)));
-} else {
-  process.stderr.write(`Unknown test mode: ${mode}\n`);
-  process.exit(1);
-}
+const selectedTests =
+  mode === 'unit'
+    ? unitTests
+    : mode === 'integration'
+      ? integrationTests
+      : [...unitTests, ...integrationTests];
 
 if (selectedTests.length === 0) {
   process.stderr.write(`No tests matched mode ${mode}\n`);
@@ -84,7 +79,15 @@ if (mode === 'integration' || mode === 'all') {
   runMigrations();
 }
 
-const result = spawnSync('npx', ['tsx', '--test', ...selectedTests], {
+const args = ['tsx', '--test'];
+
+if (mode === 'integration') {
+  args.push('--test-concurrency=1');
+}
+
+args.push(...selectedTests);
+
+const result = spawnSync('npx', args, {
   cwd: repoRoot,
   stdio: 'inherit',
   env: process.env

@@ -1,0 +1,5 @@
+{
+  "name": "roas_attribution_resolver_outcomes",
+  "description": "Counts deterministic resolver outcomes for attribution winner selection.",
+  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"attribution_resolver_outcome\""
+}
