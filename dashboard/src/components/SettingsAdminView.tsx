@@ -34,6 +34,7 @@ import {
   Input,
   MetricCopy,
   MetricValue,
+  Modal,
   Panel,
   PrimaryCell,
   SectionState,
@@ -318,6 +319,7 @@ export default function SettingsAdminView({
   const [selectedRecoveryAction, setSelectedRecoveryAction] = useState<
     'shopify-backfill' | 'shopify-attribution-recovery' | 'shopify-order-attribution-backfill' | null
   >(null);
+  const [showOrderAttributionConfirmModal, setShowOrderAttributionConfirmModal] = useState(false);
   const [userSort, setUserSort] = useState<SortState<'user' | 'role' | 'status' | 'lastLogin'>>({
     key: 'user',
     direction: 'asc'
@@ -427,6 +429,24 @@ export default function SettingsAdminView({
       key,
       direction: current.key === key && current.direction === 'desc' ? 'asc' : 'desc'
     }));
+  }
+
+  function handleOrderAttributionQueueClick() {
+    if (shopifyOrderAttributionBackfillOptions.dryRun) {
+      void onShopifyOrderAttributionBackfill();
+      return;
+    }
+
+    setShowOrderAttributionConfirmModal(true);
+  }
+
+  function closeOrderAttributionConfirmModal() {
+    setShowOrderAttributionConfirmModal(false);
+  }
+
+  function confirmOrderAttributionBackfill() {
+    setShowOrderAttributionConfirmModal(false);
+    void onShopifyOrderAttributionBackfill();
   }
 
   return (
@@ -767,7 +787,7 @@ export default function SettingsAdminView({
                           <ButtonRow>
                             <Button
                               type="button"
-                              onClick={() => void onShopifyOrderAttributionBackfill()}
+                              onClick={handleOrderAttributionQueueClick}
                               disabled={Boolean(orderAttributionBackfillError) || !shopifyConnection.data?.connected || isShopifyBusy}
                             >
                               {actionFeedback.loading === 'shopify-order-attribution-backfill'
@@ -797,6 +817,51 @@ export default function SettingsAdminView({
               </div>
             </ConnectionState>
           </IntegrationCard>
+          <Modal
+            open={showOrderAttributionConfirmModal}
+            title="Confirm non-dry-run attribution backfill"
+            description="This run will write recovered attribution changes instead of only analyzing the selected date window."
+            onClose={closeOrderAttributionConfirmModal}
+            footer={
+              <>
+                <Button type="button" tone="secondary" onClick={closeOrderAttributionConfirmModal}>
+                  No, go back
+                </Button>
+                <Button type="button" onClick={confirmOrderAttributionBackfill}>
+                  Yes, queue backfill
+                </Button>
+              </>
+            }
+          >
+            <div className="grid gap-4">
+              <Banner tone="warning">
+                This non-dry-run backfill may update internal attribution data
+                {shopifyOrderAttributionBackfillOptions.skipShopifyWriteback
+                  ? ', but Shopify writeback is disabled for this run.'
+                  : ' and may also write updates back to Shopify when recovered attribution is available.'}
+              </Banner>
+              <DetailList className="xl:grid-cols-2">
+                <div>
+                  <dt>Date window</dt>
+                  <dd>
+                    {shopifyBackfillRange.startDate} to {shopifyBackfillRange.endDate}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Order scan limit</dt>
+                  <dd>{shopifyOrderAttributionBackfillOptions.limit}</dd>
+                </div>
+                <div>
+                  <dt>Web orders only</dt>
+                  <dd>{shopifyOrderAttributionBackfillOptions.webOrdersOnly ? 'Yes' : 'No'}</dd>
+                </div>
+                <div>
+                  <dt>Shopify writeback</dt>
+                  <dd>{shopifyOrderAttributionBackfillOptions.skipShopifyWriteback ? 'Skipped' : 'Allowed'}</dd>
+                </div>
+              </DetailList>
+            </div>
+          </Modal>
 
           <IntegrationCard
             eyebrow="Ad platform"

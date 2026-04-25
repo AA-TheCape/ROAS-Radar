@@ -7,11 +7,11 @@ import {
   createOrderDetailsProps,
   createReportingDashboardProps,
   createSettingsAdminProps,
-  createShellProps,
   h,
+  createShellProps,
+  tick,
   loadDashboardModule,
-  mountUi,
-  tick
+  mountUi
 } from './dashboard-ui-test-helpers';
 
 test('authenticated shell mobile navigation opens and closes on route change', async () => {
@@ -471,8 +471,163 @@ test('settings admin view explains recovery actions in recommended operator orde
     assert.match(text, /Run this first to import historical Shopify orders for the window/);
     assert.match(text, /Recover attribution hints/);
     assert.match(text, /Run this after order import when web orders are still unattributed/);
-    assert.match(text, /Backfill order attribution/);
+    assert.match(text, /Select attribution backfill/);
     assert.match(text, /Run this last to queue the broader attribution backfill for the same window/);
+  } finally {
+    mounted.cleanup();
+  }
+});
+
+test('settings admin view bypasses confirmation for dry-run attribution backfills', async () => {
+  const { default: SettingsAdminView } = await loadDashboardModule<
+    typeof import('../dashboard/src/components/SettingsAdminView')
+  >('dashboard/src/components/SettingsAdminView.tsx');
+
+  let queuedCount = 0;
+  const mounted = await mountUi(
+    h(
+      SettingsAdminView,
+      createSettingsAdminProps({
+        onShopifyOrderAttributionBackfill() {
+          queuedCount += 1;
+        }
+      })
+    )
+  );
+
+  try {
+    const selectButton = Array.from(mounted.container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('Select attribution backfill')
+    );
+    assert.ok(selectButton);
+    click(selectButton);
+    await tick();
+
+    const queueButton = Array.from(mounted.container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('Queue order attribution backfill')
+    );
+    assert.ok(queueButton);
+    click(queueButton);
+    await tick();
+
+    assert.equal(queuedCount, 1);
+    assert.equal(mounted.dom.window.document.querySelector('dialog'), null);
+  } finally {
+    mounted.cleanup();
+  }
+});
+
+test('settings admin view requires confirmation before non-dry-run attribution backfills', async () => {
+  const { default: SettingsAdminView } = await loadDashboardModule<
+    typeof import('../dashboard/src/components/SettingsAdminView')
+  >('dashboard/src/components/SettingsAdminView.tsx');
+
+  let queuedCount = 0;
+  const mounted = await mountUi(
+    h(
+      SettingsAdminView,
+      createSettingsAdminProps({
+        shopifyOrderAttributionBackfillOptions: {
+          dryRun: false,
+          limit: '500',
+          webOrdersOnly: true,
+          skipShopifyWriteback: false
+        },
+        onShopifyOrderAttributionBackfill() {
+          queuedCount += 1;
+        }
+      })
+    )
+  );
+
+  try {
+    const selectButton = Array.from(mounted.container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('Select attribution backfill')
+    );
+    assert.ok(selectButton);
+    click(selectButton);
+    await tick();
+
+    const queueButton = Array.from(mounted.container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('Queue order attribution backfill')
+    );
+    assert.ok(queueButton);
+    click(queueButton);
+    await tick();
+
+    assert.equal(queuedCount, 0);
+    assert.ok(mounted.dom.window.document.querySelector('dialog'));
+    assert.match(mounted.container.textContent ?? '', /may also write updates back to Shopify/);
+
+    const confirmButton = Array.from(mounted.dom.window.document.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('Yes, queue backfill')
+    );
+    assert.ok(confirmButton);
+    click(confirmButton);
+    await tick();
+
+    assert.equal(queuedCount, 1);
+    assert.equal(mounted.dom.window.document.querySelector('dialog'), null);
+  } finally {
+    mounted.cleanup();
+  }
+});
+
+test('settings admin view lets operators cancel non-dry-run attribution confirmation', async () => {
+  const { default: SettingsAdminView } = await loadDashboardModule<
+    typeof import('../dashboard/src/components/SettingsAdminView')
+  >('dashboard/src/components/SettingsAdminView.tsx');
+
+  let queuedCount = 0;
+  const mounted = await mountUi(
+    h(
+      SettingsAdminView,
+      createSettingsAdminProps({
+        shopifyOrderAttributionBackfillOptions: {
+          dryRun: false,
+          limit: '500',
+          webOrdersOnly: true,
+          skipShopifyWriteback: true
+        },
+        onShopifyOrderAttributionBackfill() {
+          queuedCount += 1;
+        }
+      })
+    )
+  );
+
+  try {
+    const selectButton = Array.from(mounted.container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('Select attribution backfill')
+    );
+    assert.ok(selectButton);
+    click(selectButton);
+    await tick();
+
+    const queueButton = Array.from(mounted.container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('Queue order attribution backfill')
+    );
+    assert.ok(queueButton);
+    click(queueButton);
+    await tick();
+
+    assert.ok(mounted.dom.window.document.querySelector('dialog'));
+    assert.match(mounted.container.textContent ?? '', /Shopify writeback is disabled for this run/);
+
+    const cancelButton = Array.from(mounted.dom.window.document.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('No, go back')
+    );
+    assert.ok(cancelButton);
+    click(cancelButton);
+    await tick();
+
+    assert.equal(queuedCount, 0);
+    assert.equal(mounted.dom.window.document.querySelector('dialog'), null);
+
+    const restoredQueueButton = Array.from(mounted.container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('Queue order attribution backfill')
+    );
+    assert.ok(restoredQueueButton);
   } finally {
     mounted.cleanup();
   }

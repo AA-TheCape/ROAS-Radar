@@ -595,6 +595,12 @@ export function createSettingsAdminProps(
     } satisfies AsyncSection<import('../dashboard/src/lib/api').ShopifyConnectionResponse>,
     shopifyBackfillRange: { startDate: '2026-04-01', endDate: '2026-04-20' },
     setShopifyBackfillRange: noop,
+    shopifyOrderAttributionBackfillOptions: {
+      dryRun: true,
+      limit: '500',
+      webOrdersOnly: true,
+      skipShopifyWriteback: false
+    },
     metaConnection: {
       data: {
         config: {
