@@ -1,10 +1,20 @@
+import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pool } from './pool.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const migrationsDir = path.resolve(__dirname, '../../db/migrations');
+const migrationDirCandidates = [
+    path.resolve(__dirname, '../../db/migrations'),
+    path.resolve(__dirname, '../../../db/migrations'),
+    path.resolve(process.cwd(), 'db/migrations')
+];
+const resolvedMigrationsDir = migrationDirCandidates.find((candidate) => existsSync(candidate));
+if (!resolvedMigrationsDir) {
+    throw new Error(`Could not locate db/migrations. Tried: ${migrationDirCandidates.join(', ')}`);
+}
+const migrationsDir = resolvedMigrationsDir;
 async function migrate() {
     const client = await pool.connect();
     try {

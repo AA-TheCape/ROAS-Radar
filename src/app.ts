@@ -2,6 +2,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 
 import { checkDatabaseHealth } from './db/pool.js';
 import { createAuthRouter, createUserAdminRouter } from './modules/auth/index.js';
+import { createAttributionAdminRouter } from './modules/attribution/admin.js';
 import { createGoogleAdsAdminRouter, createGoogleAdsPublicRouter } from './modules/google-ads/index.js';
 import { createMetaAdsAdminRouter, createMetaAdsPublicRouter } from './modules/meta-ads/index.js';
 import { createReportingRouter } from './modules/reporting/index.js';
@@ -63,6 +64,7 @@ export function createApp() {
   app.use('/api/settings', createSettingsRouter());
   app.use('/api/reporting', createReportingRouter());
   app.use('/api/admin/users', createUserAdminRouter());
+  app.use('/api/admin/attribution', createAttributionAdminRouter());
   app.use('/shopify', createShopifyPublicRouter());
   app.use('/api/admin/shopify', createShopifyAdminRouter());
   app.use('/meta-ads', createMetaAdsPublicRouter());

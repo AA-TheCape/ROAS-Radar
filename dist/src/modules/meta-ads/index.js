@@ -263,6 +263,13 @@ function buildPlanningDates(now = new Date(), lastSyncCompletedAt = null) {
     }
     return listDateRangeInclusive(formatDateOnly(firstDate), formatDateOnly(currentBusinessDate));
 }
+function buildIncrementalPlanningDates(now = new Date(), lastSyncCompletedAt = null, lastSyncPlannedFor = null) {
+    const today = formatDateInTimeZone(now, META_ADS_SYNC_TIME_ZONE);
+    if (lastSyncPlannedFor === today) {
+        return [today];
+    }
+    return buildPlanningDates(now, lastSyncCompletedAt);
+}
 function buildInsightsEntityId(level, row) {
     switch (level) {
         case 'account':
@@ -638,18 +645,17 @@ async function planIncrementalSyncs(now = new Date()) {
     let plannedJobs = 0;
     const today = formatDateInTimeZone(now, META_ADS_SYNC_TIME_ZONE);
     for (const row of result.rows) {
-        if (row.last_sync_planned_for === today) {
-            continue;
-        }
-        const dates = buildPlanningDates(now, row.last_sync_completed_at);
+        const dates = buildIncrementalPlanningDates(now, row.last_sync_completed_at, row.last_sync_planned_for);
         if (dates.length === 0) {
             continue;
         }
         plannedJobs += await enqueueSyncDates(row.id, dates);
-        await query('UPDATE meta_ads_connections SET last_sync_planned_for = $2::date, updated_at = now() WHERE id = $1', [
-            row.id,
-            today
-        ]);
+        if (row.last_sync_planned_for !== today) {
+            await query('UPDATE meta_ads_connections SET last_sync_planned_for = $2::date, updated_at = now() WHERE id = $1', [
+                row.id,
+                today
+            ]);
+        }
     }
     return plannedJobs;
 }
@@ -1151,6 +1157,7 @@ export const __metaAdsTestUtils = {
     computeRetryDelaySeconds,
     shouldRefreshToken,
     buildPlanningDates,
+    buildIncrementalPlanningDates,
     listDateRangeInclusive,
     normalizeInsightRows,
     rollupNormalizedSpendRows,
