@@ -25,7 +25,7 @@ type ShopifyOrderWritebackJob = {
 
 type CanonicalAttributeSourceRow = {
   shopify_order_id: string;
-  landing_session_id: string | null;
+  resolved_session_id: string | null;
   raw_payload: unknown;
   landing_url: string | null;
   identity_referrer_url: string | null;
@@ -193,8 +193,8 @@ function extractRawPayloadAttributeMap(rawPayload: unknown): Map<string, string>
 }
 
 function buildCanonicalAttributeRows(row: CanonicalAttributeSourceRow): CanonicalAttributeRow[] {
-  if (!row.landing_session_id) {
-    throw new ShopifyWritebackError('shopify order is missing a landing_session_id', { retryable: false });
+  if (!row.resolved_session_id) {
+    throw new ShopifyWritebackError('shopify order is missing a resolved roas_radar_session_id', { retryable: false });
   }
 
   if (row.landing_url == null && row.page_url == null) {
@@ -203,7 +203,7 @@ function buildCanonicalAttributeRows(row: CanonicalAttributeSourceRow): Canonica
 
   const attributes: CanonicalAttributeRow[] = [
     { key: 'schema_version', value: String(ATTRIBUTION_SCHEMA_VERSION) },
-    { key: 'roas_radar_session_id', value: row.landing_session_id }
+    { key: 'roas_radar_session_id', value: row.resolved_session_id }
   ];
 
   const urlPairs: Array<[string, string | null]> = [
@@ -242,7 +242,7 @@ async function fetchCanonicalAttributeSource(db: Queryable, shopifyOrderId: stri
     `
       SELECT
         o.shopify_order_id,
-        o.landing_session_id::text AS landing_session_id,
+        COALESCE(o.landing_session_id, attribution.session_id)::text AS resolved_session_id,
         o.raw_payload,
         identity_capture.landing_url,
         identity_capture.referrer_url AS identity_referrer_url,
@@ -271,8 +271,10 @@ async function fetchCanonicalAttributeSource(db: Queryable, shopifyOrderId: stri
         last_touch.ttclid,
         last_touch.msclkid
       FROM shopify_orders o
+      LEFT JOIN attribution_results attribution
+        ON attribution.shopify_order_id = o.shopify_order_id
       LEFT JOIN session_attribution_identities identity_capture
-        ON identity_capture.roas_radar_session_id = o.landing_session_id
+        ON identity_capture.roas_radar_session_id = COALESCE(o.landing_session_id, attribution.session_id)
       LEFT JOIN LATERAL (
         SELECT
           page_url,
@@ -289,7 +291,7 @@ async function fetchCanonicalAttributeSource(db: Queryable, shopifyOrderId: stri
           ttclid,
           msclkid
         FROM session_attribution_touch_events
-        WHERE roas_radar_session_id = o.landing_session_id
+        WHERE roas_radar_session_id = COALESCE(o.landing_session_id, attribution.session_id)
         ORDER BY occurred_at DESC, captured_at DESC, id DESC
         LIMIT 1
       ) AS last_touch ON TRUE
@@ -309,6 +311,12 @@ async function fetchCanonicalAttributeRows(db: Queryable, shopifyOrderId: string
   }
 
   return buildCanonicalAttributeRows(row);
+}
+
+export async function previewShopifyOrderWritebackAttributes(
+  shopifyOrderId: string
+): Promise<CanonicalAttributeRow[] | null> {
+  return fetchCanonicalAttributeRows({ query }, shopifyOrderId);
 }
 
 async function fetchShopifyWritebackCredentials(): Promise<{ shopDomain: string; accessToken: string }> {
@@ -596,6 +604,36 @@ async function markJobForRetry(job: ShopifyOrderWritebackJob, workerId: string, 
   return 'retry';
 }
 
+export async function applyShopifyOrderWriteback(input: {
+  workerId: string;
+  shopifyOrderId: string;
+  requestedReason: string;
+}): Promise<{ status: 'completed' | 'skipped'; attributesCount: number }> {
+  const attributes = await fetchCanonicalAttributeRows({ query }, input.shopifyOrderId);
+
+  if (!attributes || attributes.length === 0) {
+    return {
+      status: 'skipped',
+      attributesCount: 0
+    };
+  }
+
+  const payload = {
+    workerId: input.workerId,
+    shopifyOrderId: input.shopifyOrderId,
+    requestedReason: input.requestedReason,
+    attributes
+  };
+
+  appliedWritebacks.push(payload);
+  await shopifyWritebackProcessor(payload);
+
+  return {
+    status: 'completed',
+    attributesCount: attributes.length
+  };
+}
+
 export async function processShopifyOrderWritebackQueue(options: ProcessShopifyOrderWritebackOptions): Promise<{
   claimedJobs: number;
   completedJobs: number;
@@ -615,23 +653,17 @@ export async function processShopifyOrderWritebackQueue(options: ProcessShopifyO
 
   for (const job of jobs) {
     try {
-      const attributes = await fetchCanonicalAttributeRows({ query }, job.shopify_order_id);
+      const outcome = await applyShopifyOrderWriteback({
+        workerId,
+        shopifyOrderId: job.shopify_order_id,
+        requestedReason: job.requested_reason
+      });
 
-      if (!attributes || attributes.length === 0) {
+      if (outcome.status === 'skipped') {
         await markJobSkipped(job.id, 'canonical_attributes_not_available');
         skippedJobs += 1;
         continue;
       }
-
-      const payload = {
-        workerId,
-        shopifyOrderId: job.shopify_order_id,
-        requestedReason: job.requested_reason,
-        attributes
-      };
-
-      appliedWritebacks.push(payload);
-      await shopifyWritebackProcessor(payload);
       await markJobCompleted(job.id);
       completedJobs += 1;
     } catch (error) {
