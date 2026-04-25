@@ -127,39 +127,57 @@ class TrackingHttpError extends Error {
   }
 }
 
-const trimmedStringSchema = (maxLength: number) =>
+const rawRequiredStringSchema = z.string();
+
+const rawOptionalStringSchema = z.union([z.string(), z.null(), z.undefined()]);
+
+const normalizedRequiredStringSchema = (maxLength: number) =>
   z
     .string()
-    .trim()
     .min(1)
     .max(maxLength);
 
-const nullableTrimmedStringSchema = (maxLength: number) =>
-  z
-    .union([z.string(), z.null(), z.undefined()])
-    .transform((value) => normalizeAttributionString(value))
-    .refine((value) => value === null || value.length <= maxLength, {
-      message: `String must contain at most ${maxLength} character(s)`
-    });
+const normalizedOptionalStringSchema = (maxLength: number) =>
+  z.union([z.string(), z.null()]).refine((value) => value === null || value.length <= maxLength, {
+    message: `String must contain at most ${maxLength} character(s)`
+  });
 
 const trackingEventSchema = z
   .object({
     eventType: z.enum(EVENT_TYPES),
-    occurredAt: z.string().datetime({ offset: true }),
-    sessionId: z.string().uuid(),
-    pageUrl: trimmedStringSchema(MAX_ATTRIBUTION_URL_LENGTH),
-    referrerUrl: nullableTrimmedStringSchema(MAX_ATTRIBUTION_URL_LENGTH),
-    shopifyCartToken: nullableTrimmedStringSchema(MAX_TOKEN_LENGTH),
-    shopifyCheckoutToken: nullableTrimmedStringSchema(MAX_TOKEN_LENGTH),
-    clientEventId: nullableTrimmedStringSchema(MAX_CLIENT_EVENT_ID_LENGTH),
+    occurredAt: rawRequiredStringSchema,
+    sessionId: rawRequiredStringSchema,
+    pageUrl: rawRequiredStringSchema,
+    referrerUrl: rawOptionalStringSchema,
+    shopifyCartToken: rawOptionalStringSchema,
+    shopifyCheckoutToken: rawOptionalStringSchema,
+    clientEventId: rawOptionalStringSchema,
     consentState: attributionConsentStateSchema.optional(),
     context: z
       .object({
-        userAgent: nullableTrimmedStringSchema(MAX_USER_AGENT_LENGTH),
-        screen: nullableTrimmedStringSchema(MAX_SCREEN_LENGTH),
-        language: nullableTrimmedStringSchema(MAX_LANGUAGE_LENGTH)
+        userAgent: rawOptionalStringSchema,
+        screen: rawOptionalStringSchema,
+        language: rawOptionalStringSchema
       })
       .default({})
+  });
+
+const normalizedTrackingEventSchema = z
+  .object({
+    eventType: z.enum(EVENT_TYPES),
+    occurredAt: z.string().datetime({ offset: true }),
+    sessionId: z.string().uuid(),
+    pageUrl: normalizedRequiredStringSchema(MAX_ATTRIBUTION_URL_LENGTH),
+    referrerUrl: normalizedOptionalStringSchema(MAX_ATTRIBUTION_URL_LENGTH),
+    shopifyCartToken: normalizedOptionalStringSchema(MAX_TOKEN_LENGTH),
+    shopifyCheckoutToken: normalizedOptionalStringSchema(MAX_TOKEN_LENGTH),
+    clientEventId: normalizedOptionalStringSchema(MAX_CLIENT_EVENT_ID_LENGTH),
+    consentState: attributionConsentStateSchema,
+    context: z.object({
+      userAgent: normalizedOptionalStringSchema(MAX_USER_AGENT_LENGTH),
+      screen: normalizedOptionalStringSchema(MAX_SCREEN_LENGTH),
+      language: normalizedOptionalStringSchema(MAX_LANGUAGE_LENGTH)
+    })
   })
   .superRefine((value, ctx) => {
     validateTrackingTimestamp(value.occurredAt, ctx);
@@ -191,16 +209,12 @@ const attributionCaptureRequestSchema = z
     ttclid: z.union([z.string(), z.null(), z.undefined()]).optional(),
     msclkid: z.union([z.string(), z.null(), z.undefined()]).optional(),
     consent_state: attributionConsentStateSchema.optional()
-  })
-  .transform((value) => ({
-    capture: normalizeAttributionCaptureV1(value),
-    consentState: normalizeAttributionConsentState(value.consent_state)
-  }));
+  });
 
 const sessionBootstrapQuerySchema = z.object({
-  pageUrl: trimmedStringSchema(MAX_ATTRIBUTION_URL_LENGTH),
-  landingUrl: nullableTrimmedStringSchema(MAX_ATTRIBUTION_URL_LENGTH),
-  referrerUrl: nullableTrimmedStringSchema(MAX_ATTRIBUTION_URL_LENGTH)
+  pageUrl: rawRequiredStringSchema,
+  landingUrl: rawOptionalStringSchema,
+  referrerUrl: rawOptionalStringSchema
 });
 
 function logAttributionCaptureObserved(
@@ -284,6 +298,20 @@ function hashIp(value: string | null | undefined): string | null {
   }
 
   return createHash('sha256').update(normalized).digest('hex');
+}
+
+function buildRawPayloadStorageMetadata(rawPayload: TrackingRawPayload): {
+  rawPayloadJson: string;
+  payloadSizeBytes: number;
+  payloadHash: string;
+} {
+  const rawPayloadJson = JSON.stringify(rawPayload);
+
+  return {
+    rawPayloadJson,
+    payloadSizeBytes: Buffer.byteLength(rawPayloadJson, 'utf8'),
+    payloadHash: createHash('sha256').update(rawPayloadJson).digest('hex')
+  };
 }
 
 function hashTrackingFingerprint(input: SanitizedTrackingEventInput): string {
@@ -383,12 +411,14 @@ function buildCaptureFromTrackingEvent(input: SanitizedTrackingEventInput): Attr
 }
 
 function sanitizeTrackingInput(input: TrackingRequestBody): SanitizedTrackingEventInput {
+  const sanitizedReferrerUrl = normalizeTrackingUrl(input.referrerUrl);
+
   return {
     eventType: input.eventType,
     occurredAt: new Date(input.occurredAt).toISOString(),
     sessionId: input.sessionId,
     pageUrl: normalizeTrackingUrl(input.pageUrl) ?? input.pageUrl,
-    referrerUrl: normalizeTrackingUrl(input.referrerUrl),
+    referrerUrl: input.referrerUrl == null ? null : (sanitizedReferrerUrl ?? input.referrerUrl),
     shopifyCartToken: normalizeNullableString(input.shopifyCartToken),
     shopifyCheckoutToken: normalizeNullableString(input.shopifyCheckoutToken),
     clientEventId: normalizeNullableString(input.clientEventId),
@@ -398,6 +428,13 @@ function sanitizeTrackingInput(input: TrackingRequestBody): SanitizedTrackingEve
       screen: normalizeNullableString(input.context.screen),
       language: normalizeNullableString(input.context.language)
     }
+  };
+}
+
+function normalizeAttributionCaptureRequest(body: z.infer<typeof attributionCaptureRequestSchema>): AttributionCaptureRequest {
+  return {
+    capture: normalizeAttributionCaptureV1(body),
+    consentState: normalizeAttributionConsentState(body.consent_state)
   };
 }
 
@@ -665,6 +702,7 @@ async function insertTrackingEventForCapture(
   }
 ): Promise<string> {
   const eventId = randomUUID();
+  const { rawPayloadJson, payloadSizeBytes, payloadHash } = buildRawPayloadStorageMetadata(input.rawPayload);
 
   try {
     await client.query(
@@ -690,7 +728,9 @@ async function insertTrackingEventForCapture(
           consent_state,
           ingestion_fingerprint,
           ingestion_source,
-          raw_payload
+          raw_payload,
+          payload_size_bytes,
+          payload_hash
         )
         VALUES (
           $1::uuid,
@@ -713,7 +753,9 @@ async function insertTrackingEventForCapture(
           $18,
           $19,
           $20,
-          $21::jsonb
+          $21::jsonb,
+          $22,
+          $23
         )
       `,
       [
@@ -737,7 +779,9 @@ async function insertTrackingEventForCapture(
         input.consentState,
         input.ingestionFingerprint,
         input.ingestionSource,
-        JSON.stringify(input.rawPayload)
+        rawPayloadJson,
+        payloadSizeBytes,
+        payloadHash
       ]
     );
   } catch (error) {
@@ -763,6 +807,7 @@ async function insertTrackingBrowserEvent(
 ): Promise<string> {
   const capture = buildCaptureFromTrackingEvent(input);
   const eventId = randomUUID();
+  const { rawPayloadJson, payloadSizeBytes, payloadHash } = buildRawPayloadStorageMetadata(rawPayload);
 
   try {
     await client.query(
@@ -791,7 +836,9 @@ async function insertTrackingBrowserEvent(
           consent_state,
           ingestion_fingerprint,
           ingestion_source,
-          raw_payload
+          raw_payload,
+          payload_size_bytes,
+          payload_hash
         )
         VALUES (
           $1::uuid,
@@ -817,7 +864,9 @@ async function insertTrackingBrowserEvent(
           $21,
           $22,
           $23,
-          $24::jsonb
+          $24::jsonb,
+          $25,
+          $26
         )
       `,
       [
@@ -844,7 +893,9 @@ async function insertTrackingBrowserEvent(
         input.consentState,
         ingestionFingerprint,
         'browser',
-        JSON.stringify(rawPayload)
+        rawPayloadJson,
+        payloadSizeBytes,
+        payloadHash
       ]
     );
   } catch (error) {
@@ -877,6 +928,8 @@ async function insertAttributionTouchEvent(
     shopifyCheckoutToken?: string | null;
   }
 ): Promise<{ id: number; deduplicated: boolean }> {
+  const { rawPayloadJson, payloadSizeBytes, payloadHash } = buildRawPayloadStorageMetadata(input.rawPayload);
+
   try {
     const result = await client.query<{ id: number }>(
       `
@@ -902,6 +955,8 @@ async function insertAttributionTouchEvent(
           ingestion_source,
           ingestion_fingerprint,
           raw_payload,
+          payload_size_bytes,
+          payload_hash,
           shopify_cart_token,
           shopify_checkout_token
         )
@@ -928,7 +983,9 @@ async function insertAttributionTouchEvent(
           $20,
           $21::jsonb,
           $22,
-          $23
+          $23,
+          $24,
+          $25
         )
         RETURNING id
       `,
@@ -953,7 +1010,9 @@ async function insertAttributionTouchEvent(
         input.consentState,
         input.ingestionSource,
         input.ingestionFingerprint,
-        JSON.stringify(input.rawPayload),
+        rawPayloadJson,
+        payloadSizeBytes,
+        payloadHash,
         input.shopifyCartToken ?? null,
         input.shopifyCheckoutToken ?? null
       ]
@@ -1055,15 +1114,14 @@ async function ingestAttributionCapture(
 }
 
 async function ingestTrackingEvent(
-  input: TrackingRequestBody,
+  input: SanitizedTrackingEventInput,
   rawPayload: TrackingRawPayload,
   requestIp: string | null
 ): Promise<TrackingIngestResult> {
-  const sanitizedInput = sanitizeTrackingInput(input);
-  const ingestionFingerprint = hashTrackingFingerprint(sanitizedInput);
+  const ingestionFingerprint = hashTrackingFingerprint(input);
 
-  if (sanitizedInput.clientEventId) {
-    const existingByClientEventId = await findExistingTrackingEventByClientEventId(sanitizedInput.clientEventId);
+  if (input.clientEventId) {
+    const existingByClientEventId = await findExistingTrackingEventByClientEventId(input.clientEventId);
 
     if (existingByClientEventId) {
       return {
@@ -1071,7 +1129,7 @@ async function ingestTrackingEvent(
         ingestedAt: existingByClientEventId.ingested_at.toISOString(),
         sessionId: existingByClientEventId.session_id,
         deduplicated: true,
-        sanitizedInput
+        sanitizedInput: input
       };
     }
   }
@@ -1084,34 +1142,34 @@ async function ingestTrackingEvent(
       ingestedAt: existingByFingerprint.ingested_at.toISOString(),
       sessionId: existingByFingerprint.session_id,
       deduplicated: true,
-      sanitizedInput
+      sanitizedInput: input
     };
   }
 
-  const derivedCapture = buildCaptureFromTrackingEvent(sanitizedInput);
+  const derivedCapture = buildCaptureFromTrackingEvent(input);
   const ipHash = hashIp(requestIp);
   const eventId = await withTransaction(async (client) => {
     await upsertTrackingSessionForCapture(
       client,
       {
         ...derivedCapture,
-        landing_url: sanitizedInput.pageUrl
+        landing_url: input.pageUrl
       },
-      new Date(sanitizedInput.occurredAt),
-      sanitizedInput.context.userAgent,
+      new Date(input.occurredAt),
+      input.context.userAgent,
       ipHash
     );
 
-    const insertedEventId = await insertTrackingBrowserEvent(client, sanitizedInput, rawPayload, ingestionFingerprint);
+    const insertedEventId = await insertTrackingBrowserEvent(client, input, rawPayload, ingestionFingerprint);
 
     await enqueueAttributionForTrackingTouchpoint(client, {
-      sessionId: sanitizedInput.sessionId,
-      shopifyCheckoutToken: sanitizedInput.shopifyCheckoutToken,
-      shopifyCartToken: sanitizedInput.shopifyCartToken
+      sessionId: input.sessionId,
+      shopifyCheckoutToken: input.shopifyCheckoutToken,
+      shopifyCartToken: input.shopifyCartToken
     });
 
     await refreshDailyReportingMetrics(client, [
-      formatDateInTimezone(new Date(sanitizedInput.occurredAt), await getReportingTimezone(client))
+      formatDateInTimezone(new Date(input.occurredAt), await getReportingTimezone(client))
     ]);
 
     return insertedEventId;
@@ -1120,9 +1178,9 @@ async function ingestTrackingEvent(
   return {
     eventId,
     ingestedAt: new Date().toISOString(),
-    sessionId: sanitizedInput.sessionId,
+    sessionId: input.sessionId,
     deduplicated: false,
-    sanitizedInput
+    sanitizedInput: input
   };
 }
 
@@ -1271,6 +1329,7 @@ function parseTrackingRequestBody(body: unknown): Record<string, unknown> {
 }
 
 function cloneTrackingRawPayload(payload: TrackingRawPayload): TrackingRawPayload {
+  // Preserve the inbound request object for raw JSONB storage before any normalization.
   return structuredClone(payload);
 }
 
@@ -1314,7 +1373,7 @@ function enforceRateLimit(req: Request): void {
 
 function parseAttributionCaptureRequest(body: unknown): AttributionCaptureRequest {
   try {
-    return attributionCaptureRequestSchema.parse(body);
+    return normalizeAttributionCaptureRequest(attributionCaptureRequestSchema.parse(body));
   } catch (error) {
     if (error instanceof z.ZodError) {
       throw new TrackingHttpError(400, 'invalid_request', 'Invalid attribution capture payload', error.flatten());
@@ -1324,9 +1383,19 @@ function parseAttributionCaptureRequest(body: unknown): AttributionCaptureReques
   }
 }
 
-function parseTrackingEventRequest(body: unknown): TrackingRequestBody {
+function parseTrackingEventRequest(body: unknown): {
+  raw: TrackingRequestBody;
+  sanitized: SanitizedTrackingEventInput;
+} {
   try {
-    return trackingEventSchema.parse(body);
+    const raw = trackingEventSchema.parse(body);
+    const sanitized = sanitizeTrackingInput(raw);
+    normalizedTrackingEventSchema.parse(sanitized);
+
+    return {
+      raw,
+      sanitized
+    };
   } catch (error) {
     if (error instanceof z.ZodError) {
       throw new TrackingHttpError(400, 'invalid_request', 'Invalid tracking payload', error.flatten());
@@ -1521,9 +1590,9 @@ export function createTrackingRouter() {
       enforceRateLimit(req);
 
       const rawPayload = cloneTrackingRawPayload(parseTrackingRequestBody(req.body));
-      const input = parseTrackingEventRequest(rawPayload);
+      const { sanitized: sanitizedInput } = parseTrackingEventRequest(rawPayload);
       const requestIp = resolveRequestIp(req);
-      const browserResult = await ingestTrackingEvent(input, rawPayload, requestIp);
+      const browserResult = await ingestTrackingEvent(sanitizedInput, rawPayload, requestIp);
       const serverAttributionResult = await emitDerivedAttributionFromBrowserEvent(
         browserResult.sanitizedInput,
         rawPayload,
@@ -1533,7 +1602,7 @@ export function createTrackingRouter() {
       logAttributionCaptureObserved('browser_event', browserResult.sanitizedInput, {
         accepted: true,
         deduplicated: browserResult.deduplicated,
-        eventType: input.eventType
+        eventType: sanitizedInput.eventType
       });
 
       logInfo('tracking_dual_write_consistency', {
@@ -1547,7 +1616,7 @@ export function createTrackingRouter() {
         }),
         sessionId: browserResult.sessionId,
         eventId: browserResult.eventId,
-        eventType: input.eventType,
+        eventType: sanitizedInput.eventType,
         touchEventId: serverAttributionResult.touchEventId,
         errorCode: serverAttributionResult.ok ? null : serverAttributionResult.errorCode
       });

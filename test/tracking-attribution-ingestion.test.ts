@@ -36,6 +36,26 @@ const validPayload = {
   msclkid: null
 };
 
+const rawPayloadWithExtraFields = {
+  ...validPayload,
+  landing_url: '  https://example.com/?utm_source=Google&utm_medium=CPC&utm_campaign=Spring  ',
+  referrer_url: '  https://google.com/search?q=roas  ',
+  page_url: '  https://example.com/products/widget?gclid=ABC123#details  ',
+  utm_source: '  Google  ',
+  utm_medium: '  CPC  ',
+  utm_campaign: '  Spring  ',
+  utm_content: '  Hero  ',
+  utm_term: '  Widget  ',
+  gclid: '  ABC123  ',
+  gbraid: '  GB-123  ',
+  wbraid: '  WB-456  ',
+  debug_context: {
+    nested: {
+      untouched: true
+    }
+  }
+};
+
 async function postAttribution(
   server: { address(): AddressInfo | null },
   payload: unknown
@@ -197,6 +217,89 @@ test('tracking attribution endpoint persists canonical touch events and mirrors 
     assert.equal(trackingInsert.params?.[17], 'denied');
     assert.equal(trackingInsert.params?.[19], 'server');
     assert.deepEqual(JSON.parse(String(trackingInsert.params?.[20])), validPayload);
+  } finally {
+    await closeServer(server);
+  }
+});
+
+test('tracking attribution endpoint preserves the full raw payload before canonical normalization', async () => {
+  const { pool, createServer, closeServer } = await getModules();
+  const queries: Array<{ text: string; params?: unknown[] }> = [];
+
+  pool.query = (async (text: string, params?: unknown[]) => {
+    queries.push({ text, params });
+
+    if (text.includes('FROM session_attribution_touch_events')) {
+      return {
+        rows: []
+      };
+    }
+
+    throw new Error(`Unexpected pool.query call: ${text}`);
+  }) as typeof pool.query;
+
+  pool.connect = (async () => ({
+    query: async (text: string, params?: unknown[]) => {
+      queries.push({ text, params });
+
+      if (text === 'BEGIN' || text === 'COMMIT' || text === 'ROLLBACK') {
+        return { rows: [] };
+      }
+
+      if (text.includes('INSERT INTO session_attribution_identities')) {
+        return { rows: [] };
+      }
+
+      if (text.includes('INSERT INTO tracking_sessions')) {
+        return { rows: [] };
+      }
+
+      if (text.includes('INSERT INTO session_attribution_touch_events')) {
+        return {
+          rows: [
+            {
+              id: 42,
+              captured_at: new Date('2026-04-23T12:00:05.000Z'),
+              roas_radar_session_id: validPayload.roas_radar_session_id
+            }
+          ]
+        };
+      }
+
+      if (text.includes('INSERT INTO tracking_events')) {
+        return { rows: [] };
+      }
+
+      throw new Error(`Unexpected client.query call: ${text}`);
+    },
+    release: () => undefined
+  })) as typeof pool.connect;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await postAttribution(server, rawPayloadWithExtraFields);
+
+    assert.equal(response.status, 200);
+    assert.equal(body.ok, true);
+
+    const touchInsert = queries.find((entry) => entry.text.includes('INSERT INTO session_attribution_touch_events'));
+    assert.ok(touchInsert);
+    assert.equal(touchInsert.params?.[4], 'https://example.com/products/widget?gclid=ABC123');
+    assert.equal(touchInsert.params?.[6], 'google');
+    assert.equal(touchInsert.params?.[7], 'cpc');
+    assert.equal(touchInsert.params?.[12], 'GB-123');
+    assert.equal(touchInsert.params?.[13], 'WB-456');
+    assert.deepEqual(JSON.parse(String(touchInsert.params?.[20])), rawPayloadWithExtraFields);
+
+    const trackingInsert = queries.find((entry) => entry.text.includes('INSERT INTO tracking_events'));
+    assert.ok(trackingInsert);
+    assert.equal(trackingInsert.params?.[4], 'https://example.com/products/widget?gclid=ABC123');
+    assert.equal(trackingInsert.params?.[6], 'google');
+    assert.equal(trackingInsert.params?.[7], 'cpc');
+    assert.equal(trackingInsert.params?.[12], 'GB-123');
+    assert.equal(trackingInsert.params?.[13], 'WB-456');
+    assert.deepEqual(JSON.parse(String(trackingInsert.params?.[20])), rawPayloadWithExtraFields);
   } finally {
     await closeServer(server);
   }

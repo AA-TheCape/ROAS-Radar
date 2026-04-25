@@ -40,6 +40,20 @@ const manualSyncSchema = z.object({
   endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
 });
 
+function buildRawPayloadStorageMetadata(rawPayload: unknown): {
+  rawPayloadJson: string;
+  payloadSizeBytes: number;
+  payloadHash: string;
+} {
+  const rawPayloadJson = JSON.stringify(rawPayload);
+
+  return {
+    rawPayloadJson,
+    payloadSizeBytes: Buffer.byteLength(rawPayloadJson, 'utf8'),
+    payloadHash: createHash('sha256').update(rawPayloadJson).digest('hex')
+  };
+}
+
 const oauthCallbackSchema = z.object({
   code: z.string().min(1).optional(),
   state: z.string().min(1).optional(),
@@ -844,6 +858,8 @@ async function upsertMetaAdsConnection(params: {
   account: MetaAdsAccountResponse;
   encryptionKey: string;
 }): Promise<void> {
+  const { rawPayloadJson, payloadSizeBytes, payloadHash } = buildRawPayloadStorageMetadata(params.account);
+
   await query(
     `
       INSERT INTO meta_ads_connections (
@@ -857,6 +873,8 @@ async function upsertMetaAdsConnection(params: {
         account_name,
         account_currency,
         raw_account_data,
+        raw_account_payload_size_bytes,
+        raw_account_payload_hash,
         updated_at
       )
       VALUES (
@@ -870,6 +888,8 @@ async function upsertMetaAdsConnection(params: {
         $7,
         $8,
         $9::jsonb,
+        $10,
+        $11,
         now()
       )
       ON CONFLICT (ad_account_id)
@@ -883,6 +903,8 @@ async function upsertMetaAdsConnection(params: {
         account_name = $7,
         account_currency = $8,
         raw_account_data = $9::jsonb,
+        raw_account_payload_size_bytes = $10,
+        raw_account_payload_hash = $11,
         updated_at = now()
     `,
     [
@@ -894,7 +916,9 @@ async function upsertMetaAdsConnection(params: {
       params.tokenExpiresAt,
       params.account.name ?? null,
       params.account.currency ?? params.account.account_currency ?? null,
-      JSON.stringify(params.account)
+      rawPayloadJson,
+      payloadSizeBytes,
+      payloadHash
     ]
   );
 }
@@ -1195,6 +1219,8 @@ async function persistDailySpendSnapshot(
         continue;
       }
 
+      const { rawPayloadJson, payloadSizeBytes, payloadHash } = buildRawPayloadStorageMetadata(row);
+
       const rawInsert = await client.query<{ id: number }>(
         `
           INSERT INTO meta_ads_raw_spend_records (
@@ -1208,9 +1234,11 @@ async function persistDailySpendSnapshot(
             impressions,
             clicks,
             raw_payload,
+            payload_size_bytes,
+            payload_hash,
             updated_at
           )
-          VALUES ($1, $2, $3::date, $4, $5, $6, $7::numeric, $8, $9, $10::jsonb, now())
+          VALUES ($1, $2, $3::date, $4, $5, $6, $7::numeric, $8, $9, $10::jsonb, $11, $12, now())
           RETURNING id
         `,
         [
@@ -1223,7 +1251,9 @@ async function persistDailySpendSnapshot(
           parseMetricDecimal(row.spend),
           parseMetricInteger(row.impressions),
           parseMetricInteger(row.clicks),
-          JSON.stringify(row)
+          rawPayloadJson,
+          payloadSizeBytes,
+          payloadHash
         ]
       );
 

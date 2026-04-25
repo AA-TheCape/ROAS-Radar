@@ -33,6 +33,14 @@ const oauthCallbackSchema = z.object({
     error: z.string().optional(),
     error_description: z.string().optional()
 });
+function buildRawPayloadStorageMetadata(rawPayload) {
+    const rawPayloadJson = JSON.stringify(rawPayload);
+    return {
+        rawPayloadJson,
+        payloadSizeBytes: Buffer.byteLength(rawPayloadJson, 'utf8'),
+        payloadHash: createHash('sha256').update(rawPayloadJson).digest('hex')
+    };
+}
 const manualSyncSchema = z.object({
     startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
@@ -704,6 +712,7 @@ function normalizeSpendSnapshot(params) {
     return [...rollup.values()];
 }
 async function upsertGoogleAdsConnection(params) {
+    const { rawPayloadJson, payloadSizeBytes, payloadHash } = buildRawPayloadStorageMetadata(params.customer.rawPayload);
     await query(`
       INSERT INTO google_ads_connections (
         customer_id,
@@ -718,6 +727,8 @@ async function upsertGoogleAdsConnection(params) {
         customer_descriptive_name,
         currency_code,
         raw_customer_data,
+        raw_customer_payload_size_bytes,
+        raw_customer_payload_hash,
         updated_at
       )
       VALUES (
@@ -733,6 +744,8 @@ async function upsertGoogleAdsConnection(params) {
         $8,
         $9,
         $10::jsonb,
+        $11,
+        $12,
         now()
       )
       ON CONFLICT (customer_id)
@@ -748,6 +761,8 @@ async function upsertGoogleAdsConnection(params) {
         customer_descriptive_name = $8,
         currency_code = $9,
         raw_customer_data = $10::jsonb,
+        raw_customer_payload_size_bytes = $11,
+        raw_customer_payload_hash = $12,
         updated_at = now()
     `, [
         params.customerId,
@@ -759,7 +774,9 @@ async function upsertGoogleAdsConnection(params) {
         env.GOOGLE_ADS_ENCRYPTION_KEY,
         params.customer.descriptiveName,
         params.customer.currencyCode,
-        JSON.stringify(params.customer.rawPayload)
+        rawPayloadJson,
+        payloadSizeBytes,
+        payloadHash
     ]);
 }
 async function getGoogleAdsConnectionById(connectionId) {
@@ -951,6 +968,7 @@ async function persistDailySpendSnapshot(client, params) {
         if (!entityId) {
             continue;
         }
+        const { rawPayloadJson, payloadSizeBytes, payloadHash } = buildRawPayloadStorageMetadata(row);
         await client.query(`
         INSERT INTO google_ads_raw_spend_records (
           connection_id,
@@ -963,9 +981,11 @@ async function persistDailySpendSnapshot(client, params) {
           impressions,
           clicks,
           raw_payload,
+          payload_size_bytes,
+          payload_hash,
           updated_at
         )
-        VALUES ($1, $2, $3::date, 'campaign', $4, $5, $6::numeric, $7, $8, $9::jsonb, now())
+        VALUES ($1, $2, $3::date, 'campaign', $4, $5, $6::numeric, $7, $8, $9::jsonb, $10, $11, now())
       `, [
             params.connectionId,
             params.syncJobId,
@@ -975,7 +995,9 @@ async function persistDailySpendSnapshot(client, params) {
             parseMicrosToDecimal(row.metrics?.costMicros),
             parseMetricInteger(row.metrics?.impressions),
             parseMetricInteger(row.metrics?.clicks),
-            JSON.stringify(row)
+            rawPayloadJson,
+            payloadSizeBytes,
+            payloadHash
         ]);
     }
     const rawRecordIdsByAdId = new Map();
@@ -984,6 +1006,7 @@ async function persistDailySpendSnapshot(client, params) {
         if (!entityId) {
             continue;
         }
+        const { rawPayloadJson, payloadSizeBytes, payloadHash } = buildRawPayloadStorageMetadata(row);
         const insertResult = await client.query(`
         INSERT INTO google_ads_raw_spend_records (
           connection_id,
@@ -996,9 +1019,11 @@ async function persistDailySpendSnapshot(client, params) {
           impressions,
           clicks,
           raw_payload,
+          payload_size_bytes,
+          payload_hash,
           updated_at
         )
-        VALUES ($1, $2, $3::date, 'ad', $4, $5, $6::numeric, $7, $8, $9::jsonb, now())
+        VALUES ($1, $2, $3::date, 'ad', $4, $5, $6::numeric, $7, $8, $9::jsonb, $10, $11, now())
         RETURNING id
       `, [
             params.connectionId,
@@ -1009,7 +1034,9 @@ async function persistDailySpendSnapshot(client, params) {
             parseMicrosToDecimal(row.metrics?.costMicros),
             parseMetricInteger(row.metrics?.impressions),
             parseMetricInteger(row.metrics?.clicks),
-            JSON.stringify(row)
+            rawPayloadJson,
+            payloadSizeBytes,
+            payloadHash
         ]);
         rawRecordIdsByAdId.set(entityId, insertResult.rows[0].id);
     }
@@ -1184,15 +1211,18 @@ async function processSyncJob(job) {
                 normalizedRows
             });
         });
+        const { rawPayloadJson, payloadSizeBytes, payloadHash } = buildRawPayloadStorageMetadata(customer.rawPayload);
         await query(`
         UPDATE google_ads_connections
         SET
           customer_descriptive_name = $2,
           currency_code = $3,
           raw_customer_data = $4::jsonb,
+          raw_customer_payload_size_bytes = $5,
+          raw_customer_payload_hash = $6,
           updated_at = now()
         WHERE id = $1
-      `, [job.connection_id, customer.descriptiveName, customer.currencyCode, JSON.stringify(customer.rawPayload)]);
+      `, [job.connection_id, customer.descriptiveName, customer.currencyCode, rawPayloadJson, payloadSizeBytes, payloadHash]);
     };
     try {
         await attemptJob();

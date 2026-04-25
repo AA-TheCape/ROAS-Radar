@@ -115,6 +115,16 @@ Meta Ads and Google Ads sync workers now persist per-call audit rows in `ad_sync
 
 This table is an audit surface for sync transactions. The existing raw spend tables remain the canonical row-level source-payload store for spend records.
 
+## Raw Payload Persistence Rule
+
+For ingestion surfaces that expose `raw_payload` or equivalent raw-source JSONB columns, ROAS Radar persists the decoded-and-parsed upstream payload exactly as received before any trimming, lowercasing, schema projection, or derived-field injection.
+
+- tracking request bodies are cloned before normalization so `tracking_events.raw_payload` and `session_attribution_touch_events.raw_payload` retain the exact inbound browser or capture payload
+- Shopify order rows persist the original order object, and Shopify line-item rows persist the original line-item node rather than a schema-reduced subset
+- Meta Ads and Google Ads raw spend tables persist the decoded API row exactly; normalized daily spend tables remain derived projections
+
+Normalization, URL cleanup, consent coercion, idempotency fingerprints, and log redaction still apply to typed columns, hashes, and logs. They must not mutate the JSON written to raw-source storage.
+
 ## Environment Configuration
 
 All runtime configuration is validated in `src/config/env.ts`. `DATABASE_URL` is the only hard requirement for process startup. Most other values have defaults, but several are functionally required if you want non-local integrations to work.

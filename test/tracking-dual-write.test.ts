@@ -313,8 +313,8 @@ test('tracking endpoint persists the full raw browser payload before schema filt
       (entry) => entry.transaction === 2 && entry.text.includes('INSERT INTO session_attribution_touch_events')
     );
     assert.ok(touchInsert);
-    assert.equal(touchInsert.params?.[21], 'cart-token-with-whitespace');
-    assert.equal(touchInsert.params?.[22], 'checkout-token-with-whitespace');
+    assert.equal(touchInsert.params?.[23], 'cart-token-with-whitespace');
+    assert.equal(touchInsert.params?.[24], 'checkout-token-with-whitespace');
     assert.deepEqual(JSON.parse(String(touchInsert.params?.[20])), rawPayloadWithExtraFields);
   } finally {
     await closeServer(server);

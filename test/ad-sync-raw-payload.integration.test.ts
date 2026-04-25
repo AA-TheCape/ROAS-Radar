@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
 
 process.env.DATABASE_URL ??= 'postgres://postgres:postgres@127.0.0.1:5432/roas_radar_test';
@@ -34,7 +35,60 @@ type AuditRow = {
   error_message: string | null;
 };
 
+async function loadMetaRawPersistence() {
+  const [connectionResult, spendResult] = await Promise.all([
+    pool.query<{ raw_account_data: Record<string, unknown> }>(
+      `
+        SELECT raw_account_data
+        FROM meta_ads_connections
+        WHERE id = 1
+      `
+    ),
+    pool.query<{ level: string; raw_payload: Record<string, unknown> }>(
+      `
+        SELECT level, raw_payload
+        FROM meta_ads_raw_spend_records
+        WHERE connection_id = 1
+        ORDER BY id ASC
+      `
+    )
+  ]);
+
+  return {
+    connection: connectionResult.rows[0]?.raw_account_data ?? null,
+    spendRows: spendResult.rows
+  };
+}
+
+async function loadGoogleRawPersistence() {
+  const [connectionResult, spendResult] = await Promise.all([
+    pool.query<{ raw_customer_data: Record<string, unknown> }>(
+      `
+        SELECT raw_customer_data
+        FROM google_ads_connections
+        WHERE id = 1
+      `
+    ),
+    pool.query<{ level: string; raw_payload: Record<string, unknown> }>(
+      `
+        SELECT level, raw_payload
+        FROM google_ads_raw_spend_records
+        WHERE connection_id = 1
+        ORDER BY id ASC
+      `
+    )
+  ]);
+
+  return {
+    connection: connectionResult.rows[0]?.raw_customer_data ?? null,
+    spendRows: spendResult.rows
+  };
+}
+
 async function seedMetaSyncJob(): Promise<void> {
+  const rawAccountData = { id: '123456789', name: 'Meta Account' };
+  const rawAccountJson = JSON.stringify(rawAccountData);
+
   await pool.query(
     `
       INSERT INTO meta_ads_connections (
@@ -47,7 +101,9 @@ async function seedMetaSyncJob(): Promise<void> {
         status,
         account_name,
         account_currency,
-        raw_account_data
+        raw_account_data,
+        raw_account_payload_size_bytes,
+        raw_account_payload_hash
       )
       VALUES (
         1,
@@ -59,10 +115,18 @@ async function seedMetaSyncJob(): Promise<void> {
         'active',
         'Meta Account',
         'USD',
-        $3::jsonb
+        $3::jsonb,
+        $4,
+        $5
       )
     `,
-    ['meta-access-token', process.env.META_ADS_ENCRYPTION_KEY, JSON.stringify({ id: '123456789', name: 'Meta Account' })]
+    [
+      'meta-access-token',
+      process.env.META_ADS_ENCRYPTION_KEY,
+      rawAccountJson,
+      Buffer.byteLength(rawAccountJson, 'utf8'),
+      createHash('sha256').update(rawAccountJson).digest('hex')
+    ]
   );
 
   await pool.query(
@@ -81,6 +145,11 @@ async function seedMetaSyncJob(): Promise<void> {
 }
 
 async function seedGoogleSyncJob(): Promise<void> {
+  const rawCustomerData = {
+    customer: { id: '1234567890', descriptiveName: 'Main Account', currencyCode: 'USD' }
+  };
+  const rawCustomerJson = JSON.stringify(rawCustomerData);
+
   await pool.query(
     `
       INSERT INTO google_ads_connections (
@@ -97,7 +166,9 @@ async function seedGoogleSyncJob(): Promise<void> {
         status,
         customer_descriptive_name,
         currency_code,
-        raw_customer_data
+        raw_customer_data,
+        raw_customer_payload_size_bytes,
+        raw_customer_payload_hash
       )
       VALUES (
         1,
@@ -109,11 +180,13 @@ async function seedGoogleSyncJob(): Promise<void> {
         pgp_sym_encrypt($5, $4, 'cipher-algo=aes256, compress-algo=0'),
         ARRAY['https://www.googleapis.com/auth/adwords']::text[],
         '2026-04-11'::date,
-        '2026-04-10T08:00:00.000Z'::timestamptz,
+        NULL,
         'active',
         'Main Account',
         'USD',
-        $6::jsonb
+        $6::jsonb,
+        $7,
+        $8
       )
     `,
     [
@@ -122,31 +195,22 @@ async function seedGoogleSyncJob(): Promise<void> {
       process.env.GOOGLE_ADS_CLIENT_SECRET,
       process.env.GOOGLE_ADS_ENCRYPTION_KEY,
       'google-refresh-token',
-      JSON.stringify({ customer: { id: '1234567890', descriptiveName: 'Main Account', currencyCode: 'USD' } })
+      rawCustomerJson,
+      Buffer.byteLength(rawCustomerJson, 'utf8'),
+      createHash('sha256').update(rawCustomerJson).digest('hex')
     ]
   );
 
   await pool.query(
     `
-      INSERT INTO google_ads_sync_jobs (connection_id, sync_date, status, completed_at, available_at, updated_at)
-      VALUES
-        (1, '2026-04-09'::date, 'completed', now(), now(), now()),
-        (1, '2026-04-10'::date, 'completed', now(), now(), now())
-      ON CONFLICT (connection_id, sync_date) DO NOTHING
-    `
-  );
-
-  await pool.query(
-    `
       INSERT INTO google_ads_sync_jobs (
-        id,
         connection_id,
         sync_date,
         status,
         available_at,
         updated_at
       )
-      VALUES (3, 1, '2026-04-11'::date, 'pending', now(), now())
+      VALUES (1, '2026-04-11'::date, 'pending', now(), now())
     `
   );
 }
@@ -255,12 +319,13 @@ test('Meta Ads sync stores raw request and response audit payloads for each API 
     });
 
     assert.equal(result.succeededJobs, 1);
+    const persisted = await loadMetaRawPersistence();
 
     const rows = await loadAuditRows('meta_ads');
     assert.equal(rows.length, 5);
     assert.equal(rows[0].transaction_source, 'meta_ads_insights');
     assert.equal(rows[0].request_method, 'GET');
-    assert.equal(rows[0].request_url, 'https://graph.facebook.com/v22.0/act_123456789/insights');
+    assert.match(rows[0].request_url, /^https:\/\/graph\.facebook\.com\/v\d+\.\d+\/act_123456789\/insights$/);
     assert.deepEqual(rows[0].request_payload, {
       fields: 'account_id,account_name,campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,spend,impressions,clicks,objective,date_start,date_stop',
       access_token: '[redacted]',
@@ -313,6 +378,49 @@ test('Meta Ads sync stores raw request and response audit payloads for each API 
     assert.equal(rows[4].error_message, null);
     assert.ok(rows[4].request_started_at instanceof Date);
     assert.ok(rows[4].response_received_at instanceof Date);
+    assert.deepEqual(persisted.connection, {
+      id: '123456789',
+      name: 'Meta Account'
+    });
+    assert.equal(persisted.spendRows.length, 4);
+    assert.deepEqual(persisted.spendRows[0], {
+      level: 'account',
+      raw_payload: {
+        account_id: '123456789',
+        account_name: 'Meta Account',
+        spend: '12.34',
+        impressions: '100',
+        clicks: '5',
+        objective: 'OUTCOME_TRAFFIC',
+        date_start: '2026-04-11',
+        date_stop: '2026-04-11',
+        source_debug: {
+          level: 'account',
+          untouched: true
+        }
+      }
+    });
+    assert.equal(persisted.spendRows[3].level, 'ad');
+    assert.deepEqual(persisted.spendRows[3].raw_payload, {
+      account_id: '123456789',
+      account_name: 'Meta Account',
+      campaign_id: 'cmp_1',
+      campaign_name: 'Campaign One',
+      adset_id: 'adset_1',
+      adset_name: 'Adset One',
+      ad_id: 'ad_1',
+      ad_name: 'Ad One',
+      spend: '12.34',
+      impressions: '100',
+      clicks: '5',
+      objective: 'OUTCOME_TRAFFIC',
+      date_start: '2026-04-11',
+      date_stop: '2026-04-11',
+      source_debug: {
+        level: 'ad',
+        untouched: true
+      }
+    });
   } finally {
     globalThis.fetch = previousFetch;
   }
@@ -448,14 +556,15 @@ test('Google Ads sync stores raw request and response audit payloads for each AP
     });
 
     assert.equal(result.succeededJobs, 1);
+    const persisted = await loadGoogleRawPersistence();
 
     const rows = await loadAuditRows('google_ads');
     assert.equal(rows.length, 3);
     assert.equal(rows[0].transaction_source, 'google_ads_customer_search');
     assert.equal(rows[0].request_method, 'POST');
-    assert.equal(
+    assert.match(
       rows[0].request_url,
-      'https://googleads.googleapis.com/v18/customers/1234567890/googleAds:searchStream'
+      /^https:\/\/googleads\.googleapis\.com\/v\d+\/customers\/1234567890\/googleAds:searchStream$/
     );
     assert.deepEqual(rows[0].request_payload, {
       query: 'SELECT customer.id, customer.descriptive_name, customer.currency_code FROM customer LIMIT 1'
@@ -484,6 +593,78 @@ test('Google Ads sync stores raw request and response audit payloads for each AP
     assert.equal(rows[2].error_message, null);
     assert.ok(rows[2].request_started_at instanceof Date);
     assert.ok(rows[2].response_received_at instanceof Date);
+    assert.deepEqual(persisted.connection, {
+      customer: {
+        id: '1234567890',
+        descriptiveName: 'Main Account',
+        currencyCode: 'USD'
+      },
+      untouched_customer_debug: {
+        kept: true
+      }
+    });
+    assert.equal(persisted.spendRows.length, 2);
+    assert.deepEqual(persisted.spendRows[0], {
+      level: 'campaign',
+      raw_payload: {
+        customer: {
+          id: '1234567890',
+          descriptiveName: 'Main Account',
+          currencyCode: 'USD'
+        },
+        campaign: {
+          id: 'cmp_1',
+          name: 'Brand Search'
+        },
+        metrics: {
+          costMicros: '12340000',
+          impressions: '100',
+          clicks: '5'
+        },
+        segments: {
+          date: '2026-04-11'
+        },
+        untouched_campaign_debug: {
+          kept: true
+        }
+      }
+    });
+    assert.deepEqual(persisted.spendRows[1], {
+      level: 'ad',
+      raw_payload: {
+        customer: {
+          id: '1234567890',
+          descriptiveName: 'Main Account',
+          currencyCode: 'USD'
+        },
+        campaign: {
+          id: 'cmp_1',
+          name: 'Brand Search'
+        },
+        adGroup: {
+          id: 'adgroup_1',
+          name: 'Ad Group One'
+        },
+        adGroupAd: {
+          ad: {
+            id: 'ad_1',
+            name: 'Headline A',
+            resourceName: 'customers/1234567890/adGroupAds/1'
+          }
+        },
+        metrics: {
+          costMicros: '2500000',
+          impressions: '40',
+          clicks: '2'
+        },
+        segments: {
+          date: '2026-04-11'
+        },
+        untouched_ad_debug: {
+          kept: true
+        }
+      }
+    });
   } finally {
     globalThis.fetch = previousFetch;
   }

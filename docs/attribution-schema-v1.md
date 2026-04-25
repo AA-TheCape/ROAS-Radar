@@ -122,6 +122,12 @@ For nullable string fields:
 
 This rule applies to URL fields, UTM fields, click IDs, and adjacent token fields where the pipeline accepts nullable strings.
 
+Raw-source JSONB retention is stricter:
+
+- these normalization rules apply to typed columns and canonical capture objects
+- they do not authorize trimming, lowercasing, key projection, or reconstruction inside raw-source `raw_payload` columns
+- raw-source payloads must remain exact decoded-and-parsed copies of the upstream request or platform row
+
 ### URL fields
 
 Applies to `landing_url`, `referrer_url`, and `page_url`.

@@ -954,6 +954,7 @@ async function upsertShopifyOrderLineItems(client, shopifyOrderId, lineItems, ra
             normalizeLineItemText(lineItem.fulfillment_status),
             lineItem.requires_shipping ?? null,
             lineItem.taxable ?? null,
+            // Preserve the original decoded Shopify line item alongside normalized columns.
             JSON.stringify(rawLineItem)
         ]);
     }
