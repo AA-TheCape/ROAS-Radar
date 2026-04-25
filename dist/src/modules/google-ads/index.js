@@ -4,6 +4,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
+import { parseJsonResponsePayload, recordAdSyncApiTransaction } from '../ad-sync-audit/index.js';
 import { attachAuthContext, requireAdmin } from '../auth/index.js';
 import { buildCanonicalSpendDimensions } from '../marketing-dimensions/index.js';
 import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
@@ -355,7 +356,7 @@ async function exchangeAuthorizationCode(config, code) {
         body: buildAuthorizationCodeRequestBody(config, code)
     });
     const text = await response.text();
-    const payload = text ? JSON.parse(text) : {};
+    const payload = parseJsonResponsePayload(text) ?? {};
     if (!response.ok || !payload.access_token || !payload.refresh_token) {
         throw new GoogleAdsApiError(response.status, payload.error_description ?? payload.error ?? 'Google OAuth code exchange failed', payload);
     }
@@ -370,7 +371,7 @@ async function exchangeRefreshToken(connection) {
         body: buildAccessTokenRequestBody(connection)
     });
     const text = await response.text();
-    const payload = text ? JSON.parse(text) : {};
+    const payload = parseJsonResponsePayload(text) ?? {};
     if (!response.ok || !payload.access_token) {
         throw new GoogleAdsApiError(response.status, payload.error_description ?? payload.error ?? 'Google OAuth token exchange failed', payload);
     }
@@ -379,6 +380,10 @@ async function exchangeRefreshToken(connection) {
 }
 async function googleAdsSearch(params) {
     const url = new URL(`${GOOGLE_ADS_API_BASE_URL}/${env.GOOGLE_ADS_API_VERSION}/customers/${params.connection.customer_id}/googleAds:searchStream`);
+    const requestStartedAt = new Date();
+    const requestPayload = {
+        query: params.gaql
+    };
     const response = await fetch(url, {
         method: 'POST',
         headers: {
@@ -392,7 +397,25 @@ async function googleAdsSearch(params) {
         })
     });
     const text = await response.text();
-    const payload = text ? JSON.parse(text) : [];
+    const payload = parseJsonResponsePayload(text);
+    const responseReceivedAt = new Date();
+    if (params.audit) {
+        await recordAdSyncApiTransaction({
+            platform: 'google_ads',
+            connectionId: params.audit.connectionId,
+            syncJobId: params.audit.syncJobId,
+            transactionSource: params.audit.transactionSource,
+            sourceMetadata: params.audit.sourceMetadata,
+            requestMethod: 'POST',
+            requestUrl: url.toString(),
+            requestPayload,
+            requestStartedAt,
+            responseStatus: response.status,
+            responsePayload: payload,
+            responseReceivedAt,
+            errorMessage: response.ok ? null : `HTTP ${response.status}`
+        });
+    }
     if (!response.ok) {
         const details = payload;
         throw new GoogleAdsApiError(response.status, 'Google Ads API request failed', details);
@@ -402,11 +425,21 @@ async function googleAdsSearch(params) {
     }
     return payload.flatMap((batch) => batch.results ?? []);
 }
-async function fetchCustomerMetadata(connection, accessToken) {
+async function fetchCustomerMetadata(connection, accessToken, audit) {
     const rows = await googleAdsSearch({
         connection,
         accessToken,
-        gaql: 'SELECT customer.id, customer.descriptive_name, customer.currency_code FROM customer LIMIT 1'
+        gaql: 'SELECT customer.id, customer.descriptive_name, customer.currency_code FROM customer LIMIT 1',
+        audit: audit
+            ? {
+                connectionId: audit.connectionId,
+                syncJobId: audit.syncJobId,
+                transactionSource: 'google_ads_customer_search',
+                sourceMetadata: {
+                    customerId: connection.customer_id
+                }
+            }
+            : undefined
     });
     const row = rows[0]?.customer;
     if (!row?.id) {
@@ -456,18 +489,36 @@ function buildAdSpendQuery(syncDate) {
     WHERE segments.date = '${syncDate}'
   `;
 }
-async function fetchCampaignSpendRows(connection, accessToken, syncDate) {
+async function fetchCampaignSpendRows(connection, accessToken, syncDate, audit) {
     return googleAdsSearch({
         connection,
         accessToken,
-        gaql: buildCampaignSpendQuery(syncDate)
+        gaql: buildCampaignSpendQuery(syncDate),
+        audit: {
+            connectionId: audit.connectionId,
+            syncJobId: audit.syncJobId,
+            transactionSource: 'google_ads_campaign_search',
+            sourceMetadata: {
+                customerId: connection.customer_id,
+                syncDate
+            }
+        }
     });
 }
-async function fetchAdSpendRows(connection, accessToken, syncDate) {
+async function fetchAdSpendRows(connection, accessToken, syncDate, audit) {
     return googleAdsSearch({
         connection,
         accessToken,
-        gaql: buildAdSpendQuery(syncDate)
+        gaql: buildAdSpendQuery(syncDate),
+        audit: {
+            connectionId: audit.connectionId,
+            syncJobId: audit.syncJobId,
+            transactionSource: 'google_ads_ad_search',
+            sourceMetadata: {
+                customerId: connection.customer_id,
+                syncDate
+            }
+        }
     });
 }
 function normalizeSpendSnapshot(params) {
@@ -1105,9 +1156,19 @@ async function processSyncJob(job) {
     const attemptJob = async () => {
         const connection = await getGoogleAdsConnectionById(job.connection_id);
         const accessToken = await exchangeRefreshToken(connection);
-        const customer = await fetchCustomerMetadata(connection, accessToken);
-        const campaignRows = await fetchCampaignSpendRows(connection, accessToken, job.sync_date);
-        const adRows = await fetchAdSpendRows(connection, accessToken, job.sync_date);
+        // Preserve decoded Google Ads API responses before any projection into spend rows.
+        const customer = await fetchCustomerMetadata(connection, accessToken, {
+            connectionId: job.connection_id,
+            syncJobId: job.id
+        });
+        const campaignRows = await fetchCampaignSpendRows(connection, accessToken, job.sync_date, {
+            connectionId: job.connection_id,
+            syncJobId: job.id
+        });
+        const adRows = await fetchAdSpendRows(connection, accessToken, job.sync_date, {
+            connectionId: job.connection_id,
+            syncJobId: job.id
+        });
         const normalizedRows = normalizeSpendSnapshot({
             customer,
             campaignRows,

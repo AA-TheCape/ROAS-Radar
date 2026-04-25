@@ -16,6 +16,16 @@ export async function resetE2EDatabase(): Promise<void> {
   const pool = await getPool();
   await pool.query(`
     TRUNCATE TABLE
+      ad_sync_api_transactions,
+      google_ads_reconciliation_runs,
+      google_ads_daily_spend,
+      google_ads_raw_spend_records,
+      google_ads_sync_jobs,
+      google_ads_connections,
+      meta_ads_daily_spend,
+      meta_ads_raw_spend_records,
+      meta_ads_sync_jobs,
+      meta_ads_connections,
       attribution_jobs,
       shopify_order_writeback_jobs,
       attribution_order_credits,

@@ -948,6 +948,9 @@ function parseTrackingRequestBody(body) {
     }
     return body;
 }
+function cloneTrackingRawPayload(payload) {
+    return structuredClone(payload);
+}
 function buildSessionBootstrapRawPayload(req) {
     const rawPayload = {};
     if (req.query.pageUrl !== undefined) {
@@ -1098,7 +1101,7 @@ export function createTrackingRouter() {
             enforceSupportedContentType(req);
             enforceAllowedOrigin(req);
             enforceRateLimit(req);
-            const rawPayload = parseTrackingRequestBody(req.body);
+            const rawPayload = cloneTrackingRawPayload(parseTrackingRequestBody(req.body));
             const parsed = parseAttributionCaptureRequest(rawPayload);
             const result = await ingestAttributionCapture({
                 capture: parsed.capture,
@@ -1148,7 +1151,7 @@ export function createTrackingRouter() {
             enforceSupportedContentType(req);
             enforceAllowedOrigin(req);
             enforceRateLimit(req);
-            const rawPayload = parseTrackingRequestBody(req.body);
+            const rawPayload = cloneTrackingRawPayload(parseTrackingRequestBody(req.body));
             const input = parseTrackingEventRequest(rawPayload);
             const requestIp = resolveRequestIp(req);
             const browserResult = await ingestTrackingEvent(input, rawPayload, requestIp);

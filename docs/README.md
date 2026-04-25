@@ -22,7 +22,7 @@
 
 ## Core References
 
-- [Implementation Guide](implementation-guide.md): local setup, service responsibilities, and end-to-end validation.
+- [Implementation Guide](implementation-guide.md): local setup, service responsibilities, end-to-end validation, and ad sync raw request/response audit storage.
 - [Attribution Schema V1](attribution-schema-v1.md): shared attribution contract, normalization rules, DB mappings, Shopify keys, and rollout expectations.
 - [Operational Attribution Contracts](operational-attribution-contracts.md): resolver precedence, Shopify writeback lifecycle, retention rules, and incident-routing links.
 - [Shopify App Setup](shopify-app-setup.md): Shopify app install flow, OAuth, and webhook provisioning.

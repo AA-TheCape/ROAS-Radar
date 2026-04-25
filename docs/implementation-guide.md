@@ -104,6 +104,17 @@ The current deployment docs in `infra/cloud-run/README.md` assume:
 
 That topology matches the current Node.js codebase and should remain the reference when preparing Cloud Run manifests or deployment scripts.
 
+## Raw Sync Audit Storage
+
+Meta Ads and Google Ads sync workers now persist per-call audit rows in `ad_sync_api_transactions`.
+
+- `request_payload` stores the outbound sync request payload when the platform call has a body, or the structured request query payload for Meta sync reads
+- `response_payload` stores the decoded platform response before any normalization or row projection
+- `transaction_source` and `source_metadata` identify which sync step produced the record
+- `request_started_at` and `response_received_at` provide the transport timing for each audited platform call
+
+This table is an audit surface for sync transactions. The existing raw spend tables remain the canonical row-level source-payload store for spend records.
+
 ## Environment Configuration
 
 All runtime configuration is validated in `src/config/env.ts`. `DATABASE_URL` is the only hard requirement for process startup. Most other values have defaults, but several are functionally required if you want non-local integrations to work.

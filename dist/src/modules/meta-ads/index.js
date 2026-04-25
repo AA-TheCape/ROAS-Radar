@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
 import { attachAuthContext, requireAdmin } from '../auth/index.js';
+import { buildSearchParamsAuditPayload, parseJsonResponsePayload, recordAdSyncApiTransaction } from '../ad-sync-audit/index.js';
 import { buildCanonicalSpendDimensions } from '../marketing-dimensions/index.js';
 import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
 const META_OAUTH_STATE_TTL_MINUTES = 10;
@@ -421,13 +422,37 @@ function buildMetaLog(event, payload) {
         ...payload
     });
 }
-async function metaFetchJson(url, retryCount = 2) {
+async function metaFetchJson(url, retryCount = 2, audit) {
     let lastError;
+    const requestUrl = `${url.origin}${url.pathname}`;
+    const requestPayload = buildSearchParamsAuditPayload(url.searchParams, ['access_token']);
     for (let attempt = 1; attempt <= retryCount + 1; attempt += 1) {
+        const requestStartedAt = new Date();
         try {
             const response = await fetch(url);
             const text = await response.text();
-            const json = text ? JSON.parse(text) : {};
+            const json = parseJsonResponsePayload(text);
+            const responseReceivedAt = new Date();
+            if (audit) {
+                await recordAdSyncApiTransaction({
+                    platform: 'meta_ads',
+                    connectionId: audit.connectionId,
+                    syncJobId: audit.syncJobId,
+                    transactionSource: audit.transactionSource,
+                    sourceMetadata: {
+                        ...(audit.sourceMetadata ?? {}),
+                        attempt
+                    },
+                    requestMethod: 'GET',
+                    requestUrl,
+                    requestPayload,
+                    requestStartedAt,
+                    responseStatus: response.status,
+                    responsePayload: json,
+                    responseReceivedAt,
+                    errorMessage: response.ok ? null : json?.error?.message ?? `HTTP ${response.status}`
+                });
+            }
             if (!response.ok) {
                 const errorBody = json ?? null;
                 const errorMessage = errorBody?.error?.message ?? `Meta Ads API request failed with status ${response.status}`;
@@ -437,6 +462,26 @@ async function metaFetchJson(url, retryCount = 2) {
         }
         catch (error) {
             lastError = error;
+            if (audit && !(error instanceof MetaAdsApiError)) {
+                await recordAdSyncApiTransaction({
+                    platform: 'meta_ads',
+                    connectionId: audit.connectionId,
+                    syncJobId: audit.syncJobId,
+                    transactionSource: audit.transactionSource,
+                    sourceMetadata: {
+                        ...(audit.sourceMetadata ?? {}),
+                        attempt
+                    },
+                    requestMethod: 'GET',
+                    requestUrl,
+                    requestPayload,
+                    requestStartedAt,
+                    responseStatus: null,
+                    responsePayload: null,
+                    responseReceivedAt: null,
+                    errorMessage: error instanceof Error ? error.message : String(error)
+                });
+            }
             if (attempt > retryCount ||
                 !(error instanceof MetaAdsApiError) ||
                 ![429, 500, 502, 503, 504].includes(error.statusCode)) {
@@ -678,7 +723,7 @@ async function claimSyncJobs(workerId, limit) {
     `, [workerId, limit]);
     return result.rows;
 }
-async function fetchInsightsForLevel(accessToken, adAccountId, syncDate, level) {
+async function fetchInsightsForLevel(audit, accessToken, adAccountId, syncDate, level) {
     const rows = [];
     let nextUrl = new URL(`${META_GRAPH_BASE_URL}/${env.META_ADS_API_VERSION}/act_${adAccountId}/insights`);
     nextUrl.searchParams.set('fields', 'account_id,account_name,campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,spend,impressions,clicks,objective,date_start,date_stop');
@@ -688,13 +733,22 @@ async function fetchInsightsForLevel(accessToken, adAccountId, syncDate, level) 
     nextUrl.searchParams.set('limit', '500');
     nextUrl.searchParams.set('time_range', JSON.stringify({ since: syncDate, until: syncDate }));
     while (nextUrl) {
-        const page = await metaFetchJson(nextUrl);
+        const page = await metaFetchJson(nextUrl, 2, {
+            connectionId: audit.connectionId,
+            syncJobId: audit.syncJobId,
+            transactionSource: 'meta_ads_insights',
+            sourceMetadata: {
+                adAccountId,
+                syncDate,
+                level
+            }
+        });
         rows.push(...(page.data ?? []));
         nextUrl = page.paging?.next ? new URL(page.paging.next) : null;
     }
     return rows.filter((row) => buildInsightsEntityId(level, row));
 }
-async function fetchCreativeMap(accessToken, adIds) {
+async function fetchCreativeMap(audit, accessToken, adIds) {
     const creativeMap = {};
     for (let index = 0; index < adIds.length; index += 50) {
         const chunk = adIds.slice(index, index + 50);
@@ -705,7 +759,16 @@ async function fetchCreativeMap(accessToken, adIds) {
         url.searchParams.set('access_token', accessToken);
         url.searchParams.set('ids', chunk.join(','));
         url.searchParams.set('fields', 'creative{id,name}');
-        const response = await metaFetchJson(url);
+        const response = await metaFetchJson(url, 2, {
+            connectionId: audit.connectionId,
+            syncJobId: audit.syncJobId,
+            transactionSource: 'meta_ads_creatives',
+            sourceMetadata: {
+                adAccountId: audit.adAccountId,
+                syncDate: audit.syncDate,
+                adIds: chunk
+            }
+        });
         for (const adId of chunk) {
             const creative = response[adId]?.creative;
             creativeMap[adId] = {
@@ -908,13 +971,19 @@ async function processSyncJob(job) {
     let connection = await getUsableMetaAdsConnection();
     try {
         const rowsByLevel = {
-            account: await fetchInsightsForLevel(connection.access_token, job.ad_account_id, job.sync_date, 'account'),
-            campaign: await fetchInsightsForLevel(connection.access_token, job.ad_account_id, job.sync_date, 'campaign'),
-            adset: await fetchInsightsForLevel(connection.access_token, job.ad_account_id, job.sync_date, 'adset'),
-            ad: await fetchInsightsForLevel(connection.access_token, job.ad_account_id, job.sync_date, 'ad')
+            // Keep the decoded API responses in audit storage before row-level normalization.
+            account: await fetchInsightsForLevel({ connectionId: job.connection_id, syncJobId: job.id }, connection.access_token, job.ad_account_id, job.sync_date, 'account'),
+            campaign: await fetchInsightsForLevel({ connectionId: job.connection_id, syncJobId: job.id }, connection.access_token, job.ad_account_id, job.sync_date, 'campaign'),
+            adset: await fetchInsightsForLevel({ connectionId: job.connection_id, syncJobId: job.id }, connection.access_token, job.ad_account_id, job.sync_date, 'adset'),
+            ad: await fetchInsightsForLevel({ connectionId: job.connection_id, syncJobId: job.id }, connection.access_token, job.ad_account_id, job.sync_date, 'ad')
         };
         const adIds = [...new Set(rowsByLevel.ad.map((row) => row.ad_id).filter((value) => Boolean(value)))];
-        const creativeMap = await fetchCreativeMap(connection.access_token, adIds);
+        const creativeMap = await fetchCreativeMap({
+            connectionId: job.connection_id,
+            syncJobId: job.id,
+            adAccountId: job.ad_account_id,
+            syncDate: job.sync_date
+        }, connection.access_token, adIds);
         await withTransaction(async (client) => {
             await persistDailySpendSnapshot(client, {
                 connectionId: job.connection_id,
@@ -932,15 +1001,20 @@ async function processSyncJob(job) {
             connection = await getUsableMetaAdsConnection(true);
             try {
                 const rowsByLevel = {
-                    account: await fetchInsightsForLevel(connection.access_token, job.ad_account_id, job.sync_date, 'account'),
-                    campaign: await fetchInsightsForLevel(connection.access_token, job.ad_account_id, job.sync_date, 'campaign'),
-                    adset: await fetchInsightsForLevel(connection.access_token, job.ad_account_id, job.sync_date, 'adset'),
-                    ad: await fetchInsightsForLevel(connection.access_token, job.ad_account_id, job.sync_date, 'ad')
+                    account: await fetchInsightsForLevel({ connectionId: job.connection_id, syncJobId: job.id }, connection.access_token, job.ad_account_id, job.sync_date, 'account'),
+                    campaign: await fetchInsightsForLevel({ connectionId: job.connection_id, syncJobId: job.id }, connection.access_token, job.ad_account_id, job.sync_date, 'campaign'),
+                    adset: await fetchInsightsForLevel({ connectionId: job.connection_id, syncJobId: job.id }, connection.access_token, job.ad_account_id, job.sync_date, 'adset'),
+                    ad: await fetchInsightsForLevel({ connectionId: job.connection_id, syncJobId: job.id }, connection.access_token, job.ad_account_id, job.sync_date, 'ad')
                 };
                 const adIds = [
                     ...new Set(rowsByLevel.ad.map((row) => row.ad_id).filter((value) => Boolean(value)))
                 ];
-                const creativeMap = await fetchCreativeMap(connection.access_token, adIds);
+                const creativeMap = await fetchCreativeMap({
+                    connectionId: job.connection_id,
+                    syncJobId: job.id,
+                    adAccountId: job.ad_account_id,
+                    syncDate: job.sync_date
+                }, connection.access_token, adIds);
                 await withTransaction(async (client) => {
                     await persistDailySpendSnapshot(client, {
                         connectionId: job.connection_id,
