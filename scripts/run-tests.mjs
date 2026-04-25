@@ -9,7 +9,11 @@ const repoRoot = path.resolve(__dirname, '..');
 const testDir = path.join(repoRoot, 'test');
 const mode = process.argv[2] ?? 'all';
 
-const integrationTests = new Set(['attribution-e2e.integration.test.ts', 'reporting-api.integration.test.ts']);
+const integrationTests = new Set([
+  'attribution-e2e.integration.test.ts',
+  'reporting-aggregates.integration.test.ts',
+  'reporting-api.integration.test.ts'
+]);
 const unitTests = [];
 const selectedTests = [];
 

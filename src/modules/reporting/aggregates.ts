@@ -119,6 +119,30 @@ export async function refreshDailyReportingMetrics(client: PoolClient, metricDat
         FROM google_ads_daily_spend
         WHERE report_date = ANY($1::date[])
           AND granularity = 'creative'
+
+        UNION ALL
+
+        SELECT
+          campaign_row.report_date AS metric_date,
+          campaign_row.canonical_source AS source,
+          campaign_row.canonical_medium AS medium,
+          campaign_row.canonical_campaign AS campaign,
+          campaign_row.canonical_content AS content,
+          campaign_row.canonical_term AS term,
+          campaign_row.spend,
+          campaign_row.impressions,
+          campaign_row.clicks
+        FROM google_ads_daily_spend campaign_row
+        WHERE campaign_row.report_date = ANY($1::date[])
+          AND campaign_row.granularity = 'campaign'
+          AND NOT EXISTS (
+            SELECT 1
+            FROM google_ads_daily_spend creative_row
+            WHERE creative_row.report_date = campaign_row.report_date
+              AND creative_row.granularity = 'creative'
+              AND creative_row.connection_id = campaign_row.connection_id
+              AND creative_row.campaign_id IS NOT DISTINCT FROM campaign_row.campaign_id
+          )
       ),
       spend_rows AS (
         SELECT
