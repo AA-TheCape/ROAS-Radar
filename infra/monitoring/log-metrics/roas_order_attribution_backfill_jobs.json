@@ -1,0 +1,45 @@
+{
+  "name": "roas_order_attribution_backfill_jobs",
+  "description": "Counts order attribution backfill job lifecycle events for enqueue, start, completion, and failure monitoring.",
+  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"order_attribution_backfill_job_lifecycle\"",
+  "labelExtractors": {
+    "service": "EXTRACT(jsonPayload.service)",
+    "stage": "EXTRACT(jsonPayload.stage)",
+    "dry_run": "EXTRACT(jsonPayload.dryRun)",
+    "web_orders_only": "EXTRACT(jsonPayload.webOrdersOnly)",
+    "skip_shopify_writeback": "EXTRACT(jsonPayload.skipShopifyWriteback)"
+  },
+  "metricDescriptor": {
+    "metricKind": "DELTA",
+    "valueType": "INT64",
+    "unit": "1",
+    "displayName": "ROAS Radar Order Attribution Backfill Jobs",
+    "labels": [
+      {
+        "key": "service",
+        "valueType": "STRING",
+        "description": "Service emitting the lifecycle event."
+      },
+      {
+        "key": "stage",
+        "valueType": "STRING",
+        "description": "Backfill lifecycle stage."
+      },
+      {
+        "key": "dry_run",
+        "valueType": "STRING",
+        "description": "Whether the job ran in dry-run mode."
+      },
+      {
+        "key": "web_orders_only",
+        "valueType": "STRING",
+        "description": "Whether the job was restricted to web orders."
+      },
+      {
+        "key": "skip_shopify_writeback",
+        "valueType": "STRING",
+        "description": "Whether Shopify writeback was disabled."
+      }
+    ]
+  }
+}

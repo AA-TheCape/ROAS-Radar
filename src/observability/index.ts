@@ -2,6 +2,11 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 
 import type { NextFunction, Request, Response } from 'express';
+import type {
+  OrderAttributionBackfillFailure,
+  OrderAttributionBackfillReport,
+  OrderAttributionBackfillSubmittedOptions
+} from '../../packages/attribution-schema/index.js';
 
 type RequestContext = {
   requestId: string;
@@ -12,6 +17,18 @@ type RequestContext = {
 };
 
 type SerializableFields = Record<string, unknown>;
+type OrderAttributionBackfillLifecycleStage = 'enqueued' | 'started' | 'completed' | 'failed';
+type OrderAttributionBackfillLifecycleInput = {
+  stage: OrderAttributionBackfillLifecycleStage;
+  jobId: string;
+  options: OrderAttributionBackfillSubmittedOptions;
+  workerId?: string;
+  submittedAt?: string;
+  startedAt?: string;
+  completedAt?: string;
+  report?: OrderAttributionBackfillReport | null;
+  error?: unknown;
+};
 
 type AttributionObservationInput = Partial<Record<
   | 'roas_radar_session_id'
@@ -99,6 +116,109 @@ function serializeError(error: unknown): SerializableFields {
   return {
     message: String(error)
   };
+}
+
+function summarizeBackfillFailures(
+  failures: OrderAttributionBackfillFailure[]
+): {
+  failureCount: number;
+  sampleFailures: OrderAttributionBackfillFailure[];
+} {
+  return {
+    failureCount: failures.length,
+    sampleFailures: failures.slice(0, 5)
+  };
+}
+
+export function summarizeOrderAttributionBackfillReport(
+  report: OrderAttributionBackfillReport
+): SerializableFields {
+  return {
+    scanned: report.scanned,
+    recovered: report.recovered,
+    unrecoverable: report.unrecoverable,
+    writebackCompleted: report.writebackCompleted,
+    ...summarizeBackfillFailures(report.failures)
+  };
+}
+
+function normalizeBackfillErrorCode(error: unknown): string | null {
+  if (typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string' && error.code.trim()) {
+    return error.code.trim();
+  }
+
+  if (error instanceof Error && error.name.trim()) {
+    return error.name.trim();
+  }
+
+  return null;
+}
+
+function normalizeBackfillErrorMessage(error: unknown): string | null {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message.trim();
+  }
+
+  if (typeof error === 'string' && error.trim()) {
+    return error.trim();
+  }
+
+  return null;
+}
+
+function toBackfillLifecycleStatus(stage: OrderAttributionBackfillLifecycleStage): 'queued' | 'processing' | 'completed' | 'failed' {
+  switch (stage) {
+    case 'enqueued':
+      return 'queued';
+    case 'started':
+      return 'processing';
+    case 'completed':
+      return 'completed';
+    case 'failed':
+      return 'failed';
+  }
+}
+
+export function emitOrderAttributionBackfillJobLifecycleLog(input: OrderAttributionBackfillLifecycleInput): void {
+  const fields: SerializableFields = {
+    service: process.env.K_SERVICE ?? 'roas-radar',
+    stage: input.stage,
+    status: toBackfillLifecycleStatus(input.stage),
+    jobId: input.jobId,
+    workerId: input.workerId,
+    submittedAt: input.submittedAt,
+    startedAt: input.startedAt,
+    completedAt: input.completedAt,
+    startDate: input.options.startDate,
+    endDate: input.options.endDate,
+    dryRun: input.options.dryRun,
+    limit: input.options.limit,
+    webOrdersOnly: input.options.webOrdersOnly,
+    skipShopifyWriteback: input.options.skipShopifyWriteback
+  };
+
+  if (input.report) {
+    fields.report = summarizeOrderAttributionBackfillReport(input.report);
+  }
+
+  if (input.stage === 'failed') {
+    const errorCode = normalizeBackfillErrorCode(input.error);
+    const errorMessage = normalizeBackfillErrorMessage(input.error);
+
+    if (errorCode) {
+      fields.code = errorCode;
+    }
+
+    if (errorMessage) {
+      fields.failureMessage = errorMessage;
+    }
+
+    fields.alertable = true;
+    logError('order_attribution_backfill_job_lifecycle', input.error ?? new Error('Order attribution backfill job failed'), fields);
+    return;
+  }
+
+  logInfo('order_attribution_backfill_job_lifecycle', fields);
 }
 
 function writeLog(
@@ -307,7 +427,9 @@ export function buildAttributionBacklogLog(snapshot: SerializableFields): string
 
 export const __observabilityTestUtils = {
   buildAttributionBacklogLog,
+  emitOrderAttributionBackfillJobLifecycleLog,
   parseCloudTraceContext,
+  summarizeOrderAttributionBackfillReport,
   summarizeAttributionObservation,
   summarizeDualWriteConsistency,
   summarizeResolverOutcome

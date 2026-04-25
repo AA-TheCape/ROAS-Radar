@@ -9,6 +9,41 @@ const backfillModule = await import('../src/modules/attribution/backfill.js');
 const { buildBackfillExecutionOptions, processOrderAttributionBackfillRuns } = backfillJobsModule;
 const { OrderAttributionBackfillRunError } = backfillModule;
 
+async function captureStructuredLogs<T>(callback: () => Promise<T>): Promise<{
+  entries: Array<Record<string, unknown>>;
+  result: T;
+}> {
+  const stdoutChunks: string[] = [];
+  const stderrChunks: string[] = [];
+  const originalStdoutWrite = process.stdout.write.bind(process.stdout);
+  const originalStderrWrite = process.stderr.write.bind(process.stderr);
+
+  process.stdout.write = ((chunk: string | Uint8Array) => {
+    stdoutChunks.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+    return true;
+  }) as typeof process.stdout.write;
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    stderrChunks.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+    return true;
+  }) as typeof process.stderr.write;
+
+  try {
+    const result = await callback();
+    const entries = [...stdoutChunks, ...stderrChunks]
+      .join('')
+      .trim()
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith('{') && line.endsWith('}'))
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+
+    return { entries, result };
+  } finally {
+    process.stdout.write = originalStdoutWrite as typeof process.stdout.write;
+    process.stderr.write = originalStderrWrite as typeof process.stderr.write;
+  }
+}
+
 test('buildBackfillExecutionOptions maps submitted options to backfill execution inputs', () => {
   const executionOptions = buildBackfillExecutionOptions(
     {
@@ -410,4 +445,155 @@ test('processOrderAttributionBackfillRuns marks failed runs without aborting the
       }
     }
   ]);
+});
+
+test('processOrderAttributionBackfillRuns emits per-job lifecycle logs with job ids and failure summaries', async () => {
+  const { entries, result } = await captureStructuredLogs(() =>
+    processOrderAttributionBackfillRuns({
+      workerId: 'worker-observed',
+      claimRuns: async () => [
+        {
+          id: 'job-complete',
+          submitted_by: 'internal',
+          options: {
+            startDate: '2026-04-20',
+            endDate: '2026-04-21',
+            dryRun: true,
+            limit: 25,
+            webOrdersOnly: true,
+            skipShopifyWriteback: false
+          }
+        },
+        {
+          id: 'job-failed',
+          submitted_by: 'internal',
+          options: {
+            startDate: '2026-04-22',
+            endDate: '2026-04-22',
+            dryRun: false,
+            limit: 10,
+            webOrdersOnly: false,
+            skipShopifyWriteback: true
+          }
+        }
+      ],
+      markRunCompleted: async () => undefined,
+      markRunFailed: async () => undefined,
+      executeBackfillRun: async (options) => {
+        if (options.limit === 25) {
+          return {
+            requestedBy: options.requestedBy,
+            workerId: options.workerId,
+            dryRun: true,
+            scope: {
+              windowStart: options.windowStart.toISOString(),
+              windowEnd: options.windowEnd.toISOString(),
+              onlyWebOrders: options.onlyWebOrders ?? true,
+              limit: options.limit ?? 25
+            },
+            beforeMetrics: {
+              totalOrdersInScope: 25,
+              ordersMissingAttribution: 9,
+              ordersWithAttribution: 16,
+              completenessRate: 0.64
+            },
+            afterMetrics: {
+              totalOrdersInScope: 25,
+              ordersMissingAttribution: 9,
+              ordersWithAttribution: 16,
+              completenessRate: 0.64
+            },
+            scannedOrders: 25,
+            recoverableOrders: 7,
+            recoveredOrders: 0,
+            unrecoverableOrders: 2,
+            failedOrders: 0,
+            shopifyWritebackCompleted: 0,
+            shopifyWritebackSkipped: 0,
+            shopifyWritebackFailed: 0,
+            failures: [],
+            preview: []
+          };
+        }
+
+        throw new OrderAttributionBackfillRunError('Worker failed while writing report', {
+          code: 'report_write_failed',
+          report: {
+            scanned: 10,
+            recovered: 2,
+            unrecoverable: 3,
+            writebackCompleted: 1,
+            failures: [
+              {
+                orderId: '1003',
+                code: 'shopify_writeback_failed',
+                message: 'Shopify writeback failed for order 1003'
+              }
+            ]
+          }
+        });
+      }
+    })
+  );
+
+  assert.deepEqual(result, {
+    claimedRuns: 2,
+    completedRuns: 1,
+    failedRuns: 1
+  });
+
+  const lifecycleEntries = entries.filter((entry) => entry.event === 'order_attribution_backfill_job_lifecycle');
+  assert.equal(lifecycleEntries.length, 4);
+  assert.deepEqual(
+    lifecycleEntries.map((entry) => ({
+      jobId: entry.jobId,
+      stage: entry.stage,
+      status: entry.status
+    })),
+    [
+      {
+        jobId: 'job-complete',
+        stage: 'started',
+        status: 'processing'
+      },
+      {
+        jobId: 'job-complete',
+        stage: 'completed',
+        status: 'completed'
+      },
+      {
+        jobId: 'job-failed',
+        stage: 'started',
+        status: 'processing'
+      },
+      {
+        jobId: 'job-failed',
+        stage: 'failed',
+        status: 'failed'
+      }
+    ]
+  );
+  assert.deepEqual(lifecycleEntries[1].report, {
+    scanned: 25,
+    recovered: 0,
+    unrecoverable: 2,
+    writebackCompleted: 0,
+    failureCount: 0,
+    sampleFailures: []
+  });
+  assert.equal(lifecycleEntries[3].code, 'report_write_failed');
+  assert.deepEqual(lifecycleEntries[3].report, {
+    scanned: 10,
+    recovered: 2,
+    unrecoverable: 3,
+    writebackCompleted: 1,
+    failureCount: 1,
+    sampleFailures: [
+      {
+        orderId: '1003',
+        code: 'shopify_writeback_failed',
+        message: 'Shopify writeback failed for order 1003'
+      }
+    ]
+  });
 });

@@ -5,7 +5,7 @@ import {
   type OrderAttributionBackfillSubmittedOptions
 } from '../../../packages/attribution-schema/index.js';
 import { query, withTransaction } from '../../db/pool.js';
-import { logError, logInfo } from '../../observability/index.js';
+import { emitOrderAttributionBackfillJobLifecycleLog, logInfo } from '../../observability/index.js';
 import {
   backfillRecentOrdersWithRecoveredAttribution,
   OrderAttributionBackfillRunError,
@@ -190,21 +190,50 @@ export async function processOrderAttributionBackfillRuns(
   let failedRuns = 0;
 
   for (const run of runs) {
+    const submittedOptions = parseJobOptions(run.options);
+    const startedAt = new Date().toISOString();
+
+    emitOrderAttributionBackfillJobLifecycleLog({
+      stage: 'started',
+      jobId: run.id,
+      workerId: options.workerId,
+      startedAt,
+      options: submittedOptions
+    });
+
     try {
       const executionOptions = buildBackfillExecutionOptions(run, options.workerId);
       const detailedReport = await executeBackfillRun(executionOptions);
       const finalReport = orderAttributionBackfillReportSchema.parse(toOrderAttributionBackfillJobReport(detailedReport));
+      const completedAt = new Date().toISOString();
 
-      await markRunCompleted(run.id, finalReport, new Date());
+      await markRunCompleted(run.id, finalReport, new Date(completedAt));
+      emitOrderAttributionBackfillJobLifecycleLog({
+        stage: 'completed',
+        jobId: run.id,
+        workerId: options.workerId,
+        startedAt,
+        completedAt,
+        options: submittedOptions,
+        report: finalReport
+      });
       completedRuns += 1;
     } catch (error) {
       failedRuns += 1;
       const failedReport = extractFailedRunReport(error);
-      logError('order_attribution_backfill_run_failed', error, {
+      const completedAt = new Date().toISOString();
+
+      emitOrderAttributionBackfillJobLifecycleLog({
+        stage: 'failed',
+        jobId: run.id,
         workerId: options.workerId,
-        jobId: run.id
+        startedAt,
+        completedAt,
+        options: submittedOptions,
+        report: failedReport,
+        error
       });
-      await markRunFailed(run.id, error, failedReport, new Date());
+      await markRunFailed(run.id, error, failedReport, new Date(completedAt));
     }
   }
 

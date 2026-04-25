@@ -14,6 +14,7 @@ import {
   type OrderAttributionBackfillRequest
 } from '../../../packages/attribution-schema/index.js';
 import { query } from '../../db/pool.js';
+import { emitOrderAttributionBackfillJobLifecycleLog } from '../../observability/index.js';
 import { attachAuthContext, requireAdmin, type AuthContext } from '../auth/index.js';
 
 class AttributionAdminHttpError extends Error {
@@ -98,6 +99,13 @@ async function enqueueOrderAttributionBackfillRun(
     `,
     [jobId, submittedAt, submittedBy, JSON.stringify(options)]
   );
+
+  emitOrderAttributionBackfillJobLifecycleLog({
+    stage: 'enqueued',
+    jobId,
+    submittedAt,
+    options
+  });
 
   return orderAttributionBackfillEnqueueResponseSchema.parse({
     ok: true,
