@@ -400,6 +400,24 @@ export type ShopifyAttributionRecoveryResponse = {
   shopifyHintAttributedOrders: number;
 };
 
+export type OrderAttributionBackfillSubmittedOptions = {
+  startDate: string;
+  endDate: string;
+  dryRun: boolean;
+  limit: number;
+  webOrdersOnly: boolean;
+  skipShopifyWriteback: boolean;
+};
+
+export type OrderAttributionBackfillEnqueueResponse = {
+  ok: true;
+  jobId: string;
+  status: 'queued' | 'processing' | 'completed' | 'failed';
+  submittedAt: string;
+  submittedBy: string;
+  options: OrderAttributionBackfillSubmittedOptions;
+};
+
 declare global {
   interface Window {
     __ROAS_RADAR_RUNTIME_CONFIG__?: {
@@ -671,6 +689,13 @@ export function backfillShopifyOrders(startDate: string, endDate: string) {
 
 export function recoverShopifyAttributionHints(startDate: string, endDate: string) {
   return requestJson<ShopifyAttributionRecoveryResponse>('/api/admin/shopify/orders/recover-attribution', {
+    method: 'POST',
+    body: { startDate, endDate }
+  });
+}
+
+export function backfillOrderAttribution(startDate: string, endDate: string) {
+  return requestJson<OrderAttributionBackfillEnqueueResponse>('/api/admin/attribution/orders/backfill', {
     method: 'POST',
     body: { startDate, endDate }
   });

@@ -428,6 +428,7 @@ async function renderSnapshots() {
       onShopifyTest: noop,
       onShopifyWebhookSync: noop,
       onShopifyAttributionRecovery: noop,
+      onShopifyOrderAttributionBackfill: noop,
       onMetaConnect: noop,
       onMetaSync: noop,
       onGoogleSync: noop,

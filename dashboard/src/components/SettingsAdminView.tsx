@@ -137,6 +137,7 @@ type SettingsAdminViewProps = {
   onShopifyTest: () => void | Promise<void>;
   onShopifyWebhookSync: () => void | Promise<void>;
   onShopifyAttributionRecovery: () => void | Promise<void>;
+  onShopifyOrderAttributionBackfill: () => void | Promise<void>;
   onMetaConnect: () => void | Promise<void>;
   onMetaSync: () => void | Promise<void>;
   onGoogleSync: () => void | Promise<void>;
@@ -251,6 +252,7 @@ export default function SettingsAdminView({
   onShopifyTest,
   onShopifyWebhookSync,
   onShopifyAttributionRecovery,
+  onShopifyOrderAttributionBackfill,
   onMetaConnect,
   onMetaSync,
   onGoogleSync,
@@ -306,7 +308,9 @@ export default function SettingsAdminView({
   };
   const isSettingsSaving = actionFeedback.loading === 'settings-save';
   const isShopifyBusy =
-    actionFeedback.loading === 'shopify-backfill' || actionFeedback.loading === 'shopify-attribution-recovery';
+    actionFeedback.loading === 'shopify-backfill' ||
+    actionFeedback.loading === 'shopify-attribution-recovery' ||
+    actionFeedback.loading === 'shopify-order-attribution-backfill';
   const isMetaConfigSaving = actionFeedback.loading === 'meta-config-save';
   const isMetaActionBusy = actionFeedback.loading === 'meta-connect' || actionFeedback.loading === 'meta-sync';
   const isGoogleBusy =
@@ -539,11 +543,15 @@ export default function SettingsAdminView({
                     <Card padding="compact" className="border-line/60 bg-canvas-tint/80 shadow-none">
                       <Eyebrow>Recovery tools</Eyebrow>
                       <p className="mt-2 text-body text-ink-soft">
-                        Backfill imports historical orders. Attribution recovery rescans unattributed web orders in the same date window.
+                        Backfill imports historical orders. Attribution recovery rescans unattributed web orders, and order attribution backfill queues recovered-attribution processing for the same date window.
                       </p>
                     </Card>
 
-                    {hasMessageForAction(actionFeedback, ['shopify-backfill', 'shopify-attribution-recovery']) ? (
+                    {hasMessageForAction(actionFeedback, [
+                      'shopify-backfill',
+                      'shopify-attribution-recovery',
+                      'shopify-order-attribution-backfill'
+                    ]) ? (
                       <FormMessage tone={actionFeedback.error ? 'error' : isShopifyBusy ? 'warning' : 'success'}>
                         {actionFeedback.error
                           ? actionFeedback.error
@@ -568,6 +576,16 @@ export default function SettingsAdminView({
                         disabled={Boolean(shopifyBackfillError) || !shopifyConnection.data?.connected}
                       >
                         {actionFeedback.loading === 'shopify-attribution-recovery' ? 'Recovering…' : 'Recover attribution hints'}
+                      </Button>
+                      <Button
+                        type="button"
+                        tone="secondary"
+                        onClick={() => void onShopifyOrderAttributionBackfill()}
+                        disabled={Boolean(shopifyBackfillError) || !shopifyConnection.data?.connected}
+                      >
+                        {actionFeedback.loading === 'shopify-order-attribution-backfill'
+                          ? 'Queueing…'
+                          : 'Backfill order attribution'}
                       </Button>
                     </ButtonRow>
                   </FormSection>

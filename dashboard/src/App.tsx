@@ -11,6 +11,7 @@ import React, {
 } from 'react';
 
 import {
+  backfillOrderAttribution,
   backfillShopifyOrders,
   clearStoredAuthToken,
   createUser,
@@ -48,6 +49,7 @@ import {
   type GoogleAdsStatusResponse,
   type MetaAdsConnection,
   type MetaAdsConfigSummary,
+  type OrderAttributionBackfillEnqueueResponse,
   type OrderDetailsResponse,
   type OrderRow,
   type ReportingFilters,
@@ -1176,6 +1178,39 @@ function App() {
     }
   }
 
+  async function handleShopifyOrderAttributionBackfill() {
+    setActionFeedback({
+      context: 'shopify-order-attribution-backfill',
+      loading: 'shopify-order-attribution-backfill',
+      error: null,
+      message: null
+    });
+
+    try {
+      const response: OrderAttributionBackfillEnqueueResponse = await backfillOrderAttribution(
+        shopifyBackfillRange.startDate,
+        shopifyBackfillRange.endDate
+      );
+      await loadConnections();
+      startTransition(() => {
+        setDashboardRefreshKey((current) => current + 1);
+      });
+      setActionFeedback({
+        context: 'shopify-order-attribution-backfill',
+        loading: null,
+        error: null,
+        message: `Queued order attribution backfill job ${response.jobId} for ${response.options.startDate} to ${response.options.endDate}.`
+      });
+    } catch (error) {
+      setActionFeedback({
+        context: 'shopify-order-attribution-backfill',
+        loading: null,
+        error: error instanceof Error ? error.message : 'Failed to queue order attribution backfill',
+        message: null
+      });
+    }
+  }
+
   async function handleMetaSync() {
     setActionFeedback({
       context: 'meta-sync',
@@ -1579,6 +1614,7 @@ function App() {
             onShopifyTest={handleShopifyTest}
             onShopifyWebhookSync={handleShopifyWebhookSync}
             onShopifyAttributionRecovery={handleShopifyAttributionRecovery}
+            onShopifyOrderAttributionBackfill={handleShopifyOrderAttributionBackfill}
             onMetaConnect={handleMetaConnect}
             onMetaSync={handleMetaSync}
             onGoogleSync={handleGoogleSync}
