@@ -1,3 +1,9 @@
+import type {
+  OrderAttributionBackfillEnqueueResponse,
+  OrderAttributionBackfillRequest,
+  OrderAttributionBackfillSubmittedOptions
+} from '../../../packages/attribution-schema/index.js';
+
 export type ReportingFilters = {
   startDate: string;
   endDate: string;
@@ -400,23 +406,7 @@ export type ShopifyAttributionRecoveryResponse = {
   shopifyHintAttributedOrders: number;
 };
 
-export type OrderAttributionBackfillSubmittedOptions = {
-  startDate: string;
-  endDate: string;
-  dryRun: boolean;
-  limit: number;
-  webOrdersOnly: boolean;
-  skipShopifyWriteback: boolean;
-};
-
-export type OrderAttributionBackfillEnqueueResponse = {
-  ok: true;
-  jobId: string;
-  status: 'queued' | 'processing' | 'completed' | 'failed';
-  submittedAt: string;
-  submittedBy: string;
-  options: OrderAttributionBackfillSubmittedOptions;
-};
+export type { OrderAttributionBackfillEnqueueResponse, OrderAttributionBackfillRequest, OrderAttributionBackfillSubmittedOptions };
 
 declare global {
   interface Window {
@@ -694,10 +684,10 @@ export function recoverShopifyAttributionHints(startDate: string, endDate: strin
   });
 }
 
-export function backfillOrderAttribution(startDate: string, endDate: string) {
+export function backfillOrderAttribution(payload: OrderAttributionBackfillRequest) {
   return requestJson<OrderAttributionBackfillEnqueueResponse>('/api/admin/attribution/orders/backfill', {
     method: 'POST',
-    body: { startDate, endDate }
+    body: payload
   });
 }
 

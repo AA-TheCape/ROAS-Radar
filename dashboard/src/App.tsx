@@ -9,6 +9,10 @@ import React, {
   useState,
   type FormEvent
 } from 'react';
+import {
+  ORDER_ATTRIBUTION_BACKFILL_DEFAULT_LIMIT,
+  orderAttributionBackfillRequestSchema
+} from '../../packages/attribution-schema/index.js';
 
 import {
   backfillOrderAttribution,
@@ -572,6 +576,12 @@ function App() {
   const [shopifyBackfillRange, setShopifyBackfillRange] = useState({
     startDate: buildAprilFirstDateInput(DEFAULT_REPORTING_TIMEZONE),
     endDate: buildYesterdayDateInput(DEFAULT_REPORTING_TIMEZONE)
+  });
+  const [shopifyOrderAttributionBackfillOptions, setShopifyOrderAttributionBackfillOptions] = useState({
+    dryRun: true,
+    limit: String(ORDER_ATTRIBUTION_BACKFILL_DEFAULT_LIMIT),
+    webOrdersOnly: true,
+    skipShopifyWriteback: false
   });
   const [metaConnection, setMetaConnection] = useState<AsyncSection<MetaConnectionState>>(createLoadingSection());
   const [metaConfigForm, setMetaConfigForm] = useState<MetaConfigForm>({
@@ -1179,6 +1189,26 @@ function App() {
   }
 
   async function handleShopifyOrderAttributionBackfill() {
+    const parsedRequest = orderAttributionBackfillRequestSchema.safeParse({
+      startDate: shopifyBackfillRange.startDate,
+      endDate: shopifyBackfillRange.endDate,
+      dryRun: shopifyOrderAttributionBackfillOptions.dryRun,
+      limit: Number(shopifyOrderAttributionBackfillOptions.limit),
+      webOrdersOnly: shopifyOrderAttributionBackfillOptions.webOrdersOnly,
+      skipShopifyWriteback: shopifyOrderAttributionBackfillOptions.skipShopifyWriteback
+    });
+
+    if (!parsedRequest.success) {
+      const [firstIssue] = parsedRequest.error.issues;
+      setActionFeedback({
+        context: 'shopify-order-attribution-backfill',
+        loading: null,
+        error: firstIssue?.message ?? 'Enter a valid date range and limit before queueing the order attribution backfill.',
+        message: null
+      });
+      return;
+    }
+
     setActionFeedback({
       context: 'shopify-order-attribution-backfill',
       loading: 'shopify-order-attribution-backfill',
@@ -1187,10 +1217,7 @@ function App() {
     });
 
     try {
-      const response: OrderAttributionBackfillEnqueueResponse = await backfillOrderAttribution(
-        shopifyBackfillRange.startDate,
-        shopifyBackfillRange.endDate
-      );
+      const response: OrderAttributionBackfillEnqueueResponse = await backfillOrderAttribution(parsedRequest.data);
       await loadConnections();
       startTransition(() => {
         setDashboardRefreshKey((current) => current + 1);
@@ -1596,6 +1623,10 @@ function App() {
             shopifyConnection={shopifyConnection}
             shopifyBackfillRange={shopifyBackfillRange}
             setShopifyBackfillRange={(updater) => setShopifyBackfillRange((current) => updater(current))}
+            shopifyOrderAttributionBackfillOptions={shopifyOrderAttributionBackfillOptions}
+            setShopifyOrderAttributionBackfillOptions={(updater) =>
+              setShopifyOrderAttributionBackfillOptions((current) => updater(current))
+            }
             metaConnection={metaConnection}
             metaConfigForm={metaConfigForm}
             setMetaConfigForm={(updater) => setMetaConfigForm((current) => updater(current))}
