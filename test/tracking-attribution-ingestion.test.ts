@@ -186,6 +186,7 @@ test('tracking attribution endpoint persists canonical touch events and mirrors 
     assert.equal(touchInsert.params?.[13], 'WB-456');
     assert.equal(touchInsert.params?.[17], 'denied');
     assert.equal(touchInsert.params?.[18], 'server');
+    assert.deepEqual(JSON.parse(String(touchInsert.params?.[20])), validPayload);
 
     const trackingInsert = queries.find((entry) => entry.text.includes('INSERT INTO tracking_events'));
     assert.ok(trackingInsert);
@@ -195,6 +196,7 @@ test('tracking attribution endpoint persists canonical touch events and mirrors 
     assert.equal(trackingInsert.params?.[13], 'WB-456');
     assert.equal(trackingInsert.params?.[17], 'denied');
     assert.equal(trackingInsert.params?.[19], 'server');
+    assert.deepEqual(JSON.parse(String(trackingInsert.params?.[20])), validPayload);
   } finally {
     await closeServer(server);
   }

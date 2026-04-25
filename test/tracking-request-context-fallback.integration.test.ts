@@ -84,6 +84,7 @@ test('request-context bootstrap fallback preserves attributable revenue when the
       gbraid: string | null;
       ingestion_source: string;
       consent_state: string;
+      raw_payload: Record<string, unknown>;
     }>(
       `
         SELECT
@@ -95,7 +96,8 @@ test('request-context bootstrap fallback preserves attributable revenue when the
           utm_campaign,
           gbraid,
           ingestion_source,
-          consent_state
+          consent_state,
+          raw_payload
         FROM tracking_events
         WHERE session_id = $1::uuid
       `,
@@ -112,12 +114,24 @@ test('request-context bootstrap fallback preserves attributable revenue when the
       utm_campaign: 'spring-sale',
       gbraid: 'GBRAID-123',
       ingestion_source: 'request_query',
-      consent_state: 'unknown'
+      consent_state: 'unknown',
+      raw_payload: {
+        pageUrl:
+          'https://store.example/products/widget?utm_source=google&utm_medium=cpc&utm_campaign=spring-sale&gbraid=GBRAID-123',
+        landingUrl:
+          'https://store.example/products/widget?utm_source=google&utm_medium=cpc&utm_campaign=spring-sale&gbraid=GBRAID-123',
+        referrerUrl: 'https://www.google.com/search?q=widget',
+        referer: 'https://store.example/products/widget?utm_source=google&utm_medium=cpc&utm_campaign=spring-sale'
+      }
     });
 
-    const persistedTouchEvent = await pool.query<{ ingestion_source: string; consent_state: string }>(
+    const persistedTouchEvent = await pool.query<{
+      ingestion_source: string;
+      consent_state: string;
+      raw_payload: Record<string, unknown>;
+    }>(
       `
-        SELECT ingestion_source, consent_state
+        SELECT ingestion_source, consent_state, raw_payload
         FROM session_attribution_touch_events
         WHERE roas_radar_session_id = $1::uuid
       `,
@@ -127,6 +141,14 @@ test('request-context bootstrap fallback preserves attributable revenue when the
     assert.equal(persistedTouchEvent.rowCount, 1);
     assert.equal(persistedTouchEvent.rows[0].ingestion_source, 'request_query');
     assert.equal(persistedTouchEvent.rows[0].consent_state, 'unknown');
+    assert.deepEqual(persistedTouchEvent.rows[0].raw_payload, {
+      pageUrl:
+        'https://store.example/products/widget?utm_source=google&utm_medium=cpc&utm_campaign=spring-sale&gbraid=GBRAID-123',
+      landingUrl:
+        'https://store.example/products/widget?utm_source=google&utm_medium=cpc&utm_campaign=spring-sale&gbraid=GBRAID-123',
+      referrerUrl: 'https://www.google.com/search?q=widget',
+      referer: 'https://store.example/products/widget?utm_source=google&utm_medium=cpc&utm_campaign=spring-sale'
+    });
 
     await pool.query(
       `

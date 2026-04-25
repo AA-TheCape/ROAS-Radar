@@ -36,6 +36,7 @@ const MAX_LANGUAGE_LENGTH = 64;
 const MAX_SCREEN_LENGTH = 64;
 const MAX_CLIENT_EVENT_ID_LENGTH = 128;
 type TrackingEventType = (typeof EVENT_TYPES)[number];
+type TrackingRawPayload = Record<string, unknown>;
 
 type TrackingEventInput = {
   eventType: TrackingEventType;
@@ -654,6 +655,7 @@ async function insertTrackingEventForCapture(
   client: Parameters<typeof withTransaction>[0] extends (client: infer T) => Promise<unknown> ? T : never,
   input: {
     capture: AttributionCaptureV1;
+    rawPayload: TrackingRawPayload;
     eventType: TrackingEventType;
     consentState: AttributionConsentState;
     ingestionSource: 'server' | 'request_query';
@@ -735,29 +737,7 @@ async function insertTrackingEventForCapture(
         input.consentState,
         input.ingestionFingerprint,
         input.ingestionSource,
-        JSON.stringify({
-          schema_version: input.capture.schema_version,
-          roas_radar_session_id: input.capture.roas_radar_session_id,
-          occurred_at: input.capture.occurred_at,
-          captured_at: input.capture.captured_at,
-          landing_url: input.capture.landing_url,
-          referrer_url: input.capture.referrer_url,
-          page_url: input.capture.page_url,
-          utm_source: input.capture.utm_source,
-          utm_medium: input.capture.utm_medium,
-          utm_campaign: input.capture.utm_campaign,
-          utm_content: input.capture.utm_content,
-          utm_term: input.capture.utm_term,
-          gclid: input.capture.gclid,
-          gbraid: input.capture.gbraid,
-          wbraid: input.capture.wbraid,
-          fbclid: input.capture.fbclid,
-          ttclid: input.capture.ttclid,
-          msclkid: input.capture.msclkid,
-          consent_state: input.consentState,
-          shopify_cart_token: input.shopifyCartToken ?? null,
-          shopify_checkout_token: input.shopifyCheckoutToken ?? null
-        })
+        JSON.stringify(input.rawPayload)
       ]
     );
   } catch (error) {
@@ -778,6 +758,7 @@ async function insertTrackingEventForCapture(
 async function insertTrackingBrowserEvent(
   client: Parameters<typeof withTransaction>[0] extends (client: infer T) => Promise<unknown> ? T : never,
   input: SanitizedTrackingEventInput,
+  rawPayload: TrackingRawPayload,
   ingestionFingerprint: string
 ): Promise<string> {
   const capture = buildCaptureFromTrackingEvent(input);
@@ -863,23 +844,7 @@ async function insertTrackingBrowserEvent(
         input.consentState,
         ingestionFingerprint,
         'browser',
-        JSON.stringify({
-          ...input,
-          schema_version: ATTRIBUTION_SCHEMA_VERSION,
-          marketing_dimensions: {
-            utm_source: capture.utm_source,
-            utm_medium: capture.utm_medium,
-            utm_campaign: capture.utm_campaign,
-            utm_content: capture.utm_content,
-            utm_term: capture.utm_term,
-            gclid: capture.gclid,
-            gbraid: capture.gbraid,
-            wbraid: capture.wbraid,
-            fbclid: capture.fbclid,
-            ttclid: capture.ttclid,
-            msclkid: capture.msclkid
-          }
-        })
+        JSON.stringify(rawPayload)
       ]
     );
   } catch (error) {
@@ -903,6 +868,7 @@ async function insertAttributionTouchEvent(
   client: Parameters<typeof withTransaction>[0] extends (client: infer T) => Promise<unknown> ? T : never,
   input: {
     capture: AttributionCaptureV1;
+    rawPayload: TrackingRawPayload;
     eventType: TrackingEventType;
     consentState: AttributionConsentState;
     ingestionSource: 'server' | 'request_query';
@@ -987,12 +953,7 @@ async function insertAttributionTouchEvent(
         input.consentState,
         input.ingestionSource,
         input.ingestionFingerprint,
-        JSON.stringify({
-          ...input.capture,
-          consent_state: input.consentState,
-          shopify_cart_token: input.shopifyCartToken ?? null,
-          shopify_checkout_token: input.shopifyCheckoutToken ?? null
-        }),
+        JSON.stringify(input.rawPayload),
         input.shopifyCartToken ?? null,
         input.shopifyCheckoutToken ?? null
       ]
@@ -1021,6 +982,7 @@ async function insertAttributionTouchEvent(
 async function ingestAttributionCapture(
   input: {
     capture: AttributionCaptureV1;
+    rawPayload: TrackingRawPayload;
     eventType: TrackingEventType;
     consentState: AttributionConsentState;
     ingestionSource: 'server' | 'request_query';
@@ -1061,6 +1023,7 @@ async function ingestAttributionCapture(
 
     const touchEvent = await insertAttributionTouchEvent(client, {
       capture: input.capture,
+      rawPayload: input.rawPayload,
       eventType: input.eventType,
       consentState: input.consentState,
       ingestionSource: input.ingestionSource,
@@ -1071,6 +1034,7 @@ async function ingestAttributionCapture(
 
     await insertTrackingEventForCapture(client, {
       capture: input.capture,
+      rawPayload: input.rawPayload,
       eventType: input.eventType,
       consentState: input.consentState,
       ingestionSource: input.ingestionSource,
@@ -1090,7 +1054,11 @@ async function ingestAttributionCapture(
   };
 }
 
-async function ingestTrackingEvent(input: TrackingRequestBody, requestIp: string | null): Promise<TrackingIngestResult> {
+async function ingestTrackingEvent(
+  input: TrackingRequestBody,
+  rawPayload: TrackingRawPayload,
+  requestIp: string | null
+): Promise<TrackingIngestResult> {
   const sanitizedInput = sanitizeTrackingInput(input);
   const ingestionFingerprint = hashTrackingFingerprint(sanitizedInput);
 
@@ -1134,7 +1102,7 @@ async function ingestTrackingEvent(input: TrackingRequestBody, requestIp: string
       ipHash
     );
 
-    const insertedEventId = await insertTrackingBrowserEvent(client, sanitizedInput, ingestionFingerprint);
+    const insertedEventId = await insertTrackingBrowserEvent(client, sanitizedInput, rawPayload, ingestionFingerprint);
 
     await enqueueAttributionForTrackingTouchpoint(client, {
       sessionId: sanitizedInput.sessionId,
@@ -1159,6 +1127,7 @@ async function ingestTrackingEvent(input: TrackingRequestBody, requestIp: string
 }
 
 async function bootstrapSession(
+  rawPayload: TrackingRawPayload,
   pageUrl: string,
   landingUrl: string | null,
   referrerUrl: string | null,
@@ -1182,6 +1151,7 @@ async function bootstrapSession(
   await ingestAttributionCapture(
     {
       capture,
+      rawPayload,
       eventType: 'page_view',
       consentState: 'unknown',
       ingestionSource: 'request_query',
@@ -1300,6 +1270,30 @@ function parseTrackingRequestBody(body: unknown): Record<string, unknown> {
   return body as Record<string, unknown>;
 }
 
+function buildSessionBootstrapRawPayload(req: Request): TrackingRawPayload {
+  const rawPayload: TrackingRawPayload = {};
+
+  if (req.query.pageUrl !== undefined) {
+    rawPayload.pageUrl = req.query.pageUrl;
+  }
+
+  if (req.query.landingUrl !== undefined) {
+    rawPayload.landingUrl = req.query.landingUrl;
+  }
+
+  if (req.query.referrerUrl !== undefined) {
+    rawPayload.referrerUrl = req.query.referrerUrl;
+  }
+
+  const referer = req.header('referer');
+
+  if (referer !== undefined) {
+    rawPayload.referer = referer;
+  }
+
+  return rawPayload;
+}
+
 function enforceRateLimit(req: Request): void {
   const requestIp = resolveRequestIp(req);
   const body = typeof req.body === 'object' && req.body !== null ? (req.body as Record<string, unknown>) : {};
@@ -1340,12 +1334,14 @@ function parseTrackingEventRequest(body: unknown): TrackingRequestBody {
 
 async function emitDerivedAttributionFromBrowserEvent(
   input: SanitizedTrackingEventInput,
+  rawPayload: TrackingRawPayload,
   requestIp: string | null
 ): Promise<BrowserDerivedAttributionResult> {
   try {
     const result = await ingestAttributionCapture(
       {
         capture: buildCaptureFromTrackingEvent(input),
+        rawPayload,
         eventType: input.eventType,
         consentState: input.consentState,
         ingestionSource: 'server',
@@ -1389,6 +1385,7 @@ export function createTrackingRouter() {
         landingUrl: req.query.landingUrl,
         referrerUrl: req.query.referrerUrl
       });
+      const rawPayload = buildSessionBootstrapRawPayload(req);
 
       const normalizedPageUrl = normalizeTrackingUrl(parsedQuery.pageUrl);
       const normalizedLandingUrl = normalizeTrackingUrl(parsedQuery.landingUrl);
@@ -1406,6 +1403,7 @@ export function createTrackingRouter() {
           : 'none';
 
       const result = await bootstrapSession(
+        rawPayload,
         normalizedPageUrl,
         normalizedLandingUrl,
         normalizedReferrerUrl,
@@ -1462,10 +1460,12 @@ export function createTrackingRouter() {
       enforceAllowedOrigin(req);
       enforceRateLimit(req);
 
-      const parsed = parseAttributionCaptureRequest(parseTrackingRequestBody(req.body));
+      const rawPayload = parseTrackingRequestBody(req.body);
+      const parsed = parseAttributionCaptureRequest(rawPayload);
       const result = await ingestAttributionCapture(
         {
           capture: parsed.capture,
+          rawPayload,
           eventType: 'page_view',
           consentState: parsed.consentState,
           ingestionSource: 'server',
@@ -1516,10 +1516,15 @@ export function createTrackingRouter() {
       enforceAllowedOrigin(req);
       enforceRateLimit(req);
 
-      const input = parseTrackingEventRequest(parseTrackingRequestBody(req.body));
+      const rawPayload = parseTrackingRequestBody(req.body);
+      const input = parseTrackingEventRequest(rawPayload);
       const requestIp = resolveRequestIp(req);
-      const browserResult = await ingestTrackingEvent(input, requestIp);
-      const serverAttributionResult = await emitDerivedAttributionFromBrowserEvent(browserResult.sanitizedInput, requestIp);
+      const browserResult = await ingestTrackingEvent(input, rawPayload, requestIp);
+      const serverAttributionResult = await emitDerivedAttributionFromBrowserEvent(
+        browserResult.sanitizedInput,
+        rawPayload,
+        requestIp
+      );
 
       logAttributionCaptureObserved('browser_event', browserResult.sanitizedInput, {
         accepted: true,

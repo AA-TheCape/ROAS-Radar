@@ -212,6 +212,7 @@ test('tracking endpoint dual-writes browser events into the attribution touch st
     assert.ok(browserEventInsert);
     assert.equal(browserEventInsert.params?.[20], 'denied');
     assert.equal(browserEventInsert.params?.[22], 'browser');
+    assert.deepEqual(JSON.parse(String(browserEventInsert.params?.[23])), validTrackPayload);
 
     const touchInsert = queries.find(
       (entry) => entry.transaction === 2 && entry.text.includes('INSERT INTO session_attribution_touch_events')
@@ -223,6 +224,7 @@ test('tracking endpoint dual-writes browser events into the attribution touch st
     assert.equal(touchInsert.params?.[11], 'ABC123');
     assert.equal(touchInsert.params?.[17], 'denied');
     assert.equal(touchInsert.params?.[18], 'server');
+    assert.deepEqual(JSON.parse(String(touchInsert.params?.[20])), validTrackPayload);
   } finally {
     await closeServer(server);
   }
