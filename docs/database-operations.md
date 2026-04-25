@@ -27,6 +27,8 @@ Use these columns first:
 - Google Ads connection raw customer data: `raw_customer_source`, `raw_customer_external_id`, `raw_customer_received_at`
 - Google Ads raw spend rows: `payload_source`, `payload_external_id`, `payload_received_at`
 
+Do not use `meta_ads_daily_spend` or `google_ads_daily_spend` as raw-source lookup surfaces. Those tables are normalized projections for reporting and may legitimately omit malformed upstream rows that were still retained in the raw spend tables.
+
 Preferred query shape:
 
 ```sql

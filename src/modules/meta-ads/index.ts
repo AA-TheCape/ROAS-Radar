@@ -1145,7 +1145,7 @@ async function fetchInsightsForLevel(
     nextUrl = page.paging?.next ? new URL(page.paging.next) : null;
   }
 
-  return rows.filter((row) => buildInsightsEntityId(level, row));
+  return rows;
 }
 
 async function fetchCreativeMap(
@@ -1219,11 +1219,7 @@ async function persistDailySpendSnapshot(
 
   for (const level of META_SPEND_LEVELS) {
     for (const row of params.rowsByLevel[level]) {
-      const entityId = buildInsightsEntityId(level, row);
-
-      if (!entityId) {
-        continue;
-      }
+      const entityId = buildInsightsEntityId(level, row) || null;
 
       const rawPayloadMetadata = buildRawPayloadStorageMetadata(row);
       const { rawPayloadJson, payloadSizeBytes, payloadHash } = rawPayloadMetadata;
@@ -1285,7 +1281,14 @@ async function persistDailySpendSnapshot(
         }
       );
 
+      // Raw spend records are the canonical source-payload surface. Projection rows are
+      // derived later and are allowed to skip malformed rows that cannot produce entity keys.
       const rawRecordId = rawInsert.rows[0].id;
+
+      if (!entityId) {
+        continue;
+      }
+
       const normalizedRows = normalizeInsightRows(row, params.creativeMap, params.currency);
 
       for (const normalizedRow of normalizedRows) {
@@ -1300,6 +1303,8 @@ async function persistDailySpendSnapshot(
   for (const row of rollupPersistableSpendRows(normalizedRowsToInsert)) {
     const normalizedRow = row.normalizedRow;
 
+    // meta_ads_daily_spend is a derived reporting projection, not the canonical raw-source
+    // retention surface. It intentionally stores normalized rollups linked back to raw rows.
     await client.query(
       `
         INSERT INTO meta_ads_daily_spend (

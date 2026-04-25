@@ -972,9 +972,6 @@ async function persistDailySpendSnapshot(client, params) {
     ]);
     for (const row of params.campaignRows) {
         const entityId = row.campaign?.id ?? null;
-        if (!entityId) {
-            continue;
-        }
         const rawPayloadMetadata = buildRawPayloadStorageMetadata(row);
         const { rawPayloadJson, payloadSizeBytes, payloadHash } = rawPayloadMetadata;
         const insertResult = await client.query(`
@@ -996,7 +993,7 @@ async function persistDailySpendSnapshot(client, params) {
         )
         VALUES ($1, $2, $3::date, 'campaign', $4, $5, $6, $7::numeric, $8, $9, $10::jsonb, $11, $12, now())
         RETURNING
-          entity_id AS "entityId",
+          id,
           payload_size_bytes AS "storedPayloadSizeBytes",
           payload_hash AS "storedPayloadHash",
           raw_payload AS "persistedRawPayload"
@@ -1017,9 +1014,10 @@ async function persistDailySpendSnapshot(client, params) {
         logRawPayloadIntegrityMismatch(rawPayloadMetadata, insertResult.rows[0], {
             surface: 'google_ads_raw_spend_records',
             operation: 'insert',
-            recordId: `campaign:${insertResult.rows[0].entityId}`,
+            recordId: insertResult.rows[0].id,
             fields: {
                 level: 'campaign',
+                entityId,
                 syncJobId: params.syncJobId
             }
         });
@@ -1027,9 +1025,6 @@ async function persistDailySpendSnapshot(client, params) {
     const rawRecordIdsByAdId = new Map();
     for (const row of params.adRows) {
         const entityId = row.adGroupAd?.ad?.id ?? null;
-        if (!entityId) {
-            continue;
-        }
         const rawPayloadMetadata = buildRawPayloadStorageMetadata(row);
         const { rawPayloadJson, payloadSizeBytes, payloadHash } = rawPayloadMetadata;
         const insertResult = await client.query(`
@@ -1079,9 +1074,13 @@ async function persistDailySpendSnapshot(client, params) {
                 syncJobId: params.syncJobId
             }
         });
-        rawRecordIdsByAdId.set(entityId, insertResult.rows[0].id);
+        if (entityId) {
+            rawRecordIdsByAdId.set(entityId, insertResult.rows[0].id);
+        }
     }
     for (const normalizedRow of params.normalizedRows) {
+        // google_ads_daily_spend is a derived reporting projection. The raw API rows above remain
+        // the canonical source-payload storage even when a row cannot be projected cleanly.
         await client.query(`
         INSERT INTO google_ads_daily_spend (
           connection_id,

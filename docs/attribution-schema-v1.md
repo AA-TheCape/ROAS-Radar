@@ -103,7 +103,7 @@ These fields are not part of the shared `AttributionCaptureV1` object, but they 
 | `shopify_cart_token` | `string \| null` | `255` | `tracking_events`, `session_attribution_touch_events`, raw payload snapshots | Shopify cart token observed at capture time. Used for deterministic order/session stitching. |
 | `shopify_checkout_token` | `string \| null` | `255` | `tracking_events`, `session_attribution_touch_events`, raw payload snapshots | Shopify checkout token observed at capture time. Used for deterministic order/session stitching. |
 | `ingestion_source` | text | `64` in `session_attribution_touch_events` | `tracking_events`, `session_attribution_touch_events` | How the event entered the system. Current persisted values include `browser`, `server`, and `request_query`. |
-| `raw_payload` | `jsonb` | n/a | `tracking_events`, `session_attribution_touch_events`, `shopify_orders` snapshots | Exact parsed source payload for raw-retention surfaces. Derived tables may retain normalized snapshots separately, but raw-source columns must not silently trim, lowercase, or subset upstream fields. |
+| `raw_payload` | `jsonb` | n/a | `tracking_events`, `session_attribution_touch_events`, `shopify_orders` snapshots, ad raw spend tables | Exact parsed source payload for raw-retention surfaces. Derived tables may retain normalized snapshots separately, but raw-source columns must not silently trim, lowercase, subset, or replace upstream fields. |
 | `retained_until` | timestamptz | n/a | `session_attribution_identities`, `session_attribution_touch_events`, `order_attribution_links` | Retention cutoff used by cleanup jobs. Not a business attribution field. |
 | `first_captured_at` | timestamptz | n/a | `session_attribution_identities` | Earliest capture timestamp retained for the session snapshot lifecycle. |
 | `last_captured_at` | timestamptz | n/a | `session_attribution_identities` | Latest capture timestamp retained for the session snapshot lifecycle. |
@@ -127,6 +127,7 @@ Raw-source JSONB retention is stricter:
 - these normalization rules apply to typed columns and canonical capture objects
 - they do not authorize trimming, lowercasing, key projection, or reconstruction inside raw-source `raw_payload` columns
 - raw-source payloads must remain exact decoded-and-parsed copies of the upstream request or platform row
+- for ad-platform spend ingestion, this exactness requirement applies to `meta_ads_raw_spend_records.raw_payload` and `google_ads_raw_spend_records.raw_payload`, while `*_daily_spend.raw_payload` remains a derived projection field
 
 ### URL fields
 
