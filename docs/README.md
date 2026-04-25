@@ -1,5 +1,25 @@
 # Docs Index
 
+## Start Here
+
+### Engineers
+
+1. Read [Implementation Guide](implementation-guide.md) for local setup, service topology, validation flow, and troubleshooting.
+2. Read [Attribution Schema V1](attribution-schema-v1.md) for canonical field names, normalization rules, DB mappings, and Shopify attribute keys.
+3. Read [Operational Attribution Contracts](operational-attribution-contracts.md) for resolver precedence, Shopify writeback, retention, and recovery semantics.
+
+### Analysts
+
+1. Read [Analytics Playbook](analytics-playbook.md) for how ROAS Radar stores attribution, resolves orders, and exposes reporting outputs.
+2. Read [Reporting Metrics](reporting-metrics.md) for KPI formulas used by the dashboard and reporting API.
+3. Read [Marketing Dimensions](marketing-dimensions.md) and [Attribution Schema V1](attribution-schema-v1.md) when channel naming or field semantics matter.
+
+### Troubleshooting
+
+- Start with [Implementation Guide](implementation-guide.md#troubleshooting) for local setup and validation issues.
+- Use [Operational Attribution Contracts](operational-attribution-contracts.md) when you need resolver, writeback, retention, or dead-letter behavior.
+- Use [Attribution Completeness](runbooks/attribution-completeness.md), [Ingestion Failures](runbooks/ingestion-failures.md), and [Attribution Worker Backlog](runbooks/attribution-worker-backlog.md) for incident response.
+
 ## Core References
 
 - [Implementation Guide](implementation-guide.md): local setup, service responsibilities, and end-to-end validation.

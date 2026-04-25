@@ -2,6 +2,23 @@
 
 This guide is for engineers who need to run the ROAS Radar MVP locally, understand how the backend and dashboard fit together, and validate the ingestion, attribution, and reporting flow end to end.
 
+## Short Onboarding Path
+
+Use this sequence when you are new to the repository and want the shortest path to productive local work:
+
+1. Read `docs/README.md` to see the current doc map and the operator-facing runbooks.
+2. Skim this guide through `Local Setup` so you know which services to start and which env vars matter.
+3. Read `docs/attribution-schema-v1.md` before changing capture fields, Shopify attribute keys, or normalization logic.
+4. Read `docs/operational-attribution-contracts.md` before changing resolver precedence, Shopify writeback, retention, or recovery flows.
+5. Read `docs/analytics-playbook.md` and `docs/reporting-metrics.md` before changing dashboard-facing metrics or attribution interpretation.
+
+If you only need a starting point for one area:
+
+- capture and ingestion: `src/modules/tracking/index.ts` plus `docs/attribution-schema-v1.md`
+- Shopify ingestion and writeback: `src/modules/shopify/index.ts`, `src/modules/shopify/writeback.ts`, and `docs/operational-attribution-contracts.md`
+- attribution resolution: `src/modules/attribution/index.ts`, `src/modules/attribution/resolver.ts`, and `docs/last-non-direct-touch-approval-matrix.md`
+- dashboard and reporting: `src/modules/reporting/index.ts`, `dashboard/`, `docs/analytics-playbook.md`, and `docs/reporting-metrics.md`
+
 ## What Runs In The MVP
 
 The repository currently contains one Node.js backend, one React dashboard, and several worker entrypoints:
@@ -549,6 +566,8 @@ If the dashboard fails immediately, check `dashboard/src/lib/api.ts` first for m
 
 ## Troubleshooting
 
+Use this section as the first stop for local setup problems. If the symptom looks like a production contract issue rather than a local shell issue, jump directly to the linked runbook or contract doc instead of debugging from source first.
+
 ### Common local issues
 
 - `401 Unauthorized` on reporting routes:
@@ -566,15 +585,26 @@ If the dashboard fails immediately, check `dashboard/src/lib/api.ts` first for m
 
 Use these docs when local symptoms match production behavior:
 
+- Attribution completeness and missing session capture: `docs/runbooks/attribution-completeness.md`
 - Ingestion failures: `docs/runbooks/ingestion-failures.md`
 - Attribution backlog: `docs/runbooks/attribution-worker-backlog.md`
 - API latency: `docs/runbooks/api-latency.md`
 - Database operations: `docs/database-operations.md`
+- Operational attribution contracts: `docs/operational-attribution-contracts.md`
 - Attribution Schema V1 reference: `docs/attribution-schema-v1.md`
 - Shopify app setup: `docs/shopify-app-setup.md`
 - Visitor identity stitching: `docs/visitor-identity-stitching.md`
 - Reporting metrics definitions: `docs/reporting-metrics.md`
 - Marketing dimensions: `docs/marketing-dimensions.md`
+
+### Dashboard interpretation quick links
+
+When the local dashboard is loading but the numbers look wrong, use this map before tracing requests by hand:
+
+- card and KPI formulas: `docs/reporting-metrics.md`
+- order-to-session matching semantics: `docs/analytics-playbook.md`
+- field naming, null handling, and canonical Shopify keys: `docs/attribution-schema-v1.md`
+- writeback, reconciliation, retention, and dead-letter behavior: `docs/operational-attribution-contracts.md`
 
 ## Recommended Engineer Workflow
 
