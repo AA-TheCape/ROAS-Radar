@@ -28,6 +28,16 @@ test('buildPlanningDates switches to the rolling lookback after at least one suc
   assert.deepEqual(dates, ['2026-04-09', '2026-04-10', '2026-04-11']);
 });
 
+test('buildIncrementalPlanningDates re-enqueues only today after the daily plan has already been created', () => {
+  const dates = __metaAdsTestUtils.buildIncrementalPlanningDates(
+    new Date('2026-04-25T19:30:00.000Z'),
+    new Date('2026-04-25T07:17:28.000Z'),
+    '2026-04-25'
+  );
+
+  assert.deepEqual(dates, ['2026-04-25']);
+});
+
 test('rollupPersistableSpendRows collapses duplicate campaign-level entities before persistence', () => {
   const rolled = __metaAdsTestUtils.rollupPersistableSpendRows([
     {
