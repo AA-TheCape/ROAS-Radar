@@ -27,3 +27,146 @@ test('buildPlanningDates switches to the rolling lookback after at least one suc
 
   assert.deepEqual(dates, ['2026-04-09', '2026-04-10', '2026-04-11']);
 });
+
+test('rollupPersistableSpendRows collapses duplicate campaign-level entities before persistence', () => {
+  const rolled = __metaAdsTestUtils.rollupPersistableSpendRows([
+    {
+      rawRecordId: 11,
+      normalizedRow: {
+        granularity: 'campaign',
+        entityKey: 'campaign-1',
+        accountId: 'act_1',
+        accountName: 'Account',
+        campaignId: 'campaign-1',
+        campaignName: 'Campaign One',
+        adsetId: null,
+        adsetName: null,
+        adId: null,
+        adName: null,
+        creativeId: null,
+        creativeName: null,
+        canonicalSource: 'meta',
+        canonicalMedium: 'paid_social',
+        canonicalCampaign: 'campaign one',
+        canonicalContent: 'unknown',
+        canonicalTerm: 'unknown',
+        currency: 'USD',
+        spend: '12.34',
+        impressions: 100,
+        clicks: 5,
+        rawPayload: { row: 1 }
+      }
+    },
+    {
+      rawRecordId: 12,
+      normalizedRow: {
+        granularity: 'campaign',
+        entityKey: 'campaign-1',
+        accountId: 'act_1',
+        accountName: 'Account',
+        campaignId: 'campaign-1',
+        campaignName: 'Campaign One',
+        adsetId: null,
+        adsetName: null,
+        adId: null,
+        adName: null,
+        creativeId: null,
+        creativeName: null,
+        canonicalSource: 'meta',
+        canonicalMedium: 'paid_social',
+        canonicalCampaign: 'campaign one',
+        canonicalContent: 'unknown',
+        canonicalTerm: 'unknown',
+        currency: 'USD',
+        spend: '7.66',
+        impressions: 40,
+        clicks: 3,
+        rawPayload: { row: 2 }
+      }
+    },
+    {
+      rawRecordId: 13,
+      normalizedRow: {
+        granularity: 'ad',
+        entityKey: 'ad-1',
+        accountId: 'act_1',
+        accountName: 'Account',
+        campaignId: 'campaign-1',
+        campaignName: 'Campaign One',
+        adsetId: 'adset-1',
+        adsetName: 'Adset One',
+        adId: 'ad-1',
+        adName: 'Ad One',
+        creativeId: null,
+        creativeName: null,
+        canonicalSource: 'meta',
+        canonicalMedium: 'paid_social',
+        canonicalCampaign: 'campaign one',
+        canonicalContent: 'ad one',
+        canonicalTerm: 'unknown',
+        currency: 'USD',
+        spend: '3.00',
+        impressions: 20,
+        clicks: 2,
+        rawPayload: { row: 3 }
+      }
+    }
+  ]);
+
+  assert.deepEqual(rolled, [
+    {
+      rawRecordId: 11,
+      normalizedRow: {
+        granularity: 'campaign',
+        entityKey: 'campaign-1',
+        accountId: 'act_1',
+        accountName: 'Account',
+        campaignId: 'campaign-1',
+        campaignName: 'Campaign One',
+        adsetId: null,
+        adsetName: null,
+        adId: null,
+        adName: null,
+        creativeId: null,
+        creativeName: null,
+        canonicalSource: 'meta',
+        canonicalMedium: 'paid_social',
+        canonicalCampaign: 'campaign one',
+        canonicalContent: 'unknown',
+        canonicalTerm: 'unknown',
+        currency: 'USD',
+        spend: '20.00',
+        impressions: 140,
+        clicks: 8,
+        rawPayload: { row: 1 }
+      }
+    },
+    {
+      rawRecordId: 13,
+      normalizedRow: {
+        granularity: 'ad',
+        entityKey: 'ad-1',
+        accountId: 'act_1',
+        accountName: 'Account',
+        campaignId: 'campaign-1',
+        campaignName: 'Campaign One',
+        adsetId: 'adset-1',
+        adsetName: 'Adset One',
+        adId: 'ad-1',
+        adName: 'Ad One',
+        creativeId: null,
+        creativeName: null,
+        canonicalSource: 'meta',
+        canonicalMedium: 'paid_social',
+        canonicalCampaign: 'campaign one',
+        canonicalContent: 'ad one',
+        canonicalTerm: 'unknown',
+        currency: 'USD',
+        spend: '3.00',
+        impressions: 20,
+        clicks: 2,
+        rawPayload: { row: 3 }
+      }
+    }
+  ]);
+});
