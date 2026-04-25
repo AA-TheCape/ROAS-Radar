@@ -1144,11 +1144,6 @@ function normalizeNullableString(value: string | null | undefined): string | nul
   return normalizeAttributionString(value);
 }
 
-function isEligibleOnlineStoreOrder(sourceName: string | null | undefined): boolean {
-  const normalizedSource = normalizeNullableString(sourceName)?.toLowerCase();
-  return normalizedSource === 'web';
-}
-
 function buildLineItemExternalId(orderId: string, lineItem: ShopifyLineItemPayload, index: number): string {
   if (lineItem.id !== undefined && lineItem.id !== null) {
     return String(lineItem.id);
@@ -1713,18 +1708,8 @@ async function persistWebhook(input: PersistWebhookInput): Promise<{ duplicated:
     return { duplicated: true };
   }
 
-  if (!isEligibleOnlineStoreOrder(input.payload.source_name)) {
-    await markWebhookReceiptStatus(receipt.id, 'ignored');
-    logInfo('shopify_webhook_ignored', {
-      topic: input.topic,
-      shopDomain: input.shopDomain,
-      webhookId: input.webhookId,
-      sourceName: input.payload.source_name ?? null
-    });
-    return { duplicated: false };
-  }
-
   try {
+    // Preserve every decoded Shopify order payload in shopify_orders, regardless of source_name.
     await normalizeShopifyOrder(receipt.id, input.payload, input.rawPayload);
     logInfo('shopify_webhook_processed', {
       topic: input.topic,
@@ -2078,7 +2063,6 @@ export const __shopifyTestUtils = {
   verifyShopifyOAuthHmac,
   buildShopifyInstallUrl,
   verifyWebhookSignature,
-  isEligibleOnlineStoreOrder,
   buildLineItemExternalId,
   extractRawShopifyLineItems,
   persistWebhook,

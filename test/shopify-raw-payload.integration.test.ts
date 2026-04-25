@@ -235,6 +235,41 @@ function buildRawOrder(shopifyOrderId: string) {
   };
 }
 
+function buildRawNonWebOrder(shopifyOrderId: string) {
+  return {
+    ...buildRawOrder(shopifyOrderId),
+    source_name: 'pos',
+    unknown_top_level: {
+      channel: 'retail-store',
+      nested: {
+        keep: true,
+        tags: ['counter', 'walk-in']
+      }
+    },
+    line_items: [
+      {
+        id: `line-${shopifyOrderId}`,
+        product_id: `product-${shopifyOrderId}`,
+        variant_id: `variant-${shopifyOrderId}`,
+        sku: 'POS-SKU-1',
+        title: 'Point of Sale Widget',
+        name: 'In Store',
+        vendor: 'Acme Retail',
+        quantity: 1,
+        price: '21.49',
+        total_discount: '0.00',
+        fulfillment_status: 'fulfilled',
+        requires_shipping: false,
+        taxable: true,
+        pos_metadata: {
+          register: 'front-counter',
+          cashier: 'alex'
+        }
+      }
+    ]
+  };
+}
+
 test.beforeEach(async () => {
   const { resetE2EDatabase, shopifyWritebackTestUtils } = await getModules();
   shopifyWritebackTestUtils.reset();
@@ -338,5 +373,36 @@ test('Shopify webhook and backfill ingestion preserve raw orders without trimmin
       }
     ).unknown_top_level.notes[0],
     backfillOrder.unknown_top_level.notes[0]
+  );
+});
+
+test('Shopify ingestion persists non-web orders into shopify_orders with untouched raw order and line-item payloads', async () => {
+  const posOrder = buildRawNonWebOrder('raw-pos-order-1');
+
+  await persistOrderViaIngress('orders/create', posOrder);
+
+  const persistedOrder = await fetchPersistedRawPayloads('raw-pos-order-1');
+  const posMetadata = __rawPayloadStorageTestUtils.buildRawPayloadStorageMetadata(posOrder);
+  const posReceiptJson = JSON.stringify(posOrder);
+
+  assert.deepEqual(persistedOrder.order.raw_payload, posOrder);
+  assert.equal(persistedOrder.order.payload_source, 'shopify_order');
+  assert.equal(persistedOrder.order.payload_external_id, 'raw-pos-order-1');
+  assert.equal(persistedOrder.order.payload_size_bytes, posMetadata.payloadSizeBytes);
+  assert.equal(persistedOrder.order.payload_hash, posMetadata.payloadHash);
+  assert.deepEqual(persistedOrder.receipt.raw_payload, posOrder);
+  assert.equal(persistedOrder.receipt.payload_source, 'shopify_webhook');
+  assert.equal(persistedOrder.receipt.payload_external_id, 'raw-pos-order-1');
+  assert.equal(persistedOrder.receipt.payload_size_bytes, Buffer.byteLength(posReceiptJson, 'utf8'));
+  assert.equal(persistedOrder.receipt.payload_hash, createHash('sha256').update(posReceiptJson).digest('hex'));
+  assert.deepEqual(persistedOrder.lineItem, posOrder.line_items[0]);
+  assert.equal(persistedOrder.order.raw_payload.source_name, 'pos');
+  assert.equal(
+    (
+      persistedOrder.lineItem as {
+        pos_metadata: { register: string };
+      }
+    ).pos_metadata.register,
+    'front-counter'
   );
 });
