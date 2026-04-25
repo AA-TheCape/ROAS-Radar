@@ -1,9 +1,20 @@
 import type {
   OrderAttributionBackfillEnqueueResponse,
+  OrderAttributionBackfillJobResponse,
   OrderAttributionBackfillRequest,
   OrderAttributionBackfillSubmittedOptions
 } from '../../../packages/attribution-schema/index.js';
-import { orderAttributionBackfillEnqueueResponseSchema } from '../../../packages/attribution-schema/index.js';
+import {
+  orderAttributionBackfillEnqueueResponseSchema,
+  orderAttributionBackfillJobResponseSchema
+} from '../../../packages/attribution-schema/index.js';
+
+export type {
+  OrderAttributionBackfillEnqueueResponse,
+  OrderAttributionBackfillJobResponse,
+  OrderAttributionBackfillRequest,
+  OrderAttributionBackfillSubmittedOptions
+};
 
 export type ReportingFilters = {
   startDate: string;
@@ -692,6 +703,12 @@ export function enqueueOrderAttributionBackfill(payload: OrderAttributionBackfil
     method: 'POST',
     body: payload,
     parse: (response) => orderAttributionBackfillEnqueueResponseSchema.parse(response)
+  });
+}
+
+export function fetchOrderAttributionBackfillJob(jobId: string) {
+  return requestJson<OrderAttributionBackfillJobResponse>(`/api/admin/attribution/orders/backfill/${jobId}`, {
+    parse: (response) => orderAttributionBackfillJobResponseSchema.parse(response)
   });
 }
 

@@ -8,6 +8,7 @@ import type {
   GoogleAdsStatusResponse,
   MetaAdsConfigSummary,
   MetaAdsConnection,
+  OrderAttributionBackfillJobResponse,
   ShopifyConnectionResponse
 } from '../lib/api';
 import { formatDateLabel, formatDateTimeLabel } from '../lib/format';
@@ -140,6 +141,7 @@ type SettingsAdminViewProps = {
       skipShopifyWriteback: boolean;
     }
   ) => void;
+  orderAttributionBackfillJob: AsyncSection<OrderAttributionBackfillJobResponse>;
   metaConnection: AsyncSection<MetaConnectionState>;
   metaConfigForm: MetaConfigForm;
   setMetaConfigForm: (updater: (current: MetaConfigForm) => MetaConfigForm) => void;
@@ -159,6 +161,7 @@ type SettingsAdminViewProps = {
   onShopifyWebhookSync: () => void | Promise<void>;
   onShopifyAttributionRecovery: () => void | Promise<void>;
   onShopifyOrderAttributionBackfill: () => void | Promise<void>;
+  onOrderAttributionBackfillRefresh: () => void | Promise<void>;
   onMetaConnect: () => void | Promise<void>;
   onMetaSync: () => void | Promise<void>;
   onGoogleSync: () => void | Promise<void>;
@@ -274,6 +277,32 @@ function RecoveryAction({
   );
 }
 
+function getOrderAttributionJobTone(status: OrderAttributionBackfillJobResponse['status']) {
+  switch (status) {
+    case 'queued':
+      return 'warning';
+    case 'processing':
+      return 'brand';
+    case 'completed':
+      return 'success';
+    case 'failed':
+      return 'danger';
+  }
+}
+
+function getOrderAttributionJobLabel(status: OrderAttributionBackfillJobResponse['status']) {
+  switch (status) {
+    case 'queued':
+      return 'Queued';
+    case 'processing':
+      return 'Running';
+    case 'completed':
+      return 'Completed';
+    case 'failed':
+      return 'Failed';
+  }
+}
+
 export default function SettingsAdminView({
   isAdmin,
   reportingTimezone,
@@ -291,6 +320,7 @@ export default function SettingsAdminView({
   setShopifyBackfillRange,
   shopifyOrderAttributionBackfillOptions,
   setShopifyOrderAttributionBackfillOptions,
+  orderAttributionBackfillJob,
   metaConnection,
   metaConfigForm,
   setMetaConfigForm,
@@ -310,6 +340,7 @@ export default function SettingsAdminView({
   onShopifyWebhookSync,
   onShopifyAttributionRecovery,
   onShopifyOrderAttributionBackfill,
+  onOrderAttributionBackfillRefresh,
   onMetaConnect,
   onMetaSync,
   onGoogleSync,
@@ -407,6 +438,10 @@ export default function SettingsAdminView({
   const timezoneUpdatedAt = appSettings.data?.updatedAt
     ? formatOptionalDateTime(appSettings.data.updatedAt, reportingTimezone)
     : 'Awaiting first save';
+  const latestOrderAttributionJob = orderAttributionBackfillJob.data;
+  const showOrderAttributionJobCard = Boolean(
+    latestOrderAttributionJob || orderAttributionBackfillJob.loading || orderAttributionBackfillJob.error
+  );
   const users = usersSection.data ?? [];
   const filteredUsers = useMemo(
     () => users.filter((user) => matchesQuery([user.displayName, user.email, user.status, user.isAdmin ? 'Admin' : 'Viewer'], userSearch)),
@@ -793,6 +828,137 @@ export default function SettingsAdminView({
                               {actionFeedback.loading === 'shopify-order-attribution-backfill'
                                 ? 'Queueing…'
                                 : 'Queue order attribution backfill'}
+                            </Button>
+                          </ButtonRow>
+                        </div>
+                      </Card>
+                    ) : null}
+
+                    {showOrderAttributionJobCard ? (
+                      <Card padding="compact" className="border-line/60 bg-canvas-tint/80 shadow-none">
+                        <div className="grid gap-4">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div className="grid gap-2">
+                              <Eyebrow>Latest attribution backfill run</Eyebrow>
+                              <p className="text-body text-ink-soft">
+                                Reloading the page keeps tracking this job by its latest queued id until a newer run replaces it.
+                              </p>
+                            </div>
+                            {latestOrderAttributionJob ? (
+                              <StatusPill tone={getOrderAttributionJobTone(latestOrderAttributionJob.status)}>
+                                {getOrderAttributionJobLabel(latestOrderAttributionJob.status)}
+                              </StatusPill>
+                            ) : null}
+                          </div>
+
+                          {orderAttributionBackfillJob.error ? (
+                            <Banner tone="error">{orderAttributionBackfillJob.error}</Banner>
+                          ) : null}
+
+                          {latestOrderAttributionJob ? (
+                            <>
+                              <DetailList className="xl:grid-cols-2">
+                                <div>
+                                  <dt>Job ID</dt>
+                                  <dd>{latestOrderAttributionJob.jobId}</dd>
+                                </div>
+                                <div>
+                                  <dt>Date window</dt>
+                                  <dd>
+                                    {latestOrderAttributionJob.options.startDate} to {latestOrderAttributionJob.options.endDate}
+                                  </dd>
+                                </div>
+                                <div>
+                                  <dt>Submitted</dt>
+                                  <dd>{formatOptionalDateTime(latestOrderAttributionJob.submittedAt, reportingTimezone)}</dd>
+                                </div>
+                                <div>
+                                  <dt>Submitted by</dt>
+                                  <dd>{latestOrderAttributionJob.submittedBy}</dd>
+                                </div>
+                                <div>
+                                  <dt>Started</dt>
+                                  <dd>{formatOptionalDateTime(latestOrderAttributionJob.startedAt, reportingTimezone)}</dd>
+                                </div>
+                                <div>
+                                  <dt>Completed</dt>
+                                  <dd>{formatOptionalDateTime(latestOrderAttributionJob.completedAt, reportingTimezone)}</dd>
+                                </div>
+                                <div>
+                                  <dt>Mode</dt>
+                                  <dd>{latestOrderAttributionJob.options.dryRun ? 'Dry run' : 'Write changes'}</dd>
+                                </div>
+                                <div>
+                                  <dt>Order limit</dt>
+                                  <dd>{latestOrderAttributionJob.options.limit}</dd>
+                                </div>
+                              </DetailList>
+
+                              {latestOrderAttributionJob.status === 'queued' || latestOrderAttributionJob.status === 'processing' ? (
+                                <Banner tone="warning">
+                                  {latestOrderAttributionJob.status === 'queued'
+                                    ? 'This backfill is queued and will update here once a worker starts it.'
+                                    : 'This backfill is currently running. The report will populate automatically when processing finishes.'}
+                                </Banner>
+                              ) : null}
+
+                              {latestOrderAttributionJob.error ? (
+                                <Banner tone="error">
+                                  {latestOrderAttributionJob.error.code}: {latestOrderAttributionJob.error.message}
+                                </Banner>
+                              ) : null}
+
+                              {latestOrderAttributionJob.report ? (
+                                <div className="grid gap-4">
+                                  <DetailList className="xl:grid-cols-2">
+                                    <div>
+                                      <dt>Orders scanned</dt>
+                                      <dd>{latestOrderAttributionJob.report.scanned}</dd>
+                                    </div>
+                                    <div>
+                                      <dt>Recovered</dt>
+                                      <dd>{latestOrderAttributionJob.report.recovered}</dd>
+                                    </div>
+                                    <div>
+                                      <dt>Unrecoverable</dt>
+                                      <dd>{latestOrderAttributionJob.report.unrecoverable}</dd>
+                                    </div>
+                                    <div>
+                                      <dt>Shopify writebacks</dt>
+                                      <dd>{latestOrderAttributionJob.report.writebackCompleted}</dd>
+                                    </div>
+                                    <div>
+                                      <dt>Failures</dt>
+                                      <dd>{latestOrderAttributionJob.report.failures.length}</dd>
+                                    </div>
+                                  </DetailList>
+
+                                  {latestOrderAttributionJob.report.failures.length ? (
+                                    <div className="grid gap-2">
+                                      <Eyebrow>Recent failures</Eyebrow>
+                                      <div className="grid gap-2">
+                                        {latestOrderAttributionJob.report.failures.slice(0, 3).map((failure, index) => (
+                                          <Banner key={`${failure.orderId ?? 'unknown'}-${failure.code}-${index}`} tone="warning">
+                                            {failure.orderId ? `${failure.orderId}: ` : ''}
+                                            {failure.code} ({failure.message})
+                                          </Banner>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  ) : null}
+                                </div>
+                              ) : null}
+                            </>
+                          ) : null}
+
+                          <ButtonRow>
+                            <Button
+                              type="button"
+                              tone="secondary"
+                              onClick={() => void onOrderAttributionBackfillRefresh()}
+                              disabled={orderAttributionBackfillJob.loading || latestOrderAttributionJob == null}
+                            >
+                              {orderAttributionBackfillJob.loading ? 'Refreshing…' : 'Refresh backfill status'}
                             </Button>
                           </ButtonRow>
                         </div>
