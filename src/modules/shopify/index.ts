@@ -1331,11 +1331,14 @@ async function resolveLandingSessionId(
 async function upsertShopifyOrderLineItems(
   client: PoolClient,
   shopifyOrderId: string,
-  lineItems: ShopifyLineItemPayload[]
+  lineItems: ShopifyLineItemPayload[],
+  rawLineItems: unknown[]
 ): Promise<void> {
   await client.query('DELETE FROM shopify_order_line_items WHERE shopify_order_id = $1', [shopifyOrderId]);
 
   for (const [index, lineItem] of lineItems.entries()) {
+    const rawLineItem = rawLineItems[index] ?? lineItem;
+
     await client.query(
       `
         INSERT INTO shopify_order_line_items (
@@ -1390,10 +1393,19 @@ async function upsertShopifyOrderLineItems(
         normalizeLineItemText(lineItem.fulfillment_status),
         lineItem.requires_shipping ?? null,
         lineItem.taxable ?? null,
-        JSON.stringify(lineItem)
+        JSON.stringify(rawLineItem)
       ]
     );
   }
+}
+
+function extractRawShopifyLineItems(rawPayload: unknown): unknown[] {
+  if (!rawPayload || typeof rawPayload !== 'object') {
+    return [];
+  }
+
+  const { line_items: rawLineItems } = rawPayload as { line_items?: unknown };
+  return Array.isArray(rawLineItems) ? rawLineItems : [];
 }
 
 async function createOrReuseWebhookReceipt(
@@ -1403,6 +1415,9 @@ async function createOrReuseWebhookReceipt(
   payloadHash: string,
   rawPayload: unknown
 ): Promise<WebhookReceiptRow> {
+  const rawPayloadJson = JSON.stringify(rawPayload);
+  const payloadSizeBytes = Buffer.byteLength(rawPayloadJson, 'utf8');
+
   const insertResult = await query<WebhookReceiptRow>(
     `
       INSERT INTO shopify_webhook_receipts (
@@ -1410,15 +1425,16 @@ async function createOrReuseWebhookReceipt(
         shop_domain,
         webhook_id,
         payload_hash,
+        payload_size_bytes,
         received_at,
         status,
         raw_payload
       )
-      VALUES ($1, $2, $3, $4, now(), 'received', $5::jsonb)
+      VALUES ($1, $2, $3, $4, $5, now(), 'received', $6::jsonb)
       ON CONFLICT DO NOTHING
       RETURNING id, status, processed_at
     `,
-    [topic, shopDomain, webhookId, payloadHash, JSON.stringify(rawPayload)]
+    [topic, shopDomain, webhookId, payloadHash, payloadSizeBytes, rawPayloadJson]
   );
 
   if (insertResult.rowCount) {
@@ -1471,6 +1487,10 @@ async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPay
   const normalizedOrderEmail = payload.email ?? payload.customer?.email ?? null;
   const orderEmailHash = hashIdentityEmail(normalizedOrderEmail);
   const shopifyOrderId = String(payload.id);
+  const rawLineItems = extractRawShopifyLineItems(rawPayload);
+  const rawPayloadJson = JSON.stringify(rawPayload);
+  const payloadSizeBytes = Buffer.byteLength(rawPayloadJson, 'utf8');
+  const payloadHash = createHash('sha256').update(rawPayloadJson).digest('hex');
 
   await withTransaction(async (client) => {
     const landingSessionId = await resolveLandingSessionId(client, payload);
@@ -1518,6 +1538,9 @@ async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPay
           checkout_token,
           cart_token,
           source_name,
+          payload_received_at,
+          payload_size_bytes,
+          payload_hash,
           raw_payload,
           ingested_at
         )
@@ -1539,7 +1562,10 @@ async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPay
           $15,
           $16,
           $17,
-          $18::jsonb,
+          now(),
+          $18,
+          $19,
+          $20::jsonb,
           now()
         )
         ON CONFLICT (shopify_order_id)
@@ -1560,6 +1586,9 @@ async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPay
           checkout_token = COALESCE(EXCLUDED.checkout_token, shopify_orders.checkout_token),
           cart_token = COALESCE(EXCLUDED.cart_token, shopify_orders.cart_token),
           source_name = COALESCE(EXCLUDED.source_name, shopify_orders.source_name),
+          payload_received_at = EXCLUDED.payload_received_at,
+          payload_size_bytes = EXCLUDED.payload_size_bytes,
+          payload_hash = EXCLUDED.payload_hash,
           raw_payload = EXCLUDED.raw_payload,
           ingested_at = now()
       `,
@@ -1581,11 +1610,13 @@ async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPay
         payload.checkout_token ?? null,
         payload.cart_token ?? null,
         payload.source_name ?? null,
-        JSON.stringify(rawPayload)
+        payloadSizeBytes,
+        payloadHash,
+        rawPayloadJson
       ]
     );
 
-    await upsertShopifyOrderLineItems(client, shopifyOrderId, payload.line_items);
+    await upsertShopifyOrderLineItems(client, shopifyOrderId, payload.line_items, rawLineItems);
 
     await stitchKnownCustomerIdentity(client, {
       shopifyOrderId,
@@ -2009,6 +2040,8 @@ export const __shopifyTestUtils = {
   verifyWebhookSignature,
   isEligibleOnlineStoreOrder,
   buildLineItemExternalId,
+  extractRawShopifyLineItems,
+  persistWebhook,
   extractShopifyHintAttribution,
   recoverShopifyAttributionHints
 };

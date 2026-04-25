@@ -33,3 +33,26 @@ test('buildLineItemExternalId reuses Shopify ids and falls back to a stable per-
     'order-1:line:2'
   );
 });
+
+test('extractRawShopifyLineItems returns untouched raw line item nodes from the source payload', () => {
+  const rawLineItems = __shopifyTestUtils.extractRawShopifyLineItems({
+    id: 123,
+    line_items: [
+      {
+        id: 456,
+        title: 'Widget',
+        admin_graphql_api_id: 'gid://shopify/LineItem/456',
+        properties: [{ name: '_bundle', value: 'starter-kit' }]
+      }
+    ]
+  });
+
+  assert.deepEqual(rawLineItems, [
+    {
+      id: 456,
+      title: 'Widget',
+      admin_graphql_api_id: 'gid://shopify/LineItem/456',
+      properties: [{ name: '_bundle', value: 'starter-kit' }]
+    }
+  ]);
+});
