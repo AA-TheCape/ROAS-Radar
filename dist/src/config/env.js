@@ -61,6 +61,7 @@ const envSchema = zod_1.z.object({
     TRACKING_MAX_FUTURE_SKEW_SECONDS: integerString.default(300),
     TRACKING_RATE_LIMIT_MAX: integerString.default(120),
     TRACKING_RATE_LIMIT_WINDOW_MS: integerString.default(60_000),
+    SESSION_ATTRIBUTION_RETENTION_DAYS: integerString.default(30),
     ATTRIBUTION_JOB_BATCH_SIZE: integerString.default(25),
     ATTRIBUTION_STALE_SCAN_BATCH_SIZE: integerString.default(100),
     ATTRIBUTION_WORKER_LOOP: booleanString.default(true),
