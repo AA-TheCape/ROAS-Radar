@@ -478,6 +478,50 @@ test('settings admin view explains recovery actions in recommended operator orde
   }
 });
 
+test('settings admin view reveals attribution options with safe defaults only after selection', async () => {
+  const { default: SettingsAdminView } = await loadDashboardModule<
+    typeof import('../dashboard/src/components/SettingsAdminView')
+  >('dashboard/src/components/SettingsAdminView.tsx');
+
+  const mounted = await mountUi(h(SettingsAdminView, createSettingsAdminProps()));
+
+  try {
+    assert.doesNotMatch(mounted.container.textContent ?? '', /Attribution backfill options/);
+
+    const selectButton = Array.from(mounted.container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('Select attribution backfill')
+    );
+    assert.ok(selectButton);
+    click(selectButton);
+    await tick();
+
+    const text = mounted.container.textContent ?? '';
+    assert.match(text, /Attribution backfill options/);
+    assert.match(text, /Review these before queueing the asynchronous attribution backfill/);
+    assert.match(text, /Enabled by default so the first run analyzes the window without writing attribution changes/);
+    assert.match(text, /Keep the backfill focused on web orders/);
+    assert.match(text, /Leave Shopify untouched even on a non-dry run/);
+
+    const limitInput = mounted.container.querySelector('#shopify-order-attribution-limit') as HTMLInputElement | null;
+    const dryRunInput = mounted.container.querySelector('#shopify-order-attribution-dry-run') as HTMLInputElement | null;
+    const webOnlyInput = mounted.container.querySelector('#shopify-order-attribution-web-only') as HTMLInputElement | null;
+    const skipWritebackInput = mounted.container.querySelector(
+      '#shopify-order-attribution-skip-writeback'
+    ) as HTMLInputElement | null;
+
+    assert.ok(limitInput);
+    assert.equal(limitInput.value, '500');
+    assert.ok(dryRunInput);
+    assert.equal(dryRunInput.checked, true);
+    assert.ok(webOnlyInput);
+    assert.equal(webOnlyInput.checked, true);
+    assert.ok(skipWritebackInput);
+    assert.equal(skipWritebackInput.checked, false);
+  } finally {
+    mounted.cleanup();
+  }
+});
+
 test('settings admin view bypasses confirmation for dry-run attribution backfills', async () => {
   const { default: SettingsAdminView } = await loadDashboardModule<
     typeof import('../dashboard/src/components/SettingsAdminView')
@@ -568,6 +612,190 @@ test('settings admin view requires confirmation before non-dry-run attribution b
 
     assert.equal(queuedCount, 1);
     assert.equal(mounted.dom.window.document.querySelector('dialog'), null);
+  } finally {
+    mounted.cleanup();
+  }
+});
+
+test('settings admin view renders queued, processing, completed, and failed backfill report states', async () => {
+  const { default: SettingsAdminView } = await loadDashboardModule<
+    typeof import('../dashboard/src/components/SettingsAdminView')
+  >('dashboard/src/components/SettingsAdminView.tsx');
+
+  const mounted = await mountUi(
+    h(
+      SettingsAdminView,
+      createSettingsAdminProps({
+        orderAttributionBackfillJob: {
+          data: {
+            ok: true,
+            jobId: 'job-queued',
+            status: 'queued',
+            submittedAt: '2026-04-20T19:10:00.000Z',
+            submittedBy: 'taylor@roasradar.dev',
+            startedAt: null,
+            completedAt: null,
+            options: {
+              startDate: '2026-04-01',
+              endDate: '2026-04-20',
+              dryRun: true,
+              limit: 500,
+              webOrdersOnly: true,
+              skipShopifyWriteback: false
+            },
+            report: null,
+            error: null
+          },
+          loading: false,
+          error: null
+        }
+      })
+    )
+  );
+
+  try {
+    assert.match(mounted.container.textContent ?? '', /Latest attribution backfill run/);
+    assert.match(mounted.container.textContent ?? '', /Queued/);
+    assert.match(mounted.container.textContent ?? '', /This backfill is queued and will update here once a worker starts it\./);
+
+    mounted.root.render(
+      h(
+        SettingsAdminView,
+        createSettingsAdminProps({
+          orderAttributionBackfillJob: {
+            data: {
+              ok: true,
+              jobId: 'job-processing',
+              status: 'processing',
+              submittedAt: '2026-04-20T19:10:00.000Z',
+              submittedBy: 'taylor@roasradar.dev',
+              startedAt: '2026-04-20T19:11:00.000Z',
+              completedAt: null,
+              options: {
+                startDate: '2026-04-01',
+                endDate: '2026-04-20',
+                dryRun: true,
+                limit: 500,
+                webOrdersOnly: true,
+                skipShopifyWriteback: false
+              },
+              report: null,
+              error: null
+            },
+            loading: false,
+            error: null
+          }
+        })
+      )
+    );
+    await tick();
+
+    assert.match(mounted.container.textContent ?? '', /Running/);
+    assert.match(
+      mounted.container.textContent ?? '',
+      /This backfill is currently running\. The report will populate automatically when processing finishes\./
+    );
+
+    mounted.root.render(
+      h(
+        SettingsAdminView,
+        createSettingsAdminProps({
+          orderAttributionBackfillJob: {
+            data: {
+              ok: true,
+              jobId: 'job-completed',
+              status: 'completed',
+              submittedAt: '2026-04-20T19:10:00.000Z',
+              submittedBy: 'taylor@roasradar.dev',
+              startedAt: '2026-04-20T19:11:00.000Z',
+              completedAt: '2026-04-20T19:14:00.000Z',
+              options: {
+                startDate: '2026-04-01',
+                endDate: '2026-04-20',
+                dryRun: false,
+                limit: 150,
+                webOrdersOnly: false,
+                skipShopifyWriteback: true
+              },
+              report: {
+                scanned: 150,
+                recovered: 42,
+                unrecoverable: 7,
+                writebackCompleted: 0,
+                failures: [
+                  { orderId: '1001', code: 'missing-session', message: 'Missing session evidence' },
+                  { orderId: '1002', code: 'no-click-id', message: 'No deterministic click id found' },
+                  { orderId: '1003', code: 'writeback-skipped', message: 'Writeback disabled' },
+                  { orderId: '1004', code: 'late-order', message: 'Order processed after range close' }
+                ]
+              },
+              error: null
+            },
+            loading: false,
+            error: null
+          }
+        })
+      )
+    );
+    await tick();
+
+    const completedText = mounted.container.textContent ?? '';
+    assert.match(completedText, /Completed/);
+    assert.match(completedText, /Orders scanned/);
+    assert.match(completedText, /150/);
+    assert.match(completedText, /Recovered/);
+    assert.match(completedText, /42/);
+    assert.match(completedText, /Recent failures/);
+    assert.match(completedText, /1001: missing-session \(Missing session evidence\)/);
+    assert.match(completedText, /1003: writeback-skipped \(Writeback disabled\)/);
+    assert.doesNotMatch(completedText, /1004: late-order \(Order processed after range close\)/);
+
+    mounted.root.render(
+      h(
+        SettingsAdminView,
+        createSettingsAdminProps({
+          orderAttributionBackfillJob: {
+            data: {
+              ok: true,
+              jobId: 'job-failed',
+              status: 'failed',
+              submittedAt: '2026-04-20T19:10:00.000Z',
+              submittedBy: 'taylor@roasradar.dev',
+              startedAt: '2026-04-20T19:11:00.000Z',
+              completedAt: '2026-04-20T19:12:00.000Z',
+              options: {
+                startDate: '2026-04-01',
+                endDate: '2026-04-20',
+                dryRun: false,
+                limit: 75,
+                webOrdersOnly: true,
+                skipShopifyWriteback: false
+              },
+              report: {
+                scanned: 23,
+                recovered: 5,
+                unrecoverable: 2,
+                writebackCompleted: 1,
+                failures: [{ orderId: '2001', code: 'worker-timeout', message: 'Worker timed out' }]
+              },
+              error: {
+                code: 'job-failed',
+                message: 'Worker exited before finishing the backfill'
+              }
+            },
+            loading: false,
+            error: null
+          }
+        })
+      )
+    );
+    await tick();
+
+    const failedText = mounted.container.textContent ?? '';
+    assert.match(failedText, /Failed/);
+    assert.match(failedText, /job-failed: Worker exited before finishing the backfill/);
+    assert.match(failedText, /Orders scanned/);
+    assert.match(failedText, /23/);
   } finally {
     mounted.cleanup();
   }
