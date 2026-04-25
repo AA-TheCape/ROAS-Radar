@@ -78,3 +78,8 @@ Authorization: Bearer <REPORTING_API_TOKEN>
 - Only one active Shopify store can be connected in this MVP environment.
 - Attempting to connect a different active store returns `409`.
 - `app/uninstalled` marks the stored installation as `uninstalled`, which makes reconnecting the same store explicit and auditable.
+
+## Related operational docs
+
+- `docs/attribution-schema-v1.md` defines the canonical note-attribute field names and normalization rules used by Shopify writeback.
+- `docs/operational-attribution-contracts.md` defines queue, retry, dead-letter, reconciliation, skip-condition, and retention behavior for Shopify writeback and attribution recovery.

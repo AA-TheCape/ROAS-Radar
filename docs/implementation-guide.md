@@ -63,6 +63,8 @@ The worker claims jobs from `attribution_jobs`, resolves the winning journey, pe
 4. stitched customer identity / email fallback
 5. unattributed fallback
 
+The operational contract for resolver precedence, Shopify writeback, reconciliation, and retention is documented in `docs/operational-attribution-contracts.md`.
+
 ### React dashboard
 
 The dashboard in `dashboard/src/App.tsx` calls the reporting API only. It does not write directly to the database and does not own attribution logic. API configuration is read from:

@@ -1,3 +1,4 @@
+- `docs/operational-attribution-contracts.md` for the implemented resolver, writeback, reconciliation, retention, and dead-letter contract
 - `docs/runbooks/attribution-completeness.md` for capture, session propagation, writeback, and resolver quality incidents
 
 - `attribution_capture_observed`
