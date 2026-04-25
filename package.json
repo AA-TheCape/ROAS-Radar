@@ -1,8 +1,31 @@
 {
+  "name": "roas-radar-api",
+  "version": "0.1.0",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "db:migrate": "tsx src/db/migrate.ts",
     "dead-letters:replay": "tsx src/admin/replay-dead-letters.ts",
+    "test": "node scripts/run-tests.mjs all",
+    "test:all": "node scripts/run-tests.mjs all",
+    "test:unit": "node scripts/run-tests.mjs unit",
+    "test:integration": "node scripts/run-tests.mjs integration",
     "test:dead-letters": "node --import tsx --test test/dead-letter-replay.test.ts"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "pg": "^8.13.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.2",
+    "@types/pg": "^8.20.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }
