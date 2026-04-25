@@ -455,3 +455,25 @@ test('settings admin view keeps user management gated for non-admin access', asy
     mounted.cleanup();
   }
 });
+
+test('settings admin view explains recovery actions in recommended operator order', async () => {
+  const { default: SettingsAdminView } = await loadDashboardModule<
+    typeof import('../dashboard/src/components/SettingsAdminView')
+  >('dashboard/src/components/SettingsAdminView.tsx');
+
+  const mounted = await mountUi(h(SettingsAdminView, createSettingsAdminProps()));
+
+  try {
+    const text = mounted.container.textContent ?? '';
+    assert.match(text, /Recovery tools/);
+    assert.match(text, /Use these in order for the selected date window/);
+    assert.match(text, /Backfill Shopify orders/);
+    assert.match(text, /Run this first to import historical Shopify orders for the window/);
+    assert.match(text, /Recover attribution hints/);
+    assert.match(text, /Run this after order import when web orders are still unattributed/);
+    assert.match(text, /Backfill order attribution/);
+    assert.match(text, /Run this last to queue the broader attribution backfill for the same window/);
+  } finally {
+    mounted.cleanup();
+  }
+});

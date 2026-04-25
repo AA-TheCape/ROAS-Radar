@@ -219,6 +219,33 @@ function DetailGrid({ children }: { children: JSX.Element[] | JSX.Element }) {
   return <DetailList className="xl:grid-cols-2">{children}</DetailList>;
 }
 
+function RecoveryAction({
+  label,
+  description,
+  loadingLabel,
+  isLoading,
+  disabled,
+  type = 'button',
+  onClick
+}: {
+  label: string;
+  description: string;
+  loadingLabel: string;
+  isLoading: boolean;
+  disabled: boolean;
+  type?: 'button' | 'submit';
+  onClick?: () => void;
+}) {
+  return (
+    <div className="grid gap-3 rounded-card border border-line/60 bg-surface/85 p-4 shadow-inset-soft">
+      <Button type={type} tone="secondary" onClick={onClick} disabled={disabled}>
+        {isLoading ? loadingLabel : label}
+      </Button>
+      <p className="text-body text-ink-muted">{description}</p>
+    </div>
+  );
+}
+
 export default function SettingsAdminView({
   isAdmin,
   reportingTimezone,
@@ -543,7 +570,7 @@ export default function SettingsAdminView({
                     <Card padding="compact" className="border-line/60 bg-canvas-tint/80 shadow-none">
                       <Eyebrow>Recovery tools</Eyebrow>
                       <p className="mt-2 text-body text-ink-soft">
-                        Backfill imports historical orders. Attribution recovery rescans unattributed web orders, and order attribution backfill queues recovered-attribution processing for the same date window.
+                        Use these in order for the selected date window so operators import missing orders first, then recover attribution, then queue the broader backfill only if the earlier steps still leave gaps.
                       </p>
                     </Card>
 
@@ -561,33 +588,32 @@ export default function SettingsAdminView({
                       </FormMessage>
                     ) : null}
 
-                    <ButtonRow>
-                      <Button
+                    <div className="grid gap-3 xl:grid-cols-3">
+                      <RecoveryAction
                         type="submit"
-                        tone="secondary"
+                        label="Backfill Shopify orders"
+                        loadingLabel="Backfilling…"
+                        isLoading={actionFeedback.loading === 'shopify-backfill'}
                         disabled={Boolean(shopifyBackfillError) || !shopifyConnection.data?.connected}
-                      >
-                        {actionFeedback.loading === 'shopify-backfill' ? 'Backfilling…' : 'Backfill Shopify orders'}
-                      </Button>
-                      <Button
-                        type="button"
-                        tone="secondary"
+                        description="Run this first to import historical Shopify orders for the window; it can pull a large backlog, so use the narrowest range that fixes the gap."
+                      />
+                      <RecoveryAction
+                        label="Recover attribution hints"
+                        loadingLabel="Recovering…"
+                        isLoading={actionFeedback.loading === 'shopify-attribution-recovery'}
+                        disabled={Boolean(shopifyBackfillError) || !shopifyConnection.data?.connected}
                         onClick={() => void onShopifyAttributionRecovery()}
+                        description="Run this after order import when web orders are still unattributed; it applies Shopify-hint fallback only where deterministic matching still failed."
+                      />
+                      <RecoveryAction
+                        label="Backfill order attribution"
+                        loadingLabel="Queueing…"
+                        isLoading={actionFeedback.loading === 'shopify-order-attribution-backfill'}
                         disabled={Boolean(shopifyBackfillError) || !shopifyConnection.data?.connected}
-                      >
-                        {actionFeedback.loading === 'shopify-attribution-recovery' ? 'Recovering…' : 'Recover attribution hints'}
-                      </Button>
-                      <Button
-                        type="button"
-                        tone="secondary"
                         onClick={() => void onShopifyOrderAttributionBackfill()}
-                        disabled={Boolean(shopifyBackfillError) || !shopifyConnection.data?.connected}
-                      >
-                        {actionFeedback.loading === 'shopify-order-attribution-backfill'
-                          ? 'Queueing…'
-                          : 'Backfill order attribution'}
-                      </Button>
-                    </ButtonRow>
+                        description="Run this last to queue the broader attribution backfill for the same window; it can touch many orders asynchronously, so avoid it until the earlier recovery steps are done."
+                      />
+                    </div>
                   </FormSection>
                 </Form>
 
