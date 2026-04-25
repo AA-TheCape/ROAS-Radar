@@ -1,7 +1,7 @@
 import { orderAttributionBackfillReportSchema, orderAttributionBackfillSubmittedOptionsSchema } from '../../../packages/attribution-schema/index.js';
 import { query, withTransaction } from '../../db/pool.js';
 import { logError, logInfo } from '../../observability/index.js';
-import { backfillRecentOrdersWithRecoveredAttribution, toOrderAttributionBackfillJobReport } from './backfill.js';
+import { backfillRecentOrdersWithRecoveredAttribution, OrderAttributionBackfillRunError, toOrderAttributionBackfillJobReport } from './backfill.js';
 const DEFAULT_ORDER_ATTRIBUTION_BACKFILL_RUN_BATCH_SIZE = 1;
 function parseJobOptions(input) {
     return orderAttributionBackfillSubmittedOptionsSchema.parse(input);
@@ -29,6 +29,12 @@ function normalizeErrorMessage(error) {
         return error.trim();
     }
     return 'Order attribution backfill job failed';
+}
+function extractFailedRunReport(error) {
+    if (!(error instanceof OrderAttributionBackfillRunError)) {
+        return null;
+    }
+    return orderAttributionBackfillReportSchema.parse(error.report);
 }
 export function buildBackfillExecutionOptions(run, workerId) {
     const options = parseJobOptions(run.options);
@@ -82,17 +88,18 @@ async function markOrderAttributionBackfillRunCompleted(runId, report, now) {
       WHERE id = $1
     `, [runId, now, JSON.stringify(report)]);
 }
-async function markOrderAttributionBackfillRunFailed(runId, error, now) {
+async function markOrderAttributionBackfillRunFailed(runId, error, report, now) {
     await query(`
       UPDATE order_attribution_backfill_runs
       SET
         status = 'failed',
         completed_at = $2,
-        error_code = $3,
-        error_message = $4,
+        report = $3::jsonb,
+        error_code = $4,
+        error_message = $5,
         updated_at = $2
       WHERE id = $1
-    `, [runId, now, normalizeErrorCode(error), normalizeErrorMessage(error)]);
+    `, [runId, now, report === null ? null : JSON.stringify(report), normalizeErrorCode(error), normalizeErrorMessage(error)]);
 }
 export async function processOrderAttributionBackfillRuns(options) {
     const now = options.now ?? new Date();
@@ -114,11 +121,12 @@ export async function processOrderAttributionBackfillRuns(options) {
         }
         catch (error) {
             failedRuns += 1;
+            const failedReport = extractFailedRunReport(error);
             logError('order_attribution_backfill_run_failed', error, {
                 workerId: options.workerId,
                 jobId: run.id
             });
-            await markRunFailed(run.id, error, new Date());
+            await markRunFailed(run.id, error, failedReport, new Date());
         }
     }
     if (runs.length > 0) {

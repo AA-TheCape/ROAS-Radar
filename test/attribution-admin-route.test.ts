@@ -144,3 +144,76 @@ test('order attribution backfill admin route enqueues normalized jobs and return
     await closeServer(server);
   }
 });
+
+test('order attribution backfill admin route returns persisted partial reports for failed jobs', async () => {
+  pool.query = (async () => ({
+    rows: [
+      {
+        id: 'job-failed',
+        status: 'failed',
+        submitted_at: new Date('2026-04-25T10:00:00.000Z'),
+        submitted_by: 'internal',
+        started_at: new Date('2026-04-25T10:00:05.000Z'),
+        completed_at: new Date('2026-04-25T10:01:00.000Z'),
+        options: {
+          startDate: '2026-04-01',
+          endDate: '2026-04-05',
+          dryRun: false,
+          limit: 500,
+          webOrdersOnly: true,
+          skipShopifyWriteback: false
+        },
+        report: {
+          scanned: 12,
+          recovered: 4,
+          unrecoverable: 3,
+          writebackCompleted: 2,
+          failures: [
+            {
+              orderId: 'order-9',
+              code: 'order_processing_failed',
+              message: 'Timed out while refreshing daily reporting metrics'
+            }
+          ]
+        },
+        error_code: 'DatabaseTimeout',
+        error_message: 'database timeout while scanning orders'
+      }
+    ]
+  })) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(server, '/api/admin/attribution/orders/backfill/job-failed', {
+      headers: {
+        authorization: 'Bearer test-reporting-token'
+      }
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(body.ok, true);
+    assert.equal(body.jobId, 'job-failed');
+    assert.equal(body.status, 'failed');
+    assert.deepEqual(body.report, {
+      scanned: 12,
+      recovered: 4,
+      unrecoverable: 3,
+      writebackCompleted: 2,
+      failures: [
+        {
+          orderId: 'order-9',
+          code: 'order_processing_failed',
+          message: 'Timed out while refreshing daily reporting metrics'
+        }
+      ]
+    });
+    assert.deepEqual(body.error, {
+      code: 'DatabaseTimeout',
+      message: 'database timeout while scanning orders'
+    });
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});

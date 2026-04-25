@@ -21,6 +21,16 @@ const MISSING_ATTRIBUTION_SQL = `
     AND attribution.attributed_click_id_value IS NULL
   )
 `;
+export class OrderAttributionBackfillRunError extends Error {
+    code;
+    report;
+    constructor(message, options) {
+        super(message, options.cause === undefined ? undefined : { cause: options.cause });
+        this.name = 'OrderAttributionBackfillRunError';
+        this.code = options.code;
+        this.report = options.report;
+    }
+}
 function normalizeFailureCode(error, fallback) {
     if (typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string' && error.code.trim()) {
         return error.code.trim();
@@ -38,6 +48,39 @@ function normalizeFailureMessage(error, fallback) {
         return error.trim();
     }
     return fallback;
+}
+function buildEmptyScopeMetrics() {
+    return {
+        totalOrdersInScope: 0,
+        ordersMissingAttribution: 0,
+        ordersWithAttribution: 0,
+        completenessRate: 1
+    };
+}
+function buildOrderAttributionBackfillReport(input) {
+    return {
+        requestedBy: input.requestedBy,
+        workerId: input.workerId,
+        dryRun: input.dryRun,
+        scope: {
+            windowStart: input.windowStart.toISOString(),
+            windowEnd: input.windowEnd.toISOString(),
+            onlyWebOrders: input.onlyWebOrders,
+            limit: input.limit
+        },
+        beforeMetrics: input.beforeMetrics,
+        afterMetrics: input.afterMetrics,
+        scannedOrders: input.scannedOrders,
+        recoverableOrders: input.recoverableOrders,
+        recoveredOrders: input.recoveredOrders,
+        unrecoverableOrders: input.unrecoverableOrders,
+        failedOrders: input.failedOrders,
+        shopifyWritebackCompleted: input.shopifyWritebackCompleted,
+        shopifyWritebackSkipped: input.shopifyWritebackSkipped,
+        shopifyWritebackFailed: input.shopifyWritebackFailed,
+        failures: input.failures,
+        preview: input.preview
+    };
 }
 function recordFailure(failures, failure) {
     if (failures.length >= MAX_REPORTED_FAILURES) {
@@ -543,26 +586,9 @@ export async function backfillRecentOrdersWithRecoveredAttribution(options) {
     const onlyWebOrders = options.onlyWebOrders ?? true;
     const writeToShopifyWhenAvailable = options.writeToShopifyWhenAvailable ?? true;
     const applyWriteback = options.applyWriteback ?? applyShopifyOrderWriteback;
-    logInfo('order_attribution_backfill_started', {
-        requestedBy: options.requestedBy,
-        workerId: options.workerId,
-        dryRun,
-        onlyWebOrders,
-        limit,
-        windowStart: options.windowStart.toISOString(),
-        windowEnd: options.windowEnd.toISOString()
-    });
-    const beforeMetrics = await withTransaction((client) => fetchScopeMetrics(client, {
-        windowStart: options.windowStart,
-        windowEnd: options.windowEnd,
-        onlyWebOrders
-    }));
-    const candidateRows = await withTransaction((client) => fetchBackfillCandidates(client, {
-        windowStart: options.windowStart,
-        windowEnd: options.windowEnd,
-        onlyWebOrders,
-        limit
-    }));
+    let beforeMetrics = buildEmptyScopeMetrics();
+    let afterMetrics = buildEmptyScopeMetrics();
+    let scannedOrders = 0;
     let recoverableOrders = 0;
     let recoveredOrders = 0;
     let unrecoverableOrders = 0;
@@ -572,123 +598,181 @@ export async function backfillRecentOrdersWithRecoveredAttribution(options) {
     let shopifyWritebackFailed = 0;
     const failures = [];
     const preview = [];
-    const reportingDates = new Set();
-    const reportingTimezone = dryRun ? null : await withTransaction((client) => getReportingTimezone(client));
-    for (const candidate of candidateRows) {
-        try {
-            const resolved = await withTransaction(async (client) => {
-                const order = await fetchOrder(client, candidate.shopify_order_id);
-                if (!order) {
-                    return null;
-                }
-                const journey = await resolveAttributionJourney(client, order);
-                return { order, journey };
-            });
-            if (!resolved) {
-                failedOrders += 1;
-                recordFailure(failures, {
-                    orderId: candidate.shopify_order_id,
-                    code: 'order_not_found',
-                    message: `Shopify order ${candidate.shopify_order_id} was not found during backfill processing`
-                });
-                continue;
-            }
-            if (preview.length < MAX_PREVIEW_ORDERS) {
-                preview.push(previewRowForOrder(resolved.order, resolved.journey));
-            }
-            if (!resolved.journey.winner) {
-                unrecoverableOrders += 1;
-                continue;
-            }
-            recoverableOrders += 1;
-            if (dryRun) {
-                continue;
-            }
-            await withTransaction(async (client) => {
-                await persistAttribution(client, resolved.order, resolved.journey);
-                if (reportingTimezone) {
-                    reportingDates.add(formatDateInTimezone(resolveOrderOccurredAt(resolved.order), reportingTimezone));
-                }
-            });
-            recoveredOrders += 1;
-            if (writeToShopifyWhenAvailable) {
-                try {
-                    const writeback = await applyWriteback({
-                        workerId: options.workerId,
-                        shopifyOrderId: resolved.order.shopify_order_id,
-                        requestedReason: 'recent_order_attribution_backfill'
-                    });
-                    if (writeback.status === 'completed') {
-                        shopifyWritebackCompleted += 1;
-                    }
-                    else {
-                        shopifyWritebackSkipped += 1;
-                    }
-                }
-                catch (error) {
-                    shopifyWritebackFailed += 1;
-                    recordFailure(failures, {
-                        orderId: resolved.order.shopify_order_id,
-                        code: normalizeFailureCode(error, 'shopify_writeback_failed'),
-                        message: normalizeFailureMessage(error, `Shopify writeback failed for Shopify order ${resolved.order.shopify_order_id}`)
-                    });
-                    logError('order_attribution_backfill_shopify_writeback_failed', error, {
-                        requestedBy: options.requestedBy,
-                        workerId: options.workerId,
-                        shopifyOrderId: resolved.order.shopify_order_id
-                    });
-                }
-            }
-        }
-        catch (error) {
-            failedOrders += 1;
-            recordFailure(failures, {
-                orderId: candidate.shopify_order_id,
-                code: normalizeFailureCode(error, 'order_attribution_backfill_failed'),
-                message: normalizeFailureMessage(error, `Failed to backfill Shopify order ${candidate.shopify_order_id}`)
-            });
-            logError('order_attribution_backfill_order_failed', error, {
-                requestedBy: options.requestedBy,
-                workerId: options.workerId,
-                shopifyOrderId: candidate.shopify_order_id
-            });
-        }
-    }
-    if (!dryRun && reportingDates.size > 0) {
-        await withTransaction((client) => refreshDailyReportingMetrics(client, [...reportingDates]));
-    }
-    const afterMetrics = dryRun
-        ? beforeMetrics
-        : await withTransaction((client) => fetchScopeMetrics(client, {
+    try {
+        logInfo('order_attribution_backfill_started', {
+            requestedBy: options.requestedBy,
+            workerId: options.workerId,
+            dryRun,
+            onlyWebOrders,
+            limit,
+            windowStart: options.windowStart.toISOString(),
+            windowEnd: options.windowEnd.toISOString()
+        });
+        beforeMetrics = await withTransaction((client) => fetchScopeMetrics(client, {
             windowStart: options.windowStart,
             windowEnd: options.windowEnd,
             onlyWebOrders
         }));
-    const report = {
-        requestedBy: options.requestedBy,
-        workerId: options.workerId,
-        dryRun,
-        scope: {
-            windowStart: options.windowStart.toISOString(),
-            windowEnd: options.windowEnd.toISOString(),
+        const candidateRows = await withTransaction((client) => fetchBackfillCandidates(client, {
+            windowStart: options.windowStart,
+            windowEnd: options.windowEnd,
             onlyWebOrders,
             limit
-        },
-        beforeMetrics,
-        afterMetrics,
-        scannedOrders: candidateRows.length,
-        recoverableOrders,
-        recoveredOrders,
-        unrecoverableOrders,
-        failedOrders,
-        shopifyWritebackCompleted,
-        shopifyWritebackSkipped,
-        shopifyWritebackFailed,
-        failures,
-        preview
-    };
-    logInfo(dryRun ? 'order_attribution_backfill_dry_run_completed' : 'order_attribution_backfill_completed', report);
-    return report;
+        }));
+        scannedOrders = candidateRows.length;
+        const reportingDates = new Set();
+        const reportingTimezone = dryRun ? null : await withTransaction((client) => getReportingTimezone(client));
+        for (const candidate of candidateRows) {
+            try {
+                const resolved = await withTransaction(async (client) => {
+                    const order = await fetchOrder(client, candidate.shopify_order_id);
+                    if (!order) {
+                        return null;
+                    }
+                    const journey = await resolveAttributionJourney(client, order);
+                    return { order, journey };
+                });
+                if (!resolved) {
+                    failedOrders += 1;
+                    recordFailure(failures, {
+                        orderId: candidate.shopify_order_id,
+                        code: 'order_not_found',
+                        message: `Shopify order ${candidate.shopify_order_id} was not found during backfill processing`
+                    });
+                    continue;
+                }
+                if (preview.length < MAX_PREVIEW_ORDERS) {
+                    preview.push(previewRowForOrder(resolved.order, resolved.journey));
+                }
+                if (!resolved.journey.winner) {
+                    unrecoverableOrders += 1;
+                    continue;
+                }
+                recoverableOrders += 1;
+                if (dryRun) {
+                    continue;
+                }
+                await withTransaction(async (client) => {
+                    await persistAttribution(client, resolved.order, resolved.journey);
+                    if (reportingTimezone) {
+                        reportingDates.add(formatDateInTimezone(resolveOrderOccurredAt(resolved.order), reportingTimezone));
+                    }
+                });
+                recoveredOrders += 1;
+                if (writeToShopifyWhenAvailable) {
+                    try {
+                        const writeback = await applyWriteback({
+                            workerId: options.workerId,
+                            shopifyOrderId: resolved.order.shopify_order_id,
+                            requestedReason: 'recent_order_attribution_backfill'
+                        });
+                        if (writeback.status === 'completed') {
+                            shopifyWritebackCompleted += 1;
+                        }
+                        else {
+                            shopifyWritebackSkipped += 1;
+                        }
+                    }
+                    catch (error) {
+                        shopifyWritebackFailed += 1;
+                        recordFailure(failures, {
+                            orderId: resolved.order.shopify_order_id,
+                            code: normalizeFailureCode(error, 'shopify_writeback_failed'),
+                            message: normalizeFailureMessage(error, `Shopify writeback failed for Shopify order ${resolved.order.shopify_order_id}`)
+                        });
+                        logError('order_attribution_backfill_shopify_writeback_failed', error, {
+                            requestedBy: options.requestedBy,
+                            workerId: options.workerId,
+                            shopifyOrderId: resolved.order.shopify_order_id
+                        });
+                    }
+                }
+            }
+            catch (error) {
+                failedOrders += 1;
+                recordFailure(failures, {
+                    orderId: candidate.shopify_order_id,
+                    code: normalizeFailureCode(error, 'order_attribution_backfill_failed'),
+                    message: normalizeFailureMessage(error, `Failed to backfill Shopify order ${candidate.shopify_order_id}`)
+                });
+                logError('order_attribution_backfill_order_failed', error, {
+                    requestedBy: options.requestedBy,
+                    workerId: options.workerId,
+                    shopifyOrderId: candidate.shopify_order_id
+                });
+            }
+        }
+        if (!dryRun && reportingDates.size > 0) {
+            await withTransaction((client) => refreshDailyReportingMetrics(client, [...reportingDates]));
+        }
+        afterMetrics = dryRun
+            ? beforeMetrics
+            : await withTransaction((client) => fetchScopeMetrics(client, {
+                windowStart: options.windowStart,
+                windowEnd: options.windowEnd,
+                onlyWebOrders
+            }));
+        const report = buildOrderAttributionBackfillReport({
+            requestedBy: options.requestedBy,
+            workerId: options.workerId,
+            dryRun,
+            windowStart: options.windowStart,
+            windowEnd: options.windowEnd,
+            onlyWebOrders,
+            limit,
+            beforeMetrics,
+            afterMetrics,
+            scannedOrders,
+            recoverableOrders,
+            recoveredOrders,
+            unrecoverableOrders,
+            failedOrders,
+            shopifyWritebackCompleted,
+            shopifyWritebackSkipped,
+            shopifyWritebackFailed,
+            failures,
+            preview
+        });
+        logInfo(dryRun ? 'order_attribution_backfill_dry_run_completed' : 'order_attribution_backfill_completed', report);
+        return report;
+    }
+    catch (error) {
+        const partialReport = buildOrderAttributionBackfillReport({
+            requestedBy: options.requestedBy,
+            workerId: options.workerId,
+            dryRun,
+            windowStart: options.windowStart,
+            windowEnd: options.windowEnd,
+            onlyWebOrders,
+            limit,
+            beforeMetrics,
+            afterMetrics,
+            scannedOrders,
+            recoverableOrders,
+            recoveredOrders,
+            unrecoverableOrders,
+            failedOrders,
+            shopifyWritebackCompleted,
+            shopifyWritebackSkipped,
+            shopifyWritebackFailed,
+            failures,
+            preview
+        });
+        logError('order_attribution_backfill_run_failed', error, {
+            requestedBy: options.requestedBy,
+            workerId: options.workerId,
+            scannedOrders,
+            recoveredOrders,
+            unrecoverableOrders,
+            writebackCompleted: shopifyWritebackCompleted,
+            failedOrders
+        });
+        throw new OrderAttributionBackfillRunError(normalizeFailureMessage(error, 'Order attribution backfill job failed'), {
+            code: normalizeFailureCode(error, 'order_attribution_backfill_run_failed'),
+            report: toOrderAttributionBackfillJobReport(partialReport),
+            cause: error
+        });
+    }
 }
 export function toOrderAttributionBackfillJobReport(report) {
     return {

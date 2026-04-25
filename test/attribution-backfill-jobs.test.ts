@@ -4,8 +4,10 @@ import test from 'node:test';
 process.env.DATABASE_URL ??= 'postgres://postgres:postgres@localhost:5432/roas_radar_test';
 
 const backfillJobsModule = await import('../src/modules/attribution/backfill-jobs.js');
+const backfillModule = await import('../src/modules/attribution/backfill.js');
 
 const { buildBackfillExecutionOptions, processOrderAttributionBackfillRuns } = backfillJobsModule;
+const { OrderAttributionBackfillRunError } = backfillModule;
 
 test('buildBackfillExecutionOptions maps submitted options to backfill execution inputs', () => {
   const executionOptions = buildBackfillExecutionOptions(
@@ -148,7 +150,7 @@ test('processOrderAttributionBackfillRuns completes queued runs with the shared 
 });
 
 test('processOrderAttributionBackfillRuns marks failed runs without aborting the batch', async () => {
-  const failedRuns: Array<{ runId: string; error: { code: string; message: string } }> = [];
+  const failedRuns: Array<{ runId: string; report: unknown; error: { code: string; message: string } }> = [];
 
   const result = await processOrderAttributionBackfillRuns({
     workerId: 'worker-runner',
@@ -166,9 +168,10 @@ test('processOrderAttributionBackfillRuns marks failed runs without aborting the
         }
       }
     ],
-    markRunFailed: async (runId, error) => {
+    markRunFailed: async (runId, error, report) => {
       failedRuns.push({
         runId,
+        report,
         error: {
           code: error instanceof Error ? error.name : 'unknown_error',
           message: error instanceof Error ? error.message : String(error)
@@ -178,7 +181,17 @@ test('processOrderAttributionBackfillRuns marks failed runs without aborting the
     executeBackfillRun: async () => {
       const error = new Error('database timeout while scanning orders');
       error.name = 'DatabaseTimeout';
-      throw error;
+      throw new OrderAttributionBackfillRunError(error.message, {
+        code: 'DatabaseTimeout',
+        report: {
+          scanned: 0,
+          recovered: 0,
+          unrecoverable: 0,
+          writebackCompleted: 0,
+          failures: []
+        },
+        cause: error
+      });
     }
   });
 
@@ -190,8 +203,15 @@ test('processOrderAttributionBackfillRuns marks failed runs without aborting the
   assert.deepEqual(failedRuns, [
     {
       runId: 'job-failed',
+      report: {
+        scanned: 0,
+        recovered: 0,
+        unrecoverable: 0,
+        writebackCompleted: 0,
+        failures: []
+      },
       error: {
-        code: 'DatabaseTimeout',
+        code: 'OrderAttributionBackfillRunError',
         message: 'database timeout while scanning orders'
       }
     }

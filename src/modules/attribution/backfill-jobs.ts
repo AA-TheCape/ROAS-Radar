@@ -8,6 +8,7 @@ import { query, withTransaction } from '../../db/pool.js';
 import { logError, logInfo } from '../../observability/index.js';
 import {
   backfillRecentOrdersWithRecoveredAttribution,
+  OrderAttributionBackfillRunError,
   toOrderAttributionBackfillJobReport,
   type OrderAttributionBackfillOptions as BackfillExecutionOptions
 } from './backfill.js';
@@ -28,7 +29,7 @@ type ProcessOrderAttributionBackfillRunsOptions = {
   executeBackfillRun?: ExecuteBackfillRun;
   claimRuns?: (workerId: string, now: Date, limit: number) => Promise<OrderAttributionBackfillRunRow[]>;
   markRunCompleted?: (runId: string, report: OrderAttributionBackfillReport, now: Date) => Promise<void>;
-  markRunFailed?: (runId: string, error: unknown, now: Date) => Promise<void>;
+  markRunFailed?: (runId: string, error: unknown, report: OrderAttributionBackfillReport | null, now: Date) => Promise<void>;
 };
 
 type ProcessOrderAttributionBackfillRunsResult = {
@@ -71,6 +72,14 @@ function normalizeErrorMessage(error: unknown): string {
   }
 
   return 'Order attribution backfill job failed';
+}
+
+function extractFailedRunReport(error: unknown): OrderAttributionBackfillReport | null {
+  if (!(error instanceof OrderAttributionBackfillRunError)) {
+    return null;
+  }
+
+  return orderAttributionBackfillReportSchema.parse(error.report);
 }
 
 export function buildBackfillExecutionOptions(
@@ -144,19 +153,25 @@ async function markOrderAttributionBackfillRunCompleted(
   );
 }
 
-async function markOrderAttributionBackfillRunFailed(runId: string, error: unknown, now: Date): Promise<void> {
+async function markOrderAttributionBackfillRunFailed(
+  runId: string,
+  error: unknown,
+  report: OrderAttributionBackfillReport | null,
+  now: Date
+): Promise<void> {
   await query(
     `
       UPDATE order_attribution_backfill_runs
       SET
         status = 'failed',
         completed_at = $2,
-        error_code = $3,
-        error_message = $4,
+        report = $3::jsonb,
+        error_code = $4,
+        error_message = $5,
         updated_at = $2
       WHERE id = $1
     `,
-    [runId, now, normalizeErrorCode(error), normalizeErrorMessage(error)]
+    [runId, now, report === null ? null : JSON.stringify(report), normalizeErrorCode(error), normalizeErrorMessage(error)]
   );
 }
 
@@ -184,11 +199,12 @@ export async function processOrderAttributionBackfillRuns(
       completedRuns += 1;
     } catch (error) {
       failedRuns += 1;
+      const failedReport = extractFailedRunReport(error);
       logError('order_attribution_backfill_run_failed', error, {
         workerId: options.workerId,
         jobId: run.id
       });
-      await markRunFailed(run.id, error, new Date());
+      await markRunFailed(run.id, error, failedReport, new Date());
     }
   }
 
