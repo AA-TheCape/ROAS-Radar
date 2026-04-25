@@ -26,6 +26,22 @@ function buildLargeText(prefix: string): string {
   return `${prefix}-${'y'.repeat(10_000)}`;
 }
 
+function assertExactRawPayloadInvariant(params: {
+  persistedRawPayload: Record<string, unknown>;
+  expectedRawPayload: Record<string, unknown>;
+  unmappedPathValue: unknown;
+  expectedUnmappedPathValue: unknown;
+  normalizedVariant: Record<string, unknown>;
+  subsetVariant: Record<string, unknown>;
+  enrichedVariant: Record<string, unknown>;
+}) {
+  assert.deepEqual(params.persistedRawPayload, params.expectedRawPayload);
+  assert.deepEqual(params.unmappedPathValue, params.expectedUnmappedPathValue);
+  assert.notDeepEqual(params.persistedRawPayload, params.normalizedVariant);
+  assert.notDeepEqual(params.persistedRawPayload, params.subsetVariant);
+  assert.notDeepEqual(params.persistedRawPayload, params.enrichedVariant);
+}
+
 function buildMetaAccountFixture() {
   return {
     id: '123456789',
@@ -439,7 +455,7 @@ async function seedGoogleSyncJob(): Promise<void> {
   );
 }
 
-test('Meta Ads and Google Ads sync preserve raw payloads without trimming', async () => {
+test('Meta Ads and Google Ads sync preserve raw payloads without trimming', { concurrency: false }, async () => {
   const previousFetch = globalThis.fetch;
 
   try {
@@ -494,7 +510,29 @@ test('Meta Ads and Google Ads sync preserve raw payloads without trimming', asyn
     assert.equal(result.succeededJobs, 1);
     const persisted = await loadMetaRawPersistence();
     const projectionCountsAfterMeta = await loadAdProjectionCounts();
-    assert.deepEqual(persisted.connection?.raw_account_data, expectedMetaAccount);
+    assertExactRawPayloadInvariant({
+      persistedRawPayload: persisted.connection?.raw_account_data ?? {},
+      expectedRawPayload: expectedMetaAccount,
+      unmappedPathValue: (
+        (persisted.connection?.raw_account_data ?? {}) as {
+          nested_debug: { arrays: Array<string | { beta: Array<string | null> }> };
+        }
+      ).nested_debug.arrays[1],
+      expectedUnmappedPathValue: expectedMetaAccount.nested_debug.arrays[1],
+      normalizedVariant: {
+        ...expectedMetaAccount,
+        name: 'meta account'
+      },
+      subsetVariant: {
+        id: expectedMetaAccount.id,
+        name: expectedMetaAccount.name,
+        currency: expectedMetaAccount.currency
+      },
+      enrichedVariant: {
+        ...expectedMetaAccount,
+        canonical_source: 'meta'
+      }
+    });
     assert.equal(persisted.connection?.raw_account_source, 'meta_ads_account');
     assert.equal(persisted.connection?.raw_account_external_id, '123456789');
     assert.equal(persisted.spendRows.length, 5);
@@ -505,19 +543,92 @@ test('Meta Ads and Google Ads sync preserve raw payloads without trimming', asyn
     const expectedAccountMetadata = __rawPayloadStorageTestUtils.buildRawPayloadStorageMetadata(expectedAccountInsight);
     const expectedAdMetadata = __rawPayloadStorageTestUtils.buildRawPayloadStorageMetadata(expectedAdInsight);
     const expectedMalformedAdMetadata = __rawPayloadStorageTestUtils.buildRawPayloadStorageMetadata(expectedMalformedAdInsight);
-    assert.deepEqual(persisted.spendRows[0].raw_payload, expectedAccountInsight);
+    assertExactRawPayloadInvariant({
+      persistedRawPayload: persisted.spendRows[0].raw_payload,
+      expectedRawPayload: expectedAccountInsight,
+      unmappedPathValue: (
+        persisted.spendRows[0].raw_payload as {
+          source_debug: { nested: { kept: Array<string | null | { marker: string }> } };
+        }
+      ).source_debug.nested.kept[2],
+      expectedUnmappedPathValue: expectedAccountInsight.source_debug.nested.kept[2],
+      normalizedVariant: {
+        ...expectedAccountInsight,
+        objective: 'outcome_traffic'
+      },
+      subsetVariant: {
+        account_id: expectedAccountInsight.account_id,
+        account_name: expectedAccountInsight.account_name,
+        spend: expectedAccountInsight.spend,
+        impressions: expectedAccountInsight.impressions,
+        clicks: expectedAccountInsight.clicks,
+        date_start: expectedAccountInsight.date_start,
+        date_stop: expectedAccountInsight.date_stop
+      },
+      enrichedVariant: {
+        ...expectedAccountInsight,
+        canonical_campaign: 'Meta Account'
+      }
+    });
     assert.equal(persisted.spendRows[0].payload_source, 'meta_ads_insights');
     assert.equal(persisted.spendRows[0].payload_external_id, '123456789');
     assert.equal(persisted.spendRows[0].payload_size_bytes, expectedAccountMetadata.payloadSizeBytes);
     assert.equal(persisted.spendRows[0].payload_hash, expectedAccountMetadata.payloadHash);
     assert.equal(persisted.spendRows[3].level, 'ad');
-    assert.deepEqual(persisted.spendRows[3].raw_payload, expectedAdInsight);
+    assertExactRawPayloadInvariant({
+      persistedRawPayload: persisted.spendRows[3].raw_payload,
+      expectedRawPayload: expectedAdInsight,
+      unmappedPathValue: (
+        persisted.spendRows[3].raw_payload as {
+          action_values: Array<{ action_type: string; value: string | null }>;
+        }
+      ).action_values[1],
+      expectedUnmappedPathValue: expectedAdInsight.action_values[1],
+      normalizedVariant: {
+        ...expectedAdInsight,
+        ad_name: 'ad one'
+      },
+      subsetVariant: {
+        account_id: expectedAdInsight.account_id,
+        campaign_id: expectedAdInsight.campaign_id,
+        adset_id: expectedAdInsight.adset_id,
+        ad_id: expectedAdInsight.ad_id,
+        spend: expectedAdInsight.spend
+      },
+      enrichedVariant: {
+        ...expectedAdInsight,
+        canonical_medium: 'paid_social'
+      }
+    });
     assert.equal(persisted.spendRows[3].payload_source, 'meta_ads_insights');
     assert.equal(persisted.spendRows[3].payload_external_id, 'ad_1');
     assert.equal(persisted.spendRows[3].payload_size_bytes, expectedAdMetadata.payloadSizeBytes);
     assert.equal(persisted.spendRows[3].payload_hash, expectedAdMetadata.payloadHash);
     assert.equal(persisted.spendRows[4].level, 'ad');
-    assert.deepEqual(persisted.spendRows[4].raw_payload, expectedMalformedAdInsight);
+    assertExactRawPayloadInvariant({
+      persistedRawPayload: persisted.spendRows[4].raw_payload,
+      expectedRawPayload: expectedMalformedAdInsight,
+      unmappedPathValue: (
+        persisted.spendRows[4].raw_payload as {
+          malformed_debug: { kept: boolean };
+        }
+      ).malformed_debug,
+      expectedUnmappedPathValue: expectedMalformedAdInsight.malformed_debug,
+      normalizedVariant: {
+        ...expectedMalformedAdInsight,
+        ad_name: 'missing entity id ad'
+      },
+      subsetVariant: {
+        account_id: expectedMalformedAdInsight.account_id,
+        campaign_id: expectedMalformedAdInsight.campaign_id,
+        adset_id: expectedMalformedAdInsight.adset_id,
+        spend: expectedMalformedAdInsight.spend
+      },
+      enrichedVariant: {
+        ...expectedMalformedAdInsight,
+        roas_radar_debug: true
+      }
+    });
     assert.equal(persisted.spendRows[4].payload_source, 'meta_ads_insights');
     assert.equal(persisted.spendRows[4].payload_external_id, null);
     assert.equal(persisted.spendRows[4].payload_size_bytes, expectedMalformedAdMetadata.payloadSizeBytes);
@@ -585,7 +696,30 @@ test('Meta Ads and Google Ads sync preserve raw payloads without trimming', asyn
     assert.equal(googleResult.succeededJobs, 1);
     const googlePersisted = await loadGoogleRawPersistence();
     const projectionCountsAfterGoogle = await loadAdProjectionCounts();
-    assert.deepEqual(googlePersisted.connection?.raw_customer_data, expectedGoogleCustomer);
+    assertExactRawPayloadInvariant({
+      persistedRawPayload: googlePersisted.connection?.raw_customer_data ?? {},
+      expectedRawPayload: expectedGoogleCustomer,
+      unmappedPathValue: (
+        (googlePersisted.connection?.raw_customer_data ?? {}) as {
+          untouched_customer_debug: { nested: { values: Array<string | null | { deep: string }> } };
+        }
+      ).untouched_customer_debug.nested.values[2],
+      expectedUnmappedPathValue: expectedGoogleCustomer.untouched_customer_debug.nested.values[2],
+      normalizedVariant: {
+        ...expectedGoogleCustomer,
+        customer: {
+          ...expectedGoogleCustomer.customer,
+          descriptiveName: 'main account'
+        }
+      },
+      subsetVariant: {
+        customer: expectedGoogleCustomer.customer
+      },
+      enrichedVariant: {
+        ...expectedGoogleCustomer,
+        canonical_source: 'google'
+      }
+    });
     assert.equal(googlePersisted.connection?.raw_customer_source, 'google_ads_customer');
     assert.equal(googlePersisted.connection?.raw_customer_external_id, '1234567890');
     assert.equal(googlePersisted.spendRows.length, 4);
@@ -599,22 +733,130 @@ test('Meta Ads and Google Ads sync preserve raw payloads without trimming', asyn
     const expectedMalformedGoogleCampaignMetadata =
       __rawPayloadStorageTestUtils.buildRawPayloadStorageMetadata(expectedMalformedGoogleCampaign);
     const expectedMalformedGoogleAdMetadata = __rawPayloadStorageTestUtils.buildRawPayloadStorageMetadata(expectedMalformedGoogleAd);
-    assert.deepEqual(googlePersisted.spendRows[0].raw_payload, expectedGoogleCampaign);
+    assertExactRawPayloadInvariant({
+      persistedRawPayload: googlePersisted.spendRows[0].raw_payload,
+      expectedRawPayload: expectedGoogleCampaign,
+      unmappedPathValue: (
+        googlePersisted.spendRows[0].raw_payload as {
+          untouched_campaign_debug: { labels: string[] };
+        }
+      ).untouched_campaign_debug.labels,
+      expectedUnmappedPathValue: expectedGoogleCampaign.untouched_campaign_debug.labels,
+      normalizedVariant: {
+        ...expectedGoogleCampaign,
+        campaign: {
+          ...expectedGoogleCampaign.campaign,
+          name: 'brand search'
+        }
+      },
+      subsetVariant: {
+        customer: expectedGoogleCampaign.customer,
+        campaign: expectedGoogleCampaign.campaign,
+        metrics: expectedGoogleCampaign.metrics,
+        segments: expectedGoogleCampaign.segments
+      },
+      enrichedVariant: {
+        ...expectedGoogleCampaign,
+        canonical_campaign: 'Brand Search'
+      }
+    });
     assert.equal(googlePersisted.spendRows[0].payload_source, 'google_ads_api');
     assert.equal(googlePersisted.spendRows[0].payload_external_id, 'cmp_1');
     assert.equal(googlePersisted.spendRows[0].payload_size_bytes, expectedGoogleCampaignMetadata.payloadSizeBytes);
     assert.equal(googlePersisted.spendRows[0].payload_hash, expectedGoogleCampaignMetadata.payloadHash);
-    assert.deepEqual(googlePersisted.spendRows[1].raw_payload, expectedMalformedGoogleCampaign);
+    assertExactRawPayloadInvariant({
+      persistedRawPayload: googlePersisted.spendRows[1].raw_payload,
+      expectedRawPayload: expectedMalformedGoogleCampaign,
+      unmappedPathValue: (
+        googlePersisted.spendRows[1].raw_payload as {
+          malformed_debug: { kept: boolean };
+        }
+      ).malformed_debug,
+      expectedUnmappedPathValue: expectedMalformedGoogleCampaign.malformed_debug,
+      normalizedVariant: {
+        ...expectedMalformedGoogleCampaign,
+        campaign: {
+          ...expectedMalformedGoogleCampaign.campaign,
+          name: 'missing campaign id'
+        }
+      },
+      subsetVariant: {
+        customer: expectedMalformedGoogleCampaign.customer,
+        campaign: expectedMalformedGoogleCampaign.campaign
+      },
+      enrichedVariant: {
+        ...expectedMalformedGoogleCampaign,
+        roas_radar_debug: true
+      }
+    });
     assert.equal(googlePersisted.spendRows[1].payload_source, 'google_ads_api');
     assert.equal(googlePersisted.spendRows[1].payload_external_id, null);
     assert.equal(googlePersisted.spendRows[1].payload_size_bytes, expectedMalformedGoogleCampaignMetadata.payloadSizeBytes);
     assert.equal(googlePersisted.spendRows[1].payload_hash, expectedMalformedGoogleCampaignMetadata.payloadHash);
-    assert.deepEqual(googlePersisted.spendRows[2].raw_payload, expectedGoogleAd);
+    assertExactRawPayloadInvariant({
+      persistedRawPayload: googlePersisted.spendRows[2].raw_payload,
+      expectedRawPayload: expectedGoogleAd,
+      unmappedPathValue: (
+        googlePersisted.spendRows[2].raw_payload as {
+          untouched_ad_debug: { nested: Array<{ asset: string } | null> };
+        }
+      ).untouched_ad_debug.nested[2],
+      expectedUnmappedPathValue: expectedGoogleAd.untouched_ad_debug.nested[2],
+      normalizedVariant: {
+        ...expectedGoogleAd,
+        adGroupAd: {
+          ...expectedGoogleAd.adGroupAd,
+          ad: {
+            ...expectedGoogleAd.adGroupAd.ad,
+            name: 'headline a'
+          }
+        }
+      },
+      subsetVariant: {
+        customer: expectedGoogleAd.customer,
+        campaign: expectedGoogleAd.campaign,
+        adGroup: expectedGoogleAd.adGroup,
+        adGroupAd: expectedGoogleAd.adGroupAd,
+        metrics: expectedGoogleAd.metrics
+      },
+      enrichedVariant: {
+        ...expectedGoogleAd,
+        canonical_medium: 'cpc'
+      }
+    });
     assert.equal(googlePersisted.spendRows[2].payload_source, 'google_ads_api');
     assert.equal(googlePersisted.spendRows[2].payload_external_id, 'ad_1');
     assert.equal(googlePersisted.spendRows[2].payload_size_bytes, expectedGoogleAdMetadata.payloadSizeBytes);
     assert.equal(googlePersisted.spendRows[2].payload_hash, expectedGoogleAdMetadata.payloadHash);
-    assert.deepEqual(googlePersisted.spendRows[3].raw_payload, expectedMalformedGoogleAd);
+    assertExactRawPayloadInvariant({
+      persistedRawPayload: googlePersisted.spendRows[3].raw_payload,
+      expectedRawPayload: expectedMalformedGoogleAd,
+      unmappedPathValue: (
+        googlePersisted.spendRows[3].raw_payload as {
+          malformed_debug: { kept: boolean };
+        }
+      ).malformed_debug,
+      expectedUnmappedPathValue: expectedMalformedGoogleAd.malformed_debug,
+      normalizedVariant: {
+        ...expectedMalformedGoogleAd,
+        adGroupAd: {
+          ...expectedMalformedGoogleAd.adGroupAd,
+          ad: {
+            ...expectedMalformedGoogleAd.adGroupAd.ad,
+            name: 'missing ad id'
+          }
+        }
+      },
+      subsetVariant: {
+        customer: expectedMalformedGoogleAd.customer,
+        campaign: expectedMalformedGoogleAd.campaign,
+        adGroupAd: expectedMalformedGoogleAd.adGroupAd
+      },
+      enrichedVariant: {
+        ...expectedMalformedGoogleAd,
+        roas_radar_debug: true
+      }
+    });
     assert.equal(googlePersisted.spendRows[3].payload_source, 'google_ads_api');
     assert.equal(googlePersisted.spendRows[3].payload_external_id, null);
     assert.equal(googlePersisted.spendRows[3].payload_size_bytes, expectedMalformedGoogleAdMetadata.payloadSizeBytes);

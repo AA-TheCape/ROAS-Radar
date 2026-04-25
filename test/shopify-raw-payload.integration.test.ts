@@ -154,6 +154,22 @@ function buildLargeText(prefix: string): string {
   return `${prefix}-${'x'.repeat(12_000)}`;
 }
 
+function assertExactRawPayloadInvariant(params: {
+  persistedRawPayload: Record<string, unknown>;
+  expectedRawPayload: Record<string, unknown>;
+  unmappedPathValue: unknown;
+  expectedUnmappedPathValue: unknown;
+  normalizedVariant: Record<string, unknown>;
+  subsetVariant: Record<string, unknown>;
+  enrichedVariant: Record<string, unknown>;
+}) {
+  assert.deepEqual(params.persistedRawPayload, params.expectedRawPayload);
+  assert.deepEqual(params.unmappedPathValue, params.expectedUnmappedPathValue);
+  assert.notDeepEqual(params.persistedRawPayload, params.normalizedVariant);
+  assert.notDeepEqual(params.persistedRawPayload, params.subsetVariant);
+  assert.notDeepEqual(params.persistedRawPayload, params.enrichedVariant);
+}
+
 function buildRawOrder(shopifyOrderId: string) {
   return {
     id: shopifyOrderId,
@@ -282,7 +298,7 @@ test.after(async () => {
   await pool.end();
 });
 
-test('Shopify webhook and backfill ingestion preserve raw orders without trimming', async () => {
+test('Shopify webhook and backfill ingestion preserve raw orders without trimming', { concurrency: false }, async () => {
   const webhookOrder = buildRawOrder('raw-webhook-order-1');
 
   await persistOrderViaIngress('orders/create', webhookOrder);
@@ -291,7 +307,32 @@ test('Shopify webhook and backfill ingestion preserve raw orders without trimmin
   const webhookMetadata = __rawPayloadStorageTestUtils.buildRawPayloadStorageMetadata(webhookOrder);
   const webhookReceiptJson = JSON.stringify(webhookOrder);
 
-  assert.deepEqual(persistedWebhook.order.raw_payload, webhookOrder);
+  assertExactRawPayloadInvariant({
+    persistedRawPayload: persistedWebhook.order.raw_payload,
+    expectedRawPayload: webhookOrder,
+    unmappedPathValue: (
+      persistedWebhook.order.raw_payload as {
+        unknown_top_level: { nested: { tags: Array<string | { variant: string }> } };
+      }
+    ).unknown_top_level.nested.tags[2],
+    expectedUnmappedPathValue: webhookOrder.unknown_top_level.nested.tags[2],
+    normalizedVariant: {
+      ...webhookOrder,
+      email: 'buyer@example.com'
+    },
+    subsetVariant: {
+      id: webhookOrder.id,
+      order_number: webhookOrder.order_number,
+      email: webhookOrder.email,
+      line_items: webhookOrder.line_items
+    },
+    enrichedVariant: {
+      ...webhookOrder,
+      roas_radar_debug: {
+        source: 'shopify'
+      }
+    }
+  });
   assert.equal(persistedWebhook.order.payload_source, 'shopify_order');
   assert.equal(persistedWebhook.order.payload_external_id, 'raw-webhook-order-1');
   assert.equal(persistedWebhook.order.payload_size_bytes, webhookMetadata.payloadSizeBytes);
@@ -307,10 +348,7 @@ test('Shopify webhook and backfill ingestion preserve raw orders without trimmin
     { name: '_bundle', value: 'starter-kit' },
     { name: 'gift_wrap', value: 'yes' }
   ]);
-  assert.equal(
-    (persistedWebhook.order.raw_payload as { unknown_top_level: { nested: { nullValue: null } } }).unknown_top_level.nested.nullValue,
-    null
-  );
+  assert.equal((persistedWebhook.order.raw_payload as { unknown_top_level: { nested: { nullValue: null } } }).unknown_top_level.nested.nullValue, null);
   assert.equal(
     (
       persistedWebhook.order.raw_payload as {
@@ -339,7 +377,30 @@ test('Shopify webhook and backfill ingestion preserve raw orders without trimmin
   const backfillMetadata = __rawPayloadStorageTestUtils.buildRawPayloadStorageMetadata(backfillOrder);
   const backfillReceiptJson = JSON.stringify(backfillOrder);
 
-  assert.deepEqual(persistedBackfill.order.raw_payload, backfillOrder);
+  assertExactRawPayloadInvariant({
+    persistedRawPayload: persistedBackfill.order.raw_payload,
+    expectedRawPayload: backfillOrder,
+    unmappedPathValue: (
+      persistedBackfill.order.raw_payload as {
+        unknown_top_level: { notes: string[] };
+      }
+    ).unknown_top_level.notes[0],
+    expectedUnmappedPathValue: backfillOrder.unknown_top_level.notes[0],
+    normalizedVariant: {
+      ...backfillOrder,
+      email: 'buyer@example.com'
+    },
+    subsetVariant: {
+      id: backfillOrder.id,
+      order_number: backfillOrder.order_number,
+      email: backfillOrder.email,
+      line_items: backfillOrder.line_items
+    },
+    enrichedVariant: {
+      ...backfillOrder,
+      canonical_source: 'shopify'
+    }
+  });
   assert.equal(persistedBackfill.order.payload_source, 'shopify_order');
   assert.equal(persistedBackfill.order.payload_external_id, 'raw-backfill-order-1');
   assert.equal(persistedBackfill.order.payload_size_bytes, backfillMetadata.payloadSizeBytes);
@@ -366,43 +427,63 @@ test('Shopify webhook and backfill ingestion preserve raw orders without trimmin
     ).custom_metadata.warehouse.auditTrail,
     [1, 2, 3]
   );
-  assert.equal(
-    (
-      persistedBackfill.order.raw_payload as {
-        unknown_top_level: { notes: string[] };
-      }
-    ).unknown_top_level.notes[0],
-    backfillOrder.unknown_top_level.notes[0]
-  );
+  assert.equal((persistedBackfill.order.raw_payload as { unknown_top_level: { notes: string[] } }).unknown_top_level.notes[0], backfillOrder.unknown_top_level.notes[0]);
 });
 
-test('Shopify ingestion persists non-web orders into shopify_orders with untouched raw order and line-item payloads', async () => {
-  const posOrder = buildRawNonWebOrder('raw-pos-order-1');
+test(
+  'Shopify ingestion persists non-web orders into shopify_orders with untouched raw order and line-item payloads',
+  { concurrency: false },
+  async () => {
+    const posOrder = buildRawNonWebOrder('raw-pos-order-1');
 
-  await persistOrderViaIngress('orders/create', posOrder);
+    await persistOrderViaIngress('orders/create', posOrder);
 
-  const persistedOrder = await fetchPersistedRawPayloads('raw-pos-order-1');
-  const posMetadata = __rawPayloadStorageTestUtils.buildRawPayloadStorageMetadata(posOrder);
-  const posReceiptJson = JSON.stringify(posOrder);
+    const persistedOrder = await fetchPersistedRawPayloads('raw-pos-order-1');
+    const posMetadata = __rawPayloadStorageTestUtils.buildRawPayloadStorageMetadata(posOrder);
+    const posReceiptJson = JSON.stringify(posOrder);
 
-  assert.deepEqual(persistedOrder.order.raw_payload, posOrder);
-  assert.equal(persistedOrder.order.payload_source, 'shopify_order');
-  assert.equal(persistedOrder.order.payload_external_id, 'raw-pos-order-1');
-  assert.equal(persistedOrder.order.payload_size_bytes, posMetadata.payloadSizeBytes);
-  assert.equal(persistedOrder.order.payload_hash, posMetadata.payloadHash);
-  assert.deepEqual(persistedOrder.receipt.raw_payload, posOrder);
-  assert.equal(persistedOrder.receipt.payload_source, 'shopify_webhook');
-  assert.equal(persistedOrder.receipt.payload_external_id, 'raw-pos-order-1');
-  assert.equal(persistedOrder.receipt.payload_size_bytes, Buffer.byteLength(posReceiptJson, 'utf8'));
-  assert.equal(persistedOrder.receipt.payload_hash, createHash('sha256').update(posReceiptJson).digest('hex'));
-  assert.deepEqual(persistedOrder.lineItem, posOrder.line_items[0]);
-  assert.equal(persistedOrder.order.raw_payload.source_name, 'pos');
-  assert.equal(
-    (
-      persistedOrder.lineItem as {
-        pos_metadata: { register: string };
+    assertExactRawPayloadInvariant({
+      persistedRawPayload: persistedOrder.order.raw_payload,
+      expectedRawPayload: posOrder,
+      unmappedPathValue: (
+        persistedOrder.order.raw_payload as {
+          unknown_top_level: { nested: { tags: string[] } };
+        }
+      ).unknown_top_level.nested.tags[1],
+      expectedUnmappedPathValue: posOrder.unknown_top_level.nested.tags[1],
+      normalizedVariant: {
+        ...posOrder,
+        source_name: 'web'
+      },
+      subsetVariant: {
+        id: posOrder.id,
+        order_number: posOrder.order_number,
+        source_name: posOrder.source_name,
+        line_items: posOrder.line_items
+      },
+      enrichedVariant: {
+        ...posOrder,
+        canonical_source: 'shopify_pos'
       }
-    ).pos_metadata.register,
-    'front-counter'
-  );
-});
+    });
+    assert.equal(persistedOrder.order.payload_source, 'shopify_order');
+    assert.equal(persistedOrder.order.payload_external_id, 'raw-pos-order-1');
+    assert.equal(persistedOrder.order.payload_size_bytes, posMetadata.payloadSizeBytes);
+    assert.equal(persistedOrder.order.payload_hash, posMetadata.payloadHash);
+    assert.deepEqual(persistedOrder.receipt.raw_payload, posOrder);
+    assert.equal(persistedOrder.receipt.payload_source, 'shopify_webhook');
+    assert.equal(persistedOrder.receipt.payload_external_id, 'raw-pos-order-1');
+    assert.equal(persistedOrder.receipt.payload_size_bytes, Buffer.byteLength(posReceiptJson, 'utf8'));
+    assert.equal(persistedOrder.receipt.payload_hash, createHash('sha256').update(posReceiptJson).digest('hex'));
+    assert.deepEqual(persistedOrder.lineItem, posOrder.line_items[0]);
+    assert.equal(persistedOrder.order.raw_payload.source_name, 'pos');
+    assert.equal(
+      (
+        persistedOrder.lineItem as {
+          pos_metadata: { register: string };
+        }
+      ).pos_metadata.register,
+      'front-counter'
+    );
+  }
+);
