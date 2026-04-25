@@ -1224,6 +1224,8 @@ async function persistDailySpendSnapshot(
       const rawPayloadMetadata = buildRawPayloadStorageMetadata(row);
       const { rawPayloadJson, payloadSizeBytes, payloadHash } = rawPayloadMetadata;
 
+      // docs/raw-payload-persistence-contract.md governs this table: persist the
+      // decoded Meta insight row exactly before any normalization or rollup logic.
       const rawInsert = await client.query<{ id: number } & RawPayloadIntegrityRow>(
         `
           INSERT INTO meta_ads_raw_spend_records (

@@ -9,14 +9,16 @@ Use this sequence when you are new to the repository and want the shortest path 
 1. Read `docs/README.md` to see the current doc map and the operator-facing runbooks.
 2. Skim this guide through `Local Setup` so you know which services to start and which env vars matter.
 3. Read `docs/attribution-schema-v1.md` before changing capture fields, Shopify attribute keys, or normalization logic.
-4. Read `docs/operational-attribution-contracts.md` before changing resolver precedence, Shopify writeback, retention, or recovery flows.
-5. Read `docs/analytics-playbook.md` and `docs/reporting-metrics.md` before changing dashboard-facing metrics or attribution interpretation.
+4. Read `docs/raw-payload-persistence-contract.md` before changing Shopify, Meta Ads, or Google Ads raw-source payload storage.
+5. Read `docs/operational-attribution-contracts.md` before changing resolver precedence, Shopify writeback, retention, or recovery flows.
+6. Read `docs/analytics-playbook.md` and `docs/reporting-metrics.md` before changing dashboard-facing metrics or attribution interpretation.
 
 If you only need a starting point for one area:
 
 - capture and ingestion: `src/modules/tracking/index.ts` plus `docs/attribution-schema-v1.md`
-- Shopify ingestion and writeback: `src/modules/shopify/index.ts`, `src/modules/shopify/writeback.ts`, and `docs/operational-attribution-contracts.md`
+- Shopify ingestion and writeback: `src/modules/shopify/index.ts`, `src/modules/shopify/writeback.ts`, `docs/raw-payload-persistence-contract.md`, and `docs/operational-attribution-contracts.md`
 - attribution resolution: `src/modules/attribution/index.ts`, `src/modules/attribution/resolver.ts`, and `docs/last-non-direct-touch-approval-matrix.md`
+- ad sync ingestion: `src/modules/meta-ads/index.ts`, `src/modules/google-ads/index.ts`, and `docs/raw-payload-persistence-contract.md`
 - dashboard and reporting: `src/modules/reporting/index.ts`, `dashboard/`, `docs/analytics-playbook.md`, and `docs/reporting-metrics.md`
 
 ## What Runs In The MVP
@@ -122,15 +124,19 @@ For spend storage specifically:
 - raw spend inserts must happen from the decoded API row before normalization
 - rows that cannot produce a usable reporting entity id must still remain in the raw spend tables, even if no daily projection row is written
 
-## Raw Payload Persistence Rule
+## Raw Payload Persistence Contract
 
-For ingestion surfaces that expose `raw_payload` or equivalent raw-source JSONB columns, ROAS Radar persists the decoded-and-parsed upstream payload exactly as received before any trimming, lowercasing, schema projection, or derived-field injection.
+ROAS Radar’s exact-as-received raw JSONB rules for external ingestion live in `docs/raw-payload-persistence-contract.md`.
 
-- tracking request bodies are cloned before normalization so `tracking_events.raw_payload` and `session_attribution_touch_events.raw_payload` retain the exact inbound browser or capture payload
-- Shopify order rows persist the original order object, and Shopify line-item rows persist the original line-item node rather than a schema-reduced subset
-- Meta Ads and Google Ads raw spend tables persist the decoded API row exactly; normalized daily spend tables remain derived projections and must not be treated as the canonical raw-source surface
+That contract governs Shopify, Meta Ads, and Google Ads raw-source surfaces and permits only:
 
-Normalization, URL cleanup, consent coercion, idempotency fingerprints, and log redaction still apply to typed columns, hashes, and logs. They must not mutate the JSON written to raw-source storage.
+- transport decoding
+- character decoding
+- JSON parsing
+
+It prohibits trimming, lowercasing, schema projection, key renaming, or derived-field injection before persistence into covered raw JSONB columns.
+
+Normalization, URL cleanup, consent coercion, idempotency fingerprints, and log redaction still apply to typed columns, hashes, and logs. They must not mutate the JSON written to covered raw-source storage.
 
 When you need to look raw rows up later, use the source-specific metadata columns first instead of querying inside JSONB:
 
@@ -630,6 +636,7 @@ Use these docs when local symptoms match production behavior:
 - Database operations: `docs/database-operations.md`
 - Operational attribution contracts: `docs/operational-attribution-contracts.md`
 - Attribution Schema V1 reference: `docs/attribution-schema-v1.md`
+- Raw payload persistence contract: `docs/raw-payload-persistence-contract.md`
 - Shopify app setup: `docs/shopify-app-setup.md`
 - Visitor identity stitching: `docs/visitor-identity-stitching.md`
 - Reporting metrics definitions: `docs/reporting-metrics.md`
@@ -642,6 +649,7 @@ When the local dashboard is loading but the numbers look wrong, use this map bef
 - card and KPI formulas: `docs/reporting-metrics.md`
 - order-to-session matching semantics: `docs/analytics-playbook.md`
 - field naming, null handling, and canonical Shopify keys: `docs/attribution-schema-v1.md`
+- exact raw-source JSONB persistence rules for external ingestion: `docs/raw-payload-persistence-contract.md`
 - writeback, reconciliation, retention, and dead-letter behavior: `docs/operational-attribution-contracts.md`
 
 ## Recommended Engineer Workflow
@@ -653,3 +661,4 @@ When making changes to tracking, Shopify ingestion, attribution, or reporting:
 3. Smoke-test `/healthz`, `/readyz`, and the affected API route locally.
 4. If the change affects dashboard behavior, run `npm --prefix dashboard run dev` and verify the corresponding view.
 5. If the change affects Cloud Run deployment shape or secrets, re-read `infra/cloud-run/README.md` before merging.
+6. If the change affects Shopify, Meta Ads, or Google Ads raw-source persistence, update `docs/raw-payload-persistence-contract.md` and the nearby ingestion-module reference in the same PR.

@@ -1334,6 +1334,8 @@ async function upsertShopifyOrderLineItems(
   lineItems: ShopifyLineItemPayload[],
   rawLineItems: unknown[]
 ): Promise<void> {
+  // Keep this aligned with docs/raw-payload-persistence-contract.md: raw Shopify
+  // line-item JSON must come from the decoded source node, not the schema-reduced projection.
   await client.query('DELETE FROM shopify_order_line_items WHERE shopify_order_id = $1', [shopifyOrderId]);
 
   for (const [index, lineItem] of lineItems.entries()) {
@@ -1428,6 +1430,8 @@ async function createOrReuseWebhookReceipt(
   payloadHash: string,
   rawPayload: unknown
 ): Promise<WebhookReceiptRow> {
+  // docs/raw-payload-persistence-contract.md requires covered Shopify raw JSONB
+  // payloads to match the decoded-and-parsed source payload exactly.
   const rawPayloadJson = JSON.stringify(rawPayload);
   const payloadSizeBytes = Buffer.byteLength(rawPayloadJson, 'utf8');
   const payloadExternalId = extractShopifyReceiptExternalId(rawPayload, webhookId);
@@ -1638,6 +1642,8 @@ async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPay
       ]
     );
 
+    // shopify_orders.raw_payload is a covered raw-source surface under
+    // docs/raw-payload-persistence-contract.md. Keep normalized columns separate.
     logRawPayloadIntegrityMismatch(
       rawPayloadMetadata,
       orderUpsertResult.rows[0],

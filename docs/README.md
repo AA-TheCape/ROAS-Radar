@@ -6,7 +6,8 @@
 
 1. Read [Implementation Guide](implementation-guide.md) for local setup, service topology, validation flow, and troubleshooting.
 2. Read [Attribution Schema V1](attribution-schema-v1.md) for canonical field names, normalization rules, DB mappings, and Shopify attribute keys.
-3. Read [Operational Attribution Contracts](operational-attribution-contracts.md) for resolver precedence, Shopify writeback, retention, and recovery semantics.
+3. Read [Raw Payload Persistence Contract](raw-payload-persistence-contract.md) before changing Shopify, Meta Ads, or Google Ads raw-source ingestion behavior.
+4. Read [Operational Attribution Contracts](operational-attribution-contracts.md) for resolver precedence, Shopify writeback, retention, and recovery semantics.
 
 ### Analysts
 
@@ -23,7 +24,8 @@
 ## Core References
 
 - [Implementation Guide](implementation-guide.md): local setup, service responsibilities, end-to-end validation, ad sync raw request/response audit storage, and the raw-vs-derived contract for ad spend tables.
-- [Attribution Schema V1](attribution-schema-v1.md): shared attribution contract, normalization rules, DB mappings, Shopify keys, rollout expectations, and raw-payload exactness rules.
+- [Attribution Schema V1](attribution-schema-v1.md): shared attribution contract, normalization rules, DB mappings, Shopify keys, rollout expectations, and how canonical attribution fields relate to raw-source storage.
+- [Raw Payload Persistence Contract](raw-payload-persistence-contract.md): exact-as-received JSONB contract for Shopify, Meta Ads, and Google Ads raw-source ingestion surfaces.
 - [Operational Attribution Contracts](operational-attribution-contracts.md): resolver precedence, Shopify writeback lifecycle, retention rules, and incident-routing links.
 - [Shopify App Setup](shopify-app-setup.md): Shopify app install flow, OAuth, and webhook provisioning.
 - [Visitor Identity Stitching](visitor-identity-stitching.md): deterministic identity-linking behavior for Shopify customers, orders, and tracked sessions.
