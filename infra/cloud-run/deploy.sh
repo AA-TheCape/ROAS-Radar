@@ -126,9 +126,24 @@ if [ "${SKIP_BUILDS:-false}" != "true" ]; then
     --tag="$IMAGE_URI"
 
   echo "Building dashboard image $DASHBOARD_IMAGE_URI"
-  gcloud builds submit "$REPO_ROOT/dashboard" \
+  DASHBOARD_BUILD_CONFIG=$(mktemp)
+  cat >"$DASHBOARD_BUILD_CONFIG" <<EOF
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - dashboard/Dockerfile
+      - -t
+      - $DASHBOARD_IMAGE_URI
+      - .
+images:
+  - $DASHBOARD_IMAGE_URI
+EOF
+  gcloud builds submit "$REPO_ROOT" \
     --project="$GCP_PROJECT_ID" \
-    --tag="$DASHBOARD_IMAGE_URI"
+    --config="$DASHBOARD_BUILD_CONFIG"
+  rm -f "$DASHBOARD_BUILD_CONFIG"
 fi
 
 echo "Deploying API service $API_SERVICE_NAME"
