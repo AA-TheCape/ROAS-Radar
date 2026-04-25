@@ -58,6 +58,53 @@ test('order attribution backfill admin route rejects unauthorized requests with 
   }
 });
 
+test('order attribution backfill admin route rejects authenticated non-admin users', async () => {
+  let queryCalls = 0;
+  pool.query = (async () => {
+    queryCalls += 1;
+    return {
+      rows: [
+        {
+          session_id: 7,
+          user_id: 42,
+          email: 'analyst@example.com',
+          display_name: 'Analyst',
+          is_admin: false,
+          status: 'active',
+          last_login_at: new Date('2026-04-25T10:00:00.000Z'),
+          created_at: new Date('2026-04-01T00:00:00.000Z'),
+          expires_at: new Date('2026-05-01T00:00:00.000Z')
+        }
+      ]
+    };
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(server, '/api/admin/attribution/orders/backfill', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer user-session-token'
+      },
+      body: {
+        startDate: '2026-04-01',
+        endDate: '2026-04-05'
+      }
+    });
+
+    assert.equal(response.status, 403);
+    assert.deepEqual(body, {
+      error: 'forbidden',
+      message: 'Admin access required'
+    });
+    assert.equal(queryCalls, 1);
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
 test('order attribution backfill admin route validates the shared request contract before enqueueing', async () => {
   let queryCalls = 0;
   pool.query = (async () => {
@@ -86,6 +133,38 @@ test('order attribution backfill admin route validates the shared request contra
     assert.equal(queryCalls, 0);
     assert.deepEqual(body.details.fieldErrors.endDate, ['Start date must be on or before end date.']);
     assert.deepEqual(body.details.fieldErrors.limit, ['Limit must be 5000 or less.']);
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
+test('order attribution backfill admin route rejects limit values below the shared minimum', async () => {
+  let queryCalls = 0;
+  pool.query = (async () => {
+    queryCalls += 1;
+    return { rows: [] };
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(server, '/api/admin/attribution/orders/backfill', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer test-reporting-token'
+      },
+      body: {
+        startDate: '2026-04-01',
+        endDate: '2026-04-05',
+        limit: 0
+      }
+    });
+
+    assert.equal(response.status, 400);
+    assert.equal(body.error, 'invalid_request');
+    assert.equal(queryCalls, 0);
+    assert.deepEqual(body.details.fieldErrors.limit, ['Limit must be greater than 0.']);
   } finally {
     pool.query = originalPoolQuery as typeof pool.query;
     await closeServer(server);
@@ -138,6 +217,56 @@ test('order attribution backfill admin route enqueues normalized jobs and return
       limit: 500,
       webOrdersOnly: true,
       skipShopifyWriteback: false
+    });
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
+test('order attribution backfill admin route preserves explicit options, including max limit and writeback flags', async () => {
+  const capturedQueries: Array<{ text: string; params?: unknown[] }> = [];
+
+  pool.query = (async (text: string, params?: unknown[]) => {
+    capturedQueries.push({ text, params });
+    return { rows: [] };
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(server, '/api/admin/attribution/orders/backfill', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer test-reporting-token'
+      },
+      body: {
+        startDate: '2026-04-01',
+        endDate: '2026-04-05',
+        dryRun: false,
+        limit: 5000,
+        webOrdersOnly: false,
+        skipShopifyWriteback: true
+      }
+    });
+
+    assert.equal(response.status, 202);
+    assert.deepEqual(body.options, {
+      startDate: '2026-04-01',
+      endDate: '2026-04-05',
+      dryRun: false,
+      limit: 5000,
+      webOrdersOnly: false,
+      skipShopifyWriteback: true
+    });
+    assert.equal(capturedQueries.length, 1);
+    assert.deepEqual(JSON.parse(String(capturedQueries[0].params?.[3])), {
+      startDate: '2026-04-01',
+      endDate: '2026-04-05',
+      dryRun: false,
+      limit: 5000,
+      webOrdersOnly: false,
+      skipShopifyWriteback: true
     });
   } finally {
     pool.query = originalPoolQuery as typeof pool.query;
