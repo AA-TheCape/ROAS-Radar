@@ -4,7 +4,8 @@ import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
 import { logError, logInfo } from '../../observability/index.js';
 
-type DeadLetterStatus = 'pending_replay' | 'replayed';
+export type DeadLetterStatus = 'pending_replay' | 'replayed';
+export type ReplayItemOutcome = 'replayed' | 'skipped' | 'failed' | 'dry_run';
 
 export type DeadLetterInput = {
   eventType: string;
@@ -16,12 +17,25 @@ export type DeadLetterInput = {
 };
 
 export type ReplayFilters = {
+  requestedBy?: string;
   eventType?: string;
   sourceTable?: string;
   status?: DeadLetterStatus;
   fromTime?: Date;
   toTime?: Date;
+  windowStart?: Date;
+  windowEnd?: Date;
   limit?: number;
+  dryRun?: boolean;
+};
+
+export type ReplayDeadLettersResult = {
+  replayRunId: number;
+  candidateCount: number;
+  replayedCount: number;
+  skippedCount: number;
+  failedCount: number;
+  dryRunCount: number;
 };
 
 type DeadLetterRow = {
@@ -90,14 +104,109 @@ async function ensureDeadLetterTables(client: PoolClient): Promise<void> {
   await client.query(`
     CREATE TABLE IF NOT EXISTS event_replay_runs (
       id bigserial PRIMARY KEY,
+      replay_scope text NOT NULL DEFAULT 'filtered',
+      event_type text,
+      source_table text,
+      window_start timestamptz,
+      window_end timestamptz,
+      requested_by text,
+      dry_run boolean NOT NULL DEFAULT false,
+      requested_at timestamptz NOT NULL DEFAULT now(),
       filters jsonb NOT NULL DEFAULT '{}'::jsonb,
       candidate_count integer NOT NULL DEFAULT 0,
       replayed_count integer NOT NULL DEFAULT 0,
       skipped_count integer NOT NULL DEFAULT 0,
       failed_count integer NOT NULL DEFAULT 0,
+      dry_run_count integer NOT NULL DEFAULT 0,
+      results jsonb NOT NULL DEFAULT '{}'::jsonb,
       started_at timestamptz NOT NULL DEFAULT now(),
       completed_at timestamptz
     )
+  `);
+
+  await client.query(`
+    ALTER TABLE event_replay_runs
+      ADD COLUMN IF NOT EXISTS replay_scope text NOT NULL DEFAULT 'filtered'
+  `);
+
+  await client.query(`
+    ALTER TABLE event_replay_runs
+      ADD COLUMN IF NOT EXISTS event_type text
+  `);
+
+  await client.query(`
+    ALTER TABLE event_replay_runs
+      ADD COLUMN IF NOT EXISTS source_table text
+  `);
+
+  await client.query(`
+    ALTER TABLE event_replay_runs
+      ADD COLUMN IF NOT EXISTS window_start timestamptz
+  `);
+
+  await client.query(`
+    ALTER TABLE event_replay_runs
+      ADD COLUMN IF NOT EXISTS window_end timestamptz
+  `);
+
+  await client.query(`
+    ALTER TABLE event_replay_runs
+      ADD COLUMN IF NOT EXISTS requested_by text
+  `);
+
+  await client.query(`
+    ALTER TABLE event_replay_runs
+      ADD COLUMN IF NOT EXISTS filters jsonb NOT NULL DEFAULT '{}'::jsonb
+  `);
+
+  await client.query(`
+    ALTER TABLE event_replay_runs
+      ADD COLUMN IF NOT EXISTS dry_run boolean NOT NULL DEFAULT false
+  `);
+
+  await client.query(`
+    ALTER TABLE event_replay_runs
+      ADD COLUMN IF NOT EXISTS requested_at timestamptz NOT NULL DEFAULT now()
+  `);
+
+  await client.query(`
+    ALTER TABLE event_replay_runs
+      ADD COLUMN IF NOT EXISTS candidate_count integer NOT NULL DEFAULT 0
+  `);
+
+  await client.query(`
+    ALTER TABLE event_replay_runs
+      ADD COLUMN IF NOT EXISTS replayed_count integer NOT NULL DEFAULT 0
+  `);
+
+  await client.query(`
+    ALTER TABLE event_replay_runs
+      ADD COLUMN IF NOT EXISTS skipped_count integer NOT NULL DEFAULT 0
+  `);
+
+  await client.query(`
+    ALTER TABLE event_replay_runs
+      ADD COLUMN IF NOT EXISTS failed_count integer NOT NULL DEFAULT 0
+  `);
+
+  await client.query(`
+    ALTER TABLE event_replay_runs
+      ADD COLUMN IF NOT EXISTS dry_run_count integer NOT NULL DEFAULT 0
+  `);
+
+  await client.query(`
+    ALTER TABLE event_replay_runs
+      ADD COLUMN IF NOT EXISTS results jsonb NOT NULL DEFAULT '{}'::jsonb
+  `);
+
+  await client.query(`
+    ALTER TABLE event_replay_runs
+      ADD COLUMN IF NOT EXISTS started_at timestamptz NOT NULL DEFAULT now()
+  `);
+
+  await client.query(`
+    ALTER TABLE event_replay_runs
+      ADD COLUMN IF NOT EXISTS completed_at timestamptz
   `);
 
   await client.query(`
@@ -111,6 +220,31 @@ async function ensureDeadLetterTables(client: PoolClient): Promise<void> {
       message text,
       created_at timestamptz NOT NULL DEFAULT now()
     )
+  `);
+
+  await client.query(`
+    ALTER TABLE event_replay_run_items
+      ADD COLUMN IF NOT EXISTS source_table text
+  `);
+
+  await client.query(`
+    ALTER TABLE event_replay_run_items
+      ADD COLUMN IF NOT EXISTS source_record_id text
+  `);
+
+  await client.query(`
+    ALTER TABLE event_replay_run_items
+      ADD COLUMN IF NOT EXISTS outcome text
+  `);
+
+  await client.query(`
+    ALTER TABLE event_replay_run_items
+      ADD COLUMN IF NOT EXISTS message text
+  `);
+
+  await client.query(`
+    ALTER TABLE event_replay_run_items
+      ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now()
   `);
 }
 
@@ -156,6 +290,51 @@ async function requeueSourceRecord(client: PoolClient, deadLetter: DeadLetterRow
   }
 
   return 'skipped';
+}
+
+function normalizeReplayFilters(filters: ReplayFilters) {
+  const requestedBy = filters.requestedBy?.trim() || null;
+  const fromTime = filters.fromTime ?? filters.windowStart ?? null;
+  const toTime = filters.toTime ?? filters.windowEnd ?? null;
+  const limit = Math.max(1, Math.min(filters.limit ?? env.DEAD_LETTER_REPLAY_MAX_BATCH_SIZE, 500));
+  const status = filters.status ?? 'pending_replay';
+  const dryRun = filters.dryRun ?? false;
+
+  return {
+    requestedBy,
+    eventType: filters.eventType ?? null,
+    sourceTable: filters.sourceTable ?? null,
+    status,
+    fromTime,
+    toTime,
+    limit,
+    dryRun
+  };
+}
+
+async function insertReplayRunItem(
+  client: PoolClient,
+  input: {
+    replayRunId: number;
+    deadLetter: DeadLetterRow;
+    outcome: ReplayItemOutcome;
+    message: string;
+  }
+): Promise<void> {
+  await client.query(
+    `
+      INSERT INTO event_replay_run_items (
+        replay_run_id,
+        dead_letter_id,
+        source_table,
+        source_record_id,
+        outcome,
+        message
+      )
+      VALUES ($1, $2, $3, $4, $5, $6)
+    `,
+    [input.replayRunId, input.deadLetter.id, input.deadLetter.source_table, input.deadLetter.source_record_id, input.outcome, input.message]
+  );
 }
 
 export async function recordDeadLetter(client: PoolClient, input: DeadLetterInput): Promise<void> {
@@ -219,38 +398,50 @@ export async function recordDeadLetter(client: PoolClient, input: DeadLetterInpu
   );
 }
 
-export async function replayDeadLetters(filters: ReplayFilters): Promise<{
-  replayRunId: number;
-  candidateCount: number;
-  replayedCount: number;
-  skippedCount: number;
-  failedCount: number;
-}> {
+export async function replayDeadLetters(filters: ReplayFilters): Promise<ReplayDeadLettersResult> {
   return withTransaction(async (client) => {
     await ensureDeadLetterTables(client);
 
+    const normalized = normalizeReplayFilters(filters);
     const replayRunResult = await client.query<{ id: number }>(
       `
-        INSERT INTO event_replay_runs (filters, started_at)
-        VALUES ($1::jsonb, now())
+        INSERT INTO event_replay_runs (
+          replay_scope,
+          event_type,
+          source_table,
+          window_start,
+          window_end,
+          requested_by,
+          dry_run,
+          requested_at,
+          filters,
+          started_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, now(), $8::jsonb, now())
         RETURNING id
       `,
       [
+        normalized.eventType || normalized.sourceTable || normalized.fromTime || normalized.toTime ? 'filtered' : 'all_pending',
+        normalized.eventType,
+        normalized.sourceTable,
+        normalized.fromTime,
+        normalized.toTime,
+        normalized.requestedBy,
+        normalized.dryRun,
         JSON.stringify({
-          eventType: filters.eventType ?? null,
-          sourceTable: filters.sourceTable ?? null,
-          status: filters.status ?? 'pending_replay',
-          fromTime: filters.fromTime?.toISOString() ?? null,
-          toTime: filters.toTime?.toISOString() ?? null,
-          limit: filters.limit ?? env.DEAD_LETTER_REPLAY_MAX_BATCH_SIZE
+          requestedBy: normalized.requestedBy,
+          eventType: normalized.eventType,
+          sourceTable: normalized.sourceTable,
+          status: normalized.status,
+          fromTime: normalized.fromTime?.toISOString() ?? null,
+          toTime: normalized.toTime?.toISOString() ?? null,
+          limit: normalized.limit,
+          dryRun: normalized.dryRun
         })
       ]
     );
 
     const replayRunId = replayRunResult.rows[0].id;
-    const effectiveLimit = Math.max(1, Math.min(filters.limit ?? env.DEAD_LETTER_REPLAY_MAX_BATCH_SIZE, 500));
-    const effectiveStatus = filters.status ?? 'pending_replay';
-
     const candidates = await client.query<DeadLetterRow>(
       `
         SELECT
@@ -267,16 +458,28 @@ export async function replayDeadLetters(filters: ReplayFilters): Promise<{
           AND ($5::timestamptz IS NULL OR last_failed_at <= $5)
         ORDER BY last_failed_at ASC, id ASC
         LIMIT $6
-        FOR UPDATE
+        FOR UPDATE SKIP LOCKED
       `,
-      [effectiveStatus, filters.eventType ?? null, filters.sourceTable ?? null, filters.fromTime ?? null, filters.toTime ?? null, effectiveLimit]
+      [normalized.status, normalized.eventType, normalized.sourceTable, normalized.fromTime, normalized.toTime, normalized.limit]
     );
 
     let replayedCount = 0;
     let skippedCount = 0;
     let failedCount = 0;
+    let dryRunCount = 0;
 
     for (const deadLetter of candidates.rows) {
+      if (normalized.dryRun) {
+        dryRunCount += 1;
+        await insertReplayRunItem(client, {
+          replayRunId,
+          deadLetter,
+          outcome: 'dry_run',
+          message: 'dry run only; source record was not requeued'
+        });
+        continue;
+      }
+
       try {
         const outcome = await requeueSourceRecord(client, deadLetter);
 
@@ -298,45 +501,22 @@ export async function replayDeadLetters(filters: ReplayFilters): Promise<{
           skippedCount += 1;
         }
 
-        await client.query(
-          `
-            INSERT INTO event_replay_run_items (
-              replay_run_id,
-              dead_letter_id,
-              source_table,
-              source_record_id,
-              outcome,
-              message
-            )
-            VALUES ($1, $2, $3, $4, $5, $6)
-          `,
-          [
-            replayRunId,
-            deadLetter.id,
-            deadLetter.source_table,
-            deadLetter.source_record_id,
-            outcome,
-            outcome === 'replayed' ? 'source record requeued' : 'source record was not found or unsupported'
-          ]
-        );
+        await insertReplayRunItem(client, {
+          replayRunId,
+          deadLetter,
+          outcome,
+          message: outcome === 'replayed' ? 'source record requeued' : 'source record was not found or unsupported'
+        });
       } catch (error) {
         failedCount += 1;
         const serializedError = serializeError(error);
 
-        await client.query(
-          `
-            INSERT INTO event_replay_run_items (
-              replay_run_id,
-              dead_letter_id,
-              source_table,
-              source_record_id,
-              outcome,
-              message
-            )
-            VALUES ($1, $2, $3, $4, 'failed', $5)
-          `,
-          [replayRunId, deadLetter.id, deadLetter.source_table, deadLetter.source_record_id, serializedError.message]
-        );
+        await insertReplayRunItem(client, {
+          replayRunId,
+          deadLetter,
+          outcome: 'failed',
+          message: serializedError.message
+        });
 
         logError('dead_letter_replay_failed', error, {
           replayRunId,
@@ -356,18 +536,37 @@ export async function replayDeadLetters(filters: ReplayFilters): Promise<{
           replayed_count = $3,
           skipped_count = $4,
           failed_count = $5,
+          dry_run_count = $6,
+          results = $7::jsonb,
           completed_at = now()
         WHERE id = $1
       `,
-      [replayRunId, candidates.rowCount, replayedCount, skippedCount, failedCount]
+      [
+        replayRunId,
+        candidates.rowCount,
+        replayedCount,
+        skippedCount,
+        failedCount,
+        dryRunCount,
+        JSON.stringify({
+          candidateCount: candidates.rows.length,
+          replayedCount,
+          skippedCount,
+          failedCount,
+          dryRunCount
+        })
+      ]
     );
 
     logInfo('dead_letter_replay_completed', {
       replayRunId,
+      requestedBy: normalized.requestedBy,
+      dryRun: normalized.dryRun,
       candidateCount: candidates.rows.length,
       replayedCount,
       skippedCount,
-      failedCount
+      failedCount,
+      dryRunCount
     });
 
     return {
@@ -375,7 +574,8 @@ export async function replayDeadLetters(filters: ReplayFilters): Promise<{
       candidateCount: candidates.rows.length,
       replayedCount,
       skippedCount,
-      failedCount
+      failedCount,
+      dryRunCount
     };
   });
 }
