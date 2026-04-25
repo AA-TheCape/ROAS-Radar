@@ -15,10 +15,10 @@ import {
 } from '../../packages/attribution-schema/index.js';
 
 import {
-  backfillOrderAttribution,
   backfillShopifyOrders,
   clearStoredAuthToken,
   createUser,
+  enqueueOrderAttributionBackfill,
   fetchAppSettings,
   fetchCampaigns,
   fetchCurrentUser,
@@ -1217,7 +1217,7 @@ function App() {
     });
 
     try {
-      const response: OrderAttributionBackfillEnqueueResponse = await backfillOrderAttribution(parsedRequest.data);
+      const response: OrderAttributionBackfillEnqueueResponse = await enqueueOrderAttributionBackfill(parsedRequest.data);
       await loadConnections();
       startTransition(() => {
         setDashboardRefreshKey((current) => current + 1);

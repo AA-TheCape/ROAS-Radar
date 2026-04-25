@@ -3,6 +3,7 @@ import type {
   OrderAttributionBackfillRequest,
   OrderAttributionBackfillSubmittedOptions
 } from '../../../packages/attribution-schema/index.js';
+import { orderAttributionBackfillEnqueueResponseSchema } from '../../../packages/attribution-schema/index.js';
 
 export type ReportingFilters = {
   startDate: string;
@@ -500,9 +501,10 @@ async function requestJson<T>(
     searchParams?: URLSearchParams;
     method?: 'GET' | 'POST' | 'PUT';
     body?: unknown;
+    parse?: (payload: unknown) => T;
   } = {}
 ): Promise<T> {
-  const { searchParams, method = 'GET', body } = options;
+  const { searchParams, method = 'GET', body, parse } = options;
   const query = searchParams ? `?${searchParams.toString()}` : '';
   const includeJsonBody = body !== undefined;
 
@@ -527,7 +529,8 @@ async function requestJson<T>(
     throw new Error(message);
   }
 
-  return (await response.json()) as T;
+  const payload = (await response.json()) as unknown;
+  return parse ? parse(payload) : (payload as T);
 }
 
 export function fetchSummary(filters: ReportingFilters) {
@@ -684,10 +687,11 @@ export function recoverShopifyAttributionHints(startDate: string, endDate: strin
   });
 }
 
-export function backfillOrderAttribution(payload: OrderAttributionBackfillRequest) {
+export function enqueueOrderAttributionBackfill(payload: OrderAttributionBackfillRequest) {
   return requestJson<OrderAttributionBackfillEnqueueResponse>('/api/admin/attribution/orders/backfill', {
     method: 'POST',
-    body: payload
+    body: payload,
+    parse: (response) => orderAttributionBackfillEnqueueResponseSchema.parse(response)
   });
 }
 
