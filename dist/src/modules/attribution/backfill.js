@@ -8,6 +8,7 @@ import { confidenceScoreForWinner, dedupeDeterministicCandidates, isDirectTouchp
 const ATTRIBUTION_MODEL_VERSION = 1;
 const ATTRIBUTION_WINDOW_DAYS = 7;
 const MAX_PREVIEW_ORDERS = 25;
+const MAX_REPORTED_FAILURES = 100;
 const MISSING_ATTRIBUTION_SQL = `
   attribution.shopify_order_id IS NULL
   OR (
@@ -20,6 +21,30 @@ const MISSING_ATTRIBUTION_SQL = `
     AND attribution.attributed_click_id_value IS NULL
   )
 `;
+function normalizeFailureCode(error, fallback) {
+    if (typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string' && error.code.trim()) {
+        return error.code.trim();
+    }
+    if (error instanceof Error && error.name.trim()) {
+        return error.name.trim();
+    }
+    return fallback;
+}
+function normalizeFailureMessage(error, fallback) {
+    if (error instanceof Error && error.message.trim()) {
+        return error.message.trim();
+    }
+    if (typeof error === 'string' && error.trim()) {
+        return error.trim();
+    }
+    return fallback;
+}
+function recordFailure(failures, failure) {
+    if (failures.length >= MAX_REPORTED_FAILURES) {
+        return;
+    }
+    failures.push(failure);
+}
 function normalizeNullableString(value) {
     const normalized = value?.trim();
     return normalized ? normalized : null;
@@ -545,6 +570,7 @@ export async function backfillRecentOrdersWithRecoveredAttribution(options) {
     let shopifyWritebackCompleted = 0;
     let shopifyWritebackSkipped = 0;
     let shopifyWritebackFailed = 0;
+    const failures = [];
     const preview = [];
     const reportingDates = new Set();
     const reportingTimezone = dryRun ? null : await withTransaction((client) => getReportingTimezone(client));
@@ -560,6 +586,11 @@ export async function backfillRecentOrdersWithRecoveredAttribution(options) {
             });
             if (!resolved) {
                 failedOrders += 1;
+                recordFailure(failures, {
+                    orderId: candidate.shopify_order_id,
+                    code: 'order_not_found',
+                    message: `Shopify order ${candidate.shopify_order_id} was not found during backfill processing`
+                });
                 continue;
             }
             if (preview.length < MAX_PREVIEW_ORDERS) {
@@ -596,6 +627,11 @@ export async function backfillRecentOrdersWithRecoveredAttribution(options) {
                 }
                 catch (error) {
                     shopifyWritebackFailed += 1;
+                    recordFailure(failures, {
+                        orderId: resolved.order.shopify_order_id,
+                        code: normalizeFailureCode(error, 'shopify_writeback_failed'),
+                        message: normalizeFailureMessage(error, `Shopify writeback failed for Shopify order ${resolved.order.shopify_order_id}`)
+                    });
                     logError('order_attribution_backfill_shopify_writeback_failed', error, {
                         requestedBy: options.requestedBy,
                         workerId: options.workerId,
@@ -606,6 +642,11 @@ export async function backfillRecentOrdersWithRecoveredAttribution(options) {
         }
         catch (error) {
             failedOrders += 1;
+            recordFailure(failures, {
+                orderId: candidate.shopify_order_id,
+                code: normalizeFailureCode(error, 'order_attribution_backfill_failed'),
+                message: normalizeFailureMessage(error, `Failed to backfill Shopify order ${candidate.shopify_order_id}`)
+            });
             logError('order_attribution_backfill_order_failed', error, {
                 requestedBy: options.requestedBy,
                 workerId: options.workerId,
@@ -643,8 +684,18 @@ export async function backfillRecentOrdersWithRecoveredAttribution(options) {
         shopifyWritebackCompleted,
         shopifyWritebackSkipped,
         shopifyWritebackFailed,
+        failures,
         preview
     };
     logInfo(dryRun ? 'order_attribution_backfill_dry_run_completed' : 'order_attribution_backfill_completed', report);
     return report;
+}
+export function toOrderAttributionBackfillJobReport(report) {
+    return {
+        scanned: report.scannedOrders,
+        recovered: report.recoveredOrders,
+        unrecoverable: report.unrecoverableOrders,
+        writebackCompleted: report.shopifyWritebackCompleted,
+        failures: report.failures
+    };
 }

@@ -1,5 +1,7 @@
 import type { PoolClient } from 'pg';
 
+import type { OrderAttributionBackfillReport as OrderAttributionBackfillJobReport } from '../../../packages/attribution-schema/index.js';
+
 import { withTransaction } from '../../db/pool.js';
 import { logError, logInfo } from '../../observability/index.js';
 import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
@@ -24,6 +26,7 @@ import {
 const ATTRIBUTION_MODEL_VERSION = 1;
 const ATTRIBUTION_WINDOW_DAYS = 7;
 const MAX_PREVIEW_ORDERS = 25;
+const MAX_REPORTED_FAILURES = 100;
 const MISSING_ATTRIBUTION_SQL = `
   attribution.shopify_order_id IS NULL
   OR (
@@ -96,6 +99,12 @@ export type OrderAttributionBackfillOptions = {
   applyWriteback?: typeof applyShopifyOrderWriteback;
 };
 
+export type OrderAttributionBackfillFailure = {
+  orderId: string | null;
+  code: string;
+  message: string;
+};
+
 export type OrderAttributionBackfillReport = {
   requestedBy: string;
   workerId: string;
@@ -116,8 +125,44 @@ export type OrderAttributionBackfillReport = {
   shopifyWritebackCompleted: number;
   shopifyWritebackSkipped: number;
   shopifyWritebackFailed: number;
+  failures: OrderAttributionBackfillFailure[];
   preview: BackfillPreviewRow[];
 };
+
+function normalizeFailureCode(error: unknown, fallback: string): string {
+  if (typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string' && error.code.trim()) {
+    return error.code.trim();
+  }
+
+  if (error instanceof Error && error.name.trim()) {
+    return error.name.trim();
+  }
+
+  return fallback;
+}
+
+function normalizeFailureMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message.trim();
+  }
+
+  if (typeof error === 'string' && error.trim()) {
+    return error.trim();
+  }
+
+  return fallback;
+}
+
+function recordFailure(
+  failures: OrderAttributionBackfillFailure[],
+  failure: OrderAttributionBackfillFailure
+): void {
+  if (failures.length >= MAX_REPORTED_FAILURES) {
+    return;
+  }
+
+  failures.push(failure);
+}
 
 function normalizeNullableString(value: string | null | undefined): string | null {
   const normalized = value?.trim();
@@ -768,6 +813,7 @@ export async function backfillRecentOrdersWithRecoveredAttribution(
   let shopifyWritebackCompleted = 0;
   let shopifyWritebackSkipped = 0;
   let shopifyWritebackFailed = 0;
+  const failures: OrderAttributionBackfillFailure[] = [];
   const preview: BackfillPreviewRow[] = [];
   const reportingDates = new Set<string>();
   const reportingTimezone = dryRun ? null : await withTransaction((client) => getReportingTimezone(client));
@@ -786,6 +832,11 @@ export async function backfillRecentOrdersWithRecoveredAttribution(
 
       if (!resolved) {
         failedOrders += 1;
+        recordFailure(failures, {
+          orderId: candidate.shopify_order_id,
+          code: 'order_not_found',
+          message: `Shopify order ${candidate.shopify_order_id} was not found during backfill processing`
+        });
         continue;
       }
 
@@ -829,6 +880,14 @@ export async function backfillRecentOrdersWithRecoveredAttribution(
           }
         } catch (error) {
           shopifyWritebackFailed += 1;
+          recordFailure(failures, {
+            orderId: resolved.order.shopify_order_id,
+            code: normalizeFailureCode(error, 'shopify_writeback_failed'),
+            message: normalizeFailureMessage(
+              error,
+              `Shopify writeback failed for Shopify order ${resolved.order.shopify_order_id}`
+            )
+          });
           logError('order_attribution_backfill_shopify_writeback_failed', error, {
             requestedBy: options.requestedBy,
             workerId: options.workerId,
@@ -838,6 +897,11 @@ export async function backfillRecentOrdersWithRecoveredAttribution(
       }
     } catch (error) {
       failedOrders += 1;
+      recordFailure(failures, {
+        orderId: candidate.shopify_order_id,
+        code: normalizeFailureCode(error, 'order_attribution_backfill_failed'),
+        message: normalizeFailureMessage(error, `Failed to backfill Shopify order ${candidate.shopify_order_id}`)
+      });
       logError('order_attribution_backfill_order_failed', error, {
         requestedBy: options.requestedBy,
         workerId: options.workerId,
@@ -880,9 +944,20 @@ export async function backfillRecentOrdersWithRecoveredAttribution(
     shopifyWritebackCompleted,
     shopifyWritebackSkipped,
     shopifyWritebackFailed,
+    failures,
     preview
   };
 
   logInfo(dryRun ? 'order_attribution_backfill_dry_run_completed' : 'order_attribution_backfill_completed', report);
   return report;
+}
+
+export function toOrderAttributionBackfillJobReport(report: OrderAttributionBackfillReport): OrderAttributionBackfillJobReport {
+  return {
+    scanned: report.scannedOrders,
+    recovered: report.recoveredOrders,
+    unrecoverable: report.unrecoverableOrders,
+    writebackCompleted: report.shopifyWritebackCompleted,
+    failures: report.failures
+  };
 }

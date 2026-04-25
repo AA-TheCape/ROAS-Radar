@@ -3,6 +3,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { env } from './config/env.js';
 import { pool } from './db/pool.js';
 import { processAttributionQueue } from './modules/attribution/index.js';
+import { processOrderAttributionBackfillRuns } from './modules/attribution/backfill-jobs.js';
 import { logError, logInfo } from './observability/index.js';
 async function run() {
     const workerId = `attribution-worker-${randomUUID()}`;
@@ -17,11 +18,14 @@ async function run() {
         mode: env.ATTRIBUTION_WORKER_LOOP ? 'daemon' : 'oneshot'
     });
     do {
-        const result = await processAttributionQueue({
+        const attributionResult = await processAttributionQueue({
             workerId,
             limit: env.ATTRIBUTION_JOB_BATCH_SIZE,
             staleScanLimit: env.ATTRIBUTION_STALE_SCAN_BATCH_SIZE,
             emitMetrics: true
+        });
+        const backfillResult = await processOrderAttributionBackfillRuns({
+            workerId
         });
         if (!env.ATTRIBUTION_WORKER_LOOP) {
             break;
@@ -29,7 +33,9 @@ async function run() {
         if (shouldStop) {
             break;
         }
-        if (result.claimedJobs === 0 && result.staleJobsEnqueued === 0) {
+        if (attributionResult.claimedJobs === 0 &&
+            attributionResult.staleJobsEnqueued === 0 &&
+            backfillResult.claimedRuns === 0) {
             await delay(env.ATTRIBUTION_WORKER_POLL_INTERVAL_MS);
         }
     } while (!shouldStop);

@@ -7,6 +7,7 @@ import express from 'express';
 import { env } from './config/env.js';
 import { checkDatabaseHealth, pool } from './db/pool.js';
 import { processAttributionQueue } from './modules/attribution/index.js';
+import { processOrderAttributionBackfillRuns } from './modules/attribution/backfill-jobs.js';
 import { buildAttributionBacklogLog, logError, logInfo } from './observability/index.js';
 
 type AttributionBacklogRow = {
@@ -102,6 +103,9 @@ async function run(): Promise<void> {
         limit: env.ATTRIBUTION_JOB_BATCH_SIZE,
         staleScanLimit: env.ATTRIBUTION_STALE_SCAN_BATCH_SIZE,
         emitMetrics: true
+      });
+      await processOrderAttributionBackfillRuns({
+        workerId
       });
       await emitAttributionBacklogSnapshot(workerId);
       lastRunAt = new Date().toISOString();
