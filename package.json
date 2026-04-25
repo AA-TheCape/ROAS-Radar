@@ -9,6 +9,8 @@
     "test:all": "node scripts/run-tests.mjs all",
     "test:unit": "node scripts/run-tests.mjs unit",
     "test:integration": "node scripts/run-tests.mjs integration",
+    "test:attribution": "node scripts/run-attribution-tests.mjs critical",
+    "test:attribution:coverage": "node scripts/run-attribution-tests.mjs coverage",
     "test:dead-letters": "node --import tsx --test test/dead-letter-replay.test.ts"
   },
   "dependencies": {

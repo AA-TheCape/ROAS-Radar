@@ -36,7 +36,36 @@ CREATE TABLE IF NOT EXISTS event_dead_letters (
 CREATE UNIQUE INDEX IF NOT EXISTS event_dead_letters_source_uidx
   ON event_dead_letters (event_type, source_table, source_record_id);
 
-CREATE TABLE IF NOT EXISTS event_replay_runs (...);
-CREATE TABLE IF NOT EXISTS event_replay_run_items (...);
+CREATE TABLE IF NOT EXISTS event_replay_runs (
+  id bigserial PRIMARY KEY,
+  replay_scope text NOT NULL DEFAULT 'filtered',
+  event_type text,
+  source_table text,
+  window_start timestamptz,
+  window_end timestamptz,
+  requested_by text,
+  dry_run boolean NOT NULL DEFAULT false,
+  requested_at timestamptz NOT NULL DEFAULT now(),
+  filters jsonb NOT NULL DEFAULT '{}'::jsonb,
+  candidate_count integer NOT NULL DEFAULT 0,
+  replayed_count integer NOT NULL DEFAULT 0,
+  skipped_count integer NOT NULL DEFAULT 0,
+  failed_count integer NOT NULL DEFAULT 0,
+  dry_run_count integer NOT NULL DEFAULT 0,
+  results jsonb NOT NULL DEFAULT '{}'::jsonb,
+  started_at timestamptz NOT NULL DEFAULT now(),
+  completed_at timestamptz
+);
+
+CREATE TABLE IF NOT EXISTS event_replay_run_items (
+  id bigserial PRIMARY KEY,
+  replay_run_id bigint NOT NULL REFERENCES event_replay_runs(id) ON DELETE CASCADE,
+  dead_letter_id bigint NOT NULL REFERENCES event_dead_letters(id) ON DELETE CASCADE,
+  source_table text NOT NULL,
+  source_record_id text NOT NULL,
+  outcome text NOT NULL,
+  message text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
 
 COMMIT;
