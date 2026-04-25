@@ -865,6 +865,7 @@ async function upsertMetaAdsConnection(params: {
         account_name,
         account_currency,
         raw_account_data,
+        raw_account_external_id,
         raw_account_payload_size_bytes,
         raw_account_payload_hash,
         updated_at
@@ -882,6 +883,7 @@ async function upsertMetaAdsConnection(params: {
         $9::jsonb,
         $10,
         $11,
+        $12,
         now()
       )
       ON CONFLICT (ad_account_id)
@@ -895,8 +897,9 @@ async function upsertMetaAdsConnection(params: {
         account_name = $7,
         account_currency = $8,
         raw_account_data = $9::jsonb,
-        raw_account_payload_size_bytes = $10,
-        raw_account_payload_hash = $11,
+        raw_account_external_id = $10,
+        raw_account_payload_size_bytes = $11,
+        raw_account_payload_hash = $12,
         updated_at = now()
       RETURNING
         raw_account_payload_size_bytes AS "storedPayloadSizeBytes",
@@ -913,6 +916,7 @@ async function upsertMetaAdsConnection(params: {
       params.account.name ?? null,
       params.account.currency ?? params.account.account_currency ?? null,
       rawPayloadJson,
+      params.adAccountId,
       payloadSizeBytes,
       payloadHash
     ]
@@ -1232,6 +1236,7 @@ async function persistDailySpendSnapshot(
             report_date,
             level,
             entity_id,
+            payload_external_id,
             currency,
             spend,
             impressions,
@@ -1241,7 +1246,7 @@ async function persistDailySpendSnapshot(
             payload_hash,
             updated_at
           )
-          VALUES ($1, $2, $3::date, $4, $5, $6, $7::numeric, $8, $9, $10::jsonb, $11, $12, now())
+          VALUES ($1, $2, $3::date, $4, $5, $6, $7, $8::numeric, $9, $10, $11::jsonb, $12, $13, now())
           RETURNING
             id,
             payload_size_bytes AS "storedPayloadSizeBytes",
@@ -1253,6 +1258,7 @@ async function persistDailySpendSnapshot(
           params.syncJobId,
           params.syncDate,
           level,
+          entityId,
           entityId,
           params.currency,
           parseMetricDecimal(row.spend),

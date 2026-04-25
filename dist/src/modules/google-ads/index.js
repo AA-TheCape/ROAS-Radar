@@ -721,6 +721,7 @@ async function upsertGoogleAdsConnection(params) {
         customer_descriptive_name,
         currency_code,
         raw_customer_data,
+        raw_customer_external_id,
         raw_customer_payload_size_bytes,
         raw_customer_payload_hash,
         updated_at
@@ -740,6 +741,7 @@ async function upsertGoogleAdsConnection(params) {
         $10::jsonb,
         $11,
         $12,
+        $13,
         now()
       )
       ON CONFLICT (customer_id)
@@ -755,8 +757,9 @@ async function upsertGoogleAdsConnection(params) {
         customer_descriptive_name = $8,
         currency_code = $9,
         raw_customer_data = $10::jsonb,
-        raw_customer_payload_size_bytes = $11,
-        raw_customer_payload_hash = $12,
+        raw_customer_external_id = $11,
+        raw_customer_payload_size_bytes = $12,
+        raw_customer_payload_hash = $13,
         updated_at = now()
       RETURNING
         raw_customer_payload_size_bytes AS "storedPayloadSizeBytes",
@@ -773,6 +776,7 @@ async function upsertGoogleAdsConnection(params) {
         params.customer.descriptiveName,
         params.customer.currencyCode,
         rawPayloadJson,
+        params.customerId,
         payloadSizeBytes,
         payloadHash
     ]);
@@ -980,6 +984,7 @@ async function persistDailySpendSnapshot(client, params) {
           report_date,
           level,
           entity_id,
+          payload_external_id,
           currency,
           spend,
           impressions,
@@ -989,7 +994,7 @@ async function persistDailySpendSnapshot(client, params) {
           payload_hash,
           updated_at
         )
-        VALUES ($1, $2, $3::date, 'campaign', $4, $5, $6::numeric, $7, $8, $9::jsonb, $10, $11, now())
+        VALUES ($1, $2, $3::date, 'campaign', $4, $5, $6, $7::numeric, $8, $9, $10::jsonb, $11, $12, now())
         RETURNING
           entity_id AS "entityId",
           payload_size_bytes AS "storedPayloadSizeBytes",
@@ -999,6 +1004,7 @@ async function persistDailySpendSnapshot(client, params) {
             params.connectionId,
             params.syncJobId,
             params.syncDate,
+            entityId,
             entityId,
             row.customer?.currencyCode ?? null,
             parseMicrosToDecimal(row.metrics?.costMicros),
@@ -1033,6 +1039,7 @@ async function persistDailySpendSnapshot(client, params) {
           report_date,
           level,
           entity_id,
+          payload_external_id,
           currency,
           spend,
           impressions,
@@ -1042,7 +1049,7 @@ async function persistDailySpendSnapshot(client, params) {
           payload_hash,
           updated_at
         )
-        VALUES ($1, $2, $3::date, 'ad', $4, $5, $6::numeric, $7, $8, $9::jsonb, $10, $11, now())
+        VALUES ($1, $2, $3::date, 'ad', $4, $5, $6, $7::numeric, $8, $9, $10::jsonb, $11, $12, now())
         RETURNING
           id,
           payload_size_bytes AS "storedPayloadSizeBytes",
@@ -1052,6 +1059,7 @@ async function persistDailySpendSnapshot(client, params) {
             params.connectionId,
             params.syncJobId,
             params.syncDate,
+            entityId,
             entityId,
             row.customer?.currencyCode ?? null,
             parseMicrosToDecimal(row.metrics?.costMicros),
@@ -1252,15 +1260,24 @@ async function processSyncJob(job) {
           customer_descriptive_name = $2,
           currency_code = $3,
           raw_customer_data = $4::jsonb,
-          raw_customer_payload_size_bytes = $5,
-          raw_customer_payload_hash = $6,
+          raw_customer_external_id = $5,
+          raw_customer_payload_size_bytes = $6,
+          raw_customer_payload_hash = $7,
           updated_at = now()
         WHERE id = $1
         RETURNING
           raw_customer_payload_size_bytes AS "storedPayloadSizeBytes",
           raw_customer_payload_hash AS "storedPayloadHash",
           raw_customer_data AS "persistedRawPayload"
-      `, [job.connection_id, customer.descriptiveName, customer.currencyCode, rawPayloadJson, payloadSizeBytes, payloadHash]);
+      `, [
+            job.connection_id,
+            customer.descriptiveName,
+            customer.currencyCode,
+            rawPayloadJson,
+            customer.customerId,
+            payloadSizeBytes,
+            payloadHash
+        ]);
         logRawPayloadIntegrityMismatch(rawPayloadMetadata, updateResult.rows[0], {
             surface: 'google_ads_connections.raw_customer_data',
             operation: 'update',

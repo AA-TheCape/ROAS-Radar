@@ -9,6 +9,7 @@
     "db:migrate": "tsx src/db/migrate.ts",
     "db:migrate:start": "node dist/db/migrate.js",
     "db:migrate:check": "node scripts/check-migrations.mjs",
+    "db:verify-raw-payload-query-plans": "node scripts/verify-raw-payload-query-plans.mjs",
     "dev": "tsx watch src/server.ts",
     "lint": "biome lint src scripts test",
     "lint:dashboard": "npm --prefix dashboard run lint",

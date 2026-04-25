@@ -125,6 +125,14 @@ For ingestion surfaces that expose `raw_payload` or equivalent raw-source JSONB 
 
 Normalization, URL cleanup, consent coercion, idempotency fingerprints, and log redaction still apply to typed columns, hashes, and logs. They must not mutate the JSON written to raw-source storage.
 
+When you need to look raw rows up later, use the source-specific metadata columns first instead of querying inside JSONB:
+
+- Shopify raw tables: `payload_source`, `payload_external_id`, and `payload_received_at` or `received_at`
+- Meta Ads raw tables: `raw_account_source` or `payload_source`, paired with `raw_account_external_id` or `payload_external_id`
+- Google Ads raw tables: `raw_customer_source` or `payload_source`, paired with `raw_customer_external_id` or `payload_external_id`
+
+Those lookup columns are intentionally narrow so staging and production do not need broad JSONB GIN indexes on high-write ingestion tables.
+
 ## Environment Configuration
 
 All runtime configuration is validated in `src/config/env.ts`. `DATABASE_URL` is the only hard requirement for process startup. Most other values have defaults, but several are functionally required if you want non-local integrations to work.

@@ -1414,6 +1414,18 @@ function extractRawShopifyLineItems(rawPayload: unknown): unknown[] {
   return Array.isArray(rawLineItems) ? rawLineItems : [];
 }
 
+function extractShopifyReceiptExternalId(rawPayload: unknown, webhookId: string | null): string | null {
+  if (rawPayload && typeof rawPayload === 'object') {
+    const { id } = rawPayload as { id?: unknown };
+
+    if (typeof id === 'string' || typeof id === 'number') {
+      return String(id);
+    }
+  }
+
+  return webhookId;
+}
+
 async function createOrReuseWebhookReceipt(
   topic: string,
   shopDomain: string,
@@ -1423,6 +1435,7 @@ async function createOrReuseWebhookReceipt(
 ): Promise<WebhookReceiptRow> {
   const rawPayloadJson = JSON.stringify(rawPayload);
   const payloadSizeBytes = Buffer.byteLength(rawPayloadJson, 'utf8');
+  const payloadExternalId = extractShopifyReceiptExternalId(rawPayload, webhookId);
 
   const insertResult = await query<WebhookReceiptRow>(
     `
@@ -1431,16 +1444,17 @@ async function createOrReuseWebhookReceipt(
         shop_domain,
         webhook_id,
         payload_hash,
+        payload_external_id,
         payload_size_bytes,
         received_at,
         status,
         raw_payload
       )
-      VALUES ($1, $2, $3, $4, $5, now(), 'received', $6::jsonb)
+      VALUES ($1, $2, $3, $4, $5, $6, now(), 'received', $7::jsonb)
       ON CONFLICT DO NOTHING
       RETURNING id, status, processed_at
     `,
-    [topic, shopDomain, webhookId, payloadHash, payloadSizeBytes, rawPayloadJson]
+    [topic, shopDomain, webhookId, payloadHash, payloadExternalId, payloadSizeBytes, rawPayloadJson]
   );
 
   if (insertResult.rowCount) {
@@ -1544,6 +1558,7 @@ async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPay
           cart_token,
           source_name,
           payload_received_at,
+          payload_external_id,
           payload_size_bytes,
           payload_hash,
           raw_payload,
@@ -1570,7 +1585,8 @@ async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPay
           now(),
           $18,
           $19,
-          $20::jsonb,
+          $20,
+          $21::jsonb,
           now()
         )
         ON CONFLICT (shopify_order_id)
@@ -1592,6 +1608,7 @@ async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPay
           cart_token = COALESCE(EXCLUDED.cart_token, shopify_orders.cart_token),
           source_name = COALESCE(EXCLUDED.source_name, shopify_orders.source_name),
           payload_received_at = EXCLUDED.payload_received_at,
+          payload_external_id = EXCLUDED.payload_external_id,
           payload_size_bytes = EXCLUDED.payload_size_bytes,
           payload_hash = EXCLUDED.payload_hash,
           raw_payload = EXCLUDED.raw_payload,
@@ -1619,6 +1636,7 @@ async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPay
         payload.checkout_token ?? null,
         payload.cart_token ?? null,
         payload.source_name ?? null,
+        shopifyOrderId,
         payloadSizeBytes,
         payloadHash,
         rawPayloadJson

@@ -102,11 +102,13 @@ async function fetchPersistedRawPayloads(shopifyOrderId: string) {
   const [orderResult, receiptResult, lineItemResult] = await Promise.all([
     pool.query<{
       raw_payload: Record<string, unknown>;
+      payload_source: string;
+      payload_external_id: string | null;
       payload_size_bytes: number;
       payload_hash: string;
     }>(
       `
-        SELECT raw_payload, payload_size_bytes, payload_hash
+        SELECT raw_payload, payload_source, payload_external_id, payload_size_bytes, payload_hash
         FROM shopify_orders
         WHERE shopify_order_id = $1
       `,
@@ -114,11 +116,13 @@ async function fetchPersistedRawPayloads(shopifyOrderId: string) {
     ),
     pool.query<{
       raw_payload: Record<string, unknown>;
+      payload_source: string;
+      payload_external_id: string | null;
       payload_size_bytes: number;
       payload_hash: string;
     }>(
       `
-        SELECT raw_payload, payload_size_bytes, payload_hash
+        SELECT raw_payload, payload_source, payload_external_id, payload_size_bytes, payload_hash
         FROM shopify_webhook_receipts
         ORDER BY id DESC
         LIMIT 1
@@ -253,9 +257,13 @@ test('Shopify webhook and backfill ingestion preserve raw orders without trimmin
   const webhookReceiptJson = JSON.stringify(webhookOrder);
 
   assert.deepEqual(persistedWebhook.order.raw_payload, webhookOrder);
+  assert.equal(persistedWebhook.order.payload_source, 'shopify_order');
+  assert.equal(persistedWebhook.order.payload_external_id, 'raw-webhook-order-1');
   assert.equal(persistedWebhook.order.payload_size_bytes, webhookMetadata.payloadSizeBytes);
   assert.equal(persistedWebhook.order.payload_hash, webhookMetadata.payloadHash);
   assert.deepEqual(persistedWebhook.receipt.raw_payload, webhookOrder);
+  assert.equal(persistedWebhook.receipt.payload_source, 'shopify_webhook');
+  assert.equal(persistedWebhook.receipt.payload_external_id, 'raw-webhook-order-1');
   assert.equal(persistedWebhook.receipt.payload_size_bytes, Buffer.byteLength(webhookReceiptJson, 'utf8'));
   assert.equal(persistedWebhook.receipt.payload_hash, createHash('sha256').update(webhookReceiptJson).digest('hex'));
   assert.deepEqual(persistedWebhook.lineItem, webhookOrder.line_items[0]);
@@ -297,9 +305,13 @@ test('Shopify webhook and backfill ingestion preserve raw orders without trimmin
   const backfillReceiptJson = JSON.stringify(backfillOrder);
 
   assert.deepEqual(persistedBackfill.order.raw_payload, backfillOrder);
+  assert.equal(persistedBackfill.order.payload_source, 'shopify_order');
+  assert.equal(persistedBackfill.order.payload_external_id, 'raw-backfill-order-1');
   assert.equal(persistedBackfill.order.payload_size_bytes, backfillMetadata.payloadSizeBytes);
   assert.equal(persistedBackfill.order.payload_hash, backfillMetadata.payloadHash);
   assert.deepEqual(persistedBackfill.receipt.raw_payload, backfillOrder);
+  assert.equal(persistedBackfill.receipt.payload_source, 'shopify_webhook');
+  assert.equal(persistedBackfill.receipt.payload_external_id, 'raw-backfill-order-1');
   assert.equal(persistedBackfill.receipt.payload_size_bytes, Buffer.byteLength(backfillReceiptJson, 'utf8'));
   assert.equal(persistedBackfill.receipt.payload_hash, createHash('sha256').update(backfillReceiptJson).digest('hex'));
   assert.deepEqual(persistedBackfill.lineItem, backfillOrder.line_items[0]);

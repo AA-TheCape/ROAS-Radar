@@ -156,11 +156,18 @@ async function loadMetaRawPersistence() {
   const [connectionResult, spendResult] = await Promise.all([
     pool.query<{
       raw_account_data: Record<string, unknown>;
+      raw_account_source: string;
+      raw_account_external_id: string | null;
       raw_account_payload_size_bytes: number;
       raw_account_payload_hash: string;
     }>(
       `
-        SELECT raw_account_data, raw_account_payload_size_bytes, raw_account_payload_hash
+        SELECT
+          raw_account_data,
+          raw_account_source,
+          raw_account_external_id,
+          raw_account_payload_size_bytes,
+          raw_account_payload_hash
         FROM meta_ads_connections
         WHERE id = 1
       `
@@ -168,11 +175,13 @@ async function loadMetaRawPersistence() {
     pool.query<{
       level: string;
       raw_payload: Record<string, unknown>;
+      payload_source: string;
+      payload_external_id: string | null;
       payload_size_bytes: number;
       payload_hash: string;
     }>(
       `
-        SELECT level, raw_payload, payload_size_bytes, payload_hash
+        SELECT level, raw_payload, payload_source, payload_external_id, payload_size_bytes, payload_hash
         FROM meta_ads_raw_spend_records
         WHERE connection_id = 1
         ORDER BY id ASC
@@ -190,11 +199,18 @@ async function loadGoogleRawPersistence() {
   const [connectionResult, spendResult] = await Promise.all([
     pool.query<{
       raw_customer_data: Record<string, unknown>;
+      raw_customer_source: string;
+      raw_customer_external_id: string | null;
       raw_customer_payload_size_bytes: number;
       raw_customer_payload_hash: string;
     }>(
       `
-        SELECT raw_customer_data, raw_customer_payload_size_bytes, raw_customer_payload_hash
+        SELECT
+          raw_customer_data,
+          raw_customer_source,
+          raw_customer_external_id,
+          raw_customer_payload_size_bytes,
+          raw_customer_payload_hash
         FROM google_ads_connections
         WHERE id = 1
       `
@@ -202,11 +218,13 @@ async function loadGoogleRawPersistence() {
     pool.query<{
       level: string;
       raw_payload: Record<string, unknown>;
+      payload_source: string;
+      payload_external_id: string | null;
       payload_size_bytes: number;
       payload_hash: string;
     }>(
       `
-        SELECT level, raw_payload, payload_size_bytes, payload_hash
+        SELECT level, raw_payload, payload_source, payload_external_id, payload_size_bytes, payload_hash
         FROM google_ads_raw_spend_records
         WHERE connection_id = 1
         ORDER BY id ASC
@@ -237,6 +255,9 @@ async function seedMetaSyncJob(): Promise<void> {
         account_name,
         account_currency,
         raw_account_data,
+        raw_account_source,
+        raw_account_received_at,
+        raw_account_external_id,
         raw_account_payload_size_bytes,
         raw_account_payload_hash
       )
@@ -251,6 +272,9 @@ async function seedMetaSyncJob(): Promise<void> {
         'Meta Account',
         'USD',
         $3::jsonb,
+        'meta_ads_account',
+        now(),
+        '123456789',
         $4,
         $5
       )
@@ -300,6 +324,9 @@ async function seedGoogleSyncJob(): Promise<void> {
         customer_descriptive_name,
         currency_code,
         raw_customer_data,
+        raw_customer_source,
+        raw_customer_received_at,
+        raw_customer_external_id,
         raw_customer_payload_size_bytes,
         raw_customer_payload_hash
       )
@@ -318,6 +345,9 @@ async function seedGoogleSyncJob(): Promise<void> {
         'Main Account',
         'USD',
         $6::jsonb,
+        'google_ads_customer',
+        now(),
+        '1234567890',
         $7,
         $8
       )
@@ -402,16 +432,22 @@ test('Meta Ads and Google Ads sync preserve raw payloads without trimming', asyn
     assert.equal(result.succeededJobs, 1);
     const persisted = await loadMetaRawPersistence();
     assert.deepEqual(persisted.connection?.raw_account_data, expectedMetaAccount);
+    assert.equal(persisted.connection?.raw_account_source, 'meta_ads_account');
+    assert.equal(persisted.connection?.raw_account_external_id, '123456789');
     assert.equal(persisted.spendRows.length, 4);
     const expectedAccountInsight = buildMetaInsightFixture('account');
     const expectedAdInsight = buildMetaInsightFixture('ad');
     const expectedAccountMetadata = __rawPayloadStorageTestUtils.buildRawPayloadStorageMetadata(expectedAccountInsight);
     const expectedAdMetadata = __rawPayloadStorageTestUtils.buildRawPayloadStorageMetadata(expectedAdInsight);
     assert.deepEqual(persisted.spendRows[0].raw_payload, expectedAccountInsight);
+    assert.equal(persisted.spendRows[0].payload_source, 'meta_ads_insights');
+    assert.equal(persisted.spendRows[0].payload_external_id, '123456789');
     assert.equal(persisted.spendRows[0].payload_size_bytes, expectedAccountMetadata.payloadSizeBytes);
     assert.equal(persisted.spendRows[0].payload_hash, expectedAccountMetadata.payloadHash);
     assert.equal(persisted.spendRows[3].level, 'ad');
     assert.deepEqual(persisted.spendRows[3].raw_payload, expectedAdInsight);
+    assert.equal(persisted.spendRows[3].payload_source, 'meta_ads_insights');
+    assert.equal(persisted.spendRows[3].payload_external_id, 'ad_1');
     assert.equal(persisted.spendRows[3].payload_size_bytes, expectedAdMetadata.payloadSizeBytes);
     assert.equal(persisted.spendRows[3].payload_hash, expectedAdMetadata.payloadHash);
 
@@ -477,15 +513,21 @@ test('Meta Ads and Google Ads sync preserve raw payloads without trimming', asyn
     assert.equal(googleResult.succeededJobs, 1);
     const googlePersisted = await loadGoogleRawPersistence();
     assert.deepEqual(googlePersisted.connection?.raw_customer_data, expectedGoogleCustomer);
+    assert.equal(googlePersisted.connection?.raw_customer_source, 'google_ads_customer');
+    assert.equal(googlePersisted.connection?.raw_customer_external_id, '1234567890');
     assert.equal(googlePersisted.spendRows.length, 2);
     const expectedGoogleCampaign = buildGoogleCampaignFixture();
     const expectedGoogleAd = buildGoogleAdFixture();
     const expectedGoogleCampaignMetadata = __rawPayloadStorageTestUtils.buildRawPayloadStorageMetadata(expectedGoogleCampaign);
     const expectedGoogleAdMetadata = __rawPayloadStorageTestUtils.buildRawPayloadStorageMetadata(expectedGoogleAd);
     assert.deepEqual(googlePersisted.spendRows[0].raw_payload, expectedGoogleCampaign);
+    assert.equal(googlePersisted.spendRows[0].payload_source, 'google_ads_api');
+    assert.equal(googlePersisted.spendRows[0].payload_external_id, 'cmp_1');
     assert.equal(googlePersisted.spendRows[0].payload_size_bytes, expectedGoogleCampaignMetadata.payloadSizeBytes);
     assert.equal(googlePersisted.spendRows[0].payload_hash, expectedGoogleCampaignMetadata.payloadHash);
     assert.deepEqual(googlePersisted.spendRows[1].raw_payload, expectedGoogleAd);
+    assert.equal(googlePersisted.spendRows[1].payload_source, 'google_ads_api');
+    assert.equal(googlePersisted.spendRows[1].payload_external_id, 'ad_1');
     assert.equal(googlePersisted.spendRows[1].payload_size_bytes, expectedGoogleAdMetadata.payloadSizeBytes);
     assert.equal(googlePersisted.spendRows[1].payload_hash, expectedGoogleAdMetadata.payloadHash);
   } finally {
