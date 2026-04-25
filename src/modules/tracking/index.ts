@@ -1270,6 +1270,10 @@ function parseTrackingRequestBody(body: unknown): Record<string, unknown> {
   return body as Record<string, unknown>;
 }
 
+function cloneTrackingRawPayload(payload: TrackingRawPayload): TrackingRawPayload {
+  return structuredClone(payload);
+}
+
 function buildSessionBootstrapRawPayload(req: Request): TrackingRawPayload {
   const rawPayload: TrackingRawPayload = {};
 
@@ -1460,7 +1464,7 @@ export function createTrackingRouter() {
       enforceAllowedOrigin(req);
       enforceRateLimit(req);
 
-      const rawPayload = parseTrackingRequestBody(req.body);
+      const rawPayload = cloneTrackingRawPayload(parseTrackingRequestBody(req.body));
       const parsed = parseAttributionCaptureRequest(rawPayload);
       const result = await ingestAttributionCapture(
         {
@@ -1516,7 +1520,7 @@ export function createTrackingRouter() {
       enforceAllowedOrigin(req);
       enforceRateLimit(req);
 
-      const rawPayload = parseTrackingRequestBody(req.body);
+      const rawPayload = cloneTrackingRawPayload(parseTrackingRequestBody(req.body));
       const input = parseTrackingEventRequest(rawPayload);
       const requestIp = resolveRequestIp(req);
       const browserResult = await ingestTrackingEvent(input, rawPayload, requestIp);
