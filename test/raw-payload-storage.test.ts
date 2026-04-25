@@ -26,6 +26,36 @@ test('summarizeRawPayloadIntegrity reports matched payload metadata when stored 
   );
 });
 
+test('buildRawPayloadStorageMetadata preserves nested unknown fields, arrays, nulls, and large payload sizes', () => {
+  const rawPayload = {
+    id: 'payload-3',
+    nested: {
+      unknown: {
+        keep: ['first', null, { deep: ['value', 42, false] }]
+      }
+    },
+    arrayField: [{ name: 'alpha' }, { name: 'beta', values: [1, 2, 3] }],
+    nullableField: null,
+    largeText: 'raw-segment-'.repeat(1024)
+  };
+
+  const metadata = __rawPayloadStorageTestUtils.buildRawPayloadStorageMetadata(rawPayload);
+
+  assert.deepEqual(metadata.rawPayload, rawPayload);
+  assert.ok(metadata.rawPayloadJson.includes('"nullableField":null'));
+  assert.ok(metadata.rawPayloadJson.includes('"largeText"'));
+  assert.ok(metadata.payloadSizeBytes > 12_000);
+  assert.match(metadata.payloadHash, /^[a-f0-9]{64}$/);
+  assert.equal(
+    __rawPayloadStorageTestUtils.summarizeRawPayloadIntegrity(metadata, {
+      storedPayloadSizeBytes: metadata.payloadSizeBytes,
+      storedPayloadHash: metadata.payloadHash,
+      persistedRawPayload: rawPayload
+    }).integrityStatus,
+    'matched'
+  );
+});
+
 test('logRawPayloadIntegrityMismatch emits a monitoring warning for mismatched stored payloads', (t) => {
   const writes: string[] = [];
 

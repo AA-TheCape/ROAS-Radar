@@ -146,6 +146,10 @@ async function fetchPersistedRawPayloads(shopifyOrderId: string) {
   };
 }
 
+function buildLargeText(prefix: string): string {
+  return `${prefix}-${'x'.repeat(12_000)}`;
+}
+
 function buildRawOrder(shopifyOrderId: string) {
   return {
     id: shopifyOrderId,
@@ -167,7 +171,25 @@ function buildRawOrder(shopifyOrderId: string) {
       email: 'Buyer@example.com',
       phone: null
     },
-    note_attributes: [{ name: 'channel', value: 'email' }],
+    note_attributes: [
+      { name: 'channel', value: 'email' },
+      { name: 'nullable-debug', value: null },
+      { name: 'oversized-debug', value: buildLargeText(`note-${shopifyOrderId}`) }
+    ],
+    attributes: [
+      { name: 'raw-array', value: 'present' },
+      { name: 'feature-flag', value: true }
+    ],
+    landing_site: `https://example.com/products/widget?utm_campaign=Spring Launch ${shopifyOrderId}`,
+    referring_site: null,
+    unknown_top_level: {
+      nested: {
+        keep: true,
+        nullValue: null,
+        tags: ['alpha', 'beta', { variant: 'gamma' }]
+      },
+      notes: [buildLargeText(`top-${shopifyOrderId}`)]
+    },
     line_items: [
       {
         id: `line-${shopifyOrderId}`,
@@ -189,13 +211,21 @@ function buildRawOrder(shopifyOrderId: string) {
           { name: '_bundle', value: 'starter-kit' },
           { name: 'gift_wrap', value: 'yes' }
         ],
+        extra_discounts: [null, { code: 'SPRING-LAUNCH', amount: '2.50' }],
         tax_lines: [
           {
             price: '1.50',
             rate: 0.075,
             title: 'State Tax'
           }
-        ]
+        ],
+        custom_metadata: {
+          warehouse: {
+            bin: 'A-12',
+            auditTrail: [1, 2, 3]
+          },
+          largeText: buildLargeText(`line-${shopifyOrderId}`)
+        }
       }
     ]
   };
@@ -213,51 +243,88 @@ test.after(async () => {
   await pool.end();
 });
 
-test('webhook order ingestion preserves the full raw Shopify order and raw line item payloads', async () => {
-  const rawOrder = buildRawOrder('raw-webhook-order-1');
+test('Shopify webhook and backfill ingestion preserve raw orders without trimming', async () => {
+  const webhookOrder = buildRawOrder('raw-webhook-order-1');
 
-  await persistOrderViaIngress('orders/create', rawOrder);
+  await persistOrderViaIngress('orders/create', webhookOrder);
 
-  const persisted = await fetchPersistedRawPayloads('raw-webhook-order-1');
-  const rawOrderMetadata = __rawPayloadStorageTestUtils.buildRawPayloadStorageMetadata(rawOrder);
-  const rawReceiptJson = JSON.stringify(rawOrder);
+  const persistedWebhook = await fetchPersistedRawPayloads('raw-webhook-order-1');
+  const webhookMetadata = __rawPayloadStorageTestUtils.buildRawPayloadStorageMetadata(webhookOrder);
+  const webhookReceiptJson = JSON.stringify(webhookOrder);
 
-  assert.deepEqual(persisted.order.raw_payload, rawOrder);
-  assert.equal(persisted.order.payload_size_bytes, rawOrderMetadata.payloadSizeBytes);
-  assert.equal(persisted.order.payload_hash, rawOrderMetadata.payloadHash);
-  assert.deepEqual(persisted.receipt.raw_payload, rawOrder);
-  assert.equal(persisted.receipt.payload_size_bytes, Buffer.byteLength(rawReceiptJson, 'utf8'));
-  assert.equal(persisted.receipt.payload_hash, createHash('sha256').update(rawReceiptJson).digest('hex'));
-  assert.deepEqual(persisted.lineItem, rawOrder.line_items[0]);
-  assert.equal(persisted.lineItem.admin_graphql_api_id, 'gid://shopify/LineItem/raw-webhook-order-1');
-  assert.deepEqual(persisted.lineItem.properties, [
+  assert.deepEqual(persistedWebhook.order.raw_payload, webhookOrder);
+  assert.equal(persistedWebhook.order.payload_size_bytes, webhookMetadata.payloadSizeBytes);
+  assert.equal(persistedWebhook.order.payload_hash, webhookMetadata.payloadHash);
+  assert.deepEqual(persistedWebhook.receipt.raw_payload, webhookOrder);
+  assert.equal(persistedWebhook.receipt.payload_size_bytes, Buffer.byteLength(webhookReceiptJson, 'utf8'));
+  assert.equal(persistedWebhook.receipt.payload_hash, createHash('sha256').update(webhookReceiptJson).digest('hex'));
+  assert.deepEqual(persistedWebhook.lineItem, webhookOrder.line_items[0]);
+  assert.equal(persistedWebhook.lineItem.admin_graphql_api_id, 'gid://shopify/LineItem/raw-webhook-order-1');
+  assert.deepEqual(persistedWebhook.lineItem.properties, [
     { name: '_bundle', value: 'starter-kit' },
     { name: 'gift_wrap', value: 'yes' }
   ]);
-});
+  assert.equal(
+    (persistedWebhook.order.raw_payload as { unknown_top_level: { nested: { nullValue: null } } }).unknown_top_level.nested.nullValue,
+    null
+  );
+  assert.equal(
+    (
+      persistedWebhook.order.raw_payload as {
+        note_attributes: Array<{ name: string; value: string | null }>;
+      }
+    ).note_attributes[2]?.value,
+    webhookOrder.note_attributes[2]?.value
+  );
+  assert.deepEqual(
+    (
+      persistedWebhook.lineItem as {
+        extra_discounts: Array<unknown>;
+      }
+    ).extra_discounts,
+    webhookOrder.line_items[0].extra_discounts
+  );
 
-test('backfill order ingestion preserves line item fields that are not modeled in normalized columns', async () => {
-  const rawOrder = buildRawOrder('raw-backfill-order-1');
+  const { resetE2EDatabase } = await getModules();
+  await resetE2EDatabase();
 
-  await persistOrderViaIngress('orders/backfill', rawOrder);
+  const backfillOrder = buildRawOrder('raw-backfill-order-1');
 
-  const persisted = await fetchPersistedRawPayloads('raw-backfill-order-1');
-  const rawOrderMetadata = __rawPayloadStorageTestUtils.buildRawPayloadStorageMetadata(rawOrder);
-  const rawReceiptJson = JSON.stringify(rawOrder);
+  await persistOrderViaIngress('orders/backfill', backfillOrder);
 
-  assert.deepEqual(persisted.order.raw_payload, rawOrder);
-  assert.equal(persisted.order.payload_size_bytes, rawOrderMetadata.payloadSizeBytes);
-  assert.equal(persisted.order.payload_hash, rawOrderMetadata.payloadHash);
-  assert.deepEqual(persisted.receipt.raw_payload, rawOrder);
-  assert.equal(persisted.receipt.payload_size_bytes, Buffer.byteLength(rawReceiptJson, 'utf8'));
-  assert.equal(persisted.receipt.payload_hash, createHash('sha256').update(rawReceiptJson).digest('hex'));
-  assert.deepEqual(persisted.lineItem, rawOrder.line_items[0]);
-  assert.equal(persisted.lineItem.grams, 450);
-  assert.deepEqual(persisted.lineItem.tax_lines, [
+  const persistedBackfill = await fetchPersistedRawPayloads('raw-backfill-order-1');
+  const backfillMetadata = __rawPayloadStorageTestUtils.buildRawPayloadStorageMetadata(backfillOrder);
+  const backfillReceiptJson = JSON.stringify(backfillOrder);
+
+  assert.deepEqual(persistedBackfill.order.raw_payload, backfillOrder);
+  assert.equal(persistedBackfill.order.payload_size_bytes, backfillMetadata.payloadSizeBytes);
+  assert.equal(persistedBackfill.order.payload_hash, backfillMetadata.payloadHash);
+  assert.deepEqual(persistedBackfill.receipt.raw_payload, backfillOrder);
+  assert.equal(persistedBackfill.receipt.payload_size_bytes, Buffer.byteLength(backfillReceiptJson, 'utf8'));
+  assert.equal(persistedBackfill.receipt.payload_hash, createHash('sha256').update(backfillReceiptJson).digest('hex'));
+  assert.deepEqual(persistedBackfill.lineItem, backfillOrder.line_items[0]);
+  assert.equal(persistedBackfill.lineItem.grams, 450);
+  assert.deepEqual(persistedBackfill.lineItem.tax_lines, [
     {
       price: '1.50',
       rate: 0.075,
       title: 'State Tax'
     }
   ]);
+  assert.deepEqual(
+    (
+      persistedBackfill.lineItem as {
+        custom_metadata: { warehouse: { auditTrail: number[] } };
+      }
+    ).custom_metadata.warehouse.auditTrail,
+    [1, 2, 3]
+  );
+  assert.equal(
+    (
+      persistedBackfill.order.raw_payload as {
+        unknown_top_level: { notes: string[] };
+      }
+    ).unknown_top_level.notes[0],
+    backfillOrder.unknown_top_level.notes[0]
+  );
 });

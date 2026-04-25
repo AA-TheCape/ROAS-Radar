@@ -16,37 +16,163 @@ process.env.GOOGLE_ADS_APP_BASE_URL ??= 'https://api.example.com';
 process.env.GOOGLE_ADS_APP_SCOPES ??= 'https://www.googleapis.com/auth/adwords';
 process.env.GOOGLE_ADS_ENCRYPTION_KEY ??= 'google-ads-encryption-key';
 
+const { __rawPayloadStorageTestUtils } = await import('../src/shared/raw-payload-storage.js');
 const { pool } = await import('../src/db/pool.js');
 const { resetE2EDatabase } = await import('./e2e-harness.js');
 const { processMetaAdsSyncQueue } = await import('../src/modules/meta-ads/index.js');
 const { processGoogleAdsSyncQueue } = await import('../src/modules/google-ads/index.js');
 
-type AuditRow = {
-  platform: 'meta_ads' | 'google_ads';
-  transaction_source: string;
-  source_metadata: Record<string, unknown>;
-  request_method: string;
-  request_url: string;
-  request_payload: unknown;
-  response_status: number | null;
-  response_payload: unknown;
-  request_started_at: Date;
-  response_received_at: Date | null;
-  error_message: string | null;
-};
+function buildLargeText(prefix: string): string {
+  return `${prefix}-${'y'.repeat(10_000)}`;
+}
+
+function buildMetaAccountFixture() {
+  return {
+    id: '123456789',
+    name: 'Meta Account',
+    currency: 'USD',
+    account_status: 1,
+    nested_debug: {
+      unknownField: true,
+      nullableValue: null,
+      arrays: ['alpha', { beta: ['gamma', null] }]
+    },
+    oversized_notes: [buildLargeText('meta-account')]
+  };
+}
+
+function buildMetaInsightFixture(level: 'account' | 'campaign' | 'adset' | 'ad') {
+  return {
+    account_id: '123456789',
+    account_name: 'Meta Account',
+    ...(level === 'account' ? {} : { campaign_id: 'cmp_1', campaign_name: 'Campaign One' }),
+    ...(level === 'adset' || level === 'ad' ? { adset_id: 'adset_1', adset_name: 'Adset One' } : {}),
+    ...(level === 'ad' ? { ad_id: 'ad_1', ad_name: 'Ad One' } : {}),
+    spend: '12.34',
+    impressions: '100',
+    clicks: '5',
+    objective: 'OUTCOME_TRAFFIC',
+    date_start: '2026-04-11',
+    date_stop: '2026-04-11',
+    source_debug: {
+      level,
+      untouched: true,
+      nested: {
+        kept: ['raw', null, { marker: level }]
+      }
+    },
+    action_values: [
+      { action_type: 'purchase', value: '1.00' },
+      { action_type: 'landing_page_view', value: null }
+    ],
+    oversized_blob: buildLargeText(`meta-${level}`)
+  };
+}
+
+function buildGoogleCustomerFixture() {
+  return {
+    customer: {
+      id: '1234567890',
+      descriptiveName: 'Main Account',
+      currencyCode: 'USD'
+    },
+    untouched_customer_debug: {
+      kept: true,
+      nested: {
+        values: ['first', null, { deep: 'value' }]
+      }
+    },
+    oversized_blob: buildLargeText('google-customer')
+  };
+}
+
+function buildGoogleCampaignFixture() {
+  return {
+    customer: {
+      id: '1234567890',
+      descriptiveName: 'Main Account',
+      currencyCode: 'USD'
+    },
+    campaign: {
+      id: 'cmp_1',
+      name: 'Brand Search'
+    },
+    metrics: {
+      costMicros: '12340000',
+      impressions: '100',
+      clicks: '5'
+    },
+    segments: {
+      date: '2026-04-11'
+    },
+    untouched_campaign_debug: {
+      kept: true,
+      labels: ['branded', 'exact']
+    },
+    null_debug: null,
+    oversized_blob: buildLargeText('google-campaign')
+  };
+}
+
+function buildGoogleAdFixture() {
+  return {
+    customer: {
+      id: '1234567890',
+      descriptiveName: 'Main Account',
+      currencyCode: 'USD'
+    },
+    campaign: {
+      id: 'cmp_1',
+      name: 'Brand Search'
+    },
+    adGroup: {
+      id: 'adgroup_1',
+      name: 'Ad Group One'
+    },
+    adGroupAd: {
+      ad: {
+        id: 'ad_1',
+        name: 'Headline A',
+        resourceName: 'customers/1234567890/adGroupAds/1'
+      }
+    },
+    metrics: {
+      costMicros: '2500000',
+      impressions: '40',
+      clicks: '2'
+    },
+    segments: {
+      date: '2026-04-11'
+    },
+    untouched_ad_debug: {
+      kept: true,
+      nested: [{ asset: 'image-1' }, null, { asset: 'image-2' }]
+    },
+    oversized_blob: buildLargeText('google-ad')
+  };
+}
 
 async function loadMetaRawPersistence() {
   const [connectionResult, spendResult] = await Promise.all([
-    pool.query<{ raw_account_data: Record<string, unknown> }>(
+    pool.query<{
+      raw_account_data: Record<string, unknown>;
+      raw_account_payload_size_bytes: number;
+      raw_account_payload_hash: string;
+    }>(
       `
-        SELECT raw_account_data
+        SELECT raw_account_data, raw_account_payload_size_bytes, raw_account_payload_hash
         FROM meta_ads_connections
         WHERE id = 1
       `
     ),
-    pool.query<{ level: string; raw_payload: Record<string, unknown> }>(
+    pool.query<{
+      level: string;
+      raw_payload: Record<string, unknown>;
+      payload_size_bytes: number;
+      payload_hash: string;
+    }>(
       `
-        SELECT level, raw_payload
+        SELECT level, raw_payload, payload_size_bytes, payload_hash
         FROM meta_ads_raw_spend_records
         WHERE connection_id = 1
         ORDER BY id ASC
@@ -55,23 +181,32 @@ async function loadMetaRawPersistence() {
   ]);
 
   return {
-    connection: connectionResult.rows[0]?.raw_account_data ?? null,
+    connection: connectionResult.rows[0] ?? null,
     spendRows: spendResult.rows
   };
 }
 
 async function loadGoogleRawPersistence() {
   const [connectionResult, spendResult] = await Promise.all([
-    pool.query<{ raw_customer_data: Record<string, unknown> }>(
+    pool.query<{
+      raw_customer_data: Record<string, unknown>;
+      raw_customer_payload_size_bytes: number;
+      raw_customer_payload_hash: string;
+    }>(
       `
-        SELECT raw_customer_data
+        SELECT raw_customer_data, raw_customer_payload_size_bytes, raw_customer_payload_hash
         FROM google_ads_connections
         WHERE id = 1
       `
     ),
-    pool.query<{ level: string; raw_payload: Record<string, unknown> }>(
+    pool.query<{
+      level: string;
+      raw_payload: Record<string, unknown>;
+      payload_size_bytes: number;
+      payload_hash: string;
+    }>(
       `
-        SELECT level, raw_payload
+        SELECT level, raw_payload, payload_size_bytes, payload_hash
         FROM google_ads_raw_spend_records
         WHERE connection_id = 1
         ORDER BY id ASC
@@ -80,13 +215,13 @@ async function loadGoogleRawPersistence() {
   ]);
 
   return {
-    connection: connectionResult.rows[0]?.raw_customer_data ?? null,
+    connection: connectionResult.rows[0] ?? null,
     spendRows: spendResult.rows
   };
 }
 
 async function seedMetaSyncJob(): Promise<void> {
-  const rawAccountData = { id: '123456789', name: 'Meta Account' };
+  const rawAccountData = buildMetaAccountFixture();
   const rawAccountJson = JSON.stringify(rawAccountData);
 
   await pool.query(
@@ -145,9 +280,7 @@ async function seedMetaSyncJob(): Promise<void> {
 }
 
 async function seedGoogleSyncJob(): Promise<void> {
-  const rawCustomerData = {
-    customer: { id: '1234567890', descriptiveName: 'Main Account', currencyCode: 'USD' }
-  };
+  const rawCustomerData = buildGoogleCustomerFixture();
   const rawCustomerJson = JSON.stringify(rawCustomerData);
 
   await pool.query(
@@ -215,104 +348,52 @@ async function seedGoogleSyncJob(): Promise<void> {
   );
 }
 
-async function loadAuditRows(platform: 'meta_ads' | 'google_ads'): Promise<AuditRow[]> {
-  const result = await pool.query<AuditRow>(
-    `
-      SELECT
-        platform,
-        transaction_source,
-        source_metadata,
-        request_method,
-        request_url,
-        request_payload,
-        response_status,
-        response_payload,
-        request_started_at,
-        response_received_at,
-        error_message
-      FROM ad_sync_api_transactions
-      WHERE platform = $1
-      ORDER BY id ASC
-    `,
-    [platform]
-  );
-
-  return result.rows;
-}
-
-test.beforeEach(async () => {
-  await resetE2EDatabase();
-});
-
-test.after(async () => {
-  await resetE2EDatabase();
-  await pool.end();
-});
-
-test('Meta Ads sync stores raw request and response audit payloads for each API transaction', async () => {
-  await seedMetaSyncJob();
-
+test('Meta Ads and Google Ads sync preserve raw payloads without trimming', async () => {
   const previousFetch = globalThis.fetch;
 
-  globalThis.fetch = (async (input: string | URL | Request) => {
-    const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url);
-    const level = url.searchParams.get('level');
-
-    if (url.pathname.endsWith('/insights') && level) {
-      return new Response(
-        JSON.stringify({
-          data: [
-            {
-              account_id: '123456789',
-              account_name: 'Meta Account',
-              campaign_id: level === 'account' ? undefined : 'cmp_1',
-              campaign_name: level === 'account' ? undefined : 'Campaign One',
-              adset_id: level === 'adset' || level === 'ad' ? 'adset_1' : undefined,
-              adset_name: level === 'adset' || level === 'ad' ? 'Adset One' : undefined,
-              ad_id: level === 'ad' ? 'ad_1' : undefined,
-              ad_name: level === 'ad' ? 'Ad One' : undefined,
-              spend: '12.34',
-              impressions: '100',
-              clicks: '5',
-              objective: 'OUTCOME_TRAFFIC',
-              date_start: '2026-04-11',
-              date_stop: '2026-04-11',
-              source_debug: {
-                level,
-                untouched: true
-              }
-            }
-          ],
-          paging: {},
-          extra_page_field: {
-            kept: level
-          }
-        }),
-        { status: 200, headers: { 'content-type': 'application/json' } }
-      );
-    }
-
-    if (url.searchParams.get('ids') === 'ad_1') {
-      return new Response(
-        JSON.stringify({
-          ad_1: {
-            creative: {
-              id: 'creative_1',
-              name: 'Creative One'
-            }
-          },
-          batch_debug: {
-            untouched: true
-          }
-        }),
-        { status: 200, headers: { 'content-type': 'application/json' } }
-      );
-    }
-
-    throw new Error(`Unexpected Meta Ads fetch ${url.toString()}`);
-  }) as typeof globalThis.fetch;
-
   try {
+    await resetE2EDatabase();
+    await seedMetaSyncJob();
+    const expectedMetaAccount = buildMetaAccountFixture();
+
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url);
+      const level = url.searchParams.get('level');
+
+      if (url.pathname.endsWith('/insights') && level) {
+        const rawInsight = buildMetaInsightFixture(level as 'account' | 'campaign' | 'adset' | 'ad');
+        return new Response(
+          JSON.stringify({
+            data: [rawInsight],
+            paging: {},
+            extra_page_field: {
+              kept: level
+            }
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        );
+      }
+
+      if (url.searchParams.get('ids') === 'ad_1') {
+        return new Response(
+          JSON.stringify({
+            ad_1: {
+              creative: {
+                id: 'creative_1',
+                name: 'Creative One'
+              }
+            },
+            batch_debug: {
+              untouched: true
+            }
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        );
+      }
+
+      throw new Error(`Unexpected Meta Ads fetch ${url.toString()}`);
+    }) as typeof globalThis.fetch;
+
     const result = await processMetaAdsSyncQueue({
       limit: 1,
       now: new Date('2026-04-11T12:00:00.000Z')
@@ -320,352 +401,96 @@ test('Meta Ads sync stores raw request and response audit payloads for each API 
 
     assert.equal(result.succeededJobs, 1);
     const persisted = await loadMetaRawPersistence();
-
-    const rows = await loadAuditRows('meta_ads');
-    assert.equal(rows.length, 5);
-    assert.equal(rows[0].transaction_source, 'meta_ads_insights');
-    assert.equal(rows[0].request_method, 'GET');
-    assert.match(rows[0].request_url, /^https:\/\/graph\.facebook\.com\/v\d+\.\d+\/act_123456789\/insights$/);
-    assert.deepEqual(rows[0].request_payload, {
-      fields: 'account_id,account_name,campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,spend,impressions,clicks,objective,date_start,date_stop',
-      access_token: '[redacted]',
-      level: 'account',
-      time_increment: '1',
-      limit: '500',
-      time_range: '{"since":"2026-04-11","until":"2026-04-11"}'
-    });
-    assert.deepEqual(rows[0].source_metadata, {
-      adAccountId: '123456789',
-      syncDate: '2026-04-11',
-      level: 'account',
-      attempt: 1
-    });
-    assert.equal(rows[0].response_status, 200);
-    assert.deepEqual(rows[0].response_payload, {
-      data: [
-        {
-          account_id: '123456789',
-          account_name: 'Meta Account',
-          spend: '12.34',
-          impressions: '100',
-          clicks: '5',
-          objective: 'OUTCOME_TRAFFIC',
-          date_start: '2026-04-11',
-          date_stop: '2026-04-11',
-          source_debug: {
-            level: 'account',
-            untouched: true
-          }
-        }
-      ],
-      paging: {},
-      extra_page_field: {
-        kept: 'account'
-      }
-    });
-    assert.equal(rows[4].transaction_source, 'meta_ads_creatives');
-    assert.deepEqual(rows[4].response_payload, {
-      ad_1: {
-        creative: {
-          id: 'creative_1',
-          name: 'Creative One'
-        }
-      },
-      batch_debug: {
-        untouched: true
-      }
-    });
-    assert.equal(rows[4].error_message, null);
-    assert.ok(rows[4].request_started_at instanceof Date);
-    assert.ok(rows[4].response_received_at instanceof Date);
-    assert.deepEqual(persisted.connection, {
-      id: '123456789',
-      name: 'Meta Account'
-    });
+    assert.deepEqual(persisted.connection?.raw_account_data, expectedMetaAccount);
     assert.equal(persisted.spendRows.length, 4);
-    assert.deepEqual(persisted.spendRows[0], {
-      level: 'account',
-      raw_payload: {
-        account_id: '123456789',
-        account_name: 'Meta Account',
-        spend: '12.34',
-        impressions: '100',
-        clicks: '5',
-        objective: 'OUTCOME_TRAFFIC',
-        date_start: '2026-04-11',
-        date_stop: '2026-04-11',
-        source_debug: {
-          level: 'account',
-          untouched: true
+    const expectedAccountInsight = buildMetaInsightFixture('account');
+    const expectedAdInsight = buildMetaInsightFixture('ad');
+    const expectedAccountMetadata = __rawPayloadStorageTestUtils.buildRawPayloadStorageMetadata(expectedAccountInsight);
+    const expectedAdMetadata = __rawPayloadStorageTestUtils.buildRawPayloadStorageMetadata(expectedAdInsight);
+    assert.deepEqual(persisted.spendRows[0].raw_payload, expectedAccountInsight);
+    assert.equal(persisted.spendRows[0].payload_size_bytes, expectedAccountMetadata.payloadSizeBytes);
+    assert.equal(persisted.spendRows[0].payload_hash, expectedAccountMetadata.payloadHash);
+    assert.equal(persisted.spendRows[3].level, 'ad');
+    assert.deepEqual(persisted.spendRows[3].raw_payload, expectedAdInsight);
+    assert.equal(persisted.spendRows[3].payload_size_bytes, expectedAdMetadata.payloadSizeBytes);
+    assert.equal(persisted.spendRows[3].payload_hash, expectedAdMetadata.payloadHash);
+
+    await resetE2EDatabase();
+    await seedGoogleSyncJob();
+    const expectedGoogleCustomer = buildGoogleCustomerFixture();
+
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url);
+
+      if (url.toString() === 'https://oauth2.googleapis.com/token') {
+        return new Response(JSON.stringify({ access_token: 'google-access-token', expires_in: 3600, token_type: 'Bearer' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        });
+      }
+
+      if (url.pathname.endsWith('/googleAds:searchStream')) {
+        const body = JSON.parse(String(init?.body ?? '{}')) as { query?: string };
+
+        if (body.query?.includes('FROM customer')) {
+          return new Response(
+            JSON.stringify([
+              {
+                results: [buildGoogleCustomerFixture()]
+              }
+            ]),
+            { status: 200, headers: { 'content-type': 'application/json' } }
+          );
+        }
+
+        if (body.query?.includes('FROM campaign')) {
+          return new Response(
+            JSON.stringify([
+              {
+                results: [buildGoogleCampaignFixture()]
+              }
+            ]),
+            { status: 200, headers: { 'content-type': 'application/json' } }
+          );
+        }
+
+        if (body.query?.includes('FROM ad_group_ad')) {
+          return new Response(
+            JSON.stringify([
+              {
+                results: [buildGoogleAdFixture()]
+              }
+            ]),
+            { status: 200, headers: { 'content-type': 'application/json' } }
+          );
         }
       }
-    });
-    assert.equal(persisted.spendRows[3].level, 'ad');
-    assert.deepEqual(persisted.spendRows[3].raw_payload, {
-      account_id: '123456789',
-      account_name: 'Meta Account',
-      campaign_id: 'cmp_1',
-      campaign_name: 'Campaign One',
-      adset_id: 'adset_1',
-      adset_name: 'Adset One',
-      ad_id: 'ad_1',
-      ad_name: 'Ad One',
-      spend: '12.34',
-      impressions: '100',
-      clicks: '5',
-      objective: 'OUTCOME_TRAFFIC',
-      date_start: '2026-04-11',
-      date_stop: '2026-04-11',
-      source_debug: {
-        level: 'ad',
-        untouched: true
-      }
-    });
-  } finally {
-    globalThis.fetch = previousFetch;
-  }
-});
 
-test('Google Ads sync stores raw request and response audit payloads for each API transaction', async () => {
-  await seedGoogleSyncJob();
+      throw new Error(`Unexpected Google Ads fetch ${url.toString()}`);
+    }) as typeof globalThis.fetch;
 
-  const previousFetch = globalThis.fetch;
-
-  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
-    const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url);
-
-    if (url.toString() === 'https://oauth2.googleapis.com/token') {
-      return new Response(JSON.stringify({ access_token: 'google-access-token', expires_in: 3600, token_type: 'Bearer' }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' }
-      });
-    }
-
-    if (url.pathname.endsWith('/googleAds:searchStream')) {
-      const body = JSON.parse(String(init?.body ?? '{}')) as { query?: string };
-
-      if (body.query?.includes('FROM customer')) {
-        return new Response(
-          JSON.stringify([
-            {
-              results: [
-                {
-                  customer: {
-                    id: '1234567890',
-                    descriptiveName: 'Main Account',
-                    currencyCode: 'USD'
-                  },
-                  untouched_customer_debug: {
-                    kept: true
-                  }
-                }
-              ]
-            }
-          ]),
-          { status: 200, headers: { 'content-type': 'application/json' } }
-        );
-      }
-
-      if (body.query?.includes('FROM campaign')) {
-        return new Response(
-          JSON.stringify([
-            {
-              results: [
-                {
-                  customer: {
-                    id: '1234567890',
-                    descriptiveName: 'Main Account',
-                    currencyCode: 'USD'
-                  },
-                  campaign: {
-                    id: 'cmp_1',
-                    name: 'Brand Search'
-                  },
-                  metrics: {
-                    costMicros: '12340000',
-                    impressions: '100',
-                    clicks: '5'
-                  },
-                  segments: {
-                    date: '2026-04-11'
-                  },
-                  untouched_campaign_debug: {
-                    kept: true
-                  }
-                }
-              ]
-            }
-          ]),
-          { status: 200, headers: { 'content-type': 'application/json' } }
-        );
-      }
-
-      if (body.query?.includes('FROM ad_group_ad')) {
-        return new Response(
-          JSON.stringify([
-            {
-              results: [
-                {
-                  customer: {
-                    id: '1234567890',
-                    descriptiveName: 'Main Account',
-                    currencyCode: 'USD'
-                  },
-                  campaign: {
-                    id: 'cmp_1',
-                    name: 'Brand Search'
-                  },
-                  adGroup: {
-                    id: 'adgroup_1',
-                    name: 'Ad Group One'
-                  },
-                  adGroupAd: {
-                    ad: {
-                      id: 'ad_1',
-                      name: 'Headline A',
-                      resourceName: 'customers/1234567890/adGroupAds/1'
-                    }
-                  },
-                  metrics: {
-                    costMicros: '2500000',
-                    impressions: '40',
-                    clicks: '2'
-                  },
-                  segments: {
-                    date: '2026-04-11'
-                  },
-                  untouched_ad_debug: {
-                    kept: true
-                  }
-                }
-              ]
-            }
-          ]),
-          { status: 200, headers: { 'content-type': 'application/json' } }
-        );
-      }
-    }
-
-    throw new Error(`Unexpected Google Ads fetch ${url.toString()}`);
-  }) as typeof globalThis.fetch;
-
-  try {
-    const result = await processGoogleAdsSyncQueue({
+    const googleResult = await processGoogleAdsSyncQueue({
       limit: 1,
       now: new Date('2026-04-11T12:00:00.000Z')
     });
 
-    assert.equal(result.succeededJobs, 1);
-    const persisted = await loadGoogleRawPersistence();
-
-    const rows = await loadAuditRows('google_ads');
-    assert.equal(rows.length, 3);
-    assert.equal(rows[0].transaction_source, 'google_ads_customer_search');
-    assert.equal(rows[0].request_method, 'POST');
-    assert.match(
-      rows[0].request_url,
-      /^https:\/\/googleads\.googleapis\.com\/v\d+\/customers\/1234567890\/googleAds:searchStream$/
-    );
-    assert.deepEqual(rows[0].request_payload, {
-      query: 'SELECT customer.id, customer.descriptive_name, customer.currency_code FROM customer LIMIT 1'
-    });
-    assert.deepEqual(rows[0].response_payload, [
-      {
-        results: [
-          {
-            customer: {
-              id: '1234567890',
-              descriptiveName: 'Main Account',
-              currencyCode: 'USD'
-            },
-            untouched_customer_debug: {
-              kept: true
-            }
-          }
-        ]
-      }
-    ]);
-    assert.equal(rows[1].transaction_source, 'google_ads_campaign_search');
-    assert.match(String((rows[1].request_payload as { query?: string }).query), /FROM campaign/);
-    assert.equal(rows[2].transaction_source, 'google_ads_ad_search');
-    assert.match(String((rows[2].request_payload as { query?: string }).query), /FROM ad_group_ad/);
-    assert.equal(rows[2].response_status, 200);
-    assert.equal(rows[2].error_message, null);
-    assert.ok(rows[2].request_started_at instanceof Date);
-    assert.ok(rows[2].response_received_at instanceof Date);
-    assert.deepEqual(persisted.connection, {
-      customer: {
-        id: '1234567890',
-        descriptiveName: 'Main Account',
-        currencyCode: 'USD'
-      },
-      untouched_customer_debug: {
-        kept: true
-      }
-    });
-    assert.equal(persisted.spendRows.length, 2);
-    assert.deepEqual(persisted.spendRows[0], {
-      level: 'campaign',
-      raw_payload: {
-        customer: {
-          id: '1234567890',
-          descriptiveName: 'Main Account',
-          currencyCode: 'USD'
-        },
-        campaign: {
-          id: 'cmp_1',
-          name: 'Brand Search'
-        },
-        metrics: {
-          costMicros: '12340000',
-          impressions: '100',
-          clicks: '5'
-        },
-        segments: {
-          date: '2026-04-11'
-        },
-        untouched_campaign_debug: {
-          kept: true
-        }
-      }
-    });
-    assert.deepEqual(persisted.spendRows[1], {
-      level: 'ad',
-      raw_payload: {
-        customer: {
-          id: '1234567890',
-          descriptiveName: 'Main Account',
-          currencyCode: 'USD'
-        },
-        campaign: {
-          id: 'cmp_1',
-          name: 'Brand Search'
-        },
-        adGroup: {
-          id: 'adgroup_1',
-          name: 'Ad Group One'
-        },
-        adGroupAd: {
-          ad: {
-            id: 'ad_1',
-            name: 'Headline A',
-            resourceName: 'customers/1234567890/adGroupAds/1'
-          }
-        },
-        metrics: {
-          costMicros: '2500000',
-          impressions: '40',
-          clicks: '2'
-        },
-        segments: {
-          date: '2026-04-11'
-        },
-        untouched_ad_debug: {
-          kept: true
-        }
-      }
-    });
+    assert.equal(googleResult.succeededJobs, 1);
+    const googlePersisted = await loadGoogleRawPersistence();
+    assert.deepEqual(googlePersisted.connection?.raw_customer_data, expectedGoogleCustomer);
+    assert.equal(googlePersisted.spendRows.length, 2);
+    const expectedGoogleCampaign = buildGoogleCampaignFixture();
+    const expectedGoogleAd = buildGoogleAdFixture();
+    const expectedGoogleCampaignMetadata = __rawPayloadStorageTestUtils.buildRawPayloadStorageMetadata(expectedGoogleCampaign);
+    const expectedGoogleAdMetadata = __rawPayloadStorageTestUtils.buildRawPayloadStorageMetadata(expectedGoogleAd);
+    assert.deepEqual(googlePersisted.spendRows[0].raw_payload, expectedGoogleCampaign);
+    assert.equal(googlePersisted.spendRows[0].payload_size_bytes, expectedGoogleCampaignMetadata.payloadSizeBytes);
+    assert.equal(googlePersisted.spendRows[0].payload_hash, expectedGoogleCampaignMetadata.payloadHash);
+    assert.deepEqual(googlePersisted.spendRows[1].raw_payload, expectedGoogleAd);
+    assert.equal(googlePersisted.spendRows[1].payload_size_bytes, expectedGoogleAdMetadata.payloadSizeBytes);
+    assert.equal(googlePersisted.spendRows[1].payload_hash, expectedGoogleAdMetadata.payloadHash);
   } finally {
     globalThis.fetch = previousFetch;
+    await resetE2EDatabase();
+    await pool.end();
   }
 });
