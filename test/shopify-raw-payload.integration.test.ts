@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
 
 process.env.DATABASE_URL ??= 'postgres://postgres:postgres@127.0.0.1:5432/roas_radar';
+
+const { __rawPayloadStorageTestUtils } = await import('../src/shared/raw-payload-storage.js');
 
 let cachedModules:
   | {
@@ -96,14 +99,30 @@ async function persistOrderViaIngress(topic: 'orders/create' | 'orders/backfill'
 async function fetchPersistedRawPayloads(shopifyOrderId: string) {
   const { pool } = await getModules();
 
-  const [orderResult, lineItemResult] = await Promise.all([
-    pool.query<{ raw_payload: Record<string, unknown> }>(
+  const [orderResult, receiptResult, lineItemResult] = await Promise.all([
+    pool.query<{
+      raw_payload: Record<string, unknown>;
+      payload_size_bytes: number;
+      payload_hash: string;
+    }>(
       `
-        SELECT raw_payload
+        SELECT raw_payload, payload_size_bytes, payload_hash
         FROM shopify_orders
         WHERE shopify_order_id = $1
       `,
       [shopifyOrderId]
+    ),
+    pool.query<{
+      raw_payload: Record<string, unknown>;
+      payload_size_bytes: number;
+      payload_hash: string;
+    }>(
+      `
+        SELECT raw_payload, payload_size_bytes, payload_hash
+        FROM shopify_webhook_receipts
+        ORDER BY id DESC
+        LIMIT 1
+      `
     ),
     pool.query<{ raw_payload: Record<string, unknown> }>(
       `
@@ -117,10 +136,12 @@ async function fetchPersistedRawPayloads(shopifyOrderId: string) {
   ]);
 
   assert.equal(orderResult.rowCount, 1);
+  assert.equal(receiptResult.rowCount, 1);
   assert.equal(lineItemResult.rowCount, 1);
 
   return {
-    order: orderResult.rows[0].raw_payload,
+    order: orderResult.rows[0],
+    receipt: receiptResult.rows[0],
     lineItem: lineItemResult.rows[0].raw_payload
   };
 }
@@ -198,8 +219,15 @@ test('webhook order ingestion preserves the full raw Shopify order and raw line 
   await persistOrderViaIngress('orders/create', rawOrder);
 
   const persisted = await fetchPersistedRawPayloads('raw-webhook-order-1');
+  const rawOrderMetadata = __rawPayloadStorageTestUtils.buildRawPayloadStorageMetadata(rawOrder);
+  const rawReceiptJson = JSON.stringify(rawOrder);
 
-  assert.deepEqual(persisted.order, rawOrder);
+  assert.deepEqual(persisted.order.raw_payload, rawOrder);
+  assert.equal(persisted.order.payload_size_bytes, rawOrderMetadata.payloadSizeBytes);
+  assert.equal(persisted.order.payload_hash, rawOrderMetadata.payloadHash);
+  assert.deepEqual(persisted.receipt.raw_payload, rawOrder);
+  assert.equal(persisted.receipt.payload_size_bytes, Buffer.byteLength(rawReceiptJson, 'utf8'));
+  assert.equal(persisted.receipt.payload_hash, createHash('sha256').update(rawReceiptJson).digest('hex'));
   assert.deepEqual(persisted.lineItem, rawOrder.line_items[0]);
   assert.equal(persisted.lineItem.admin_graphql_api_id, 'gid://shopify/LineItem/raw-webhook-order-1');
   assert.deepEqual(persisted.lineItem.properties, [
@@ -214,8 +242,15 @@ test('backfill order ingestion preserves line item fields that are not modeled i
   await persistOrderViaIngress('orders/backfill', rawOrder);
 
   const persisted = await fetchPersistedRawPayloads('raw-backfill-order-1');
+  const rawOrderMetadata = __rawPayloadStorageTestUtils.buildRawPayloadStorageMetadata(rawOrder);
+  const rawReceiptJson = JSON.stringify(rawOrder);
 
-  assert.deepEqual(persisted.order, rawOrder);
+  assert.deepEqual(persisted.order.raw_payload, rawOrder);
+  assert.equal(persisted.order.payload_size_bytes, rawOrderMetadata.payloadSizeBytes);
+  assert.equal(persisted.order.payload_hash, rawOrderMetadata.payloadHash);
+  assert.deepEqual(persisted.receipt.raw_payload, rawOrder);
+  assert.equal(persisted.receipt.payload_size_bytes, Buffer.byteLength(rawReceiptJson, 'utf8'));
+  assert.equal(persisted.receipt.payload_hash, createHash('sha256').update(rawReceiptJson).digest('hex'));
   assert.deepEqual(persisted.lineItem, rawOrder.line_items[0]);
   assert.equal(persisted.lineItem.grams, 450);
   assert.deepEqual(persisted.lineItem.tax_lines, [

@@ -5,6 +5,7 @@ import { ATTRIBUTION_SCHEMA_VERSION, MAX_ATTRIBUTION_URL_LENGTH, attributionCons
 import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
 import { logError, logInfo, logWarning, summarizeAttributionObservation, summarizeDualWriteConsistency } from '../../observability/index.js';
+import { buildRawPayloadStorageMetadata, logRawPayloadIntegrityMismatch } from '../../shared/raw-payload-storage.js';
 import { enqueueAttributionForTrackingTouchpoint } from '../attribution/index.js';
 import { buildCanonicalTouchpointDimensions } from '../marketing-dimensions/index.js';
 import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
@@ -172,14 +173,6 @@ function hashIp(value) {
         return null;
     }
     return createHash('sha256').update(normalized).digest('hex');
-}
-function buildRawPayloadStorageMetadata(rawPayload) {
-    const rawPayloadJson = JSON.stringify(rawPayload);
-    return {
-        rawPayloadJson,
-        payloadSizeBytes: Buffer.byteLength(rawPayloadJson, 'utf8'),
-        payloadHash: createHash('sha256').update(rawPayloadJson).digest('hex')
-    };
 }
 function hashTrackingFingerprint(input) {
     return createHash('sha256')
@@ -492,9 +485,10 @@ async function upsertSessionAttributionIdentity(client, capture) {
 }
 async function insertTrackingEventForCapture(client, input) {
     const eventId = randomUUID();
-    const { rawPayloadJson, payloadSizeBytes, payloadHash } = buildRawPayloadStorageMetadata(input.rawPayload);
+    const rawPayloadMetadata = buildRawPayloadStorageMetadata(input.rawPayload);
+    const { rawPayloadJson, payloadSizeBytes, payloadHash } = rawPayloadMetadata;
     try {
-        await client.query(`
+        const insertResult = await client.query(`
         INSERT INTO tracking_events (
           id,
           session_id,
@@ -545,6 +539,11 @@ async function insertTrackingEventForCapture(client, input) {
           $22,
           $23
         )
+        RETURNING
+          id::text AS id,
+          payload_size_bytes AS "storedPayloadSizeBytes",
+          payload_hash AS "storedPayloadHash",
+          raw_payload AS "persistedRawPayload"
       `, [
             eventId,
             input.capture.roas_radar_session_id,
@@ -570,6 +569,15 @@ async function insertTrackingEventForCapture(client, input) {
             payloadSizeBytes,
             payloadHash
         ]);
+        logRawPayloadIntegrityMismatch(rawPayloadMetadata, insertResult.rows[0], {
+            surface: 'tracking_events',
+            operation: 'insert',
+            recordId: insertResult.rows[0].id,
+            fields: {
+                ingestionSource: input.ingestionSource,
+                eventType: input.eventType
+            }
+        });
     }
     catch (error) {
         if (typeof error === 'object' && error !== null && 'code' in error && error.code === '23505') {
@@ -585,9 +593,10 @@ async function insertTrackingEventForCapture(client, input) {
 async function insertTrackingBrowserEvent(client, input, rawPayload, ingestionFingerprint) {
     const capture = buildCaptureFromTrackingEvent(input);
     const eventId = randomUUID();
-    const { rawPayloadJson, payloadSizeBytes, payloadHash } = buildRawPayloadStorageMetadata(rawPayload);
+    const rawPayloadMetadata = buildRawPayloadStorageMetadata(rawPayload);
+    const { rawPayloadJson, payloadSizeBytes, payloadHash } = rawPayloadMetadata;
     try {
-        await client.query(`
+        const insertResult = await client.query(`
         INSERT INTO tracking_events (
           id,
           session_id,
@@ -644,6 +653,11 @@ async function insertTrackingBrowserEvent(client, input, rawPayload, ingestionFi
           $25,
           $26
         )
+        RETURNING
+          id::text AS id,
+          payload_size_bytes AS "storedPayloadSizeBytes",
+          payload_hash AS "storedPayloadHash",
+          raw_payload AS "persistedRawPayload"
       `, [
             eventId,
             input.sessionId,
@@ -672,6 +686,15 @@ async function insertTrackingBrowserEvent(client, input, rawPayload, ingestionFi
             payloadSizeBytes,
             payloadHash
         ]);
+        logRawPayloadIntegrityMismatch(rawPayloadMetadata, insertResult.rows[0], {
+            surface: 'tracking_events',
+            operation: 'insert',
+            recordId: insertResult.rows[0].id,
+            fields: {
+                ingestionSource: 'browser',
+                eventType: input.eventType
+            }
+        });
     }
     catch (error) {
         if (typeof error === 'object' && error !== null && 'code' in error && error.code === '23505') {
@@ -686,7 +709,8 @@ async function insertTrackingBrowserEvent(client, input, rawPayload, ingestionFi
     return eventId;
 }
 async function insertAttributionTouchEvent(client, input) {
-    const { rawPayloadJson, payloadSizeBytes, payloadHash } = buildRawPayloadStorageMetadata(input.rawPayload);
+    const rawPayloadMetadata = buildRawPayloadStorageMetadata(input.rawPayload);
+    const { rawPayloadJson, payloadSizeBytes, payloadHash } = rawPayloadMetadata;
     try {
         const result = await client.query(`
         INSERT INTO session_attribution_touch_events (
@@ -743,7 +767,11 @@ async function insertAttributionTouchEvent(client, input) {
           $24,
           $25
         )
-        RETURNING id
+        RETURNING
+          id,
+          payload_size_bytes AS "storedPayloadSizeBytes",
+          payload_hash AS "storedPayloadHash",
+          raw_payload AS "persistedRawPayload"
       `, [
             input.capture.roas_radar_session_id,
             input.eventType,
@@ -771,6 +799,15 @@ async function insertAttributionTouchEvent(client, input) {
             input.shopifyCartToken ?? null,
             input.shopifyCheckoutToken ?? null
         ]);
+        logRawPayloadIntegrityMismatch(rawPayloadMetadata, result.rows[0], {
+            surface: 'session_attribution_touch_events',
+            operation: 'insert',
+            recordId: result.rows[0].id,
+            fields: {
+                ingestionSource: input.ingestionSource,
+                eventType: input.eventType
+            }
+        });
         return {
             id: result.rows[0].id,
             deduplicated: false

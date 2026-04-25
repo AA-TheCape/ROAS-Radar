@@ -7,6 +7,11 @@ import { z } from 'zod';
 
 import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
+import {
+  buildRawPayloadStorageMetadata,
+  logRawPayloadIntegrityMismatch,
+  type RawPayloadIntegrityRow
+} from '../../shared/raw-payload-storage.js';
 import { attachAuthContext, requireAdmin } from '../auth/index.js';
 import {
   buildSearchParamsAuditPayload,
@@ -39,20 +44,6 @@ const manualSyncSchema = z.object({
   startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
 });
-
-function buildRawPayloadStorageMetadata(rawPayload: unknown): {
-  rawPayloadJson: string;
-  payloadSizeBytes: number;
-  payloadHash: string;
-} {
-  const rawPayloadJson = JSON.stringify(rawPayload);
-
-  return {
-    rawPayloadJson,
-    payloadSizeBytes: Buffer.byteLength(rawPayloadJson, 'utf8'),
-    payloadHash: createHash('sha256').update(rawPayloadJson).digest('hex')
-  };
-}
 
 const oauthCallbackSchema = z.object({
   code: z.string().min(1).optional(),
@@ -858,9 +849,10 @@ async function upsertMetaAdsConnection(params: {
   account: MetaAdsAccountResponse;
   encryptionKey: string;
 }): Promise<void> {
-  const { rawPayloadJson, payloadSizeBytes, payloadHash } = buildRawPayloadStorageMetadata(params.account);
+  const rawPayloadMetadata = buildRawPayloadStorageMetadata(params.account);
+  const { rawPayloadJson, payloadSizeBytes, payloadHash } = rawPayloadMetadata;
 
-  await query(
+  const upsertResult = await query<RawPayloadIntegrityRow>(
     `
       INSERT INTO meta_ads_connections (
         ad_account_id,
@@ -906,6 +898,10 @@ async function upsertMetaAdsConnection(params: {
         raw_account_payload_size_bytes = $10,
         raw_account_payload_hash = $11,
         updated_at = now()
+      RETURNING
+        raw_account_payload_size_bytes AS "storedPayloadSizeBytes",
+        raw_account_payload_hash AS "storedPayloadHash",
+        raw_account_data AS "persistedRawPayload"
     `,
     [
       params.adAccountId,
@@ -921,6 +917,12 @@ async function upsertMetaAdsConnection(params: {
       payloadHash
     ]
   );
+
+  logRawPayloadIntegrityMismatch(rawPayloadMetadata, upsertResult.rows[0], {
+    surface: 'meta_ads_connections.raw_account_data',
+    operation: 'upsert',
+    recordId: params.adAccountId
+  });
 }
 
 async function getActiveMetaAdsConnection(): Promise<MetaAdsConnectionRow | null> {
@@ -1219,9 +1221,10 @@ async function persistDailySpendSnapshot(
         continue;
       }
 
-      const { rawPayloadJson, payloadSizeBytes, payloadHash } = buildRawPayloadStorageMetadata(row);
+      const rawPayloadMetadata = buildRawPayloadStorageMetadata(row);
+      const { rawPayloadJson, payloadSizeBytes, payloadHash } = rawPayloadMetadata;
 
-      const rawInsert = await client.query<{ id: number }>(
+      const rawInsert = await client.query<{ id: number } & RawPayloadIntegrityRow>(
         `
           INSERT INTO meta_ads_raw_spend_records (
             connection_id,
@@ -1239,7 +1242,11 @@ async function persistDailySpendSnapshot(
             updated_at
           )
           VALUES ($1, $2, $3::date, $4, $5, $6, $7::numeric, $8, $9, $10::jsonb, $11, $12, now())
-          RETURNING id
+          RETURNING
+            id,
+            payload_size_bytes AS "storedPayloadSizeBytes",
+            payload_hash AS "storedPayloadHash",
+            raw_payload AS "persistedRawPayload"
         `,
         [
           params.connectionId,
@@ -1255,6 +1262,21 @@ async function persistDailySpendSnapshot(
           payloadSizeBytes,
           payloadHash
         ]
+      );
+
+      logRawPayloadIntegrityMismatch(
+        rawPayloadMetadata,
+        rawInsert.rows[0],
+        {
+          surface: 'meta_ads_raw_spend_records',
+          operation: 'insert',
+          recordId: rawInsert.rows[0].id,
+          fields: {
+            level,
+            entityId,
+            syncJobId: params.syncJobId
+          }
+        }
       );
 
       const rawRecordId = rawInsert.rows[0].id;

@@ -13,6 +13,11 @@ import { attachAuthContext, requireAdmin } from '../auth/index.js';
 import { hashIdentityEmail, stitchKnownCustomerIdentity } from '../identity/index.js';
 import { buildCanonicalTouchpointDimensions } from '../marketing-dimensions/index.js';
 import { getReportingTimezone } from '../settings/index.js';
+import {
+  buildRawPayloadStorageMetadata,
+  logRawPayloadIntegrityMismatch,
+  type RawPayloadIntegrityRow
+} from '../../shared/raw-payload-storage.js';
 import { enqueueShopifyOrderWriteback } from './writeback.js';
 
 const OAUTH_STATE_TTL_MINUTES = 10;
@@ -1489,9 +1494,8 @@ async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPay
   const orderEmailHash = hashIdentityEmail(normalizedOrderEmail);
   const shopifyOrderId = String(payload.id);
   const rawLineItems = extractRawShopifyLineItems(rawPayload);
-  const rawPayloadJson = JSON.stringify(rawPayload);
-  const payloadSizeBytes = Buffer.byteLength(rawPayloadJson, 'utf8');
-  const payloadHash = createHash('sha256').update(rawPayloadJson).digest('hex');
+  const rawPayloadMetadata = buildRawPayloadStorageMetadata(rawPayload);
+  const { rawPayloadJson, payloadSizeBytes, payloadHash } = rawPayloadMetadata;
 
   await withTransaction(async (client) => {
     const landingSessionId = await resolveLandingSessionId(client, payload);
@@ -1519,7 +1523,7 @@ async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPay
       );
     }
 
-    await client.query(
+    const orderUpsertResult = await client.query<RawPayloadIntegrityRow>(
       `
         INSERT INTO shopify_orders (
           shopify_order_id,
@@ -1592,6 +1596,10 @@ async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPay
           payload_hash = EXCLUDED.payload_hash,
           raw_payload = EXCLUDED.raw_payload,
           ingested_at = now()
+        RETURNING
+          payload_size_bytes AS "storedPayloadSizeBytes",
+          payload_hash AS "storedPayloadHash",
+          raw_payload AS "persistedRawPayload"
       `,
       [
         shopifyOrderId,
@@ -1615,6 +1623,19 @@ async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPay
         payloadHash,
         rawPayloadJson
       ]
+    );
+
+    logRawPayloadIntegrityMismatch(
+      rawPayloadMetadata,
+      orderUpsertResult.rows[0],
+      {
+        surface: 'shopify_orders',
+        operation: 'upsert',
+        recordId: shopifyOrderId,
+        fields: {
+          receiptId
+        }
+      }
     );
 
     await upsertShopifyOrderLineItems(client, shopifyOrderId, payload.line_items, rawLineItems);

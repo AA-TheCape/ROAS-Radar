@@ -24,6 +24,11 @@ import {
   summarizeAttributionObservation,
   summarizeDualWriteConsistency
 } from '../../observability/index.js';
+import {
+  buildRawPayloadStorageMetadata,
+  logRawPayloadIntegrityMismatch,
+  type RawPayloadIntegrityRow
+} from '../../shared/raw-payload-storage.js';
 import { enqueueAttributionForTrackingTouchpoint } from '../attribution/index.js';
 import { buildCanonicalTouchpointDimensions } from '../marketing-dimensions/index.js';
 import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
@@ -298,20 +303,6 @@ function hashIp(value: string | null | undefined): string | null {
   }
 
   return createHash('sha256').update(normalized).digest('hex');
-}
-
-function buildRawPayloadStorageMetadata(rawPayload: TrackingRawPayload): {
-  rawPayloadJson: string;
-  payloadSizeBytes: number;
-  payloadHash: string;
-} {
-  const rawPayloadJson = JSON.stringify(rawPayload);
-
-  return {
-    rawPayloadJson,
-    payloadSizeBytes: Buffer.byteLength(rawPayloadJson, 'utf8'),
-    payloadHash: createHash('sha256').update(rawPayloadJson).digest('hex')
-  };
 }
 
 function hashTrackingFingerprint(input: SanitizedTrackingEventInput): string {
@@ -702,10 +693,11 @@ async function insertTrackingEventForCapture(
   }
 ): Promise<string> {
   const eventId = randomUUID();
-  const { rawPayloadJson, payloadSizeBytes, payloadHash } = buildRawPayloadStorageMetadata(input.rawPayload);
+  const rawPayloadMetadata = buildRawPayloadStorageMetadata(input.rawPayload);
+  const { rawPayloadJson, payloadSizeBytes, payloadHash } = rawPayloadMetadata;
 
   try {
-    await client.query(
+    const insertResult = await client.query<{ id: string } & RawPayloadIntegrityRow>(
       `
         INSERT INTO tracking_events (
           id,
@@ -757,6 +749,11 @@ async function insertTrackingEventForCapture(
           $22,
           $23
         )
+        RETURNING
+          id::text AS id,
+          payload_size_bytes AS "storedPayloadSizeBytes",
+          payload_hash AS "storedPayloadHash",
+          raw_payload AS "persistedRawPayload"
       `,
       [
         eventId,
@@ -784,6 +781,20 @@ async function insertTrackingEventForCapture(
         payloadHash
       ]
     );
+
+    logRawPayloadIntegrityMismatch(
+      rawPayloadMetadata,
+      insertResult.rows[0],
+      {
+        surface: 'tracking_events',
+        operation: 'insert',
+        recordId: insertResult.rows[0].id,
+        fields: {
+          ingestionSource: input.ingestionSource,
+          eventType: input.eventType
+        }
+      }
+    );
   } catch (error) {
     if (typeof error === 'object' && error !== null && 'code' in error && error.code === '23505') {
       const existing = await findExistingTrackingEventByFingerprint(input.ingestionFingerprint);
@@ -807,10 +818,11 @@ async function insertTrackingBrowserEvent(
 ): Promise<string> {
   const capture = buildCaptureFromTrackingEvent(input);
   const eventId = randomUUID();
-  const { rawPayloadJson, payloadSizeBytes, payloadHash } = buildRawPayloadStorageMetadata(rawPayload);
+  const rawPayloadMetadata = buildRawPayloadStorageMetadata(rawPayload);
+  const { rawPayloadJson, payloadSizeBytes, payloadHash } = rawPayloadMetadata;
 
   try {
-    await client.query(
+    const insertResult = await client.query<{ id: string } & RawPayloadIntegrityRow>(
       `
         INSERT INTO tracking_events (
           id,
@@ -868,6 +880,11 @@ async function insertTrackingBrowserEvent(
           $25,
           $26
         )
+        RETURNING
+          id::text AS id,
+          payload_size_bytes AS "storedPayloadSizeBytes",
+          payload_hash AS "storedPayloadHash",
+          raw_payload AS "persistedRawPayload"
       `,
       [
         eventId,
@@ -897,6 +914,20 @@ async function insertTrackingBrowserEvent(
         payloadSizeBytes,
         payloadHash
       ]
+    );
+
+    logRawPayloadIntegrityMismatch(
+      rawPayloadMetadata,
+      insertResult.rows[0],
+      {
+        surface: 'tracking_events',
+        operation: 'insert',
+        recordId: insertResult.rows[0].id,
+        fields: {
+          ingestionSource: 'browser',
+          eventType: input.eventType
+        }
+      }
     );
   } catch (error) {
     if (typeof error === 'object' && error !== null && 'code' in error && error.code === '23505') {
@@ -928,10 +959,11 @@ async function insertAttributionTouchEvent(
     shopifyCheckoutToken?: string | null;
   }
 ): Promise<{ id: number; deduplicated: boolean }> {
-  const { rawPayloadJson, payloadSizeBytes, payloadHash } = buildRawPayloadStorageMetadata(input.rawPayload);
+  const rawPayloadMetadata = buildRawPayloadStorageMetadata(input.rawPayload);
+  const { rawPayloadJson, payloadSizeBytes, payloadHash } = rawPayloadMetadata;
 
   try {
-    const result = await client.query<{ id: number }>(
+    const result = await client.query<{ id: number } & RawPayloadIntegrityRow>(
       `
         INSERT INTO session_attribution_touch_events (
           roas_radar_session_id,
@@ -987,7 +1019,11 @@ async function insertAttributionTouchEvent(
           $24,
           $25
         )
-        RETURNING id
+        RETURNING
+          id,
+          payload_size_bytes AS "storedPayloadSizeBytes",
+          payload_hash AS "storedPayloadHash",
+          raw_payload AS "persistedRawPayload"
       `,
       [
         input.capture.roas_radar_session_id,
@@ -1016,6 +1052,20 @@ async function insertAttributionTouchEvent(
         input.shopifyCartToken ?? null,
         input.shopifyCheckoutToken ?? null
       ]
+    );
+
+    logRawPayloadIntegrityMismatch(
+      rawPayloadMetadata,
+      result.rows[0],
+      {
+        surface: 'session_attribution_touch_events',
+        operation: 'insert',
+        recordId: result.rows[0].id,
+        fields: {
+          ingestionSource: input.ingestionSource,
+          eventType: input.eventType
+        }
+      }
     );
 
     return {
