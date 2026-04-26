@@ -126,6 +126,12 @@ const envSchema = z.object({
   DATA_QUALITY_ANOMALY_LOOKBACK_DAYS: integerString.default(7),
   DATA_QUALITY_ANOMALY_THRESHOLD_RATIO: z.coerce.number().default(0.35),
   DATA_QUALITY_ANOMALY_MIN_BASELINE: z.coerce.number().default(5),
+  DATA_QUALITY_REPORTING_ANOMALY_ALERT_THRESHOLD: integerString.default(0),
+  DATA_QUALITY_ORPHAN_SESSION_ALERT_THRESHOLD: integerString.default(0),
+  DATA_QUALITY_DUPLICATE_CANONICAL_ALERT_THRESHOLD: integerString.default(0),
+  DATA_QUALITY_CONFLICTING_SHOPIFY_ALERT_THRESHOLD: integerString.default(0),
+  DATA_QUALITY_HASH_ANOMALY_ALERT_THRESHOLD: integerString.default(0),
+  DATA_QUALITY_SAMPLE_LIMIT: integerString.default(10),
   DATA_QUALITY_CHECK_LOOP: booleanString.default(true),
   DATA_QUALITY_CHECK_INTERVAL_MS: integerString.default(24 * 60 * 60 * 1000),
   SESSION_ATTRIBUTION_RETENTION_DAYS: integerString.default(30)
