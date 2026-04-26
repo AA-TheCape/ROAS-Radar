@@ -544,3 +544,129 @@ test('different authoritative Shopify journeys hard-stop instead of auto-merging
   assert.equal(ingestionRun.rows[0]?.outcome_reason, 'authoritative_shopify_customer_conflict');
   assert.equal(activeEdges.rows[0]?.active_edge_count, '4');
 });
+
+test('qualifying identity events only relink historical sessions inside the inclusive 30-day lookback and ignore late older events', async () => {
+  const sessionAtBoundary = '123e4567-e89b-42d3-a456-426614174101';
+  const sessionOutsideWindow = '123e4567-e89b-42d3-a456-426614174102';
+  const { withTransaction, ingestIdentityEdges } = await getIdentityModules();
+
+  await withTransaction(async (client) => {
+    await client.query(
+      `
+        INSERT INTO tracking_sessions (id, first_seen_at, last_seen_at)
+        VALUES
+          ($1::uuid, '2026-03-26T12:00:00.000Z', '2026-03-26T12:05:00.000Z'),
+          ($2::uuid, '2026-03-26T11:59:59.000Z', '2026-03-26T12:04:59.000Z')
+      `,
+      [sessionAtBoundary, sessionOutsideWindow]
+    );
+  });
+
+  await withTransaction((client) =>
+    ingestIdentityEdges(client, {
+      sourceTimestamp: '2026-03-26T12:00:00.000Z',
+      evidenceSource: 'tracking_event',
+      sourceTable: 'tracking_events',
+      sourceRecordId: 'event-boundary',
+      idempotencyKey: 'identity-lookback-boundary-session',
+      sessionId: sessionAtBoundary,
+      checkoutToken: 'co-boundary-1'
+    })
+  );
+
+  const outsideAnonymous = await withTransaction((client) =>
+    ingestIdentityEdges(client, {
+      sourceTimestamp: '2026-03-26T11:59:59.000Z',
+      evidenceSource: 'tracking_event',
+      sourceTable: 'tracking_events',
+      sourceRecordId: 'event-outside',
+      idempotencyKey: 'identity-lookback-outside-session',
+      sessionId: sessionOutsideWindow,
+      checkoutToken: 'co-outside-1'
+    })
+  );
+
+  const authoritative = await withTransaction((client) =>
+    ingestIdentityEdges(client, {
+      sourceTimestamp: '2026-04-25T12:00:00.000Z',
+      evidenceSource: 'shopify_order_webhook',
+      sourceTable: 'shopify_orders',
+      sourceRecordId: 'order-lookback-1',
+      idempotencyKey: 'identity-lookback-authoritative',
+      sessionId: sessionAtBoundary,
+      checkoutToken: 'co-boundary-1',
+      shopifyCustomerId: 'sc-lookback-1',
+      hashedEmail: 'b'.repeat(64)
+    })
+  );
+
+  await withTransaction((client) =>
+    ingestIdentityEdges(client, {
+      sourceTimestamp: '2026-04-20T12:00:00.000Z',
+      evidenceSource: 'shopify_order_webhook',
+      sourceTable: 'shopify_orders',
+      sourceRecordId: 'order-lookback-late',
+      idempotencyKey: 'identity-lookback-late-event',
+      shopifyCustomerId: 'sc-lookback-1',
+      hashedEmail: 'b'.repeat(64)
+    })
+  );
+
+  assert.equal(authoritative.outcome, 'linked');
+
+  const { pool } = await import('../src/db/pool.js');
+  const [sessionResult, journeyWindowResult] = await Promise.all([
+    pool.query<{
+      id: string;
+      identity_journey_id: string | null;
+    }>(
+      `
+        SELECT
+          id::text AS id,
+          identity_journey_id::text AS identity_journey_id
+        FROM tracking_sessions
+        WHERE id IN ($1::uuid, $2::uuid)
+        ORDER BY id ASC
+      `,
+      [sessionAtBoundary, sessionOutsideWindow]
+    ),
+    pool.query<{
+      lookback_window_started_at: Date;
+      lookback_window_expires_at: Date;
+      last_touch_eligible_at: Date;
+    }>(
+      `
+        SELECT
+          lookback_window_started_at,
+          lookback_window_expires_at,
+          last_touch_eligible_at
+        FROM identity_journeys
+        WHERE id = $1::uuid
+      `,
+      [authoritative.journeyId]
+    )
+  ]);
+
+  assert.deepEqual(sessionResult.rows, [
+    {
+      id: sessionAtBoundary,
+      identity_journey_id: authoritative.journeyId
+    },
+    {
+      id: sessionOutsideWindow,
+      identity_journey_id: outsideAnonymous.journeyId
+    }
+  ]);
+  assert.equal(
+    journeyWindowResult.rows[0]?.lookback_window_started_at.toISOString(),
+    '2026-03-26T12:00:00.000Z'
+  );
+  assert.equal(
+    journeyWindowResult.rows[0]?.lookback_window_expires_at.toISOString(),
+    '2026-04-25T12:00:00.000Z'
+  );
+  assert.equal(
+    journeyWindowResult.rows[0]?.last_touch_eligible_at.toISOString(),
+    '2026-04-25T12:00:00.000Z'
+  );
+});

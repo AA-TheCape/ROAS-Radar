@@ -441,6 +441,137 @@ test('customer_journey refreshes incrementally and preserves reproducible canoni
   }
 });
 
+test('customer_journey materialization only includes sessions and orders inside the journey lookback window', async () => {
+  await truncateJourneyFixtures();
+
+  const journeyId = '33333333-3333-4333-8333-333333333333';
+  const boundarySessionId = '44444444-4444-4444-8444-444444444444';
+  const outsideSessionId = '55555555-5555-4555-8555-555555555555';
+  const { refreshCustomerJourneyForJourneys } = await import('../src/modules/identity/customer-journey.js');
+
+  try {
+    await pool.query(
+      `
+        INSERT INTO identity_journeys (
+          id,
+          status,
+          merge_version,
+          lookback_window_started_at,
+          lookback_window_expires_at,
+          last_touch_eligible_at,
+          created_at,
+          updated_at,
+          last_resolved_at
+        )
+        VALUES (
+          $1::uuid,
+          'active',
+          1,
+          '2026-03-26T12:00:00.000Z',
+          '2026-04-25T12:00:00.000Z',
+          '2026-04-25T12:00:00.000Z',
+          now(),
+          now(),
+          now()
+        )
+      `,
+      [journeyId]
+    );
+
+    await pool.query(
+      `
+        INSERT INTO tracking_sessions (
+          id,
+          identity_journey_id,
+          first_seen_at,
+          last_seen_at
+        )
+        VALUES
+          ($1::uuid, $3::uuid, '2026-03-26T12:00:00.000Z', '2026-03-26T12:05:00.000Z'),
+          ($2::uuid, $3::uuid, '2026-03-26T11:59:59.000Z', '2026-03-26T12:04:59.000Z')
+      `,
+      [boundarySessionId, outsideSessionId, journeyId]
+    );
+
+    await pool.query(
+      `
+        INSERT INTO tracking_events (
+          session_id,
+          event_type,
+          occurred_at,
+          payload_size_bytes,
+          raw_payload
+        )
+        VALUES
+          ($1::uuid, 'page_view', '2026-03-26T12:01:00.000Z', 2, '{}'::jsonb),
+          ($2::uuid, 'page_view', '2026-03-26T12:01:00.000Z', 2, '{}'::jsonb)
+      `,
+      [boundarySessionId, outsideSessionId]
+    );
+
+    await pool.query(
+      `
+        INSERT INTO shopify_orders (
+          shopify_order_id,
+          shopify_order_number,
+          currency_code,
+          subtotal_price,
+          total_price,
+          processed_at,
+          landing_session_id,
+          identity_journey_id,
+          payload_size_bytes,
+          source_name
+        )
+        VALUES
+          ('journey-window-order-in', '2001', 'USD', 10.00, 10.00, '2026-04-25T12:00:00.000Z', $1::uuid, $3::uuid, 2, 'web'),
+          ('journey-window-order-out', '2002', 'USD', 20.00, 20.00, '2026-03-26T11:59:59.000Z', $2::uuid, $3::uuid, 2, 'web')
+      `,
+      [boundarySessionId, outsideSessionId, journeyId]
+    );
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await refreshCustomerJourneyForJourneys(client, [journeyId]);
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    const rows = await pool.query<{
+      session_id: string;
+      journey_session_count: number;
+      journey_order_count: number;
+      journey_order_revenue: string;
+    }>(
+      `
+        SELECT
+          session_id::text AS session_id,
+          journey_session_count,
+          journey_order_count,
+          journey_order_revenue::text AS journey_order_revenue
+        FROM customer_journey
+        ORDER BY session_id ASC
+      `
+    );
+
+    assert.deepEqual(rows.rows, [
+      {
+        session_id: boundarySessionId,
+        journey_session_count: 1,
+        journey_order_count: 1,
+        journey_order_revenue: '10.00'
+      }
+    ]);
+  } finally {
+    await truncateJourneyFixtures();
+  }
+});
+
 test.after(async () => {
   await pool.end();
 });

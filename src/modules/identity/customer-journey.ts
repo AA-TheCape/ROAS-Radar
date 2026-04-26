@@ -63,6 +63,8 @@ export async function refreshCustomerJourneyForJourneys(client: DbClient, journe
         LEFT JOIN session_attribution_identities captured
           ON captured.roas_radar_session_id = s.id
         WHERE s.identity_journey_id = ANY($1::uuid[])
+          AND s.first_seen_at >= journey.lookback_window_started_at
+          AND s.first_seen_at <= journey.lookback_window_expires_at
       ),
       event_rollup AS (
         SELECT
@@ -94,6 +96,8 @@ export async function refreshCustomerJourneyForJourneys(client: DbClient, journe
           ON e.session_id = s.session_id
         INNER JOIN shopify_orders o
           ON o.identity_journey_id = s.identity_journey_id
+         AND COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) >= s.journey_lookback_window_started_at
+         AND COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) <= s.journey_lookback_window_expires_at
          AND (
            o.landing_session_id = s.session_id
            OR (
@@ -127,7 +131,11 @@ export async function refreshCustomerJourneyForJourneys(client: DbClient, journe
           MIN(COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at)) AS journey_first_order_at,
           MAX(COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at)) AS journey_last_order_at
         FROM shopify_orders o
+        INNER JOIN identity_journeys journey
+          ON journey.id = o.identity_journey_id
         WHERE o.identity_journey_id = ANY($1::uuid[])
+          AND COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) >= journey.lookback_window_started_at
+          AND COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) <= journey.lookback_window_expires_at
         GROUP BY o.identity_journey_id
       ),
       ranked_sessions AS (

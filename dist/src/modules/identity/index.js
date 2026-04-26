@@ -12,6 +12,7 @@ const IDENTITY_PRECEDENCE = {
 };
 const ACTIVE_IDENTITY_STATUSES = new Set(['active', 'quarantined']);
 const AUTHORITATIVE_CONFLICT = 'authoritative_shopify_customer_conflict';
+const HISTORICAL_IDENTITY_LOOKBACK_DAYS = 30;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 export const normalizeIdentityEmail = normalizeEmailAddress;
 export const hashIdentityEmail = hashEmailAddress;
@@ -193,6 +194,7 @@ export async function ingestIdentityEdges(client, input) {
         };
     }
     const nodeRows = await upsertAndLockIdentityNodes(client, normalizedNodes, sourceTimestamp);
+    const qualifyingIdentityObservedAt = hasQualifyingIdentityNodes(normalizedNodes) ? sourceTimestamp : null;
     const candidateRows = await loadActiveJourneyCandidates(client, nodeRows.map((row) => row.id));
     const journeyScores = await loadJourneyScores(client, [...new Set(candidateRows.map((row) => row.journey_id).filter((value) => Boolean(value)))]);
     const quarantinedNodeIds = new Set();
@@ -299,7 +301,8 @@ export async function ingestIdentityEdges(client, input) {
         authoritativeShopifyCustomerId: normalizedNodes.find((node) => node.nodeType === 'shopify_customer_id')?.nodeKey ?? null,
         emailHash: normalizedNodes.find((node) => node.nodeType === 'hashed_email')?.nodeKey ?? null,
         phoneHash: normalizedNodes.find((node) => node.nodeType === 'phone_hash')?.nodeKey ?? null,
-        graphChanged: journeyResolution.created || attachedNodes > 0 || rehomedNodes > 0 || quarantinedNodeIds.size > 0
+        graphChanged: journeyResolution.created || attachedNodes > 0 || rehomedNodes > 0 || quarantinedNodeIds.size > 0,
+        qualifyingIdentityObservedAt
     });
     for (const row of candidateRows) {
         if (!row.journey_id || row.journey_id === winnerJourneyId) {
@@ -318,7 +321,8 @@ export async function ingestIdentityEdges(client, input) {
         checkoutToken: normalizedNodes.find((node) => node.nodeType === 'checkout_token')?.nodeKey ?? null,
         cartToken: normalizedNodes.find((node) => node.nodeType === 'cart_token')?.nodeKey ?? null,
         shopifyCustomerId: normalizedNodes.find((node) => node.nodeType === 'shopify_customer_id')?.nodeKey ?? null,
-        emailHash: normalizedNodes.find((node) => node.nodeType === 'hashed_email')?.nodeKey ?? null
+        emailHash: normalizedNodes.find((node) => node.nodeType === 'hashed_email')?.nodeKey ?? null,
+        qualifyingIdentityObservedAt
     });
     await refreshCustomerJourneyForJourneys(client, [
         winnerJourneyId,
@@ -573,6 +577,7 @@ async function resolveWinningJourney(client, input) {
             emailHash: input.nodeRows.find((row) => row.node_type === 'hashed_email')?.node_key ?? null,
             phoneHash: input.nodeRows.find((row) => row.node_type === 'phone_hash')?.node_key ?? null,
             sourceTimestamp: input.sourceTimestamp,
+            lookbackAnchorTimestamp: input.sourceTimestamp,
             evidenceSource: input.evidenceSource,
             sourceTable: input.sourceTable,
             sourceRecordId: input.sourceRecordId
@@ -659,6 +664,7 @@ async function resolveWinningJourney(client, input) {
         emailHash: input.nodeRows.find((row) => row.node_type === 'hashed_email')?.node_key ?? null,
         phoneHash: input.nodeRows.find((row) => row.node_type === 'phone_hash')?.node_key ?? null,
         sourceTimestamp: input.sourceTimestamp,
+        lookbackAnchorTimestamp: input.sourceTimestamp,
         evidenceSource: input.evidenceSource,
         sourceTable: input.sourceTable,
         sourceRecordId: input.sourceRecordId
@@ -672,6 +678,12 @@ async function resolveWinningJourney(client, input) {
 }
 function distinctAuthoritativeShopifyIds(rows) {
     return [...new Set(rows.map((row) => row.authoritative_shopify_customer_id).filter((value) => Boolean(value)))];
+}
+function hasQualifyingIdentityNodes(nodes) {
+    return nodes.some((node) => isQualifyingIdentityNodeType(node.nodeType));
+}
+function isQualifyingIdentityNodeType(nodeType) {
+    return nodeType === 'shopify_customer_id' || nodeType === 'hashed_email' || nodeType === 'phone_hash';
 }
 function selectBestJourneyId(rows, journeyScores) {
     const candidates = [...new Set(rows.map((row) => row.journey_id).filter((value) => Boolean(value)))];
@@ -696,6 +708,7 @@ function selectBestJourneyId(rows, journeyScores) {
 }
 async function createJourney(client, input) {
     const journeyId = randomUUID();
+    const lookbackWindow = buildHistoricalLookbackWindow(input.lookbackAnchorTimestamp);
     await client.query(`
       INSERT INTO identity_journeys (
         id,
@@ -725,27 +738,30 @@ async function createJourney(client, input) {
         'active',
         1,
         $5::timestamptz,
-        $5::timestamptz + interval '30 days',
-        $5::timestamptz,
-        $6,
-        $7,
+        $6::timestamptz,
+        $7::timestamptz,
         $8,
-        $6,
-        $7,
+        $9,
+        $10,
         $8,
+        $9,
+        $10,
         now(),
         now(),
-        $5::timestamptz
+        $11::timestamptz
       )
     `, [
         journeyId,
         input.authoritativeShopifyCustomerId,
         input.emailHash,
         input.phoneHash,
-        input.sourceTimestamp,
+        lookbackWindow.lookbackWindowStartedAt,
+        lookbackWindow.lookbackWindowExpiresAt,
+        lookbackWindow.lastTouchEligibleAt,
         input.evidenceSource,
         input.sourceTable,
-        input.sourceRecordId
+        input.sourceRecordId,
+        input.sourceTimestamp
     ]);
     return journeyId;
 }
@@ -864,10 +880,31 @@ async function refreshJourneyConvenienceFields(client, journeyId, sourceTimestam
         primary_email_hash = COALESCE($3, primary_email_hash),
         primary_phone_hash = COALESCE($4, primary_phone_hash),
         merge_version = CASE WHEN $5 THEN merge_version + 1 ELSE merge_version END,
+        lookback_window_started_at = CASE
+          WHEN $6::timestamptz IS NULL THEN lookback_window_started_at
+          ELSE GREATEST(last_touch_eligible_at, $6::timestamptz) - ($7::text || ' days')::interval
+        END,
+        lookback_window_expires_at = CASE
+          WHEN $6::timestamptz IS NULL THEN lookback_window_expires_at
+          ELSE GREATEST(last_touch_eligible_at, $6::timestamptz)
+        END,
+        last_touch_eligible_at = CASE
+          WHEN $6::timestamptz IS NULL THEN last_touch_eligible_at
+          ELSE GREATEST(last_touch_eligible_at, $6::timestamptz)
+        END,
         updated_at = now(),
-        last_resolved_at = GREATEST(last_resolved_at, $6)
+        last_resolved_at = GREATEST(last_resolved_at, $8)
       WHERE id = $1::uuid
-    `, [journeyId, input.authoritativeShopifyCustomerId, input.emailHash, input.phoneHash, input.graphChanged, sourceTimestamp]);
+    `, [
+        journeyId,
+        input.authoritativeShopifyCustomerId,
+        input.emailHash,
+        input.phoneHash,
+        input.graphChanged,
+        input.qualifyingIdentityObservedAt,
+        String(HISTORICAL_IDENTITY_LOOKBACK_DAYS),
+        sourceTimestamp
+    ]);
 }
 async function markJourneyMergedIfEmpty(client, journeyId, mergedIntoJourneyId, sourceTimestamp) {
     const result = await client.query(`
@@ -970,6 +1007,9 @@ async function resolveCompatibilityIdentityAssignments(client, journeyId, input)
 async function syncIdentityReferences(client, input) {
     const compatibilityExists = await customerIdentityExists(client, input.journeyId);
     const journeyId = input.journeyId;
+    const lookbackWindow = input.qualifyingIdentityObservedAt
+        ? await loadJourneyLookbackWindow(client, input.journeyId)
+        : null;
     const sessionResult = await client.query(`
       WITH candidate_sessions AS (
         SELECT $1::uuid AS session_id
@@ -985,7 +1025,20 @@ async function syncIdentityReferences(client, input) {
       SELECT DISTINCT s.id::text AS session_id
       FROM candidate_sessions c
       INNER JOIN tracking_sessions s ON s.id = c.session_id
-    `, [input.sessionId, input.checkoutToken, input.cartToken]);
+      WHERE (
+        $4::timestamptz IS NULL
+        OR (
+          s.first_seen_at >= $4::timestamptz
+          AND s.first_seen_at <= $5::timestamptz
+        )
+      )
+    `, [
+        input.sessionId,
+        input.checkoutToken,
+        input.cartToken,
+        lookbackWindow?.lookbackWindowStartedAt ?? null,
+        lookbackWindow?.lookbackWindowExpiresAt ?? null
+    ]);
     const sessionIds = sessionResult.rows.map((row) => row.session_id);
     if (sessionIds.length > 0) {
         await client.query(`
@@ -1029,12 +1082,31 @@ async function syncIdentityReferences(client, input) {
           WHEN $7::boolean THEN $1::uuid
           ELSE customer_identity_id
         END
-      WHERE ($2::uuid IS NOT NULL AND landing_session_id = $2::uuid)
-         OR ($3::text IS NOT NULL AND checkout_token = $3)
-         OR ($4::text IS NOT NULL AND cart_token = $4)
-         OR ($5::text IS NOT NULL AND shopify_customer_id = $5)
-         OR ($6::text IS NOT NULL AND email_hash = $6)
-    `, [journeyId, input.sessionId, input.checkoutToken, input.cartToken, input.shopifyCustomerId, input.emailHash, compatibilityExists]);
+      WHERE (
+        ($2::uuid IS NOT NULL AND landing_session_id = $2::uuid)
+        OR ($3::text IS NOT NULL AND checkout_token = $3)
+        OR ($4::text IS NOT NULL AND cart_token = $4)
+        OR ($5::text IS NOT NULL AND shopify_customer_id = $5)
+        OR ($6::text IS NOT NULL AND email_hash = $6)
+      )
+        AND (
+          $8::timestamptz IS NULL
+          OR (
+            COALESCE(processed_at, created_at_shopify, ingested_at) >= $8::timestamptz
+            AND COALESCE(processed_at, created_at_shopify, ingested_at) <= $9::timestamptz
+          )
+        )
+    `, [
+        journeyId,
+        input.sessionId,
+        input.checkoutToken,
+        input.cartToken,
+        input.shopifyCustomerId,
+        input.emailHash,
+        compatibilityExists,
+        lookbackWindow?.lookbackWindowStartedAt ?? null,
+        lookbackWindow?.lookbackWindowExpiresAt ?? null
+    ]);
     if (input.shopifyCustomerId) {
         await client.query(`
         UPDATE shopify_customers
@@ -1058,6 +1130,26 @@ async function collectJourneySessionIds(client, journeyId) {
       ORDER BY id ASC
     `, [journeyId]);
     return result.rows.map((row) => row.session_id);
+}
+async function loadJourneyLookbackWindow(client, journeyId) {
+    const result = await client.query(`
+      SELECT
+        lookback_window_started_at,
+        lookback_window_expires_at,
+        last_touch_eligible_at
+      FROM identity_journeys
+      WHERE id = $1::uuid
+      LIMIT 1
+    `, [journeyId]);
+    const row = result.rows[0];
+    if (!row) {
+        return null;
+    }
+    return {
+        lookbackWindowStartedAt: row.lookback_window_started_at,
+        lookbackWindowExpiresAt: row.lookback_window_expires_at,
+        lastTouchEligibleAt: row.last_touch_eligible_at
+    };
 }
 async function customerIdentityExists(client, journeyId) {
     const result = await client.query(`
@@ -1090,4 +1182,11 @@ function normalizeSourceTimestamp(value) {
         throw new Error(`Invalid identity source timestamp: ${String(value)}`);
     }
     return date;
+}
+function buildHistoricalLookbackWindow(anchorTimestamp) {
+    return {
+        lookbackWindowStartedAt: new Date(anchorTimestamp.getTime() - HISTORICAL_IDENTITY_LOOKBACK_DAYS * 24 * 60 * 60 * 1000),
+        lookbackWindowExpiresAt: anchorTimestamp,
+        lastTouchEligibleAt: anchorTimestamp
+    };
 }
