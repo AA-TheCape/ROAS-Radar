@@ -6,7 +6,8 @@ import type {
 } from '../../../packages/attribution-schema/index.js';
 import {
   orderAttributionBackfillEnqueueResponseSchema,
-  orderAttributionBackfillJobResponseSchema
+  orderAttributionBackfillJobResponseSchema,
+  orderAttributionBackfillRequestSchema
 } from '../../../packages/attribution-schema/index.js';
 
 export type {
@@ -699,9 +700,11 @@ export function recoverShopifyAttributionHints(startDate: string, endDate: strin
 }
 
 export function enqueueOrderAttributionBackfill(payload: OrderAttributionBackfillRequest) {
+  const request = orderAttributionBackfillRequestSchema.parse(payload);
+
   return requestJson<OrderAttributionBackfillEnqueueResponse>('/api/admin/attribution/orders/backfill', {
     method: 'POST',
-    body: payload,
+    body: request,
     parse: (response) => orderAttributionBackfillEnqueueResponseSchema.parse(response)
   });
 }

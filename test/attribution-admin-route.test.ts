@@ -274,6 +274,56 @@ test('order attribution backfill admin route preserves explicit options, includi
   }
 });
 
+test('order attribution backfill admin route derives submittedBy from authenticated admin users', async () => {
+  const capturedQueries: Array<{ text: string; params?: unknown[] }> = [];
+
+  pool.query = (async (text: string, params?: unknown[]) => {
+    if (/FROM app_sessions s/.test(text)) {
+      return {
+        rows: [
+          {
+            session_id: 9,
+            user_id: 73,
+            email: 'admin@example.com',
+            display_name: 'Admin User',
+            is_admin: true,
+            status: 'active',
+            last_login_at: new Date('2026-04-25T10:00:00.000Z'),
+            created_at: new Date('2026-04-01T00:00:00.000Z'),
+            expires_at: new Date('2026-05-01T00:00:00.000Z')
+          }
+        ]
+      };
+    }
+
+    capturedQueries.push({ text, params });
+    return { rows: [] };
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(server, '/api/admin/attribution/orders/backfill', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer admin-session-token'
+      },
+      body: {
+        startDate: '2026-04-01',
+        endDate: '2026-04-05'
+      }
+    });
+
+    assert.equal(response.status, 202);
+    assert.equal(body.submittedBy, 'admin@example.com');
+    assert.equal(capturedQueries.length, 1);
+    assert.equal(capturedQueries[0].params?.[2], 'admin@example.com');
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
 test('order attribution backfill admin route returns persisted partial reports for failed jobs', async () => {
   pool.query = (async () => ({
     rows: [
