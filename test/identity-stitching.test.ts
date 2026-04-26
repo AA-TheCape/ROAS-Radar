@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { hashIdentityEmail, resolveIdentityStitch } from '../src/modules/identity/index.js';
+import { buildIdentityEdgeIngestionMetricsLog, hashIdentityEmail, resolveIdentityStitch } from '../src/modules/identity/index.js';
 
 test('hashIdentityEmail normalizes casing and whitespace before hashing', () => {
   const firstHash = hashIdentityEmail(' Buyer@Example.com ');
@@ -96,4 +96,29 @@ test('resolveIdentityStitch rejects automatic merges across two existing identit
 
   assert.equal(decision.outcome, 'conflict');
   assert.equal(decision.reason, 'identifiers_resolve_to_different_identities');
+});
+
+test('buildIdentityEdgeIngestionMetricsLog emits structured counters', () => {
+  const payload = JSON.parse(
+    buildIdentityEdgeIngestionMetricsLog({
+      sourceTable: 'tracking_events',
+      evidenceSource: 'tracking_event',
+      outcome: 'linked',
+      deduplicated: false,
+      processedNodes: 3,
+      attachedNodes: 2,
+      rehomedNodes: 1,
+      quarantinedNodes: 0,
+      journeyId: '123e4567-e89b-42d3-a456-426614174000'
+    })
+  ) as Record<string, unknown>;
+
+  assert.equal(payload.event, 'identity_edge_ingestion_processed');
+  assert.equal(payload.evidenceSource, 'tracking_event');
+  assert.equal(payload.sourceTable, 'tracking_events');
+  assert.equal(payload.outcome, 'linked');
+  assert.equal(payload.processedNodes, 3);
+  assert.equal(payload.attachedNodes, 2);
+  assert.equal(payload.rehomedNodes, 1);
+  assert.equal(payload.quarantinedNodes, 0);
 });

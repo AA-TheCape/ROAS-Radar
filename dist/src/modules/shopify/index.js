@@ -478,6 +478,7 @@ async function recoverShopifyAttributionHints(reportingTimezone, startDate, endD
         o.shopify_order_id,
         o.shopify_customer_id,
         o.landing_session_id::text AS landing_session_id,
+        o.payload_hash,
         o.raw_payload
       FROM shopify_orders o
       LEFT JOIN attribution_order_credits c
@@ -528,9 +529,21 @@ async function recoverShopifyAttributionHints(reportingTimezone, startDate, endD
                 shopifyOrderId: row.shopify_order_id,
                 shopifyCustomerId: row.shopify_customer_id,
                 email: parsedPayload.data.email ?? parsedPayload.data.customer?.email ?? null,
+                phoneHash: buildHashedContactProfile({
+                    email: parsedPayload.data.email ?? parsedPayload.data.customer?.email ?? null,
+                    phone: parsedPayload.data.customer?.phone ?? null
+                }).phoneHash,
                 landingSessionId: resolvedLandingSessionId ?? row.landing_session_id,
                 checkoutToken: parsedPayload.data.checkout_token ?? null,
-                cartToken: parsedPayload.data.cart_token ?? null
+                cartToken: parsedPayload.data.cart_token ?? null,
+                sourceTimestamp: parsedPayload.data.updated_at ??
+                    parsedPayload.data.processed_at ??
+                    parsedPayload.data.created_at ??
+                    new Date().toISOString(),
+                evidenceSource: 'backfill',
+                sourceTable: 'shopify_orders',
+                sourceRecordId: row.shopify_order_id,
+                idempotencyKey: `shopify_order_recovery_identity:${row.shopify_order_id}:${row.payload_hash ?? 'no_hash'}`
             });
             const shopifyHintAttribution = resolvedLandingSessionId === null ? extractShopifyHintAttribution(parsedPayload.data) : null;
             if (shopifyHintAttribution) {
@@ -1184,9 +1197,15 @@ async function normalizeShopifyOrder(receiptId, payload, rawPayload) {
             shopifyOrderId,
             shopifyCustomerId,
             email: normalizedOrderEmail,
+            phoneHash,
             landingSessionId,
             checkoutToken: payload.checkout_token ?? null,
-            cartToken: payload.cart_token ?? null
+            cartToken: payload.cart_token ?? null,
+            sourceTimestamp: payload.updated_at ?? payload.processed_at ?? payload.created_at ?? new Date().toISOString(),
+            evidenceSource: 'shopify_order_webhook',
+            sourceTable: 'shopify_orders',
+            sourceRecordId: shopifyOrderId,
+            idempotencyKey: `shopify_order_identity:${shopifyOrderId}:${payloadHash}`
         });
         await enqueueAttributionForOrder(shopifyOrderId, 'shopify_order_upserted', client);
         await enqueueShopifyOrderWriteback(shopifyOrderId, 'shopify_order_upserted', client);

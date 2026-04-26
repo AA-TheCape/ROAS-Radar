@@ -30,6 +30,7 @@ import {
   type RawPayloadIntegrityRow
 } from '../../shared/raw-payload-storage.js';
 import { enqueueAttributionForTrackingTouchpoint } from '../attribution/index.js';
+import { ingestIdentityEdges } from '../identity/index.js';
 import { buildCanonicalTouchpointDimensions } from '../marketing-dimensions/index.js';
 import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
 import { formatDateInTimezone, getReportingTimezone } from '../settings/index.js';
@@ -1141,7 +1142,7 @@ async function ingestAttributionCapture(
       shopifyCheckoutToken: input.shopifyCheckoutToken
     });
 
-    await insertTrackingEventForCapture(client, {
+    const trackingEventId = await insertTrackingEventForCapture(client, {
       capture: input.capture,
       rawPayload: input.rawPayload,
       eventType: input.eventType,
@@ -1150,6 +1151,17 @@ async function ingestAttributionCapture(
       ingestionFingerprint,
       shopifyCartToken: input.shopifyCartToken,
       shopifyCheckoutToken: input.shopifyCheckoutToken
+    });
+
+    await ingestIdentityEdges(client, {
+      sourceTimestamp: input.capture.occurred_at,
+      evidenceSource: 'tracking_event',
+      sourceTable: 'tracking_events',
+      sourceRecordId: trackingEventId,
+      idempotencyKey: `tracking_capture_identity:${ingestionFingerprint}`,
+      sessionId: input.capture.roas_radar_session_id,
+      checkoutToken: input.shopifyCheckoutToken,
+      cartToken: input.shopifyCartToken
     });
 
     return touchEvent;
@@ -1211,6 +1223,17 @@ async function ingestTrackingEvent(
     );
 
     const insertedEventId = await insertTrackingBrowserEvent(client, input, rawPayload, ingestionFingerprint);
+
+    await ingestIdentityEdges(client, {
+      sourceTimestamp: input.occurredAt,
+      evidenceSource: 'tracking_event',
+      sourceTable: 'tracking_events',
+      sourceRecordId: insertedEventId,
+      idempotencyKey: `tracking_browser_identity:${ingestionFingerprint}`,
+      sessionId: input.sessionId,
+      checkoutToken: input.shopifyCheckoutToken,
+      cartToken: input.shopifyCartToken
+    });
 
     await enqueueAttributionForTrackingTouchpoint(client, {
       sessionId: input.sessionId,
