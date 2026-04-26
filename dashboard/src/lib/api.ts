@@ -1,3 +1,22 @@
+import type {
+  OrderAttributionBackfillEnqueueResponse,
+  OrderAttributionBackfillJobResponse,
+  OrderAttributionBackfillRequest,
+  OrderAttributionBackfillSubmittedOptions
+} from '../../../packages/attribution-schema/index.js';
+import {
+  orderAttributionBackfillEnqueueResponseSchema,
+  orderAttributionBackfillJobResponseSchema,
+  orderAttributionBackfillRequestSchema
+} from '../../../packages/attribution-schema/index.js';
+
+export type {
+  OrderAttributionBackfillEnqueueResponse,
+  OrderAttributionBackfillJobResponse,
+  OrderAttributionBackfillRequest,
+  OrderAttributionBackfillSubmittedOptions
+};
+
 export type ReportingFilters = {
   startDate: string;
   endDate: string;
@@ -492,9 +511,10 @@ async function requestJson<T>(
     searchParams?: URLSearchParams;
     method?: 'GET' | 'POST' | 'PUT';
     body?: unknown;
+    parse?: (payload: unknown) => T;
   } = {}
 ): Promise<T> {
-  const { searchParams, method = 'GET', body } = options;
+  const { searchParams, method = 'GET', body, parse } = options;
   const query = searchParams ? `?${searchParams.toString()}` : '';
   const includeJsonBody = body !== undefined;
 
@@ -519,7 +539,8 @@ async function requestJson<T>(
     throw new Error(message);
   }
 
-  return (await response.json()) as T;
+  const payload = (await response.json()) as unknown;
+  return parse ? parse(payload) : (payload as T);
 }
 
 export function fetchSummary(filters: ReportingFilters) {
@@ -673,6 +694,22 @@ export function recoverShopifyAttributionHints(startDate: string, endDate: strin
   return requestJson<ShopifyAttributionRecoveryResponse>('/api/admin/shopify/orders/recover-attribution', {
     method: 'POST',
     body: { startDate, endDate }
+  });
+}
+
+export function enqueueOrderAttributionBackfill(payload: OrderAttributionBackfillRequest) {
+  const request = orderAttributionBackfillRequestSchema.parse(payload);
+
+  return requestJson<OrderAttributionBackfillEnqueueResponse>('/api/admin/attribution/orders/backfill', {
+    method: 'POST',
+    body: request,
+    parse: (response) => orderAttributionBackfillEnqueueResponseSchema.parse(response)
+  });
+}
+
+export function fetchOrderAttributionBackfillJob(jobId: string) {
+  return requestJson<OrderAttributionBackfillJobResponse>(`/api/admin/attribution/orders/backfill/${jobId}`, {
+    parse: (response) => orderAttributionBackfillJobResponseSchema.parse(response)
   });
 }
 

@@ -408,6 +408,7 @@ test('authenticated dashboard, order details, and settings pass automated access
       onShopifyTest() {},
       onShopifyWebhookSync() {},
       onShopifyAttributionRecovery() {},
+      onShopifyOrderAttributionBackfill() {},
       onMetaConnect() {},
       onMetaSync() {},
       onGoogleSync() {},

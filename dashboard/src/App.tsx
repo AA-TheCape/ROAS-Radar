@@ -9,17 +9,24 @@ import React, {
   useState,
   type FormEvent
 } from 'react';
+import {
+  ORDER_ATTRIBUTION_BACKFILL_DEFAULT_LIMIT,
+  type OrderAttributionBackfillSubmittedOptions,
+  orderAttributionBackfillRequestSchema
+} from '../../packages/attribution-schema/index.js';
 
 import {
   backfillShopifyOrders,
   clearStoredAuthToken,
   createUser,
+  enqueueOrderAttributionBackfill,
   fetchAppSettings,
   fetchCampaigns,
   fetchCurrentUser,
   fetchGoogleAdsStatus,
   fetchMetaAdsStatus,
   fetchOrderDetails,
+  fetchOrderAttributionBackfillJob,
   fetchOrders,
   fetchSpendDetails,
   fetchShopifyConnection,
@@ -48,6 +55,8 @@ import {
   type GoogleAdsStatusResponse,
   type MetaAdsConnection,
   type MetaAdsConfigSummary,
+  type OrderAttributionBackfillEnqueueResponse,
+  type OrderAttributionBackfillJobResponse,
   type OrderDetailsResponse,
   type OrderRow,
   type ReportingFilters,
@@ -169,6 +178,8 @@ const AUTHENTICATED_NAV_ITEMS: AppShellNavItem[] = [
 
 const DEFAULT_REPORTING_TIMEZONE = 'America/Los_Angeles';
 const DEFAULT_GROUP_BY: TimeseriesGroupBy = 'day';
+const ORDER_ATTRIBUTION_BACKFILL_JOB_STORAGE_KEY = 'roas-radar.order-attribution-backfill.latest-job-id';
+const ORDER_ATTRIBUTION_BACKFILL_POLL_INTERVAL_MS = 5000;
 const REPORTING_TIMEZONE_OPTIONS = [
   'America/Los_Angeles',
   'America/Denver',
@@ -381,6 +392,23 @@ function createErroredSection<T>(message: string): AsyncSection<T> {
   };
 }
 
+function readStoredOrderAttributionBackfillJobId(): string | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  const value = window.localStorage.getItem(ORDER_ATTRIBUTION_BACKFILL_JOB_STORAGE_KEY)?.trim() ?? '';
+  return value || null;
+}
+
+function storeOrderAttributionBackfillJobId(jobId: string) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  window.localStorage.setItem(ORDER_ATTRIBUTION_BACKFILL_JOB_STORAGE_KEY, jobId);
+}
+
 function useDashboardData(
   filters: ReportingFilters,
   groupBy: TimeseriesGroupBy,
@@ -525,6 +553,15 @@ function formatOptionalDateTime(value: string | null | undefined, reportingTimez
   return value ? formatDateTimeLabel(value, reportingTimezone) : 'Not available';
 }
 
+function toBackfillOptionState(options: OrderAttributionBackfillSubmittedOptions) {
+  return {
+    dryRun: options.dryRun,
+    limit: String(options.limit),
+    webOrdersOnly: options.webOrdersOnly,
+    skipShopifyWriteback: options.skipShopifyWriteback
+  };
+}
+
 function AuthenticatedViewFallback({ title, description }: { title: string; description: string }) {
   return (
     <Panel title={title} description={description} wide>
@@ -570,6 +607,17 @@ function App() {
   const [shopifyBackfillRange, setShopifyBackfillRange] = useState({
     startDate: buildAprilFirstDateInput(DEFAULT_REPORTING_TIMEZONE),
     endDate: buildYesterdayDateInput(DEFAULT_REPORTING_TIMEZONE)
+  });
+  const [shopifyOrderAttributionBackfillOptions, setShopifyOrderAttributionBackfillOptions] = useState({
+    dryRun: true,
+    limit: String(ORDER_ATTRIBUTION_BACKFILL_DEFAULT_LIMIT),
+    webOrdersOnly: true,
+    skipShopifyWriteback: false
+  });
+  const [orderAttributionBackfillJob, setOrderAttributionBackfillJob] = useState<AsyncSection<OrderAttributionBackfillJobResponse>>({
+    data: null,
+    loading: false,
+    error: null
   });
   const [metaConnection, setMetaConnection] = useState<AsyncSection<MetaConnectionState>>(createLoadingSection());
   const [metaConfigForm, setMetaConfigForm] = useState<MetaConfigForm>({
@@ -669,6 +717,37 @@ function App() {
     }
   }, []);
 
+  const loadOrderAttributionBackfillJob = useCallback(
+    async (jobId: string, options?: { preserveData?: boolean }) => {
+      setOrderAttributionBackfillJob((current) => ({
+        data: options?.preserveData ? current.data : null,
+        loading: true,
+        error: null
+      }));
+
+      try {
+        const response = await fetchOrderAttributionBackfillJob(jobId);
+        setShopifyBackfillRange({
+          startDate: response.options.startDate,
+          endDate: response.options.endDate
+        });
+        setShopifyOrderAttributionBackfillOptions(toBackfillOptionState(response.options));
+        setOrderAttributionBackfillJob({
+          data: response,
+          loading: false,
+          error: null
+        });
+      } catch (error) {
+        setOrderAttributionBackfillJob((current) => ({
+          data: current.data,
+          loading: false,
+          error: error instanceof Error ? error.message : 'Failed to load order attribution backfill job'
+        }));
+      }
+    },
+    []
+  );
+
   useEffect(() => {
     if (authState.user) {
       void loadAppSettings();
@@ -678,9 +757,51 @@ function App() {
 
     setAppSettings(createLoadingSection());
     setShopifyConnection(createLoadingSection());
+    setOrderAttributionBackfillJob({
+      data: null,
+      loading: false,
+      error: null
+    });
     setMetaConnection(createLoadingSection());
     setGoogleConnection(createLoadingSection());
   }, [authState.user, loadAppSettings, loadConnections]);
+
+  useEffect(() => {
+    if (!authState.user?.isAdmin) {
+      setOrderAttributionBackfillJob({
+        data: null,
+        loading: false,
+        error: null
+      });
+      return;
+    }
+
+    const storedJobId = readStoredOrderAttributionBackfillJobId();
+    if (!storedJobId) {
+      return;
+    }
+
+    void loadOrderAttributionBackfillJob(storedJobId);
+  }, [authState.user?.isAdmin, loadOrderAttributionBackfillJob]);
+
+  useEffect(() => {
+    if (!authState.user?.isAdmin || typeof window === 'undefined') {
+      return;
+    }
+
+    const job = orderAttributionBackfillJob.data;
+    if (!job || (job.status !== 'queued' && job.status !== 'processing')) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      void loadOrderAttributionBackfillJob(job.jobId, { preserveData: true });
+    }, ORDER_ATTRIBUTION_BACKFILL_POLL_INTERVAL_MS);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [authState.user?.isAdmin, loadOrderAttributionBackfillJob, orderAttributionBackfillJob.data]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -896,6 +1017,11 @@ function App() {
       loading: null,
       error: null,
       message: null
+    });
+    setOrderAttributionBackfillJob({
+      data: null,
+      loading: false,
+      error: null
     });
   }
 
@@ -1171,6 +1297,76 @@ function App() {
         context: 'shopify-attribution-recovery',
         loading: null,
         error: error instanceof Error ? error.message : 'Failed to recover Shopify attribution hints',
+        message: null
+      });
+    }
+  }
+
+  async function handleShopifyOrderAttributionBackfill() {
+    const parsedRequest = orderAttributionBackfillRequestSchema.safeParse({
+      startDate: shopifyBackfillRange.startDate,
+      endDate: shopifyBackfillRange.endDate,
+      dryRun: shopifyOrderAttributionBackfillOptions.dryRun,
+      limit: Number(shopifyOrderAttributionBackfillOptions.limit),
+      webOrdersOnly: shopifyOrderAttributionBackfillOptions.webOrdersOnly,
+      skipShopifyWriteback: shopifyOrderAttributionBackfillOptions.skipShopifyWriteback
+    });
+
+    if (!parsedRequest.success) {
+      const [firstIssue] = parsedRequest.error.issues;
+      setActionFeedback({
+        context: 'shopify-order-attribution-backfill',
+        loading: null,
+        error: firstIssue?.message ?? 'Enter a valid date range and limit before queueing the order attribution backfill.',
+        message: null
+      });
+      return;
+    }
+
+    setActionFeedback({
+      context: 'shopify-order-attribution-backfill',
+      loading: 'shopify-order-attribution-backfill',
+      error: null,
+      message: null
+    });
+
+    try {
+      const response: OrderAttributionBackfillEnqueueResponse = await enqueueOrderAttributionBackfill(parsedRequest.data);
+      const queuedJob: OrderAttributionBackfillJobResponse = {
+        ...response,
+        startedAt: null,
+        completedAt: null,
+        report: null,
+        error: null
+      };
+
+      storeOrderAttributionBackfillJobId(response.jobId);
+      setShopifyBackfillRange({
+        startDate: response.options.startDate,
+        endDate: response.options.endDate
+      });
+      setShopifyOrderAttributionBackfillOptions(toBackfillOptionState(response.options));
+      setOrderAttributionBackfillJob({
+        data: queuedJob,
+        loading: false,
+        error: null
+      });
+      await loadConnections();
+      startTransition(() => {
+        setDashboardRefreshKey((current) => current + 1);
+      });
+      setActionFeedback({
+        context: 'shopify-order-attribution-backfill',
+        loading: null,
+        error: null,
+        message: `Queued order attribution backfill job ${response.jobId} for ${response.options.startDate} to ${response.options.endDate}.`
+      });
+      void loadOrderAttributionBackfillJob(response.jobId, { preserveData: true });
+    } catch (error) {
+      setActionFeedback({
+        context: 'shopify-order-attribution-backfill',
+        loading: null,
+        error: error instanceof Error ? error.message : 'Failed to queue order attribution backfill',
         message: null
       });
     }
@@ -1561,6 +1757,11 @@ function App() {
             shopifyConnection={shopifyConnection}
             shopifyBackfillRange={shopifyBackfillRange}
             setShopifyBackfillRange={(updater) => setShopifyBackfillRange((current) => updater(current))}
+            shopifyOrderAttributionBackfillOptions={shopifyOrderAttributionBackfillOptions}
+            setShopifyOrderAttributionBackfillOptions={(updater) =>
+              setShopifyOrderAttributionBackfillOptions((current) => updater(current))
+            }
+            orderAttributionBackfillJob={orderAttributionBackfillJob}
             metaConnection={metaConnection}
             metaConfigForm={metaConfigForm}
             setMetaConfigForm={(updater) => setMetaConfigForm((current) => updater(current))}
@@ -1579,6 +1780,13 @@ function App() {
             onShopifyTest={handleShopifyTest}
             onShopifyWebhookSync={handleShopifyWebhookSync}
             onShopifyAttributionRecovery={handleShopifyAttributionRecovery}
+            onShopifyOrderAttributionBackfill={handleShopifyOrderAttributionBackfill}
+            onOrderAttributionBackfillRefresh={() => {
+              const jobId = orderAttributionBackfillJob.data?.jobId ?? readStoredOrderAttributionBackfillJobId();
+              if (jobId) {
+                void loadOrderAttributionBackfillJob(jobId, { preserveData: true });
+              }
+            }}
             onMetaConnect={handleMetaConnect}
             onMetaSync={handleMetaSync}
             onGoogleSync={handleGoogleSync}

@@ -595,6 +595,17 @@ export function createSettingsAdminProps(
     } satisfies AsyncSection<import('../dashboard/src/lib/api').ShopifyConnectionResponse>,
     shopifyBackfillRange: { startDate: '2026-04-01', endDate: '2026-04-20' },
     setShopifyBackfillRange: noop,
+    shopifyOrderAttributionBackfillOptions: {
+      dryRun: true,
+      limit: '500',
+      webOrdersOnly: true,
+      skipShopifyWriteback: false
+    },
+    orderAttributionBackfillJob: {
+      data: null,
+      loading: false,
+      error: null
+    } satisfies AsyncSection<import('../dashboard/src/lib/api').OrderAttributionBackfillJobResponse>,
     metaConnection: {
       data: {
         config: {
@@ -699,10 +710,13 @@ export function createSettingsAdminProps(
     onCreateUser: noop,
     onShopifyBackfill: noop,
     onMetaConfigSave: noop,
+    onGoogleConfigSave: noop,
     onGoogleConnect: noop,
     onShopifyTest: noop,
     onShopifyWebhookSync: noop,
     onShopifyAttributionRecovery: noop,
+    onShopifyOrderAttributionBackfill: noop,
+    onOrderAttributionBackfillRefresh: noop,
     onMetaConnect: noop,
     onMetaSync: noop,
     onGoogleSync: noop,

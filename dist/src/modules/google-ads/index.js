@@ -974,6 +974,8 @@ async function persistDailySpendSnapshot(client, params) {
         const entityId = row.campaign?.id ?? null;
         const rawPayloadMetadata = buildRawPayloadStorageMetadata(row);
         const { rawPayloadJson, payloadSizeBytes, payloadHash } = rawPayloadMetadata;
+        // docs/raw-payload-persistence-contract.md governs this table: persist the
+        // decoded Google Ads API row exactly before any projection or normalization.
         const insertResult = await client.query(`
         INSERT INTO google_ads_raw_spend_records (
           connection_id,
@@ -1027,6 +1029,8 @@ async function persistDailySpendSnapshot(client, params) {
         const entityId = row.adGroupAd?.ad?.id ?? null;
         const rawPayloadMetadata = buildRawPayloadStorageMetadata(row);
         const { rawPayloadJson, payloadSizeBytes, payloadHash } = rawPayloadMetadata;
+        // docs/raw-payload-persistence-contract.md governs this table: persist the
+        // decoded Google Ads API row exactly before any projection or normalization.
         const insertResult = await client.query(`
         INSERT INTO google_ads_raw_spend_records (
           connection_id,

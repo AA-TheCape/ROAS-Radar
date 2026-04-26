@@ -2,8 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  ORDER_ATTRIBUTION_BACKFILL_DEFAULT_LIMIT,
+  ORDER_ATTRIBUTION_BACKFILL_MAX_LIMIT,
   normalizeAttributionCaptureV1,
-  normalizeAttributionConsentState
+  normalizeAttributionConsentState,
+  normalizeOrderAttributionBackfillRequest,
+  orderAttributionBackfillEnqueueResponseSchema,
+  orderAttributionBackfillJobResponseSchema
 } from '../packages/attribution-schema/index.js';
 
 test('attribution consent state defaults to unknown and accepts explicit opt-out', () => {
@@ -74,4 +79,150 @@ test('attribution capture normalization converts empty strings to null and remov
   assert.equal(capture.gbraid, 'GB-123');
   assert.equal(capture.wbraid, null);
   assert.equal(capture.msclkid, null);
+});
+
+test('order attribution backfill request normalizes defaults', () => {
+  const request = normalizeOrderAttributionBackfillRequest({
+    startDate: '2026-04-01',
+    endDate: '2026-04-15'
+  });
+
+  assert.deepEqual(request, {
+    startDate: '2026-04-01',
+    endDate: '2026-04-15',
+    dryRun: true,
+    limit: ORDER_ATTRIBUTION_BACKFILL_DEFAULT_LIMIT,
+    webOrdersOnly: true,
+    skipShopifyWriteback: false
+  });
+});
+
+test('order attribution backfill request preserves explicit execution flags at the limit cap', () => {
+  const request = normalizeOrderAttributionBackfillRequest({
+    startDate: '2026-04-01',
+    endDate: '2026-04-15',
+    dryRun: false,
+    limit: ORDER_ATTRIBUTION_BACKFILL_MAX_LIMIT,
+    webOrdersOnly: false,
+    skipShopifyWriteback: true
+  });
+
+  assert.deepEqual(request, {
+    startDate: '2026-04-01',
+    endDate: '2026-04-15',
+    dryRun: false,
+    limit: ORDER_ATTRIBUTION_BACKFILL_MAX_LIMIT,
+    webOrdersOnly: false,
+    skipShopifyWriteback: true
+  });
+});
+
+test('order attribution backfill request rejects invalid date windows and oversized limits', () => {
+  assert.throws(
+    () =>
+      normalizeOrderAttributionBackfillRequest({
+        startDate: '2026-04-15',
+        endDate: '2026-04-01'
+      }),
+    /Start date must be on or before end date\./
+  );
+
+  assert.throws(
+    () =>
+      normalizeOrderAttributionBackfillRequest({
+        startDate: '2026-04-01',
+        endDate: '2026-04-15',
+        limit: ORDER_ATTRIBUTION_BACKFILL_MAX_LIMIT + 1
+      }),
+    /Limit must be 5000 or less\./
+  );
+});
+
+test('order attribution backfill request rejects non-positive limits', () => {
+  assert.throws(
+    () =>
+      normalizeOrderAttributionBackfillRequest({
+        startDate: '2026-04-01',
+        endDate: '2026-04-15',
+        limit: 0
+      }),
+    /Limit must be greater than 0\./
+  );
+});
+
+test('order attribution backfill responses accept normalized enqueue and job payloads', () => {
+  const enqueueResponse = orderAttributionBackfillEnqueueResponseSchema.parse({
+    ok: true,
+    jobId: '0ed2f8d7-3867-4bad-a91b-487080ec2a47',
+    status: 'queued',
+    submittedAt: '2026-04-25T12:34:56Z',
+    submittedBy: 'admin@example.com',
+    options: {
+      startDate: '2026-04-01',
+      endDate: '2026-04-15',
+      dryRun: true,
+      limit: 250,
+      webOrdersOnly: true,
+      skipShopifyWriteback: false
+    }
+  });
+
+  const jobResponse = orderAttributionBackfillJobResponseSchema.parse({
+    ...enqueueResponse,
+    status: 'completed',
+    startedAt: '2026-04-25T12:35:00Z',
+    completedAt: '2026-04-25T12:36:00Z',
+    report: {
+      scanned: 250,
+      recovered: 120,
+      unrecoverable: 130,
+      writebackCompleted: 120,
+      failures: [
+        {
+          orderId: '12345',
+          code: 'shopify_writeback_failed',
+          message: 'Writeback failed'
+        }
+      ]
+    },
+    error: null
+  });
+
+  assert.equal(enqueueResponse.submittedAt, '2026-04-25T12:34:56.000Z');
+  assert.equal(jobResponse.startedAt, '2026-04-25T12:35:00.000Z');
+  assert.equal(jobResponse.report?.failures[0]?.code, 'shopify_writeback_failed');
+});
+
+test('order attribution backfill job responses accept queued and processing payloads without reports', () => {
+  const queuedJob = orderAttributionBackfillJobResponseSchema.parse({
+    ok: true,
+    jobId: '0ed2f8d7-3867-4bad-a91b-487080ec2a47',
+    status: 'queued',
+    submittedAt: '2026-04-25T12:34:56Z',
+    submittedBy: 'admin@example.com',
+    startedAt: null,
+    completedAt: null,
+    options: {
+      startDate: '2026-04-01',
+      endDate: '2026-04-15',
+      dryRun: true,
+      limit: 500,
+      webOrdersOnly: true,
+      skipShopifyWriteback: false
+    },
+    report: null,
+    error: null
+  });
+
+  const processingJob = orderAttributionBackfillJobResponseSchema.parse({
+    ...queuedJob,
+    status: 'processing',
+    startedAt: '2026-04-25T12:35:00Z'
+  });
+
+  assert.equal(queuedJob.startedAt, null);
+  assert.equal(queuedJob.report, null);
+  assert.equal(processingJob.startedAt, '2026-04-25T12:35:00.000Z');
+  assert.equal(processingJob.completedAt, null);
+  assert.equal(processingJob.error, null);
 });

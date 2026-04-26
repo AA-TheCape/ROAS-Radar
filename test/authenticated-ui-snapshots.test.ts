@@ -328,6 +328,18 @@ async function renderSnapshots() {
       },
       shopifyBackfillRange: { startDate: '2026-04-01', endDate: '2026-04-20' },
       setShopifyBackfillRange: noop,
+      shopifyOrderAttributionBackfillOptions: {
+        dryRun: true,
+        limit: '500',
+        webOrdersOnly: true,
+        skipShopifyWriteback: false
+      },
+      setShopifyOrderAttributionBackfillOptions: noop,
+      orderAttributionBackfillJob: {
+        data: null,
+        loading: false,
+        error: null
+      },
       metaConnection: {
         data: {
           config: {
@@ -428,6 +440,7 @@ async function renderSnapshots() {
       onShopifyTest: noop,
       onShopifyWebhookSync: noop,
       onShopifyAttributionRecovery: noop,
+      onShopifyOrderAttributionBackfill: noop,
       onMetaConnect: noop,
       onMetaSync: noop,
       onGoogleSync: noop,

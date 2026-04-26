@@ -763,10 +763,6 @@ function toNullableUuid(value) {
 function normalizeNullableString(value) {
     return normalizeAttributionString(value);
 }
-function isEligibleOnlineStoreOrder(sourceName) {
-    const normalizedSource = normalizeNullableString(sourceName)?.toLowerCase();
-    return normalizedSource === 'web';
-}
 function buildLineItemExternalId(orderId, lineItem, index) {
     if (lineItem.id !== undefined && lineItem.id !== null) {
         return String(lineItem.id);
@@ -900,6 +896,8 @@ async function resolveLandingSessionId(client, payload) {
     return null;
 }
 async function upsertShopifyOrderLineItems(client, shopifyOrderId, lineItems, rawLineItems) {
+    // Keep this aligned with docs/raw-payload-persistence-contract.md: raw Shopify
+    // line-item JSON must come from the decoded source node, not the schema-reduced projection.
     await client.query('DELETE FROM shopify_order_line_items WHERE shopify_order_id = $1', [shopifyOrderId]);
     for (const [index, lineItem] of lineItems.entries()) {
         const rawLineItem = rawLineItems[index] ?? lineItem;
@@ -977,6 +975,8 @@ function extractShopifyReceiptExternalId(rawPayload, webhookId) {
     return webhookId;
 }
 async function createOrReuseWebhookReceipt(topic, shopDomain, webhookId, payloadHash, rawPayload) {
+    // docs/raw-payload-persistence-contract.md requires covered Shopify raw JSONB
+    // payloads to match the decoded-and-parsed source payload exactly.
     const rawPayloadJson = JSON.stringify(rawPayload);
     const payloadSizeBytes = Buffer.byteLength(rawPayloadJson, 'utf8');
     const payloadExternalId = extractShopifyReceiptExternalId(rawPayload, webhookId);
@@ -1161,6 +1161,8 @@ async function normalizeShopifyOrder(receiptId, payload, rawPayload) {
             payloadHash,
             rawPayloadJson
         ]);
+        // shopify_orders.raw_payload is a covered raw-source surface under
+        // docs/raw-payload-persistence-contract.md. Keep normalized columns separate.
         logRawPayloadIntegrityMismatch(rawPayloadMetadata, orderUpsertResult.rows[0], {
             surface: 'shopify_orders',
             operation: 'upsert',
@@ -1210,17 +1212,8 @@ async function persistWebhook(input) {
         });
         return { duplicated: true };
     }
-    if (!isEligibleOnlineStoreOrder(input.payload.source_name)) {
-        await markWebhookReceiptStatus(receipt.id, 'ignored');
-        logInfo('shopify_webhook_ignored', {
-            topic: input.topic,
-            shopDomain: input.shopDomain,
-            webhookId: input.webhookId,
-            sourceName: input.payload.source_name ?? null
-        });
-        return { duplicated: false };
-    }
     try {
+        // Preserve every decoded Shopify order payload in shopify_orders, regardless of source_name.
         await normalizeShopifyOrder(receipt.id, input.payload, input.rawPayload);
         logInfo('shopify_webhook_processed', {
             topic: input.topic,
@@ -1514,7 +1507,6 @@ export const __shopifyTestUtils = {
     verifyShopifyOAuthHmac,
     buildShopifyInstallUrl,
     verifyWebhookSignature,
-    isEligibleOnlineStoreOrder,
     buildLineItemExternalId,
     extractRawShopifyLineItems,
     persistWebhook,

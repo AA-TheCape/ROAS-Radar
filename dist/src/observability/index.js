@@ -43,6 +43,86 @@ function serializeError(error) {
         message: String(error)
     };
 }
+function summarizeBackfillFailures(failures) {
+    return {
+        failureCount: failures.length,
+        sampleFailures: failures.slice(0, 5)
+    };
+}
+export function summarizeOrderAttributionBackfillReport(report) {
+    return {
+        scanned: report.scanned,
+        recovered: report.recovered,
+        unrecoverable: report.unrecoverable,
+        writebackCompleted: report.writebackCompleted,
+        ...summarizeBackfillFailures(report.failures)
+    };
+}
+function normalizeBackfillErrorCode(error) {
+    if (typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string' && error.code.trim()) {
+        return error.code.trim();
+    }
+    if (error instanceof Error && error.name.trim()) {
+        return error.name.trim();
+    }
+    return null;
+}
+function normalizeBackfillErrorMessage(error) {
+    if (error instanceof Error && error.message.trim()) {
+        return error.message.trim();
+    }
+    if (typeof error === 'string' && error.trim()) {
+        return error.trim();
+    }
+    return null;
+}
+function toBackfillLifecycleStatus(stage) {
+    switch (stage) {
+        case 'enqueued':
+            return 'queued';
+        case 'started':
+            return 'processing';
+        case 'completed':
+            return 'completed';
+        case 'failed':
+            return 'failed';
+    }
+}
+export function emitOrderAttributionBackfillJobLifecycleLog(input) {
+    const fields = {
+        service: process.env.K_SERVICE ?? 'roas-radar',
+        stage: input.stage,
+        status: toBackfillLifecycleStatus(input.stage),
+        jobId: input.jobId,
+        workerId: input.workerId,
+        submittedAt: input.submittedAt,
+        startedAt: input.startedAt,
+        completedAt: input.completedAt,
+        startDate: input.options.startDate,
+        endDate: input.options.endDate,
+        dryRun: input.options.dryRun,
+        limit: input.options.limit,
+        webOrdersOnly: input.options.webOrdersOnly,
+        skipShopifyWriteback: input.options.skipShopifyWriteback
+    };
+    if (input.report) {
+        fields.report = summarizeOrderAttributionBackfillReport(input.report);
+    }
+    if (input.stage === 'failed') {
+        const errorCode = normalizeBackfillErrorCode(input.error);
+        const errorMessage = normalizeBackfillErrorMessage(input.error);
+        if (errorCode) {
+            fields.code = errorCode;
+        }
+        if (errorMessage) {
+            fields.failureMessage = errorMessage;
+        }
+        fields.alertable = true;
+        logError('order_attribution_backfill_job_lifecycle', input.error ?? new Error('Order attribution backfill job failed'), fields);
+        return;
+    }
+    logInfo('order_attribution_backfill_job_lifecycle', fields);
+}
 function writeLog(severity, event, fields, stream) {
     const context = requestContextStorage.getStore();
     const payload = {
@@ -206,7 +286,9 @@ export function buildAttributionBacklogLog(snapshot) {
 }
 export const __observabilityTestUtils = {
     buildAttributionBacklogLog,
+    emitOrderAttributionBackfillJobLifecycleLog,
     parseCloudTraceContext,
+    summarizeOrderAttributionBackfillReport,
     summarizeAttributionObservation,
     summarizeDualWriteConsistency,
     summarizeResolverOutcome

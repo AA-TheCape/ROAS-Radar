@@ -1,4 +1,5 @@
 import React, { useMemo, useState, type FormEvent } from 'react';
+import { ORDER_ATTRIBUTION_BACKFILL_MAX_LIMIT } from '../../../packages/attribution-schema/index.js';
 
 import type {
   AppSettings,
@@ -7,6 +8,7 @@ import type {
   GoogleAdsStatusResponse,
   MetaAdsConfigSummary,
   MetaAdsConnection,
+  OrderAttributionBackfillJobResponse,
   ShopifyConnectionResponse
 } from '../lib/api';
 import { formatDateLabel, formatDateTimeLabel } from '../lib/format';
@@ -33,6 +35,7 @@ import {
   Input,
   MetricCopy,
   MetricValue,
+  Modal,
   Panel,
   PrimaryCell,
   SectionState,
@@ -119,6 +122,26 @@ type SettingsAdminViewProps = {
   setShopifyBackfillRange: (
     updater: (current: { startDate: string; endDate: string }) => { startDate: string; endDate: string }
   ) => void;
+  shopifyOrderAttributionBackfillOptions: {
+    dryRun: boolean;
+    limit: string;
+    webOrdersOnly: boolean;
+    skipShopifyWriteback: boolean;
+  };
+  setShopifyOrderAttributionBackfillOptions: (
+    updater: (current: {
+      dryRun: boolean;
+      limit: string;
+      webOrdersOnly: boolean;
+      skipShopifyWriteback: boolean;
+    }) => {
+      dryRun: boolean;
+      limit: string;
+      webOrdersOnly: boolean;
+      skipShopifyWriteback: boolean;
+    }
+  ) => void;
+  orderAttributionBackfillJob: AsyncSection<OrderAttributionBackfillJobResponse>;
   metaConnection: AsyncSection<MetaConnectionState>;
   metaConfigForm: MetaConfigForm;
   setMetaConfigForm: (updater: (current: MetaConfigForm) => MetaConfigForm) => void;
@@ -137,6 +160,8 @@ type SettingsAdminViewProps = {
   onShopifyTest: () => void | Promise<void>;
   onShopifyWebhookSync: () => void | Promise<void>;
   onShopifyAttributionRecovery: () => void | Promise<void>;
+  onShopifyOrderAttributionBackfill: () => void | Promise<void>;
+  onOrderAttributionBackfillRefresh: () => void | Promise<void>;
   onMetaConnect: () => void | Promise<void>;
   onMetaSync: () => void | Promise<void>;
   onGoogleSync: () => void | Promise<void>;
@@ -218,6 +243,66 @@ function DetailGrid({ children }: { children: JSX.Element[] | JSX.Element }) {
   return <DetailList className="xl:grid-cols-2">{children}</DetailList>;
 }
 
+function RecoveryAction({
+  label,
+  description,
+  loadingLabel,
+  isLoading,
+  disabled,
+  selected = false,
+  type = 'button',
+  onClick
+}: {
+  label: string;
+  description: string;
+  loadingLabel: string;
+  isLoading: boolean;
+  disabled: boolean;
+  selected?: boolean;
+  type?: 'button' | 'submit';
+  onClick?: () => void;
+}) {
+  return (
+    <div
+      className={[
+        'grid gap-3 rounded-card border bg-surface/85 p-4 shadow-inset-soft',
+        selected ? 'border-brand/40 bg-brand-soft/35' : 'border-line/60'
+      ].join(' ')}
+    >
+      <Button type={type} tone="secondary" onClick={onClick} disabled={disabled}>
+        {isLoading ? loadingLabel : label}
+      </Button>
+      <p className="text-body text-ink-muted">{description}</p>
+    </div>
+  );
+}
+
+function getOrderAttributionJobTone(status: OrderAttributionBackfillJobResponse['status']) {
+  switch (status) {
+    case 'queued':
+      return 'warning';
+    case 'processing':
+      return 'brand';
+    case 'completed':
+      return 'success';
+    case 'failed':
+      return 'danger';
+  }
+}
+
+function getOrderAttributionJobLabel(status: OrderAttributionBackfillJobResponse['status']) {
+  switch (status) {
+    case 'queued':
+      return 'Queued';
+    case 'processing':
+      return 'Running';
+    case 'completed':
+      return 'Completed';
+    case 'failed':
+      return 'Failed';
+  }
+}
+
 export default function SettingsAdminView({
   isAdmin,
   reportingTimezone,
@@ -233,6 +318,9 @@ export default function SettingsAdminView({
   shopifyConnection,
   shopifyBackfillRange,
   setShopifyBackfillRange,
+  shopifyOrderAttributionBackfillOptions,
+  setShopifyOrderAttributionBackfillOptions,
+  orderAttributionBackfillJob,
   metaConnection,
   metaConfigForm,
   setMetaConfigForm,
@@ -251,12 +339,18 @@ export default function SettingsAdminView({
   onShopifyTest,
   onShopifyWebhookSync,
   onShopifyAttributionRecovery,
+  onShopifyOrderAttributionBackfill,
+  onOrderAttributionBackfillRefresh,
   onMetaConnect,
   onMetaSync,
   onGoogleSync,
   onGoogleReconcile
 }: SettingsAdminViewProps) {
   const [userSearch, setUserSearch] = useState('');
+  const [selectedRecoveryAction, setSelectedRecoveryAction] = useState<
+    'shopify-backfill' | 'shopify-attribution-recovery' | 'shopify-order-attribution-backfill' | null
+  >(null);
+  const [showOrderAttributionConfirmModal, setShowOrderAttributionConfirmModal] = useState(false);
   const [userSort, setUserSort] = useState<SortState<'user' | 'role' | 'status' | 'lastLogin'>>({
     key: 'user',
     direction: 'asc'
@@ -268,6 +362,20 @@ export default function SettingsAdminView({
     shopifyBackfillRange.startDate && shopifyBackfillRange.endDate && shopifyBackfillRange.startDate > shopifyBackfillRange.endDate
       ? 'Backfill end must be on or after the start date.'
       : null;
+  const trimmedOrderAttributionLimit = shopifyOrderAttributionBackfillOptions.limit.trim();
+  const parsedOrderAttributionLimit =
+    trimmedOrderAttributionLimit.length > 0 ? Number(trimmedOrderAttributionLimit) : Number.NaN;
+  const orderAttributionLimitError =
+    !trimmedOrderAttributionLimit
+      ? 'Enter the maximum number of orders to scan.'
+      : !Number.isInteger(parsedOrderAttributionLimit)
+        ? 'Limit must be a whole number.'
+        : parsedOrderAttributionLimit <= 0
+          ? 'Limit must be greater than 0.'
+          : parsedOrderAttributionLimit > ORDER_ATTRIBUTION_BACKFILL_MAX_LIMIT
+            ? `Limit must be ${ORDER_ATTRIBUTION_BACKFILL_MAX_LIMIT} or less.`
+            : null;
+  const orderAttributionBackfillError = shopifyBackfillError ?? orderAttributionLimitError;
   const trimmedDisplayName = newUserForm.displayName.trim();
   const trimmedEmail = newUserForm.email.trim();
   const createUserErrors = {
@@ -306,7 +414,9 @@ export default function SettingsAdminView({
   };
   const isSettingsSaving = actionFeedback.loading === 'settings-save';
   const isShopifyBusy =
-    actionFeedback.loading === 'shopify-backfill' || actionFeedback.loading === 'shopify-attribution-recovery';
+    actionFeedback.loading === 'shopify-backfill' ||
+    actionFeedback.loading === 'shopify-attribution-recovery' ||
+    actionFeedback.loading === 'shopify-order-attribution-backfill';
   const isMetaConfigSaving = actionFeedback.loading === 'meta-config-save';
   const isMetaActionBusy = actionFeedback.loading === 'meta-connect' || actionFeedback.loading === 'meta-sync';
   const isGoogleBusy =
@@ -328,6 +438,10 @@ export default function SettingsAdminView({
   const timezoneUpdatedAt = appSettings.data?.updatedAt
     ? formatOptionalDateTime(appSettings.data.updatedAt, reportingTimezone)
     : 'Awaiting first save';
+  const latestOrderAttributionJob = orderAttributionBackfillJob.data;
+  const showOrderAttributionJobCard = Boolean(
+    latestOrderAttributionJob || orderAttributionBackfillJob.loading || orderAttributionBackfillJob.error
+  );
   const users = usersSection.data ?? [];
   const filteredUsers = useMemo(
     () => users.filter((user) => matchesQuery([user.displayName, user.email, user.status, user.isAdmin ? 'Admin' : 'Viewer'], userSearch)),
@@ -350,6 +464,24 @@ export default function SettingsAdminView({
       key,
       direction: current.key === key && current.direction === 'desc' ? 'asc' : 'desc'
     }));
+  }
+
+  function handleOrderAttributionQueueClick() {
+    if (shopifyOrderAttributionBackfillOptions.dryRun) {
+      void onShopifyOrderAttributionBackfill();
+      return;
+    }
+
+    setShowOrderAttributionConfirmModal(true);
+  }
+
+  function closeOrderAttributionConfirmModal() {
+    setShowOrderAttributionConfirmModal(false);
+  }
+
+  function confirmOrderAttributionBackfill() {
+    setShowOrderAttributionConfirmModal(false);
+    void onShopifyOrderAttributionBackfill();
   }
 
   return (
@@ -539,11 +671,15 @@ export default function SettingsAdminView({
                     <Card padding="compact" className="border-line/60 bg-canvas-tint/80 shadow-none">
                       <Eyebrow>Recovery tools</Eyebrow>
                       <p className="mt-2 text-body text-ink-soft">
-                        Backfill imports historical orders. Attribution recovery rescans unattributed web orders in the same date window.
+                        Use these in order for the selected date window: import Shopify orders first, recover attribution hints second, and queue the broader attribution backfill last only if the earlier steps still leave gaps.
                       </p>
                     </Card>
 
-                    {hasMessageForAction(actionFeedback, ['shopify-backfill', 'shopify-attribution-recovery']) ? (
+                    {hasMessageForAction(actionFeedback, [
+                      'shopify-backfill',
+                      'shopify-attribution-recovery',
+                      'shopify-order-attribution-backfill'
+                    ]) ? (
                       <FormMessage tone={actionFeedback.error ? 'error' : isShopifyBusy ? 'warning' : 'success'}>
                         {actionFeedback.error
                           ? actionFeedback.error
@@ -553,23 +689,294 @@ export default function SettingsAdminView({
                       </FormMessage>
                     ) : null}
 
-                    <ButtonRow>
-                      <Button
+                    <div className="grid gap-3 xl:grid-cols-3">
+                      <RecoveryAction
                         type="submit"
-                        tone="secondary"
+                        label="Import Shopify orders"
+                        loadingLabel="Backfilling…"
+                        isLoading={actionFeedback.loading === 'shopify-backfill'}
                         disabled={Boolean(shopifyBackfillError) || !shopifyConnection.data?.connected}
-                      >
-                        {actionFeedback.loading === 'shopify-backfill' ? 'Backfilling…' : 'Backfill Shopify orders'}
-                      </Button>
-                      <Button
-                        type="button"
-                        tone="secondary"
-                        onClick={() => void onShopifyAttributionRecovery()}
+                        onClick={() => setSelectedRecoveryAction('shopify-backfill')}
+                        description="Run this first to import historical Shopify orders for the window; it can pull a large backlog, so start with the narrowest range that fixes the gap."
+                      />
+                      <RecoveryAction
+                        label="Recover attribution hints"
+                        loadingLabel="Recovering…"
+                        isLoading={actionFeedback.loading === 'shopify-attribution-recovery'}
                         disabled={Boolean(shopifyBackfillError) || !shopifyConnection.data?.connected}
-                      >
-                        {actionFeedback.loading === 'shopify-attribution-recovery' ? 'Recovering…' : 'Recover attribution hints'}
-                      </Button>
-                    </ButtonRow>
+                        onClick={() => {
+                          setSelectedRecoveryAction('shopify-attribution-recovery');
+                          void onShopifyAttributionRecovery();
+                        }}
+                        description="Run this second when imported Shopify web orders are still unattributed; it retries deterministic relinking, then applies Shopify-hint fallback only where matching still failed."
+                      />
+                      <RecoveryAction
+                        label={
+                          selectedRecoveryAction === 'shopify-order-attribution-backfill'
+                            ? 'Attribution options selected'
+                            : 'Select attribution backfill'
+                        }
+                        loadingLabel="Queueing…"
+                        isLoading={actionFeedback.loading === 'shopify-order-attribution-backfill'}
+                        disabled={!shopifyConnection.data?.connected}
+                        selected={selectedRecoveryAction === 'shopify-order-attribution-backfill'}
+                        onClick={() => setSelectedRecoveryAction('shopify-order-attribution-backfill')}
+                        description="Run this last to queue the broader asynchronous attribution backfill for the same window; always do a dry run first before turning on write-enabled recovery."
+                      />
+                    </div>
+
+                    {selectedRecoveryAction === 'shopify-order-attribution-backfill' ? (
+                      <Card padding="compact" className="border-brand/25 bg-brand-soft/20 shadow-none">
+                        <div className="grid gap-4">
+                          <div className="grid gap-2">
+                            <Eyebrow>Attribution backfill options</Eyebrow>
+                            <p className="text-body text-ink-soft">
+                              Review these before queueing the asynchronous attribution backfill for the selected date window.
+                            </p>
+                            <p className="text-body text-ink-soft">
+                              Run a dry run first for this exact window, then keep the same dates when you queue a write-enabled run.
+                            </p>
+                          </div>
+
+                          <FieldGrid>
+                            <Field
+                              label="Order scan limit"
+                              htmlFor="shopify-order-attribution-limit"
+                              required
+                              description={`Cap the job size for this run. Maximum ${ORDER_ATTRIBUTION_BACKFILL_MAX_LIMIT} orders.`}
+                              error={orderAttributionLimitError ?? undefined}
+                            >
+                              <Input
+                                id="shopify-order-attribution-limit"
+                                type="number"
+                                inputMode="numeric"
+                                min={1}
+                                max={ORDER_ATTRIBUTION_BACKFILL_MAX_LIMIT}
+                                step={1}
+                                value={shopifyOrderAttributionBackfillOptions.limit}
+                                onChange={(event) =>
+                                  setShopifyOrderAttributionBackfillOptions((current) => ({
+                                    ...current,
+                                    limit: event.target.value
+                                  }))
+                                }
+                                aria-invalid={orderAttributionLimitError ? 'true' : 'false'}
+                                required
+                              />
+                            </Field>
+                          </FieldGrid>
+
+                          <div className="grid gap-3 xl:grid-cols-2">
+                            <CheckboxField
+                              label="Dry run"
+                              htmlFor="shopify-order-attribution-dry-run"
+                              description="Defaults to enabled. Keep this on for the first run so the job analyzes the window without writing attribution changes."
+                            >
+                              <input
+                                id="shopify-order-attribution-dry-run"
+                                type="checkbox"
+                                checked={shopifyOrderAttributionBackfillOptions.dryRun}
+                                onChange={(event) =>
+                                  setShopifyOrderAttributionBackfillOptions((current) => ({
+                                    ...current,
+                                    dryRun: event.target.checked
+                                  }))
+                                }
+                              />
+                            </CheckboxField>
+
+                            <CheckboxField
+                              label="Web orders only"
+                              htmlFor="shopify-order-attribution-web-only"
+                              description="Defaults to enabled. Keep the backfill focused on Shopify web orders unless you explicitly need other order sources."
+                            >
+                              <input
+                                id="shopify-order-attribution-web-only"
+                                type="checkbox"
+                                checked={shopifyOrderAttributionBackfillOptions.webOrdersOnly}
+                                onChange={(event) =>
+                                  setShopifyOrderAttributionBackfillOptions((current) => ({
+                                    ...current,
+                                    webOrdersOnly: event.target.checked
+                                  }))
+                                }
+                              />
+                            </CheckboxField>
+
+                            <CheckboxField
+                              label="Skip Shopify writeback"
+                              htmlFor="shopify-order-attribution-skip-writeback"
+                              description="Defaults to off. Turn this on only when you want local attribution updates without Shopify writeback."
+                            >
+                              <input
+                                id="shopify-order-attribution-skip-writeback"
+                                type="checkbox"
+                                checked={shopifyOrderAttributionBackfillOptions.skipShopifyWriteback}
+                                onChange={(event) =>
+                                  setShopifyOrderAttributionBackfillOptions((current) => ({
+                                    ...current,
+                                    skipShopifyWriteback: event.target.checked
+                                  }))
+                                }
+                              />
+                            </CheckboxField>
+                          </div>
+
+                          <ButtonRow>
+                            <Button
+                              type="button"
+                              onClick={handleOrderAttributionQueueClick}
+                              disabled={Boolean(orderAttributionBackfillError) || !shopifyConnection.data?.connected || isShopifyBusy}
+                            >
+                              {actionFeedback.loading === 'shopify-order-attribution-backfill'
+                                ? 'Queueing…'
+                                : 'Queue order attribution backfill'}
+                            </Button>
+                          </ButtonRow>
+                        </div>
+                      </Card>
+                    ) : null}
+
+                    {showOrderAttributionJobCard ? (
+                      <Card padding="compact" className="border-line/60 bg-canvas-tint/80 shadow-none">
+                        <div className="grid gap-4">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div className="grid gap-2">
+                              <Eyebrow>Latest attribution backfill run</Eyebrow>
+                              <p className="text-body text-ink-soft">
+                                Reloading the page keeps tracking this job by its latest queued id until a newer run replaces it.
+                              </p>
+                            </div>
+                            {latestOrderAttributionJob ? (
+                              <StatusPill tone={getOrderAttributionJobTone(latestOrderAttributionJob.status)}>
+                                {getOrderAttributionJobLabel(latestOrderAttributionJob.status)}
+                              </StatusPill>
+                            ) : null}
+                          </div>
+
+                          {orderAttributionBackfillJob.error ? (
+                            <Banner tone="error">{orderAttributionBackfillJob.error}</Banner>
+                          ) : null}
+
+                          {latestOrderAttributionJob ? (
+                            <>
+                              <DetailList className="xl:grid-cols-2">
+                                <div>
+                                  <dt>Job ID</dt>
+                                  <dd>{latestOrderAttributionJob.jobId}</dd>
+                                </div>
+                                <div>
+                                  <dt>Date window</dt>
+                                  <dd>
+                                    {latestOrderAttributionJob.options.startDate} to {latestOrderAttributionJob.options.endDate}
+                                  </dd>
+                                </div>
+                                <div>
+                                  <dt>Submitted</dt>
+                                  <dd>{formatOptionalDateTime(latestOrderAttributionJob.submittedAt, reportingTimezone)}</dd>
+                                </div>
+                                <div>
+                                  <dt>Submitted by</dt>
+                                  <dd>{latestOrderAttributionJob.submittedBy}</dd>
+                                </div>
+                                <div>
+                                  <dt>Started</dt>
+                                  <dd>{formatOptionalDateTime(latestOrderAttributionJob.startedAt, reportingTimezone)}</dd>
+                                </div>
+                                <div>
+                                  <dt>Completed</dt>
+                                  <dd>{formatOptionalDateTime(latestOrderAttributionJob.completedAt, reportingTimezone)}</dd>
+                                </div>
+                                <div>
+                                  <dt>Mode</dt>
+                                  <dd>{latestOrderAttributionJob.options.dryRun ? 'Dry run' : 'Write changes'}</dd>
+                                </div>
+                                <div>
+                                  <dt>Order limit</dt>
+                                  <dd>{latestOrderAttributionJob.options.limit}</dd>
+                                </div>
+                                <div>
+                                  <dt>Web orders only</dt>
+                                  <dd>{latestOrderAttributionJob.options.webOrdersOnly ? 'Yes' : 'No'}</dd>
+                                </div>
+                                <div>
+                                  <dt>Shopify writeback</dt>
+                                  <dd>
+                                    {latestOrderAttributionJob.options.skipShopifyWriteback ? 'Skipped' : 'Allowed'}
+                                  </dd>
+                                </div>
+                              </DetailList>
+
+                              {latestOrderAttributionJob.status === 'queued' || latestOrderAttributionJob.status === 'processing' ? (
+                                <Banner tone="warning">
+                                  {latestOrderAttributionJob.status === 'queued'
+                                    ? 'This backfill is queued and will update here once a worker starts it.'
+                                    : 'This backfill is currently running. The report will populate automatically when processing finishes.'}
+                                </Banner>
+                              ) : null}
+
+                              {latestOrderAttributionJob.error ? (
+                                <Banner tone="error">
+                                  {latestOrderAttributionJob.error.code}: {latestOrderAttributionJob.error.message}
+                                </Banner>
+                              ) : null}
+
+                              {latestOrderAttributionJob.report ? (
+                                <div className="grid gap-4">
+                                  <DetailList className="xl:grid-cols-2">
+                                    <div>
+                                      <dt>Orders scanned</dt>
+                                      <dd>{latestOrderAttributionJob.report.scanned}</dd>
+                                    </div>
+                                    <div>
+                                      <dt>Recovered</dt>
+                                      <dd>{latestOrderAttributionJob.report.recovered}</dd>
+                                    </div>
+                                    <div>
+                                      <dt>Unrecoverable</dt>
+                                      <dd>{latestOrderAttributionJob.report.unrecoverable}</dd>
+                                    </div>
+                                    <div>
+                                      <dt>Shopify writebacks</dt>
+                                      <dd>{latestOrderAttributionJob.report.writebackCompleted}</dd>
+                                    </div>
+                                    <div>
+                                      <dt>Failures</dt>
+                                      <dd>{latestOrderAttributionJob.report.failures.length}</dd>
+                                    </div>
+                                  </DetailList>
+
+                                  {latestOrderAttributionJob.report.failures.length ? (
+                                    <div className="grid gap-2">
+                                      <Eyebrow>Recent failures</Eyebrow>
+                                      <div className="grid gap-2">
+                                        {latestOrderAttributionJob.report.failures.slice(0, 3).map((failure, index) => (
+                                          <Banner key={`${failure.orderId ?? 'unknown'}-${failure.code}-${index}`} tone="warning">
+                                            {failure.orderId ? `${failure.orderId}: ` : ''}
+                                            {failure.code} ({failure.message})
+                                          </Banner>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  ) : null}
+                                </div>
+                              ) : null}
+                            </>
+                          ) : null}
+
+                          <ButtonRow>
+                            <Button
+                              type="button"
+                              tone="secondary"
+                              onClick={() => void onOrderAttributionBackfillRefresh()}
+                              disabled={orderAttributionBackfillJob.loading || latestOrderAttributionJob == null}
+                            >
+                              {orderAttributionBackfillJob.loading ? 'Refreshing…' : 'Refresh backfill status'}
+                            </Button>
+                          </ButtonRow>
+                        </div>
+                      </Card>
+                    ) : null}
                   </FormSection>
                 </Form>
 
@@ -589,6 +996,51 @@ export default function SettingsAdminView({
               </div>
             </ConnectionState>
           </IntegrationCard>
+          <Modal
+            open={showOrderAttributionConfirmModal}
+            title="Confirm non-dry-run attribution backfill"
+            description="This run will write recovered attribution changes instead of only analyzing the selected date window."
+            onClose={closeOrderAttributionConfirmModal}
+            footer={
+              <>
+                <Button type="button" tone="secondary" onClick={closeOrderAttributionConfirmModal}>
+                  No, go back
+                </Button>
+                <Button type="button" onClick={confirmOrderAttributionBackfill}>
+                  Yes, queue backfill
+                </Button>
+              </>
+            }
+          >
+            <div className="grid gap-4">
+              <Banner tone="warning">
+                This non-dry-run backfill may update internal attribution data
+                {shopifyOrderAttributionBackfillOptions.skipShopifyWriteback
+                  ? ', but Shopify writeback is disabled for this run.'
+                  : ' and may also write updates back to Shopify when recovered attribution is available.'}
+              </Banner>
+              <DetailList className="xl:grid-cols-2">
+                <div>
+                  <dt>Date window</dt>
+                  <dd>
+                    {shopifyBackfillRange.startDate} to {shopifyBackfillRange.endDate}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Order scan limit</dt>
+                  <dd>{shopifyOrderAttributionBackfillOptions.limit}</dd>
+                </div>
+                <div>
+                  <dt>Web orders only</dt>
+                  <dd>{shopifyOrderAttributionBackfillOptions.webOrdersOnly ? 'Yes' : 'No'}</dd>
+                </div>
+                <div>
+                  <dt>Shopify writeback</dt>
+                  <dd>{shopifyOrderAttributionBackfillOptions.skipShopifyWriteback ? 'Skipped' : 'Allowed'}</dd>
+                </div>
+              </DetailList>
+            </div>
+          </Modal>
 
           <IntegrationCard
             eyebrow="Ad platform"

@@ -1,5 +1,25 @@
 import { z } from 'zod';
 
+export {
+  ORDER_ATTRIBUTION_BACKFILL_DEFAULT_LIMIT,
+  ORDER_ATTRIBUTION_BACKFILL_MAX_LIMIT,
+  normalizeOrderAttributionBackfillRequest,
+  orderAttributionBackfillEnqueueResponseSchema,
+  orderAttributionBackfillFailureSchema,
+  orderAttributionBackfillJobResponseSchema,
+  orderAttributionBackfillJobStatusSchema,
+  orderAttributionBackfillReportSchema,
+  orderAttributionBackfillRequestSchema,
+  orderAttributionBackfillSubmittedOptionsSchema,
+  type OrderAttributionBackfillEnqueueResponse,
+  type OrderAttributionBackfillFailure,
+  type OrderAttributionBackfillJobResponse,
+  type OrderAttributionBackfillJobStatus,
+  type OrderAttributionBackfillReport,
+  type OrderAttributionBackfillRequest,
+  type OrderAttributionBackfillSubmittedOptions
+} from './order-attribution-backfill.js';
+
 export const ATTRIBUTION_SCHEMA_VERSION = 1 as const;
 export const MAX_ATTRIBUTION_URL_LENGTH = 2048;
 export const MAX_ATTRIBUTION_TEXT_LENGTH = 255;
