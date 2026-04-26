@@ -113,7 +113,6 @@ type OrderDetailsRow = {
   shopify_order_number: string | null;
   shopify_customer_id: string | null;
   customer_identity_id: string | null;
-  email: string | null;
   email_hash: string | null;
   currency_code: string;
   subtotal_price: string | number;
@@ -573,7 +572,6 @@ export function createReportingRouter(): Router {
             o.shopify_order_number,
             o.shopify_customer_id,
             o.customer_identity_id::text AS customer_identity_id,
-            o.email,
             o.email_hash,
             o.currency_code,
             o.subtotal_price,
@@ -660,7 +658,6 @@ export function createReportingRouter(): Router {
           shopifyOrderNumber: order.shopify_order_number,
           shopifyCustomerId: order.shopify_customer_id,
           customerIdentityId: order.customer_identity_id,
-          email: order.email,
           emailHash: order.email_hash,
           currencyCode: order.currency_code,
           subtotalPrice: Number(order.subtotal_price),

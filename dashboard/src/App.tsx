@@ -23,6 +23,8 @@ import {
   fetchAppSettings,
   fetchCampaigns,
   fetchCurrentUser,
+  fetchIdentityHealthConflicts,
+  fetchIdentityHealthOverview,
   fetchGoogleAdsStatus,
   fetchMetaAdsStatus,
   fetchOrderDetails,
@@ -53,6 +55,9 @@ import {
   type CreateUserPayload,
   type GoogleAdsConfigSummary,
   type GoogleAdsStatusResponse,
+  type IdentityConflictsResponse,
+  type IdentityHealthFilters,
+  type IdentityHealthOverviewResponse,
   type MetaAdsConnection,
   type MetaAdsConfigSummary,
   type OrderAttributionBackfillEnqueueResponse,
@@ -97,6 +102,7 @@ import {
 const ReportingDashboard = lazy(() => import('./components/ReportingDashboard'));
 const OrderDetailsView = lazy(() => import('./components/OrderDetailsView'));
 const SettingsAdminView = lazy(() => import('./components/SettingsAdminView'));
+const IdentityGraphHealthView = lazy(() => import('./components/IdentityGraphHealthView'));
 
 type AsyncSection<T> = {
   data: T | null;
@@ -161,13 +167,18 @@ type SettingsForm = {
   reportingTimezone: string;
 };
 
-type AppPage = 'dashboard' | 'settings' | 'order-details';
+type AppPage = 'dashboard' | 'identity-health' | 'settings' | 'order-details';
 
 const AUTHENTICATED_NAV_ITEMS: AppShellNavItem[] = [
   {
     key: 'dashboard',
     label: 'Dashboard',
     description: 'Summary metrics, campaign performance, time-based revenue trends, and attributed order rows.'
+  },
+  {
+    key: 'identity-health',
+    label: 'Identity health',
+    description: 'Merge activity, conflict drill-down, unlinked session pressure, and identity graph backfill status.'
   },
   {
     key: 'settings',
@@ -603,6 +614,20 @@ function App() {
   const [groupBy, setGroupBy] = useState<TimeseriesGroupBy>(initialDashboardState.groupBy);
   const [currentPage, setCurrentPage] = useState<AppPage>('dashboard');
   const [dashboardRefreshKey, setDashboardRefreshKey] = useState(0);
+  const [identityHealthFilters, setIdentityHealthFilters] = useState<IdentityHealthFilters>({
+    ...buildRange(30, DEFAULT_REPORTING_TIMEZONE),
+    source: ''
+  });
+  const [identityHealthOverview, setIdentityHealthOverview] = useState<AsyncSection<IdentityHealthOverviewResponse>>({
+    data: null,
+    loading: false,
+    error: null
+  });
+  const [identityHealthConflicts, setIdentityHealthConflicts] = useState<AsyncSection<IdentityConflictsResponse>>({
+    data: null,
+    loading: false,
+    error: null
+  });
   const [shopifyConnection, setShopifyConnection] = useState<AsyncSection<ShopifyConnectionResponse>>(createLoadingSection());
   const [shopifyBackfillRange, setShopifyBackfillRange] = useState({
     startDate: buildAprilFirstDateInput(DEFAULT_REPORTING_TIMEZONE),
@@ -661,6 +686,46 @@ function App() {
 
   const dashboard = useDashboardData(appliedFilters, groupBy, authState.user !== null, dashboardRefreshKey);
   const reportingTimezone = appSettings.data?.reportingTimezone ?? settingsForm.reportingTimezone ?? DEFAULT_REPORTING_TIMEZONE;
+
+  const loadIdentityHealth = useCallback(async () => {
+    if (!authState.user?.isAdmin) {
+      setIdentityHealthOverview({
+        data: null,
+        loading: false,
+        error: null
+      });
+      setIdentityHealthConflicts({
+        data: null,
+        loading: false,
+        error: null
+      });
+      return;
+    }
+
+    setIdentityHealthOverview({
+      data: null,
+      loading: true,
+      error: null
+    });
+    setIdentityHealthConflicts({
+      data: null,
+      loading: true,
+      error: null
+    });
+
+    try {
+      const [overview, conflicts] = await Promise.all([
+        fetchIdentityHealthOverview(identityHealthFilters),
+        fetchIdentityHealthConflicts(identityHealthFilters, 25)
+      ]);
+      setIdentityHealthOverview(createResolvedSection(overview));
+      setIdentityHealthConflicts(createResolvedSection(conflicts));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load identity health metrics';
+      setIdentityHealthOverview(createErroredSection(message));
+      setIdentityHealthConflicts(createErroredSection(message));
+    }
+  }, [authState.user?.isAdmin, identityHealthFilters]);
 
   const loadAppSettings = useCallback(async () => {
     setAppSettings(createLoadingSection());
@@ -762,9 +827,39 @@ function App() {
       loading: false,
       error: null
     });
+    setIdentityHealthOverview({
+      data: null,
+      loading: false,
+      error: null
+    });
+    setIdentityHealthConflicts({
+      data: null,
+      loading: false,
+      error: null
+    });
     setMetaConnection(createLoadingSection());
     setGoogleConnection(createLoadingSection());
   }, [authState.user, loadAppSettings, loadConnections]);
+
+  useEffect(() => {
+    if (authState.user?.isAdmin && currentPage === 'identity-health') {
+      void loadIdentityHealth();
+      return;
+    }
+
+    if (!authState.user?.isAdmin) {
+      setIdentityHealthOverview({
+        data: null,
+        loading: false,
+        error: null
+      });
+      setIdentityHealthConflicts({
+        data: null,
+        loading: false,
+        error: null
+      });
+    }
+  }, [authState.user?.isAdmin, currentPage, loadIdentityHealth]);
 
   useEffect(() => {
     if (!authState.user?.isAdmin) {
@@ -1019,6 +1114,16 @@ function App() {
       message: null
     });
     setOrderAttributionBackfillJob({
+      data: null,
+      loading: false,
+      error: null
+    });
+    setIdentityHealthOverview({
+      data: null,
+      loading: false,
+      error: null
+    });
+    setIdentityHealthConflicts({
       data: null,
       loading: false,
       error: null
@@ -1531,11 +1636,15 @@ function App() {
     }
   }
 
+  const authenticatedUser = authState.user;
+  const isAdmin = authenticatedUser?.isAdmin ?? false;
   const activeNavKey = currentPage;
   const shellNavItems: AppShellNavItem[] =
     currentPage === 'order-details'
       ? [
-          ...AUTHENTICATED_NAV_ITEMS,
+          ...(isAdmin
+            ? AUTHENTICATED_NAV_ITEMS
+            : AUTHENTICATED_NAV_ITEMS.filter((item) => item.key !== 'identity-health')),
           {
             key: 'order-details',
             label: 'Order details',
@@ -1543,13 +1652,20 @@ function App() {
             description: 'Contextual drill-in for a selected attributed Shopify order.'
           }
         ]
-      : AUTHENTICATED_NAV_ITEMS;
+      : isAdmin
+        ? AUTHENTICATED_NAV_ITEMS
+        : AUTHENTICATED_NAV_ITEMS.filter((item) => item.key !== 'identity-health');
   const breadcrumbs: AppShellBreadcrumb[] =
     currentPage === 'dashboard'
       ? [
           { label: 'Authenticated app' },
           { label: 'Dashboard', current: true }
         ]
+      : currentPage === 'identity-health'
+        ? [
+            { label: 'Authenticated app' },
+            { label: 'Identity health', current: true }
+          ]
       : currentPage === 'settings'
         ? [
             { label: 'Authenticated app' },
@@ -1583,6 +1699,10 @@ function App() {
         return;
       }
 
+      if (key === 'identity-health' && !authState.user?.isAdmin) {
+        return;
+      }
+
       setSelectedOrderId(null);
       setOrderDetailsSection({
         data: null,
@@ -1591,7 +1711,7 @@ function App() {
       });
       setCurrentPage(key as AppPage);
     },
-    [closeOrderDetails]
+    [authState.user?.isAdmin, closeOrderDetails]
   );
   const handleDashboardFiltersChange = useCallback((next: ReportingFilters) => {
     setFilters(normalizeReportingFilters(next));
@@ -1660,8 +1780,6 @@ function App() {
       </AuthGate>
     );
   }
-
-  const authenticatedUser = authState.user;
 
   return (
     <AuthenticatedAppShell
@@ -1733,6 +1851,33 @@ function App() {
         </section>
       ) : null}
 
+      {currentPage === 'identity-health' ? (
+        <Suspense
+          fallback={
+            <AuthenticatedViewFallback
+              title="Identity health"
+              description="Loading merge telemetry, conflict drill-down, and backfill status."
+            />
+          }
+        >
+          <IdentityGraphHealthView
+            filters={identityHealthFilters}
+            onFiltersChange={(next) =>
+              setIdentityHealthFilters({
+                ...next,
+                source: next.source ?? ''
+              })
+            }
+            onRefresh={() => {
+              void loadIdentityHealth();
+            }}
+            reportingTimezone={reportingTimezone}
+            overviewSection={identityHealthOverview}
+            conflictsSection={identityHealthConflicts}
+          />
+        </Suspense>
+      ) : null}
+
       {currentPage === 'settings' ? (
         <Suspense
           fallback={
@@ -1743,7 +1888,7 @@ function App() {
           }
         >
           <SettingsAdminView
-            isAdmin={authState.user.isAdmin}
+            isAdmin={isAdmin}
             reportingTimezone={reportingTimezone}
             defaultReportingTimezone={DEFAULT_REPORTING_TIMEZONE}
             reportingTimezoneOptions={REPORTING_TIMEZONE_OPTIONS}

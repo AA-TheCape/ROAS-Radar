@@ -46,7 +46,7 @@ export async function refreshDailyReportingMetrics(client, metricDates) {
             PARTITION BY COALESCE(
               NULLIF(o.customer_identity_id::text, ''),
               NULLIF(lower(trim(o.shopify_customer_id)), ''),
-              NULLIF(lower(trim(o.email)), ''),
+              NULLIF(trim(o.email_hash), ''),
               'guest:' || o.shopify_order_id
             )
             ORDER BY COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) ASC, o.shopify_order_id ASC

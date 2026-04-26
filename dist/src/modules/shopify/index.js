@@ -5,9 +5,10 @@ import { normalizeAttributionString, normalizeAttributionUrl } from '../../../pa
 import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
 import { logError, logInfo, logWarning } from '../../observability/index.js';
+import { buildHashedContactProfile, normalizeEmailAddress } from '../../shared/privacy.js';
 import { applySyntheticAttributionForOrder, enqueueAttributionForOrder } from '../attribution/index.js';
 import { attachAuthContext, requireAdmin } from '../auth/index.js';
-import { hashIdentityEmail, stitchKnownCustomerIdentity } from '../identity/index.js';
+import { stitchKnownCustomerIdentity } from '../identity/index.js';
 import { buildCanonicalTouchpointDimensions } from '../marketing-dimensions/index.js';
 import { getReportingTimezone } from '../settings/index.js';
 import { buildRawPayloadStorageMetadata, logRawPayloadIntegrityMismatch } from '../../shared/raw-payload-storage.js';
@@ -35,7 +36,7 @@ function sanitizeNullableEmail(value) {
     if (typeof value !== 'string') {
         return null;
     }
-    const normalized = value.trim().toLowerCase();
+    const normalized = normalizeEmailAddress(value);
     if (!normalized) {
         return null;
     }
@@ -476,8 +477,8 @@ async function recoverShopifyAttributionHints(reportingTimezone, startDate, endD
       SELECT
         o.shopify_order_id,
         o.shopify_customer_id,
-        o.email,
         o.landing_session_id::text AS landing_session_id,
+        o.payload_hash,
         o.raw_payload
       FROM shopify_orders o
       LEFT JOIN attribution_order_credits c
@@ -527,10 +528,22 @@ async function recoverShopifyAttributionHints(reportingTimezone, startDate, endD
             await stitchKnownCustomerIdentity(client, {
                 shopifyOrderId: row.shopify_order_id,
                 shopifyCustomerId: row.shopify_customer_id,
-                email: row.email,
+                email: parsedPayload.data.email ?? parsedPayload.data.customer?.email ?? null,
+                phoneHash: buildHashedContactProfile({
+                    email: parsedPayload.data.email ?? parsedPayload.data.customer?.email ?? null,
+                    phone: parsedPayload.data.customer?.phone ?? null
+                }).phoneHash,
                 landingSessionId: resolvedLandingSessionId ?? row.landing_session_id,
                 checkoutToken: parsedPayload.data.checkout_token ?? null,
-                cartToken: parsedPayload.data.cart_token ?? null
+                cartToken: parsedPayload.data.cart_token ?? null,
+                sourceTimestamp: parsedPayload.data.updated_at ??
+                    parsedPayload.data.processed_at ??
+                    parsedPayload.data.created_at ??
+                    new Date().toISOString(),
+                evidenceSource: 'backfill',
+                sourceTable: 'shopify_orders',
+                sourceRecordId: row.shopify_order_id,
+                idempotencyKey: `shopify_order_recovery_identity:${row.shopify_order_id}:${row.payload_hash ?? 'no_hash'}`
             });
             const shopifyHintAttribution = resolvedLandingSessionId === null ? extractShopifyHintAttribution(parsedPayload.data) : null;
             if (shopifyHintAttribution) {
@@ -1032,8 +1045,11 @@ async function markWebhookReceiptStatus(receiptId, status) {
 }
 async function normalizeShopifyOrder(receiptId, payload, rawPayload) {
     const shopifyCustomerId = payload.customer?.id ? String(payload.customer.id) : null;
-    const normalizedOrderEmail = payload.email ?? payload.customer?.email ?? null;
-    const orderEmailHash = hashIdentityEmail(normalizedOrderEmail);
+    const normalizedOrderEmail = normalizeEmailAddress(payload.email ?? payload.customer?.email ?? null);
+    const { emailHash: orderEmailHash, phoneHash } = buildHashedContactProfile({
+        email: normalizedOrderEmail,
+        phone: payload.customer?.phone ?? null
+    });
     const shopifyOrderId = String(payload.id);
     const rawLineItems = extractRawShopifyLineItems(rawPayload);
     const rawPayloadMetadata = buildRawPayloadStorageMetadata(rawPayload);
@@ -1047,17 +1063,19 @@ async function normalizeShopifyOrder(receiptId, payload, rawPayload) {
             email,
             email_hash,
             phone,
+            phone_hash,
             created_at,
             updated_at
           )
-          VALUES ($1, $2, $3, $4, now(), now())
+          VALUES ($1, NULL, $2, NULL, $3, now(), now())
           ON CONFLICT (shopify_customer_id)
           DO UPDATE SET
-            email = COALESCE(EXCLUDED.email, shopify_customers.email),
+            email = NULL,
             email_hash = COALESCE(EXCLUDED.email_hash, shopify_customers.email_hash),
-            phone = COALESCE(EXCLUDED.phone, shopify_customers.phone),
+            phone = NULL,
+            phone_hash = COALESCE(EXCLUDED.phone_hash, shopify_customers.phone_hash),
             updated_at = now()
-        `, [shopifyCustomerId, normalizedOrderEmail, orderEmailHash, payload.customer?.phone ?? null]);
+        `, [shopifyCustomerId, orderEmailHash, phoneHash]);
         }
         const orderUpsertResult = await client.query(`
         INSERT INTO shopify_orders (
@@ -1066,6 +1084,7 @@ async function normalizeShopifyOrder(receiptId, payload, rawPayload) {
           shopify_customer_id,
           email,
           email_hash,
+          phone_hash,
           currency_code,
           subtotal_price,
           total_price,
@@ -1089,6 +1108,7 @@ async function normalizeShopifyOrder(receiptId, payload, rawPayload) {
           $1,
           $2,
           $3,
+          NULL,
           $4,
           $5,
           $6,
@@ -1114,8 +1134,9 @@ async function normalizeShopifyOrder(receiptId, payload, rawPayload) {
         DO UPDATE SET
           shopify_order_number = COALESCE(EXCLUDED.shopify_order_number, shopify_orders.shopify_order_number),
           shopify_customer_id = COALESCE(EXCLUDED.shopify_customer_id, shopify_orders.shopify_customer_id),
-          email = COALESCE(EXCLUDED.email, shopify_orders.email),
+          email = NULL,
           email_hash = COALESCE(EXCLUDED.email_hash, shopify_orders.email_hash),
+          phone_hash = COALESCE(EXCLUDED.phone_hash, shopify_orders.phone_hash),
           currency_code = EXCLUDED.currency_code,
           subtotal_price = EXCLUDED.subtotal_price,
           total_price = EXCLUDED.total_price,
@@ -1142,8 +1163,8 @@ async function normalizeShopifyOrder(receiptId, payload, rawPayload) {
             shopifyOrderId,
             payload.order_number ? String(payload.order_number) : null,
             shopifyCustomerId,
-            normalizedOrderEmail,
             orderEmailHash,
+            phoneHash,
             payload.currency ?? 'USD',
             toNumericString(payload.subtotal_price),
             toNumericString(payload.total_price),
@@ -1176,9 +1197,15 @@ async function normalizeShopifyOrder(receiptId, payload, rawPayload) {
             shopifyOrderId,
             shopifyCustomerId,
             email: normalizedOrderEmail,
+            phoneHash,
             landingSessionId,
             checkoutToken: payload.checkout_token ?? null,
-            cartToken: payload.cart_token ?? null
+            cartToken: payload.cart_token ?? null,
+            sourceTimestamp: payload.updated_at ?? payload.processed_at ?? payload.created_at ?? new Date().toISOString(),
+            evidenceSource: 'shopify_order_webhook',
+            sourceTable: 'shopify_orders',
+            sourceRecordId: shopifyOrderId,
+            idempotencyKey: `shopify_order_identity:${shopifyOrderId}:${payloadHash}`
         });
         await enqueueAttributionForOrder(shopifyOrderId, 'shopify_order_upserted', client);
         await enqueueShopifyOrderWriteback(shopifyOrderId, 'shopify_order_upserted', client);

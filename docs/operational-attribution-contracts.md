@@ -34,7 +34,7 @@ The attribution worker in `src/modules/attribution/index.ts` collects determinis
 1. `landing_session_id`
 2. `checkout_token`
 3. `cart_token`
-4. stitched `customer_identity`
+4. stitched `identity_journey`
 
 Current attribution window:
 
@@ -48,7 +48,7 @@ Current attribution window:
 1. `landing_session_id`
 2. `checkout_token`
 3. `cart_token`
-4. `customer_identity`
+4. `identity_journey`
 
 The same precedence drives:
 
@@ -60,7 +60,7 @@ Current confidence semantics:
 
 - `1.00`: `landing_session_id` or `checkout_token`
 - `0.90`: `cart_token`
-- `0.60`: `customer_identity`
+- `0.60`: stitched `identity_journey` fallback
 - `0.00`: no deterministic winner
 
 ### Last Non-Direct winner behavior
@@ -85,6 +85,11 @@ Related references:
 - `docs/analytics-playbook.md`
 - `docs/last-non-direct-touch-approval-matrix.md`
 - `docs/visitor-identity-stitching.md`
+
+Rollout note:
+
+- the attribution worker still reads the dual-written `customer_identity_id` compatibility alias internally in some paths
+- operators should treat `identity_journey_id` as the canonical contract and `customer_identity_id` as transitional storage only
 
 ## Shopify Writeback Contract
 

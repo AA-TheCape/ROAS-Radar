@@ -1,6 +1,6 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
 
-import { env } from './config/env.js';
+import { env, getApiAllowedOrigins } from './config/env.js';
 import { checkDatabaseHealth } from './db/pool.js';
 import { createAuthRouter, createUserAdminRouter } from './modules/auth/index.js';
 import { createAttributionAdminRouter } from './modules/attribution/admin.js';
@@ -10,6 +10,8 @@ import { createReportingRouter } from './modules/reporting/index.js';
 import { createSettingsRouter } from './modules/settings/index.js';
 import { createShopifyAdminRouter, createShopifyPublicRouter, createShopifyWebhookRouter } from './modules/shopify/index.js';
 import { createTrackingRouter } from './modules/tracking/index.js';
+import { createIdentityAdminRouter } from './modules/identity/admin.js';
+import { createInternalIdentityRouter } from './modules/identity/read-api.js';
 import { createRequestLoggingMiddleware, logHttpError } from './observability/index.js';
 
 export function createApp() {
@@ -20,14 +22,31 @@ export function createApp() {
   app.use(createRequestLoggingMiddleware(serviceName));
   app.use((req, res, next) => {
     const origin = req.header('origin');
+    const allowedOrigins = getApiAllowedOrigins();
+    const isAllowedOrigin = origin ? allowedOrigins.includes(origin) : false;
 
-    res.setHeader('Access-Control-Allow-Origin', origin ?? '*');
     if (origin) {
-      res.setHeader('Vary', 'Origin');
+      res.append('Vary', 'Origin');
     }
 
-    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'authorization,content-type,x-roas-radar-tenant-id');
+    if (isAllowedOrigin && origin) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'authorization,content-type,x-roas-radar-tenant-id');
+    }
+
+    if (origin && !isAllowedOrigin) {
+      if (req.method === 'OPTIONS') {
+        res.status(403).json({
+          error: 'origin_not_allowed',
+          message: 'Request origin is not allowed'
+        });
+        return;
+      }
+
+      next();
+      return;
+    }
 
     if (req.method === 'OPTIONS') {
       res.status(204).end();
@@ -68,6 +87,8 @@ export function createApp() {
   app.use('/api/auth', createAuthRouter());
   app.use('/api/settings', createSettingsRouter());
   app.use('/api/reporting', createReportingRouter());
+  app.use('/api/internal/identity', createInternalIdentityRouter());
+  app.use('/api/admin/identity', createIdentityAdminRouter());
   app.use('/api/admin/users', createUserAdminRouter());
   app.use('/api/admin/attribution', createAttributionAdminRouter());
   app.use('/shopify', createShopifyPublicRouter());

@@ -34,7 +34,13 @@ require_var API_SERVICE_ACCOUNT_NAME
 require_var DASHBOARD_SERVICE_ACCOUNT_NAME
 require_var WORKER_SERVICE_ACCOUNT_NAME
 require_var MIGRATOR_JOB_SERVICE_ACCOUNT_NAME
+require_var META_ADS_JOB_SERVICE_ACCOUNT_NAME
+require_var GOOGLE_ADS_JOB_SERVICE_ACCOUNT_NAME
 require_var RETENTION_JOB_SERVICE_ACCOUNT_NAME
+require_var DATA_QUALITY_JOB_SERVICE_ACCOUNT_NAME
+require_var IDENTITY_GRAPH_BACKFILL_JOB_SERVICE_ACCOUNT_NAME
+require_var ORDER_ATTRIBUTION_MATERIALIZATION_JOB_SERVICE_ACCOUNT_NAME
+require_var SCHEDULER_INVOKER_SERVICE_ACCOUNT_NAME
 require_var DEPLOYER_SERVICE_ACCOUNT_NAME
 
 PROJECT_NUMBER=$(gcloud projects describe "$GCP_PROJECT_ID" --format='value(projectNumber)')
@@ -90,18 +96,36 @@ API_SA=$(create_service_account "$API_SERVICE_ACCOUNT_NAME" "ROAS Radar API ($EN
 DASHBOARD_SA=$(create_service_account "$DASHBOARD_SERVICE_ACCOUNT_NAME" "ROAS Radar dashboard ($ENVIRONMENT)")
 WORKER_SA=$(create_service_account "$WORKER_SERVICE_ACCOUNT_NAME" "ROAS Radar worker ($ENVIRONMENT)")
 MIGRATOR_SA=$(create_service_account "$MIGRATOR_JOB_SERVICE_ACCOUNT_NAME" "ROAS Radar migrator ($ENVIRONMENT)")
+META_ADS_SA=$(create_service_account "$META_ADS_JOB_SERVICE_ACCOUNT_NAME" "ROAS Radar Meta Ads sync ($ENVIRONMENT)")
+GOOGLE_ADS_SA=$(create_service_account "$GOOGLE_ADS_JOB_SERVICE_ACCOUNT_NAME" "ROAS Radar Google Ads sync ($ENVIRONMENT)")
 RETENTION_SA=$(create_service_account "$RETENTION_JOB_SERVICE_ACCOUNT_NAME" "ROAS Radar retention ($ENVIRONMENT)")
+DATA_QUALITY_SA=$(create_service_account "$DATA_QUALITY_JOB_SERVICE_ACCOUNT_NAME" "ROAS Radar data quality ($ENVIRONMENT)")
+IDENTITY_GRAPH_BACKFILL_SA=$(create_service_account "$IDENTITY_GRAPH_BACKFILL_JOB_SERVICE_ACCOUNT_NAME" "ROAS Radar identity graph backfill ($ENVIRONMENT)")
+ORDER_ATTRIBUTION_MATERIALIZATION_SA=$(create_service_account "$ORDER_ATTRIBUTION_MATERIALIZATION_JOB_SERVICE_ACCOUNT_NAME" "ROAS Radar order attribution materialization ($ENVIRONMENT)")
+SCHEDULER_INVOKER_SA=$(create_service_account "$SCHEDULER_INVOKER_SERVICE_ACCOUNT_NAME" "ROAS Radar scheduler invoker ($ENVIRONMENT)")
 DEPLOYER_SA=$(create_service_account "$DEPLOYER_SERVICE_ACCOUNT_NAME" "ROAS Radar deployer ($ENVIRONMENT)")
 
 ensure_repo
 
-for SA in "$API_SA" "$DASHBOARD_SA" "$WORKER_SA" "$MIGRATOR_SA" "$RETENTION_SA"; do
+for SA in \
+  "$API_SA" \
+  "$WORKER_SA" \
+  "$MIGRATOR_SA" \
+  "$META_ADS_SA" \
+  "$GOOGLE_ADS_SA" \
+  "$RETENTION_SA" \
+  "$DATA_QUALITY_SA" \
+  "$IDENTITY_GRAPH_BACKFILL_SA" \
+  "$ORDER_ATTRIBUTION_MATERIALIZATION_SA"
+do
   grant_project_role "serviceAccount:$SA" "roles/cloudsql.client"
   grant_project_role "serviceAccount:$SA" "roles/logging.logWriter"
   grant_project_role "serviceAccount:$SA" "roles/monitoring.metricWriter"
 done
 
-grant_project_role "serviceAccount:$WORKER_SA" "roles/run.invoker"
+grant_project_role "serviceAccount:$DASHBOARD_SA" "roles/logging.logWriter"
+grant_project_role "serviceAccount:$SCHEDULER_INVOKER_SA" "roles/logging.logWriter"
+grant_project_role "serviceAccount:$SCHEDULER_INVOKER_SA" "roles/run.invoker"
 
 grant_project_role "serviceAccount:$DEPLOYER_SA" "roles/artifactregistry.writer"
 grant_project_role "serviceAccount:$DEPLOYER_SA" "roles/cloudbuild.builds.editor"
@@ -119,7 +143,6 @@ gcloud projects add-iam-policy-binding "$GCP_PROJECT_ID" \
 
 for SECRET in \
   DATABASE_URL \
-  MIGRATOR_DATABASE_URL \
   REPORTING_API_TOKEN \
   SHOPIFY_WEBHOOK_SECRET \
   SHOPIFY_APP_API_KEY \
@@ -130,17 +153,45 @@ for SECRET in \
   GOOGLE_ADS_ENCRYPTION_KEY
 do
   grant_secret_accessor "$API_SA" "$SECRET"
+done
+
+for SECRET in \
+  DATABASE_URL \
+  REPORTING_API_TOKEN \
+  SHOPIFY_WEBHOOK_SECRET \
+  SHOPIFY_APP_API_KEY \
+  SHOPIFY_APP_API_SECRET \
+  SHOPIFY_APP_ENCRYPTION_KEY \
+  META_ADS_APP_SECRET \
+  META_ADS_ENCRYPTION_KEY \
+  GOOGLE_ADS_ENCRYPTION_KEY
+do
   grant_secret_accessor "$WORKER_SA" "$SECRET"
 done
 
 grant_secret_accessor "$DASHBOARD_SA" "REPORTING_API_TOKEN"
 grant_secret_accessor "$MIGRATOR_SA" "MIGRATOR_DATABASE_URL"
+grant_secret_accessor "$META_ADS_SA" "DATABASE_URL"
+grant_secret_accessor "$META_ADS_SA" "META_ADS_APP_SECRET"
+grant_secret_accessor "$META_ADS_SA" "META_ADS_ENCRYPTION_KEY"
+grant_secret_accessor "$GOOGLE_ADS_SA" "DATABASE_URL"
+grant_secret_accessor "$GOOGLE_ADS_SA" "GOOGLE_ADS_ENCRYPTION_KEY"
 grant_secret_accessor "$RETENTION_SA" "DATABASE_URL"
+grant_secret_accessor "$DATA_QUALITY_SA" "DATABASE_URL"
+grant_secret_accessor "$IDENTITY_GRAPH_BACKFILL_SA" "DATABASE_URL"
+grant_secret_accessor "$ORDER_ATTRIBUTION_MATERIALIZATION_SA" "DATABASE_URL"
+grant_secret_accessor "$ORDER_ATTRIBUTION_MATERIALIZATION_SA" "SHOPIFY_APP_ENCRYPTION_KEY"
 
 echo "Bootstrap complete for $ENVIRONMENT"
 echo "API service account: $API_SA"
 echo "Dashboard service account: $DASHBOARD_SA"
 echo "Worker service account: $WORKER_SA"
 echo "Migrator service account: $MIGRATOR_SA"
+echo "Meta Ads job service account: $META_ADS_SA"
+echo "Google Ads job service account: $GOOGLE_ADS_SA"
 echo "Retention service account: $RETENTION_SA"
+echo "Data quality service account: $DATA_QUALITY_SA"
+echo "Identity graph backfill service account: $IDENTITY_GRAPH_BACKFILL_SA"
+echo "Order attribution materialization service account: $ORDER_ATTRIBUTION_MATERIALIZATION_SA"
+echo "Scheduler invoker service account: $SCHEDULER_INVOKER_SA"
 echo "Deployer service account: $DEPLOYER_SA"

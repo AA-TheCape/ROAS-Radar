@@ -419,6 +419,87 @@ export type ShopifyAttributionRecoveryResponse = {
   shopifyHintAttributedOrders: number;
 };
 
+export type IdentityHealthFilters = {
+  startDate: string;
+  endDate: string;
+  source?: string;
+};
+
+export type IdentityHealthSeriesPoint = {
+  date: string;
+  linked: number;
+  skipped: number;
+  conflicts: number;
+  mergeRuns: number;
+  rehomedNodes: number;
+  quarantinedNodes: number;
+};
+
+export type IdentityBackfillLatestRun = {
+  runId: string;
+  status: 'processing' | 'completed' | 'failed';
+  requestedBy: string;
+  workerId: string;
+  sources: string[];
+  startedAt: string;
+  completedAt: string | null;
+  updatedAt: string;
+  errorCode: string | null;
+  errorMessage: string | null;
+};
+
+export type IdentityHealthOverviewResponse = {
+  range: {
+    startDate: string;
+    endDate: string;
+  };
+  source: string | null;
+  summary: {
+    totalIngestions: number;
+    linkedIngestions: number;
+    skippedIngestions: number;
+    conflictIngestions: number;
+    mergeRuns: number;
+    rehomedNodes: number;
+    quarantinedNodes: number;
+    unresolvedConflicts: number;
+    unlinkedSessions: number;
+    linkedSessions: number;
+  };
+  series: IdentityHealthSeriesPoint[];
+  backfill: {
+    activeRuns: number;
+    failedRuns: number;
+    completedRuns: number;
+    latestRun: IdentityBackfillLatestRun | null;
+  };
+};
+
+export type IdentityConflictRow = {
+  edgeId: string;
+  journeyId: string;
+  journeyStatus: 'active' | 'quarantined' | 'merged' | 'conflicted';
+  authoritativeShopifyCustomerId: string | null;
+  nodeType: string;
+  nodeKey: string;
+  evidenceSource: string;
+  sourceTable: string | null;
+  sourceRecordId: string | null;
+  conflictCode: string;
+  firstObservedAt: string;
+  lastObservedAt: string;
+  updatedAt: string;
+};
+
+export type IdentityConflictsResponse = {
+  range: {
+    startDate: string;
+    endDate: string;
+  };
+  source: string | null;
+  conflicts: IdentityConflictRow[];
+};
+
 declare global {
   interface Window {
     __ROAS_RADAR_RUNTIME_CONFIG__?: {
@@ -479,6 +560,23 @@ function buildSearchParams(filters: ReportingFilters, extras: Record<string, str
 
   if (filters.attributionModel?.trim()) {
     params.set('attributionModel', filters.attributionModel.trim());
+  }
+
+  for (const [key, value] of Object.entries(extras)) {
+    params.set(key, value);
+  }
+
+  return params;
+}
+
+function buildIdentityHealthSearchParams(filters: IdentityHealthFilters, extras: Record<string, string> = {}): URLSearchParams {
+  const params = new URLSearchParams({
+    startDate: filters.startDate,
+    endDate: filters.endDate
+  });
+
+  if (filters.source?.trim()) {
+    params.set('source', filters.source.trim());
   }
 
   for (const [key, value] of Object.entries(extras)) {
@@ -721,5 +819,17 @@ export function createUser(payload: CreateUserPayload) {
   return requestJson<CreateUserResponse>('/api/admin/users', {
     method: 'POST',
     body: payload
+  });
+}
+
+export function fetchIdentityHealthOverview(filters: IdentityHealthFilters) {
+  return requestJson<IdentityHealthOverviewResponse>('/api/admin/identity/health', {
+    searchParams: buildIdentityHealthSearchParams(filters)
+  });
+}
+
+export function fetchIdentityHealthConflicts(filters: IdentityHealthFilters, limit = 25) {
+  return requestJson<IdentityConflictsResponse>('/api/admin/identity/health/conflicts', {
+    searchParams: buildIdentityHealthSearchParams(filters, { limit: `${limit}` })
   });
 }

@@ -6,6 +6,11 @@ process.env.DATA_QUALITY_TARGET_LAG_DAYS = '1';
 process.env.DATA_QUALITY_ANOMALY_LOOKBACK_DAYS = '7';
 process.env.DATA_QUALITY_ANOMALY_THRESHOLD_RATIO = '0.35';
 process.env.DATA_QUALITY_ANOMALY_MIN_BASELINE = '5';
+process.env.DATA_QUALITY_REPORTING_ANOMALY_ALERT_THRESHOLD = '0';
+process.env.DATA_QUALITY_ORPHAN_SESSION_ALERT_THRESHOLD = '2';
+process.env.DATA_QUALITY_DUPLICATE_CANONICAL_ALERT_THRESHOLD = '1';
+process.env.DATA_QUALITY_CONFLICTING_SHOPIFY_ALERT_THRESHOLD = '0';
+process.env.DATA_QUALITY_HASH_ANOMALY_ALERT_THRESHOLD = '3';
 
 const { __dataQualityTestUtils } = await import('../src/modules/data-quality/index.js');
 
@@ -36,4 +41,36 @@ test('detectAnomalyFlags identifies metrics that materially deviate from the tra
     ['orders', 'revenue', 'spend', 'visits']
   );
   assert.ok(flags.every((flag: { relativeDelta: number | null }) => (flag.relativeDelta ?? 0) >= 0.35));
+});
+
+test('evaluateDiscrepancyCount marks critical threshold breaches as failed alerts', () => {
+  const result = __dataQualityTestUtils.evaluateDiscrepancyCount({
+    discrepancyCount: 3,
+    threshold: 2,
+    severityOnAlert: 'critical',
+    healthySummary: 'healthy',
+    warningSummary: 'warning',
+    alertSummary: 'alert',
+    details: {}
+  });
+
+  assert.equal(result.status, 'failed');
+  assert.equal(result.severity, 'critical');
+  assert.equal(result.alertTriggered, true);
+});
+
+test('evaluateDiscrepancyCount keeps sub-threshold discrepancies as non-alert warnings', () => {
+  const result = __dataQualityTestUtils.evaluateDiscrepancyCount({
+    discrepancyCount: 2,
+    threshold: 3,
+    severityOnAlert: 'warning',
+    healthySummary: 'healthy',
+    warningSummary: 'warning',
+    alertSummary: 'alert',
+    details: {}
+  });
+
+  assert.equal(result.status, 'warning');
+  assert.equal(result.severity, 'warning');
+  assert.equal(result.alertTriggered, false);
 });

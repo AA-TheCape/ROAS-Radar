@@ -1,76 +1,140 @@
-# Visitor Identity Stitching
+# Identity Graph Stitching
 
-ROAS Radar now maintains a canonical `customer_identities` record that can be linked to:
+This document replaces the old single-row `customer_identities` stitching contract.
 
-- anonymous tracked visitor sessions in `tracking_sessions`,
-- historical touchpoints in `tracking_events`,
-- Shopify customer records in `shopify_customers`,
-- Shopify orders in `shopify_orders`.
+ROAS Radar now resolves identity into a canonical `identity_journey_id` backed by:
 
-## Deterministic Stitching Rules
+- `identity_journeys`: canonical entity used by attribution, reporting, and session backfill
+- `identity_nodes`: one row per normalized identifier value
+- `identity_edges`: active ownership plus historical re-home and quarantine audit trail
 
-When a Shopify order webhook arrives, the backend derives two stable identifiers:
+During rollout, the legacy `customer_identity_id` columns remain a compatibility alias and are dual-written to the same canonical UUID as `identity_journey_id`.
 
-- `shopify_customer_id`, when Shopify sends a customer object,
-- `hashed_email`, computed as `sha256(trim(lower(email)))` when an order email is present.
+## Supported Identifiers
 
-The stitcher uses these rules in order:
+The graph accepts these first-class identifiers:
 
-1. If neither identifier is present, stitching is skipped.
-2. If `shopify_customer_id` already belongs to an identity whose stored `hashed_email` is different from the incoming hash, stitching is rejected.
-3. If `hashed_email` already belongs to an identity whose stored `shopify_customer_id` is different from the incoming customer id, stitching is rejected.
-4. If the incoming `shopify_customer_id` and `hashed_email` resolve to two different identity rows, stitching is rejected.
-5. Otherwise, the system reuses the matched identity row or creates a new one and fills any missing identifier on that row.
+- `session_id`
+- `checkout_token`
+- `cart_token`
+- `shopify_customer_id`
+- `hashed_email`
+- `phone_hash`
 
-These conflict checks prevent accidental cross-user joins. The service never auto-merges two pre-existing identities.
+Normalization rules:
 
-## Historical Touchpoint Re-Linking
+- `session_id`: exact UUID string
+- `checkout_token`: trim only
+- `cart_token`: trim only
+- `shopify_customer_id`: trim only
+- `hashed_email`: `sha256(trim(lower(email)))`
+- `phone_hash`: `sha256(e164(phone))`; invalid phone numbers are ignored
 
-After an identity row is selected, the webhook flow updates:
+## Merge Precedence
 
-- the current `shopify_orders.customer_identity_id`,
-- the matching `shopify_customers.customer_identity_id`,
-- any tracked session directly evidenced by the order via:
-  - `landing_session_id`,
-  - matching `checkout_token`,
-  - matching `cart_token`.
+Merge precedence is deterministic and independent from attribution winner precedence.
 
-All `tracking_events` for those sessions inherit the same `customer_identity_id`, which re-links historical touchpoints without rewriting event payloads.
+| Rank | Identifier | Behavior |
+| --- | --- | --- |
+| `100` | `shopify_customer_id` | Authoritative. Can pull lower-rank identifiers into its journey. |
+| `70` | `hashed_email` | Deterministic unless it conflicts with another authoritative Shopify customer. |
+| `60` | `phone_hash` | Deterministic but quarantined more aggressively when shared. |
+| `40` | `checkout_token` | Session bridge only. |
+| `30` | `cart_token` | Session bridge only. |
+| `20` | `session_id` | Session-local only. |
 
-Sessions already linked to a different canonical identity are left untouched.
+When no Shopify customer id is present and multiple anonymous journeys are candidates, the winner is chosen by:
 
-## Attribution Impact
+1. highest active precedence rank on the journey
+2. latest `last_observed_at`
+3. lexicographically smallest `journey_id`
 
-Attribution still prefers direct evidence first:
+## Deterministic Rules
+
+For every ingestion event:
+
+1. Normalize incoming identifiers and drop blanks.
+2. Upsert `identity_nodes` rows for the normalized values.
+3. Load active `identity_edges` for the matched nodes.
+4. Create a new journey when no candidate exists.
+5. Reuse the single candidate journey when only one exists.
+6. If a matching `shopify_customer_id` journey exists, that journey wins.
+7. When Shopify authority wins, lower-rank identifiers are re-homed with a new active `promoted` edge and the old edge is superseded.
+8. Two different active Shopify customer ids are a hard stop. The system writes no automatic merge.
+9. Ambiguous nodes are stored but must not drive future auto-merges until repaired.
+
+## Quarantine Rules
+
+The graph never auto-merges two authoritative Shopify customers into the same journey.
+
+Conflict handling:
+
+- `phone_hash` seen under two different authoritative Shopify customers is marked ambiguous and moved into a `quarantined` edge with `phone_hash_conflicts_across_authoritative_customers`.
+- `hashed_email` follows the same path with `hashed_email_conflicts_across_authoritative_customers`.
+- a merge attempt that still sees multiple authoritative Shopify customers after quarantine returns `authoritative_shopify_customer_conflict` and leaves active ownership unchanged.
+
+Operational implications:
+
+- quarantined nodes stay queryable for audit
+- quarantined nodes do not participate in future automatic stitching
+- replaying the same conflicted source is idempotent through `identity_edge_ingestion_runs`
+
+## Compatibility Surfaces
+
+Graph stitching updates both canonical and compatibility references on:
+
+- `tracking_sessions`
+- `tracking_events`
+- `session_attribution_identities`
+- `shopify_orders`
+- `shopify_customers`
+
+Rollout rule:
+
+- `identity_journey_id` is the contract going forward
+- `customer_identity_id` is still written so existing attribution fallback code keeps working until all readers move to `identity_journey_id`
+
+## Attribution Boundary
+
+Identity stitching changes candidate collection, not attribution winner semantics.
+
+Attribution still prefers direct deterministic evidence first:
 
 1. `landing_session_id`
 2. `checkout_token`
 3. `cart_token`
+4. stitched identity-journey fallback
 
-If none of those match, the worker can now fall back to recent sessions already stitched to the order's `customer_identity_id`. It chooses the most recent eligible non-direct session first, then a direct fallback session only if no tagged session exists.
+The stitched fallback is currently implemented through the dual-written `customer_identity_id` alias, so behavior is unchanged while the attribution worker migrates internally.
 
-## Primary Winner Semantics
+## Deterministic Examples
 
-Identity stitching affects candidate collection, but it does not change the approved primary-winner contract.
+### Example 1: Anonymous journey later promoted by Shopify identity
 
-Published rules:
+- anonymous event creates one journey from `session_id`, `checkout_token`, and `cart_token`
+- later Shopify evidence with the same session/tokens plus `shopify_customer_id` and `hashed_email` updates that same journey
+- no second journey is created
 
-- if any eligible deterministic non-direct candidate exists, later direct revisits are ignored for primary winner selection
-- a touch with no UTMs but a supported click ID still counts as non-direct
-- same-timestamp deterministic ties resolve by source precedence: `landing_session_id`, then `checkout_token`, then `cart_token`, then `customer_identity`
-- if precedence also ties, click-ID presence wins, then the lexicographically smaller `sessionId`
+### Example 2: Email belongs to one journey, Shopify customer id points elsewhere
 
-This means stitched identity fallback can contribute the winning touch only when stronger deterministic evidence is absent or when it is the latest eligible non-direct candidate after the winner rules are applied.
+- the Shopify customer id journey wins
+- the email edge is superseded and re-homed with `edge_type = promoted`
+- the losing anonymous journey is marked `merged` when it no longer owns active nodes
 
-## Shopify Hint Fallback Boundary
+### Example 3: Shared phone across two authoritative Shopify customers
 
-Shopify-hint-derived attribution is not part of deterministic identity stitching.
+- the phone node is quarantined
+- the second Shopify journey stays authoritative for its own customer id
+- no automatic merge occurs
 
-Boundary rules:
+### Example 4: No Shopify id, multiple anonymous candidates
 
-- it is considered only when deterministic resolution fails to recover a landing session match
-- it is recovery-only fallback behavior and must not override a deterministic winner
-- it writes synthetic attribution with `attribution_reason = shopify_hint_derived`
-- the fallback row can carry attributed marketing dimensions while still having `session_id = null`
+- the highest-precedence anonymous journey wins
+- lower-rank nodes are re-homed deterministically
+- timestamp and lexical tie-breakers make the result stable across retries and concurrent runs
 
-Refer to `docs/last-non-direct-touch-approval-matrix.md` for the full approved matrix and caveats.
+## Operator References
+
+- `docs/operational-attribution-contracts.md`
+- `docs/internal-identity-read-api.md`
+- `docs/runbooks/identity-data-quality.md`

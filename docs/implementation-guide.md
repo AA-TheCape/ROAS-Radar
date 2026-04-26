@@ -249,6 +249,12 @@ These are required only if you are running the Shopify OAuth install flow or val
 - `DATA_QUALITY_ANOMALY_LOOKBACK_DAYS`
 - `DATA_QUALITY_ANOMALY_THRESHOLD_RATIO`
 - `DATA_QUALITY_ANOMALY_MIN_BASELINE`
+- `DATA_QUALITY_REPORTING_ANOMALY_ALERT_THRESHOLD`
+- `DATA_QUALITY_ORPHAN_SESSION_ALERT_THRESHOLD`
+- `DATA_QUALITY_DUPLICATE_CANONICAL_ALERT_THRESHOLD`
+- `DATA_QUALITY_CONFLICTING_SHOPIFY_ALERT_THRESHOLD`
+- `DATA_QUALITY_HASH_ANOMALY_ALERT_THRESHOLD`
+- `DATA_QUALITY_SAMPLE_LIMIT`
 - `DATA_QUALITY_CHECK_LOOP`
 - `DATA_QUALITY_CHECK_INTERVAL_MS`
 
@@ -469,7 +475,9 @@ Responsibilities:
 
 - evaluate lagged reporting dates
 - compare current metric totals against trailing baselines
+- detect orphan sessions, duplicate canonical assignments, conflicting Shopify mappings, and hash-format anomalies
 - persist anomaly results into `data_quality_check_runs`
+- emit alertable structured logs when a check breaches its configured threshold
 
 ## Engineer Validation Flow
 

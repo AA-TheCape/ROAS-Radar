@@ -2,7 +2,7 @@ import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual } fr
 import { promisify } from 'node:util';
 import { Router } from 'express';
 import { z } from 'zod';
-import { env } from '../../config/env.js';
+import { env, getConfiguredReportingApiToken } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
 const scrypt = promisify(scryptCallback);
 const SESSION_TOKEN_PREFIX = 'rrs_';
@@ -127,7 +127,11 @@ async function createUserSession(user) {
     };
 }
 export function isInternalServiceToken(authHeader) {
-    return authHeader === `Bearer ${env.REPORTING_API_TOKEN}`;
+    const configuredToken = getConfiguredReportingApiToken();
+    if (!configuredToken) {
+        return false;
+    }
+    return authHeader === `Bearer ${configuredToken}`;
 }
 export async function resolveAuthContext(authHeader) {
     if (isInternalServiceToken(authHeader)) {
@@ -211,6 +215,24 @@ export function requireAdmin(req, res, next) {
         res.status(403).json({
             error: 'forbidden',
             message: 'Admin access required'
+        });
+        return;
+    }
+    next();
+}
+export function requireInternalService(req, res, next) {
+    const auth = res.locals.auth;
+    if (!auth) {
+        res.status(401).json({
+            error: 'unauthorized',
+            message: 'Authentication required'
+        });
+        return;
+    }
+    if (auth.kind !== 'internal') {
+        res.status(403).json({
+            error: 'forbidden',
+            message: 'Internal service token required'
         });
         return;
     }
