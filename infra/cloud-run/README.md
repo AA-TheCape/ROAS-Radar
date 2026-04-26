@@ -1,10 +1,10 @@
 # Cloud Run Deployment
 
-This directory contains the operational scripts and environment definitions for deploying the ROAS Radar API, dashboard, attribution worker, migration job, and scheduled ad spend sync jobs to Google Cloud Run.
+This directory contains the operational scripts and environment definitions for deploying the ROAS Radar API, dashboard, attribution worker, migration job, and scheduled pipeline jobs to Google Cloud Run.
 
 ## Topology
 
-The deployment flow assumes eight deployable workloads plus four Cloud Scheduler triggers:
+The deployment flow assumes ten deployable workloads plus six Cloud Scheduler triggers:
 
 - `roas-radar-api`: public Cloud Run service for `/track`, Shopify webhooks, and authenticated reporting APIs.
 - `roas-radar-dashboard`: public Cloud Run service for the React reporting dashboard.
@@ -14,12 +14,18 @@ The deployment flow assumes eight deployable workloads plus four Cloud Scheduler
 - `roas-radar-google-ads-sync`: Cloud Run Job that runs `npm run google-ads:sync:start` once per invocation.
 - `roas-radar-session-retention`: Cloud Run Job that runs `npm run session-attribution:retention:start` to prune expired attribution-session records.
 - `roas-radar-data-quality`: Cloud Run Job that runs `npm run data-quality:check:start` once per invocation.
+- `roas-radar-identity-graph-backfill`: Cloud Run Job that runs `npm run identity:backfill-graph:start` over a recent window to reconcile graph attachments and catch missed identity stitching.
+- `roas-radar-order-attribution-materialization`: Cloud Run Job that runs `npm run attribution:materialization:start` over a recent order window to recover attribution and refresh reporting aggregates.
 - `roas-radar-meta-ads-sync-scheduler`: Cloud Scheduler job that invokes the Meta Ads Cloud Run Job.
 - `roas-radar-google-ads-sync-scheduler`: Cloud Scheduler job that invokes the Google Ads Cloud Run Job.
 - `roas-radar-session-retention-scheduler`: Cloud Scheduler job that invokes the session-retention Cloud Run Job.
 - `roas-radar-data-quality-scheduler`: Cloud Scheduler job that invokes the data-quality Cloud Run Job.
+- `roas-radar-identity-graph-backfill-scheduler`: Cloud Scheduler job that invokes the identity-graph backfill Cloud Run Job.
+- `roas-radar-order-attribution-materialization-scheduler`: Cloud Scheduler job that invokes the order-attribution materialization Cloud Run Job.
 
 The API and worker use the `roas_app` PostgreSQL login. The migration job uses the `roas_migrator` PostgreSQL login. Do not reuse the migrator credential in long-lived application services.
+
+Each recurring job now runs as its own service account, and Cloud Scheduler uses a dedicated invoker identity with `roles/run.invoker`. That keeps ads sync, data quality, identity reconciliation, and attribution materialization from sharing unnecessary secret access.
 
 ## Required Secrets
 
@@ -61,15 +67,40 @@ The environment files also carry non-secret runtime settings that must be popula
 - `GOOGLE_ADS_SCHEDULER_JOB_NAME`
 - `RETENTION_JOB_NAME`
 - `DATA_QUALITY_JOB_NAME`
+- `IDENTITY_GRAPH_BACKFILL_JOB_NAME`
+- `ORDER_ATTRIBUTION_MATERIALIZATION_JOB_NAME`
 - `RETENTION_SCHEDULER_JOB_NAME`
 - `DATA_QUALITY_SCHEDULER_JOB_NAME`
+- `IDENTITY_GRAPH_BACKFILL_SCHEDULER_JOB_NAME`
+- `ORDER_ATTRIBUTION_MATERIALIZATION_SCHEDULER_JOB_NAME`
 - `RETENTION_JOB_SERVICE_ACCOUNT_NAME`
+- `META_ADS_JOB_SERVICE_ACCOUNT_NAME`
+- `GOOGLE_ADS_JOB_SERVICE_ACCOUNT_NAME`
+- `DATA_QUALITY_JOB_SERVICE_ACCOUNT_NAME`
+- `IDENTITY_GRAPH_BACKFILL_JOB_SERVICE_ACCOUNT_NAME`
+- `ORDER_ATTRIBUTION_MATERIALIZATION_JOB_SERVICE_ACCOUNT_NAME`
+- `SCHEDULER_INVOKER_SERVICE_ACCOUNT_NAME`
 - `ADS_SYNC_DATABASE_POOL_MAX`
 - `ADS_SYNC_TIME_ZONE`
 - `META_ADS_SYNC_SCHEDULE`
 - `GOOGLE_ADS_SYNC_SCHEDULE`
 - `RETENTION_SCHEDULE`
 - `DATA_QUALITY_SCHEDULE`
+- `IDENTITY_GRAPH_BACKFILL_SCHEDULE`
+- `ORDER_ATTRIBUTION_MATERIALIZATION_SCHEDULE`
+- `IDENTITY_GRAPH_BACKFILL_REQUESTED_BY`
+- `IDENTITY_GRAPH_BACKFILL_LOOKBACK_DAYS`
+- `IDENTITY_GRAPH_BACKFILL_LAG_HOURS`
+- `IDENTITY_GRAPH_BACKFILL_BATCH_SIZE`
+- `IDENTITY_GRAPH_BACKFILL_MAX_BATCHES`
+- `IDENTITY_GRAPH_BACKFILL_SOURCES`
+- `ORDER_ATTRIBUTION_MATERIALIZATION_REQUESTED_BY`
+- `ORDER_ATTRIBUTION_MATERIALIZATION_LOOKBACK_DAYS`
+- `ORDER_ATTRIBUTION_MATERIALIZATION_LAG_DAYS`
+- `ORDER_ATTRIBUTION_MATERIALIZATION_LIMIT`
+- `ORDER_ATTRIBUTION_MATERIALIZATION_DRY_RUN`
+- `ORDER_ATTRIBUTION_MATERIALIZATION_ONLY_WEB_ORDERS`
+- `ORDER_ATTRIBUTION_MATERIALIZATION_SKIP_SHOPIFY_WRITEBACK`
 - `DATA_QUALITY_TARGET_LAG_DAYS`
 - `DATA_QUALITY_ANOMALY_LOOKBACK_DAYS`
 - `DATA_QUALITY_ANOMALY_THRESHOLD_RATIO`
@@ -92,6 +123,7 @@ The environment files also carry non-secret runtime settings that must be popula
 4. Populate `infra/cloud-run/environments/ENVIRONMENT.env`.
 5. Deploy with `infra/cloud-run/deploy.sh ENVIRONMENT`.
 6. Apply monitoring with `infra/monitoring/apply.sh ENVIRONMENT`.
+7. Validate the scheduled jobs and schedulers with `docs/runbooks/cloud-run-pipelines.md`.
 
 ## Deployment
 
@@ -116,6 +148,17 @@ Recommended trigger settings:
 - region: the same region used by Cloud Run and Artifact Registry
 - build config: `cloudbuild.staging.yaml`
 
+## Scheduled Pipelines
+
+The default daily sequence is:
+
+1. session retention at `0 3 * * *`
+2. data quality at `20 3 * * *`
+3. identity graph backfill at `35 3 * * *`
+4. order attribution materialization at `50 3 * * *`
+
+Meta Ads and Google Ads sync remain hourly schedulers. If one scheduled job is unhealthy, pause only that scheduler entry and leave the attribution worker service running because it also drains the live attribution queue.
+
 ## Large Payload Throughput
 
 The API service is configured for larger raw JSON ingestion by combining:
@@ -137,3 +180,14 @@ Keep request parser limits below the Cloud Run hard request-body ceiling. Cloud 
 ## Staging Verification
 
 After deploying staging, run the large-payload smoke/load test against the public API:
+
+Then verify the scheduled pipeline path:
+
+1. `gcloud run jobs list --region "$GCP_REGION" --project "$GCP_PROJECT_ID"`
+2. `gcloud scheduler jobs list --location "$GCP_REGION" --project "$GCP_PROJECT_ID"`
+3. `gcloud run jobs execute "$IDENTITY_GRAPH_BACKFILL_JOB_NAME" --region "$GCP_REGION" --project "$GCP_PROJECT_ID" --wait`
+4. `gcloud run jobs execute "$ORDER_ATTRIBUTION_MATERIALIZATION_JOB_NAME" --region "$GCP_REGION" --project "$GCP_PROJECT_ID" --wait`
+5. confirm logs include `identity_graph_backfill_worker_started` and `order_attribution_materialization_worker_started`
+6. confirm `/api/reporting/reconciliation?runDate=YYYY-MM-DD` remains healthy after both jobs complete
+
+Use `docs/runbooks/cloud-run-pipelines.md` for the full operational procedure and rollback commands.

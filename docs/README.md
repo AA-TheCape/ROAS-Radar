@@ -20,6 +20,7 @@
 - Start with [Implementation Guide](implementation-guide.md#troubleshooting) for local setup and validation issues.
 - Use [Operational Attribution Contracts](operational-attribution-contracts.md) when you need resolver, writeback, retention, or dead-letter behavior.
 - Use [Attribution Completeness](runbooks/attribution-completeness.md), [Ingestion Failures](runbooks/ingestion-failures.md), and [Attribution Worker Backlog](runbooks/attribution-worker-backlog.md) for incident response.
+- Use [Cloud Run Pipelines](runbooks/cloud-run-pipelines.md) for Cloud Run deploy, scheduler, IAM, and rollback operations.
 
 ## Core References
 
@@ -41,3 +42,4 @@
 - [Attribution Worker Backlog](runbooks/attribution-worker-backlog.md): worker lag investigation and recovery steps.
 - [Ingestion Failures](runbooks/ingestion-failures.md): failed ingestion triage and remediation.
 - [API Latency](runbooks/api-latency.md): API latency investigation and recovery.
+- [Cloud Run Pipelines](runbooks/cloud-run-pipelines.md): staged deploy verification, scheduler validation, least-privilege IAM, and rollback steps.
