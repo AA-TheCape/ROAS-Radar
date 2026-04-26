@@ -63,8 +63,9 @@ const envSchema = z.object({
   DATABASE_MAX_USES: integerString.default(7_500),
   DATABASE_SSL: booleanString.default(false),
 
-  REPORTING_API_TOKEN: z.string().default('dev-reporting-token'),
+  REPORTING_API_TOKEN: z.string().optional().default(''),
   APP_SESSION_TTL_HOURS: integerString.default(24 * 7),
+  API_ALLOWED_ORIGINS: stringList.default([]),
   TRACKING_ALLOWED_ORIGINS: stringList.default([]),
   API_JSON_BODY_LIMIT: z.string().optional().default('20mb'),
   TRACKING_BODY_LIMIT: z.string().optional().default('20mb'),
@@ -140,3 +141,26 @@ const envSchema = z.object({
 export const env = envSchema.parse(process.env);
 
 export type Env = typeof env;
+
+export function getConfiguredReportingApiToken(): string {
+  const configuredToken = process.env.REPORTING_API_TOKEN;
+
+  if (typeof configuredToken === 'string') {
+    return configuredToken.trim();
+  }
+
+  return env.REPORTING_API_TOKEN.trim();
+}
+
+export function getApiAllowedOrigins(): string[] {
+  const configuredOrigins = process.env.API_ALLOWED_ORIGINS;
+
+  if (typeof configuredOrigins === 'string') {
+    return configuredOrigins
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+  }
+
+  return env.API_ALLOWED_ORIGINS;
+}
