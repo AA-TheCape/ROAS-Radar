@@ -9,6 +9,7 @@ import {
   normalizeEmailAddress,
   normalizePhoneNumber
 } from '../../shared/privacy.js';
+import { refreshCustomerJourneyForJourneys } from './customer-journey.js';
 
 type DbClient = PoolClient;
 
@@ -542,6 +543,11 @@ export async function ingestIdentityEdges(
     shopifyCustomerId: normalizedNodes.find((node) => node.nodeType === 'shopify_customer_id')?.nodeKey ?? null,
     emailHash: normalizedNodes.find((node) => node.nodeType === 'hashed_email')?.nodeKey ?? null
   });
+
+  await refreshCustomerJourneyForJourneys(client, [
+    winnerJourneyId,
+    ...candidateRows.map((row) => row.journey_id).filter((journeyId): journeyId is string => Boolean(journeyId))
+  ]);
 
   await completeIdentityEdgeIngestion(client, {
     idempotencyKey: input.idempotencyKey,

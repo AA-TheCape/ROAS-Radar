@@ -31,6 +31,7 @@ export async function resetE2EDatabase(): Promise<void> {
       attribution_order_credits,
       attribution_results,
       daily_reporting_metrics,
+      customer_journey,
       order_attribution_links,
       identity_edge_ingestion_runs,
       identity_edges,

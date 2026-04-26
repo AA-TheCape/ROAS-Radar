@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { logInfo, logWarning } from '../../observability/index.js';
 import { hashEmailAddress, hashPhoneNumber, normalizeEmailAddress, normalizePhoneNumber } from '../../shared/privacy.js';
+import { refreshCustomerJourneyForJourneys } from './customer-journey.js';
 const IDENTITY_PRECEDENCE = {
     shopify_customer_id: 100,
     hashed_email: 70,
@@ -279,7 +280,7 @@ export async function ingestIdentityEdges(client, input) {
             continue;
         }
         const newEdgeId = randomUUID();
-        await supersedeIdentityEdge(client, activeCandidate.edge_id, newEdgeId);
+        await deactivateIdentityEdge(client, activeCandidate.edge_id);
         await insertIdentityEdge(client, {
             id: newEdgeId,
             nodeId: node.id,
@@ -291,6 +292,7 @@ export async function ingestIdentityEdges(client, input) {
             sourceTimestamp,
             conflictCode: null
         });
+        await linkSupersededIdentityEdge(client, activeCandidate.edge_id, newEdgeId);
         rehomedNodes += 1;
     }
     await refreshJourneyConvenienceFields(client, winnerJourneyId, sourceTimestamp, {
@@ -318,11 +320,15 @@ export async function ingestIdentityEdges(client, input) {
         shopifyCustomerId: normalizedNodes.find((node) => node.nodeType === 'shopify_customer_id')?.nodeKey ?? null,
         emailHash: normalizedNodes.find((node) => node.nodeType === 'hashed_email')?.nodeKey ?? null
     });
+    await refreshCustomerJourneyForJourneys(client, [
+        winnerJourneyId,
+        ...candidateRows.map((row) => row.journey_id).filter((journeyId) => Boolean(journeyId))
+    ]);
     await completeIdentityEdgeIngestion(client, {
         idempotencyKey: input.idempotencyKey,
         status: 'completed',
         journeyId: winnerJourneyId,
-        outcomeReason: 'linked',
+        outcomeReason: journeyResolution.reasonCode,
         metrics: {
             processedNodes: normalizedNodes.length,
             attachedNodes,
@@ -574,7 +580,8 @@ async function resolveWinningJourney(client, input) {
         return {
             outcome: 'linked',
             journeyId,
-            created: true
+            created: true,
+            reasonCode: 'created_new_journey'
         };
     }
     let workingCandidates = input.candidateRows.slice();
@@ -624,14 +631,16 @@ async function resolveWinningJourney(client, input) {
         return {
             outcome: 'linked',
             journeyId: incomingAuthoritativeJourney,
-            created: false
+            created: false,
+            reasonCode: 'shopify_customer_id_authoritative_winner'
         };
     }
     if (candidateJourneyIds.length === 1) {
         return {
             outcome: 'linked',
             journeyId: candidateJourneyIds[0],
-            created: false
+            created: false,
+            reasonCode: 'reused_existing_journey'
         };
     }
     const selectedJourneyId = selectBestJourneyId(workingCandidates, input.journeyScores);
@@ -639,7 +648,10 @@ async function resolveWinningJourney(client, input) {
         return {
             outcome: 'linked',
             journeyId: selectedJourneyId,
-            created: false
+            created: false,
+            reasonCode: input.incomingShopifyCustomerId
+                ? 'shopify_customer_id_authoritative_winner'
+                : 'non_authoritative_precedence_winner'
         };
     }
     const fallbackJourneyId = await createJourney(client, {
@@ -654,7 +666,8 @@ async function resolveWinningJourney(client, input) {
     return {
         outcome: 'linked',
         journeyId: fallbackJourneyId,
-        created: true
+        created: true,
+        reasonCode: 'created_new_journey'
     };
 }
 function distinctAuthoritativeShopifyIds(rows) {
@@ -745,7 +758,7 @@ async function quarantineIdentityNode(client, input) {
         updated_at = now()
       WHERE id = $1::uuid
     `, [input.nodeId]);
-    await supersedeIdentityEdge(client, input.currentEdgeId, newEdgeId);
+    await deactivateIdentityEdge(client, input.currentEdgeId);
     await insertIdentityEdge(client, {
         id: newEdgeId,
         nodeId: input.nodeId,
@@ -757,6 +770,7 @@ async function quarantineIdentityNode(client, input) {
         sourceTimestamp: input.sourceTimestamp,
         conflictCode: input.conflictCode
     });
+    await linkSupersededIdentityEdge(client, input.currentEdgeId, newEdgeId);
 }
 async function insertIdentityEdge(client, input) {
     const nodeTypeResult = await client.query(`
@@ -824,11 +838,19 @@ async function touchActiveIdentityEdge(client, edgeId, sourceTimestamp) {
       WHERE id = $1::uuid
     `, [edgeId, sourceTimestamp]);
 }
-async function supersedeIdentityEdge(client, previousEdgeId, supersedingEdgeId) {
+async function deactivateIdentityEdge(client, edgeId) {
     await client.query(`
       UPDATE identity_edges
       SET
         is_active = false,
+        updated_at = now()
+      WHERE id = $1::uuid
+    `, [edgeId]);
+}
+async function linkSupersededIdentityEdge(client, previousEdgeId, supersedingEdgeId) {
+    await client.query(`
+      UPDATE identity_edges
+      SET
         superseded_by_edge_id = $2::uuid,
         updated_at = now()
       WHERE id = $1::uuid
@@ -873,44 +895,77 @@ async function upsertCompatibilityCustomerIdentity(client, journeyId, input) {
     if (!input.emailHash && !input.shopifyCustomerId) {
         return;
     }
-    try {
+    const safelyAssignableFields = await resolveCompatibilityIdentityAssignments(client, journeyId, {
+        emailHash: input.emailHash,
+        shopifyCustomerId: input.shopifyCustomerId
+    });
+    const existingJourneyRow = await client.query(`
+      SELECT id::text AS id
+      FROM customer_identities
+      WHERE id = $1::uuid
+      LIMIT 1
+    `, [journeyId]);
+    if (existingJourneyRow.rowCount) {
         await client.query(`
-        INSERT INTO customer_identities (
-          id,
-          hashed_email,
-          shopify_customer_id,
-          created_at,
-          updated_at,
-          last_stitched_at
-        )
-        VALUES ($1::uuid, $2, $3, now(), now(), $4)
-        ON CONFLICT (id)
-        DO UPDATE SET
-          hashed_email = COALESCE(customer_identities.hashed_email, EXCLUDED.hashed_email),
-          shopify_customer_id = COALESCE(customer_identities.shopify_customer_id, EXCLUDED.shopify_customer_id),
+        UPDATE customer_identities
+        SET
+          hashed_email = COALESCE(hashed_email, $2),
+          shopify_customer_id = COALESCE(shopify_customer_id, $3),
           updated_at = now(),
-          last_stitched_at = GREATEST(customer_identities.last_stitched_at, EXCLUDED.last_stitched_at)
-      `, [journeyId, input.emailHash, input.shopifyCustomerId, input.sourceTimestamp]);
+          last_stitched_at = GREATEST(last_stitched_at, $4)
+        WHERE id = $1::uuid
+      `, [journeyId, safelyAssignableFields.emailHash, safelyAssignableFields.shopifyCustomerId, input.sourceTimestamp]);
+        return;
     }
-    catch (error) {
-        if (typeof error === 'object' && error !== null && 'code' in error && error.code === '23505') {
-            const existingIdentities = await findExistingIdentities(client, input.shopifyCustomerId, input.emailHash);
-            const existingIdentityId = existingIdentities[0]?.id;
-            if (existingIdentityId) {
-                await client.query(`
-            UPDATE customer_identities
-            SET
-              hashed_email = COALESCE(hashed_email, $2),
-              shopify_customer_id = COALESCE(shopify_customer_id, $3),
-              updated_at = now(),
-              last_stitched_at = GREATEST(last_stitched_at, $4)
-            WHERE id = $1::uuid
-          `, [existingIdentityId, input.emailHash, input.shopifyCustomerId, input.sourceTimestamp]);
-                return;
-            }
-        }
-        throw error;
+    const matchingIdentity = (await findExistingIdentities(client, safelyAssignableFields.shopifyCustomerId, safelyAssignableFields.emailHash))[0] ?? null;
+    if (matchingIdentity) {
+        await client.query(`
+        UPDATE customer_identities
+        SET
+          hashed_email = COALESCE(hashed_email, $2),
+          shopify_customer_id = COALESCE(shopify_customer_id, $3),
+          updated_at = now(),
+          last_stitched_at = GREATEST(last_stitched_at, $4)
+        WHERE id = $1::uuid
+      `, [matchingIdentity.id, safelyAssignableFields.emailHash, safelyAssignableFields.shopifyCustomerId, input.sourceTimestamp]);
+        return;
     }
+    await client.query(`
+      INSERT INTO customer_identities (
+        id,
+        hashed_email,
+        shopify_customer_id,
+        created_at,
+        updated_at,
+        last_stitched_at
+      )
+      VALUES ($1::uuid, $2, $3, now(), now(), $4)
+    `, [journeyId, safelyAssignableFields.emailHash, safelyAssignableFields.shopifyCustomerId, input.sourceTimestamp]);
+}
+async function resolveCompatibilityIdentityAssignments(client, journeyId, input) {
+    const emailOwnerPromise = input.emailHash
+        ? client.query(`
+          SELECT id::text AS id
+          FROM customer_identities
+          WHERE hashed_email = $1
+          LIMIT 1
+        `, [input.emailHash])
+        : Promise.resolve({ rows: [] });
+    const customerOwnerPromise = input.shopifyCustomerId
+        ? client.query(`
+          SELECT id::text AS id
+          FROM customer_identities
+          WHERE shopify_customer_id = $1
+          LIMIT 1
+        `, [input.shopifyCustomerId])
+        : Promise.resolve({ rows: [] });
+    const [emailOwnerResult, customerOwnerResult] = await Promise.all([emailOwnerPromise, customerOwnerPromise]);
+    const emailOwnerId = emailOwnerResult.rows[0]?.id ?? null;
+    const customerOwnerId = customerOwnerResult.rows[0]?.id ?? null;
+    return {
+        emailHash: emailOwnerId && emailOwnerId !== journeyId ? null : input.emailHash,
+        shopifyCustomerId: customerOwnerId && customerOwnerId !== journeyId ? null : input.shopifyCustomerId
+    };
 }
 async function syncIdentityReferences(client, input) {
     const compatibilityExists = await customerIdentityExists(client, input.journeyId);
