@@ -1190,3 +1190,7 @@ function buildHistoricalLookbackWindow(anchorTimestamp) {
         lastTouchEligibleAt: anchorTimestamp
     };
 }
+export const __identityTestUtils = {
+    buildNormalizedIdentityNodes,
+    selectBestJourneyId
+};

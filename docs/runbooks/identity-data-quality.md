@@ -94,9 +94,28 @@ ORDER BY run_date DESC
 LIMIT 7;
 ```
 
+### Quarantined identifiers
+
+```sql
+SELECT
+  n.node_type,
+  n.node_key,
+  e.conflict_code,
+  e.journey_id::text AS journey_id,
+  e.last_observed_at
+FROM identity_nodes n
+INNER JOIN identity_edges e
+  ON e.node_id = n.id
+WHERE n.is_ambiguous = true
+  AND e.is_active = true
+ORDER BY e.last_observed_at DESC, n.node_type ASC
+LIMIT 50;
+```
+
 ## Remediation
 
 1. Re-run the graph backfill for affected surfaces with `npm run identity:backfill-graph` if the issue is stale assignment data.
 2. Repair or quarantine conflicting identifiers before replaying ingestion when the breach is caused by authoritative Shopify conflicts.
-3. Fix the upstream hashing or normalization path before replaying records if the breach is a hash-format anomaly.
-4. Re-run `npm run data-quality:check` locally or re-execute the Cloud Run Job after repair to confirm the alert clears.
+3. If an identifier is already quarantined, do not expect replay alone to merge it back automatically; ambiguous nodes are intentionally ignored by future auto-merges until repaired.
+4. Fix the upstream hashing or normalization path before replaying records if the breach is a hash-format anomaly.
+5. Re-run `npm run data-quality:check` locally or re-execute the Cloud Run Job after repair to confirm the alert clears.

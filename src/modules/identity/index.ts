@@ -1769,3 +1769,8 @@ function buildHistoricalLookbackWindow(anchorTimestamp: Date): IdentityJourneyLo
     lastTouchEligibleAt: anchorTimestamp
   };
 }
+
+export const __identityTestUtils = {
+  buildNormalizedIdentityNodes,
+  selectBestJourneyId
+};

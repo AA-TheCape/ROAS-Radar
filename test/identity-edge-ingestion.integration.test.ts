@@ -280,6 +280,71 @@ test('identity edge ingestion emits structured processing metrics', async () => 
   assert.equal(identityMetricsLog?.quarantinedNodes, 0);
 });
 
+test('anonymous session and token evidence is promoted in-place when Shopify authority arrives later', async () => {
+  const sessionId = '123e4567-e89b-42d3-a456-426614174010';
+  const { withTransaction, ingestIdentityEdges, hashIdentityEmail } = await getIdentityModules();
+  const emailHash = hashIdentityEmail('buyer@example.com');
+
+  const anonymous = await withTransaction((client) =>
+    ingestIdentityEdges(client, {
+      sourceTimestamp: '2026-04-20T09:00:00.000Z',
+      evidenceSource: 'tracking_event',
+      sourceTable: 'tracking_events',
+      sourceRecordId: 'anon-session',
+      idempotencyKey: 'identity-example-1-anon',
+      sessionId,
+      checkoutToken: 'co-example-1',
+      cartToken: 'ca-example-1'
+    })
+  );
+  const promoted = await withTransaction((client) =>
+    ingestIdentityEdges(client, {
+      sourceTimestamp: '2026-04-20T10:00:00.000Z',
+      evidenceSource: 'shopify_order_webhook',
+      sourceTable: 'shopify_orders',
+      sourceRecordId: 'order-example-1',
+      idempotencyKey: 'identity-example-1-authoritative',
+      sessionId,
+      checkoutToken: 'co-example-1',
+      cartToken: 'ca-example-1',
+      shopifyCustomerId: 'sc-example-1',
+      email: 'buyer@example.com'
+    })
+  );
+
+  assert.equal(anonymous.outcome, 'linked');
+  assert.equal(promoted.outcome, 'linked');
+  assert.equal(promoted.journeyId, anonymous.journeyId);
+
+  const { pool } = await import('../src/db/pool.js');
+  const [journeyCountResult, state] = await Promise.all([
+    pool.query<{ journey_count: string }>('SELECT COUNT(*)::text AS journey_count FROM identity_journeys'),
+    fetchJourneyState(promoted.journeyId as string)
+  ]);
+
+  assert.equal(journeyCountResult.rows[0]?.journey_count, '1');
+  assert.equal(state.journey?.authoritative_shopify_customer_id, 'sc-example-1');
+  assert.equal(state.journey?.primary_email_hash, emailHash);
+  assert.ok(
+    state.edges.some(
+      (edge) =>
+        edge.node_type === 'shopify_customer_id' &&
+        edge.node_key === 'sc-example-1' &&
+        edge.edge_type === 'authoritative' &&
+        edge.is_active
+    )
+  );
+  assert.ok(
+    state.edges.some(
+      (edge) =>
+        edge.node_type === 'checkout_token' &&
+        edge.node_key === 'co-example-1' &&
+        edge.edge_type === 'deterministic' &&
+        edge.is_active
+    )
+  );
+});
+
 test('Shopify authority rehomes lower-rank identifiers and persists the authoritative merge reason', async () => {
   const { withTransaction, ingestIdentityEdges, hashIdentityEmail } = await getIdentityModules();
   const emailHash = hashIdentityEmail('buyer@example.com');
@@ -475,6 +540,96 @@ test('shared phone numbers across authoritative Shopify customers are quarantine
   assert.equal(quarantineRun?.quarantined_nodes, 1);
 });
 
+test('shared hashed emails across authoritative Shopify customers are quarantined and ignored on future merges', async () => {
+  const { withTransaction, ingestIdentityEdges, hashIdentityEmail } = await getIdentityModules();
+  const emailHash = hashIdentityEmail('shared@example.com') as string;
+
+  const firstJourney = await withTransaction((client) =>
+    ingestIdentityEdges(client, {
+      sourceTimestamp: '2026-04-22T09:00:00.000Z',
+      evidenceSource: 'shopify_order_webhook',
+      sourceTable: 'shopify_orders',
+      sourceRecordId: 'order-email-1',
+      idempotencyKey: 'identity-email-j1',
+      shopifyCustomerId: 'sc-email-1',
+      hashedEmail: emailHash
+    })
+  );
+  const secondJourney = await withTransaction((client) =>
+    ingestIdentityEdges(client, {
+      sourceTimestamp: '2026-04-22T10:00:00.000Z',
+      evidenceSource: 'shopify_order_webhook',
+      sourceTable: 'shopify_orders',
+      sourceRecordId: 'order-email-2',
+      idempotencyKey: 'identity-email-j2',
+      shopifyCustomerId: 'sc-email-2'
+    })
+  );
+  const quarantined = await withTransaction((client) =>
+    ingestIdentityEdges(client, {
+      sourceTimestamp: '2026-04-22T11:00:00.000Z',
+      evidenceSource: 'shopify_order_webhook',
+      sourceTable: 'shopify_orders',
+      sourceRecordId: 'order-email-3',
+      idempotencyKey: 'identity-email-quarantine',
+      shopifyCustomerId: 'sc-email-2',
+      hashedEmail: emailHash
+    })
+  );
+  const futureAnonymous = await withTransaction((client) =>
+    ingestIdentityEdges(client, {
+      sourceTimestamp: '2026-04-22T12:00:00.000Z',
+      evidenceSource: 'shopify_order_webhook',
+      sourceTable: 'shopify_orders',
+      sourceRecordId: 'order-email-after-quarantine',
+      idempotencyKey: 'identity-email-post-quarantine',
+      sessionId: '123e4567-e89b-42d3-a456-426614174011',
+      shopifyCustomerId: 'sc-email-3',
+      hashedEmail: emailHash
+    })
+  );
+
+  assert.equal(quarantined.outcome, 'linked');
+  assert.equal(quarantined.journeyId, secondJourney.journeyId);
+  assert.ok(futureAnonymous.journeyId);
+  assert.notEqual(futureAnonymous.journeyId, firstJourney.journeyId);
+  assert.notEqual(futureAnonymous.journeyId, secondJourney.journeyId);
+
+  const { pool } = await import('../src/db/pool.js');
+  const [emailNodeResult, futureState] = await Promise.all([
+    pool.query<{
+      is_ambiguous: boolean;
+      edge_type: string;
+      conflict_code: string | null;
+      journey_id: string;
+    }>(
+      `
+        SELECT
+          n.is_ambiguous,
+          e.edge_type,
+          e.conflict_code,
+          e.journey_id::text AS journey_id
+        FROM identity_nodes n
+        INNER JOIN identity_edges e ON e.node_id = n.id
+        WHERE n.node_type = 'hashed_email'
+          AND n.node_key = $1
+          AND e.is_active = true
+      `,
+      [emailHash]
+    ),
+    fetchJourneyState(futureAnonymous.journeyId as string)
+  ]);
+
+  assert.equal(emailNodeResult.rows[0]?.is_ambiguous, true);
+  assert.equal(emailNodeResult.rows[0]?.edge_type, 'quarantined');
+  assert.equal(emailNodeResult.rows[0]?.conflict_code, 'hashed_email_conflicts_across_authoritative_customers');
+  assert.equal(emailNodeResult.rows[0]?.journey_id, firstJourney.journeyId);
+  assert.equal(
+    futureState.edges.some((edge) => edge.node_type === 'hashed_email' && edge.node_key === emailHash && edge.is_active),
+    false
+  );
+});
+
 test('different authoritative Shopify journeys hard-stop instead of auto-merging', async () => {
   const { withTransaction, ingestIdentityEdges } = await getIdentityModules();
 
@@ -543,6 +698,90 @@ test('different authoritative Shopify journeys hard-stop instead of auto-merging
   assert.equal(ingestionRun.rows[0]?.journey_id, null);
   assert.equal(ingestionRun.rows[0]?.outcome_reason, 'authoritative_shopify_customer_conflict');
   assert.equal(activeEdges.rows[0]?.active_edge_count, '4');
+});
+
+test('concurrent authoritative conflict attempts both hard-stop without mutating active edge ownership', async () => {
+  const { withTransaction, ingestIdentityEdges } = await getIdentityModules();
+
+  await withTransaction((client) =>
+    ingestIdentityEdges(client, {
+      sourceTimestamp: '2026-04-23T09:00:00.000Z',
+      evidenceSource: 'shopify_order_webhook',
+      sourceTable: 'shopify_orders',
+      sourceRecordId: 'order-concurrency-1',
+      idempotencyKey: 'identity-concurrency-seed-1',
+      shopifyCustomerId: 'sc-concurrency-1',
+      sessionId: '123e4567-e89b-42d3-a456-426614174012'
+    })
+  );
+  await withTransaction((client) =>
+    ingestIdentityEdges(client, {
+      sourceTimestamp: '2026-04-23T10:00:00.000Z',
+      evidenceSource: 'shopify_order_webhook',
+      sourceTable: 'shopify_orders',
+      sourceRecordId: 'order-concurrency-2',
+      idempotencyKey: 'identity-concurrency-seed-2',
+      shopifyCustomerId: 'sc-concurrency-2',
+      checkoutToken: 'co-concurrency-1'
+    })
+  );
+
+  const { pool } = await import('../src/db/pool.js');
+  const runConflictAttempt = async (idempotencyKey: string) => {
+    const client = await pool.connect();
+
+    try {
+      await client.query('BEGIN');
+      const result = await ingestIdentityEdges(client, {
+        sourceTimestamp: '2026-04-23T11:00:00.000Z',
+        evidenceSource: 'tracking_event',
+        sourceTable: 'tracking_events',
+        sourceRecordId: idempotencyKey,
+        idempotencyKey,
+        sessionId: '123e4567-e89b-42d3-a456-426614174012',
+        checkoutToken: 'co-concurrency-1'
+      });
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  };
+
+  const [firstConflict, secondConflict] = await Promise.all([
+    runConflictAttempt('identity-concurrency-join-1'),
+    runConflictAttempt('identity-concurrency-join-2')
+  ]);
+
+  assert.equal(firstConflict.outcome, 'conflict');
+  assert.equal(firstConflict.reason, 'authoritative_shopify_customer_conflict');
+  assert.equal(secondConflict.outcome, 'conflict');
+  assert.equal(secondConflict.reason, 'authoritative_shopify_customer_conflict');
+
+  const [activeEdges, conflictRuns] = await Promise.all([
+    pool.query<{ active_edge_count: string }>(
+      `
+        SELECT COUNT(*)::text AS active_edge_count
+        FROM identity_edges
+        WHERE is_active = true
+      `
+    ),
+    pool.query<{ conflict_count: string }>(
+      `
+        SELECT COUNT(*)::text AS conflict_count
+        FROM identity_edge_ingestion_runs
+        WHERE idempotency_key IN ('identity-concurrency-join-1', 'identity-concurrency-join-2')
+          AND status = 'conflicted'
+          AND outcome_reason = 'authoritative_shopify_customer_conflict'
+      `
+    )
+  ]);
+
+  assert.equal(activeEdges.rows[0]?.active_edge_count, '4');
+  assert.equal(conflictRuns.rows[0]?.conflict_count, '2');
 });
 
 test('qualifying identity events only relink historical sessions inside the inclusive 30-day lookback and ignore late older events', async () => {

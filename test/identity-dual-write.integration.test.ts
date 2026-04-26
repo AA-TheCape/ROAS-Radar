@@ -263,3 +263,195 @@ test('identity graph ingestion dual-writes canonical ids onto rollout surfaces',
     compatibility_shopify_customer_id: shopifyCustomerId
   });
 });
+
+test('identity graph dual-write keeps attribution fallback compatible during rollout', async () => {
+  const sessionId = '123e4567-e89b-42d3-a456-426614174202';
+  const shopifyOrderId = 'so-dual-write-fallback-1';
+  const shopifyCustomerId = 'sc-dual-write-fallback-1';
+  const email = 'fallback@example.com';
+
+  const [{ pool, withTransaction }, { ingestIdentityEdges, hashIdentityEmail }, attributionModule] = await Promise.all([
+    import('../src/db/pool.js'),
+    import('../src/modules/identity/index.js'),
+    import('../src/modules/attribution/index.js')
+  ]);
+  const emailHash = hashIdentityEmail(email);
+
+  await pool.query(
+    `
+      INSERT INTO tracking_sessions (
+        id,
+        first_seen_at,
+        last_seen_at,
+        landing_page,
+        initial_utm_source,
+        initial_utm_medium,
+        initial_utm_campaign,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        $1::uuid,
+        '2026-04-24T12:00:00.000Z',
+        '2026-04-24T12:05:00.000Z',
+        'https://store.example/products/widget?utm_source=google&utm_medium=cpc&utm_campaign=identity-fallback',
+        'google',
+        'cpc',
+        'identity-fallback',
+        '2026-04-24T12:00:00.000Z',
+        '2026-04-24T12:00:00.000Z'
+      )
+    `,
+    [sessionId]
+  );
+
+  await pool.query(
+    `
+      INSERT INTO tracking_events (
+        id,
+        session_id,
+        event_type,
+        occurred_at,
+        page_url,
+        utm_source,
+        utm_medium,
+        utm_campaign,
+        raw_payload,
+        ingested_at,
+        payload_source,
+        payload_received_at,
+        payload_size_bytes,
+        payload_hash
+      )
+      VALUES (
+        '223e4567-e89b-42d3-a456-426614174202'::uuid,
+        $1::uuid,
+        'page_view',
+        '2026-04-24T12:00:00.000Z',
+        'https://store.example/products/widget?utm_source=google&utm_medium=cpc&utm_campaign=identity-fallback',
+        'google',
+        'cpc',
+        'identity-fallback',
+        $2::jsonb,
+        '2026-04-24T12:00:00.000Z',
+        'browser',
+        '2026-04-24T12:00:00.000Z',
+        $3,
+        $4
+      )
+    `,
+    [sessionId, EMPTY_JSON_PAYLOAD, EMPTY_JSON_PAYLOAD_SIZE, EMPTY_JSON_PAYLOAD_HASH]
+  );
+
+  await pool.query(
+    `
+      INSERT INTO shopify_orders (
+        shopify_order_id,
+        shopify_customer_id,
+        email,
+        email_hash,
+        currency_code,
+        total_price,
+        processed_at,
+        created_at_shopify,
+        updated_at_shopify,
+        raw_payload,
+        ingested_at,
+        payload_source,
+        payload_received_at,
+        payload_size_bytes,
+        payload_hash
+      )
+      VALUES (
+        $1,
+        $2,
+        null,
+        $3,
+        'USD',
+        100.00,
+        '2026-04-24T12:15:00.000Z',
+        '2026-04-24T12:15:00.000Z',
+        '2026-04-24T12:15:00.000Z',
+        $4::jsonb,
+        '2026-04-24T12:15:00.000Z',
+        'shopify_order',
+        '2026-04-24T12:15:00.000Z',
+        $5,
+        $6
+      )
+    `,
+    [shopifyOrderId, shopifyCustomerId, emailHash, EMPTY_JSON_PAYLOAD, EMPTY_JSON_PAYLOAD_SIZE, EMPTY_JSON_PAYLOAD_HASH]
+  );
+
+  const stitched = await withTransaction((client) =>
+    ingestIdentityEdges(client, {
+      sourceTimestamp: '2026-04-24T12:20:00.000Z',
+      evidenceSource: 'shopify_order_webhook',
+      sourceTable: 'shopify_orders',
+      sourceRecordId: shopifyOrderId,
+      idempotencyKey: 'identity-dual-write-fallback',
+      sessionId,
+      shopifyCustomerId,
+      email
+    })
+  );
+
+  await attributionModule.enqueueAttributionForOrder(shopifyOrderId, 'integration_test');
+  const queueResult = await attributionModule.processAttributionQueue({
+    workerId: 'test-identity-fallback',
+    limit: 10,
+    staleScanLimit: 0,
+    emitMetrics: false
+  });
+
+  assert.equal(stitched.outcome, 'linked');
+  assert.equal(queueResult.succeededJobs, 1);
+  assert.equal(queueResult.failedJobs, 0);
+
+  const [attributionResult, orderState] = await Promise.all([
+    pool.query<{
+      session_id: string | null;
+      attributed_source: string | null;
+      attributed_medium: string | null;
+      attributed_campaign: string | null;
+      attribution_reason: string;
+    }>(
+      `
+        SELECT
+          session_id::text AS session_id,
+          attributed_source,
+          attributed_medium,
+          attributed_campaign,
+          attribution_reason
+        FROM attribution_results
+        WHERE shopify_order_id = $1
+      `,
+      [shopifyOrderId]
+    ),
+    pool.query<{
+      identity_journey_id: string | null;
+      customer_identity_id: string | null;
+    }>(
+      `
+        SELECT
+          identity_journey_id::text AS identity_journey_id,
+          customer_identity_id::text AS customer_identity_id
+        FROM shopify_orders
+        WHERE shopify_order_id = $1
+      `,
+      [shopifyOrderId]
+    )
+  ]);
+
+  assert.deepEqual(attributionResult.rows[0], {
+    session_id: sessionId,
+    attributed_source: 'google',
+    attributed_medium: 'cpc',
+    attributed_campaign: 'identity-fallback',
+    attribution_reason: 'matched_by_customer_identity'
+  });
+  assert.deepEqual(orderState.rows[0], {
+    identity_journey_id: stitched.journeyId,
+    customer_identity_id: stitched.journeyId
+  });
+});
