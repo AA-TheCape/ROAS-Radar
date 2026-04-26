@@ -419,8 +419,6 @@ export type ShopifyAttributionRecoveryResponse = {
   shopifyHintAttributedOrders: number;
 };
 
-export type { OrderAttributionBackfillEnqueueResponse, OrderAttributionBackfillRequest, OrderAttributionBackfillSubmittedOptions };
-
 declare global {
   interface Window {
     __ROAS_RADAR_RUNTIME_CONFIG__?: {
