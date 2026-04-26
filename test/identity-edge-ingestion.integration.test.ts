@@ -642,7 +642,85 @@ test('shared phone numbers across authoritative Shopify customers are quarantine
 
 test('shared hashed emails across authoritative Shopify customers are quarantined and ignored on future merges', async () => {
   const { withTransaction, ingestIdentityEdges, hashIdentityEmail } = await getIdentityModules();
+  const { pool } = await import('../src/db/pool.js');
   const emailHash = hashIdentityEmail('shared@example.com') as string;
+
+  await pool.query(
+    `
+      INSERT INTO shopify_orders (
+        shopify_order_id,
+        shopify_order_number,
+        shopify_customer_id,
+        email_hash,
+        currency_code,
+        subtotal_price,
+        total_price,
+        processed_at,
+        created_at_shopify,
+        updated_at_shopify,
+        payload_size_bytes,
+        source_name
+      )
+      VALUES
+        (
+          'order-email-1',
+          '1001',
+          'sc-email-1',
+          $1,
+          'USD',
+          50.00,
+          50.00,
+          '2026-04-22T09:00:00.000Z',
+          '2026-04-22T09:00:00.000Z',
+          '2026-04-22T09:00:00.000Z',
+          2,
+          'web'
+        ),
+        (
+          'order-email-2',
+          '1002',
+          'sc-email-2',
+          $1,
+          'USD',
+          75.00,
+          75.00,
+          '2026-04-22T10:00:00.000Z',
+          '2026-04-22T10:00:00.000Z',
+          '2026-04-22T10:00:00.000Z',
+          2,
+          'web'
+        ),
+        (
+          'order-email-3',
+          '1003',
+          'sc-email-2',
+          $1,
+          'USD',
+          80.00,
+          80.00,
+          '2026-04-22T11:00:00.000Z',
+          '2026-04-22T11:00:00.000Z',
+          '2026-04-22T11:00:00.000Z',
+          2,
+          'web'
+        ),
+        (
+          'order-email-after-quarantine',
+          '1004',
+          'sc-email-3',
+          $1,
+          'USD',
+          90.00,
+          90.00,
+          '2026-04-22T12:00:00.000Z',
+          '2026-04-22T12:00:00.000Z',
+          '2026-04-22T12:00:00.000Z',
+          2,
+          'web'
+        )
+    `,
+    [emailHash]
+  );
 
   const firstJourney = await withTransaction((client) =>
     ingestIdentityEdges(client, {
@@ -695,8 +773,7 @@ test('shared hashed emails across authoritative Shopify customers are quarantine
   assert.notEqual(futureAnonymous.journeyId, firstJourney.journeyId);
   assert.notEqual(futureAnonymous.journeyId, secondJourney.journeyId);
 
-  const { pool } = await import('../src/db/pool.js');
-  const [emailNodeResult, futureState] = await Promise.all([
+  const [emailNodeResult, futureState, orderAssignments] = await Promise.all([
     pool.query<{
       is_ambiguous: boolean;
       edge_type: string;
@@ -717,7 +794,27 @@ test('shared hashed emails across authoritative Shopify customers are quarantine
       `,
       [emailHash]
     ),
-    fetchJourneyState(futureAnonymous.journeyId as string)
+    fetchJourneyState(futureAnonymous.journeyId as string),
+    pool.query<{
+      shopify_order_id: string;
+      shopify_customer_id: string | null;
+      identity_journey_id: string | null;
+    }>(
+      `
+        SELECT
+          shopify_order_id,
+          shopify_customer_id,
+          identity_journey_id::text AS identity_journey_id
+        FROM shopify_orders
+        WHERE shopify_order_id IN (
+          'order-email-1',
+          'order-email-2',
+          'order-email-3',
+          'order-email-after-quarantine'
+        )
+        ORDER BY shopify_order_id ASC
+      `
+    )
   ]);
 
   assert.equal(emailNodeResult.rows[0]?.is_ambiguous, true);
@@ -728,6 +825,28 @@ test('shared hashed emails across authoritative Shopify customers are quarantine
     futureState.edges.some((edge) => edge.node_type === 'hashed_email' && edge.node_key === emailHash && edge.is_active),
     false
   );
+  assert.deepEqual(orderAssignments.rows, [
+    {
+      shopify_order_id: 'order-email-1',
+      shopify_customer_id: 'sc-email-1',
+      identity_journey_id: firstJourney.journeyId
+    },
+    {
+      shopify_order_id: 'order-email-2',
+      shopify_customer_id: 'sc-email-2',
+      identity_journey_id: secondJourney.journeyId
+    },
+    {
+      shopify_order_id: 'order-email-3',
+      shopify_customer_id: 'sc-email-2',
+      identity_journey_id: secondJourney.journeyId
+    },
+    {
+      shopify_order_id: 'order-email-after-quarantine',
+      shopify_customer_id: 'sc-email-3',
+      identity_journey_id: futureAnonymous.journeyId
+    }
+  ]);
 });
 
 test('different authoritative Shopify journeys hard-stop instead of auto-merging', async () => {

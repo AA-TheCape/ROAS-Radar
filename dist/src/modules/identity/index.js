@@ -322,6 +322,7 @@ export async function ingestIdentityEdges(client, input) {
         cartToken: normalizedNodes.find((node) => node.nodeType === 'cart_token')?.nodeKey ?? null,
         shopifyCustomerId: normalizedNodes.find((node) => node.nodeType === 'shopify_customer_id')?.nodeKey ?? null,
         emailHash: normalizedNodes.find((node) => node.nodeType === 'hashed_email')?.nodeKey ?? null,
+        phoneHash: normalizedNodes.find((node) => node.nodeType === 'phone_hash')?.nodeKey ?? null,
         qualifyingIdentityObservedAt
     });
     await refreshCustomerJourneyForJourneys(client, [
@@ -1040,6 +1041,10 @@ async function syncIdentityReferences(client, input) {
     const lookbackWindow = input.qualifyingIdentityObservedAt
         ? await loadJourneyLookbackWindow(client, input.journeyId)
         : null;
+    const safeOrderRewriteContactHashes = await resolveSafeOrderRewriteContactHashes(client, input.journeyId, {
+        emailHash: input.emailHash,
+        phoneHash: input.phoneHash ?? null
+    });
     const sessionResult = await client.query(`
       WITH candidate_sessions AS (
         SELECT $1::uuid AS session_id
@@ -1132,7 +1137,7 @@ async function syncIdentityReferences(client, input) {
         input.checkoutToken,
         input.cartToken,
         input.shopifyCustomerId,
-        input.emailHash,
+        safeOrderRewriteContactHashes.emailHash,
         compatibilityExists,
         lookbackWindow?.lookbackWindowStartedAt ?? null,
         lookbackWindow?.lookbackWindowExpiresAt ?? null
@@ -1151,6 +1156,41 @@ async function syncIdentityReferences(client, input) {
       `, [input.shopifyCustomerId, journeyId, compatibilityExists]);
     }
     return sessionIds;
+}
+async function resolveSafeOrderRewriteContactHashes(client, journeyId, input) {
+    const hashesByType = new Map();
+    if (input.emailHash) {
+        hashesByType.set('hashed_email', input.emailHash);
+    }
+    if (input.phoneHash) {
+        hashesByType.set('phone_hash', input.phoneHash);
+    }
+    if (hashesByType.size === 0) {
+        return {
+            emailHash: null,
+            phoneHash: null
+        };
+    }
+    const nodeTypes = [...hashesByType.keys()];
+    const nodeKeys = nodeTypes.map((nodeType) => hashesByType.get(nodeType));
+    const result = await client.query(`
+      SELECT
+        n.node_type,
+        n.node_key
+      FROM identity_nodes n
+      INNER JOIN identity_edges e ON e.node_id = n.id
+      WHERE e.journey_id = $1::uuid
+        AND e.is_active = true
+        AND e.edge_type <> 'quarantined'
+        AND n.is_ambiguous = false
+        AND n.node_type = ANY($2::text[])
+        AND n.node_key = ANY($3::text[])
+    `, [journeyId, nodeTypes, nodeKeys]);
+    const safeHashes = new Map(result.rows.map((row) => [row.node_type, row.node_key]));
+    return {
+        emailHash: safeHashes.get('hashed_email') ?? null,
+        phoneHash: safeHashes.get('phone_hash') ?? null
+    };
 }
 async function collectJourneySessionIds(client, journeyId) {
     const result = await client.query(`
