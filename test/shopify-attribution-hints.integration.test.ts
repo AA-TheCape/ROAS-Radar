@@ -227,6 +227,29 @@ async function fetchOrderSnapshot(shopifyOrderId: string) {
   return result.rows[0]?.attribution_snapshot ?? null;
 }
 
+async function fetchOrderAttributionAudit(shopifyOrderId: string) {
+  const { pool } = await getModules();
+  const result = await pool.query<{
+    attribution_tier: string | null;
+    attribution_source: string | null;
+    attribution_matched_at: Date | null;
+    attribution_reason: string | null;
+  }>(
+    `
+      SELECT
+        attribution_tier,
+        attribution_source,
+        attribution_matched_at,
+        attribution_reason
+      FROM shopify_orders
+      WHERE shopify_order_id = $1
+    `,
+    [shopifyOrderId]
+  );
+
+  return result.rows[0] ?? null;
+}
+
 async function fetchPendingAttributionJobs(shopifyOrderId: string) {
   const { pool } = await getModules();
   const result = await pool.query<{ count: string }>(
@@ -301,6 +324,22 @@ test('recoverShopifyAttributionHints applies click-id-backed synthetic attributi
       isDirect: false
     });
     assert.deepEqual(snapshot?.timeline, [snapshot?.winner]);
+
+    const orderAudit = await fetchOrderAttributionAudit('order-shopify-hint-click-id-1');
+    assert.deepEqual(
+      {
+        attribution_tier: orderAudit?.attribution_tier,
+        attribution_source: orderAudit?.attribution_source,
+        attribution_reason: orderAudit?.attribution_reason
+      },
+      {
+        attribution_tier: 'deterministic_shopify_hint',
+        attribution_source: 'shopify_marketing_hint',
+        attribution_reason: 'shopify_hint_derived'
+      }
+    );
+    assert.ok(orderAudit?.attribution_matched_at instanceof Date);
+
     assert.equal(await fetchPendingAttributionJobs('order-shopify-hint-click-id-1'), 0);
   } finally {
     await resetIntegrationDatabase();

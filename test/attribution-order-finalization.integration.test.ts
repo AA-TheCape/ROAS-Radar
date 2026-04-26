@@ -339,6 +339,30 @@ async function fetchOrderSnapshot(shopifyOrderId: string) {
   return result.rows[0].attribution_snapshot;
 }
 
+async function fetchOrderAttributionAudit(shopifyOrderId: string) {
+  const { pool } = await getModules();
+  const result = await pool.query<{
+    attribution_tier: string | null;
+    attribution_source: string | null;
+    attribution_matched_at: Date | null;
+    attribution_reason: string | null;
+  }>(
+    `
+      SELECT
+        attribution_tier,
+        attribution_source,
+        attribution_matched_at,
+        attribution_reason
+      FROM shopify_orders
+      WHERE shopify_order_id = $1
+    `,
+    [shopifyOrderId]
+  );
+
+  assert.equal(result.rowCount, 1);
+  return result.rows[0];
+}
+
 async function resetIntegrationDatabase() {
   const { pool } = await getModules();
 
@@ -534,6 +558,12 @@ test('order finalization persists a deterministic last non-direct winner snapsho
       attributed_campaign: 'brand-search',
       attribution_reason: 'matched_by_landing_session'
     });
+
+    const orderAudit = await fetchOrderAttributionAudit('order-finalization-1');
+    assert.equal(orderAudit.attribution_tier, 'deterministic_first_party');
+    assert.equal(orderAudit.attribution_source, 'landing_session_id');
+    assert.equal(orderAudit.attribution_reason, 'matched_by_landing_session');
+    assert.ok(orderAudit.attribution_matched_at instanceof Date);
 
     const orderSnapshotResult = await pool.query<{ attribution_snapshot: Record<string, unknown> | null }>(
       `
@@ -938,11 +968,43 @@ test('orders with no deterministic candidates persist an unattributed fallback s
       attribution_reason: 'unattributed'
     });
 
+    const orderAudit = await fetchOrderAttributionAudit('order-unattributed-1');
+    assert.equal(orderAudit.attribution_tier, 'unattributed');
+    assert.equal(orderAudit.attribution_source, 'unattributed');
+    assert.equal(orderAudit.attribution_reason, 'unattributed');
+    assert.ok(orderAudit.attribution_matched_at instanceof Date);
+
     const snapshot = await fetchOrderSnapshot('order-unattributed-1');
     assert.ok(snapshot);
     assert.equal(snapshot?.confidenceScore, 0);
     assert.equal(snapshot?.winner, null);
     assert.deepEqual(snapshot?.timeline, []);
+  } finally {
+    await resetIntegrationDatabase();
+  }
+});
+
+test('shopify_orders attribution tier constraint rejects unsupported values', async () => {
+  await resetIntegrationDatabase();
+  const { pool } = await getModules();
+
+  try {
+    await insertShopifyOrder(pool, {
+      shopifyOrderId: 'order-invalid-tier-1',
+      processedAt: '2026-04-11T10:00:00.000Z'
+    });
+
+    await assert.rejects(
+      () =>
+        pool.query(
+          `
+            UPDATE shopify_orders
+            SET attribution_tier = 'invalid_tier'
+            WHERE shopify_order_id = 'order-invalid-tier-1'
+          `
+        ),
+      /shopify_orders_attribution_tier_chk/
+    );
   } finally {
     await resetIntegrationDatabase();
   }

@@ -22,6 +22,7 @@ import {
   type ResolvedAttributionTouchpoint,
   type ResolvedJourney
 } from './resolver.js';
+import { buildOrderAttributionAuditRecord } from './order-attribution-audit.js';
 
 const ATTRIBUTION_MODEL_VERSION = 1;
 const ATTRIBUTION_WINDOW_DAYS = 7;
@@ -557,6 +558,9 @@ async function persistAttribution(client: PoolClient, order: OrderRow, journey: 
     throw new Error(`Failed to compute attribution credits for Shopify order ${order.shopify_order_id}`);
   }
 
+  const matchedAt = new Date();
+  const orderAttributionAudit = buildOrderAttributionAuditRecord(journey.winner, matchedAt);
+
   await client.query('DELETE FROM attribution_order_credits WHERE shopify_order_id = $1', [order.shopify_order_id]);
 
   for (const model of ATTRIBUTION_MODELS) {
@@ -657,9 +661,9 @@ async function persistAttribution(client: PoolClient, order: OrderRow, journey: 
         $9,
         $10,
         $11,
-        now(),
+        $12,
         1,
-        $12
+        $13
       )
       ON CONFLICT (shopify_order_id)
       DO UPDATE SET
@@ -674,7 +678,7 @@ async function persistAttribution(client: PoolClient, order: OrderRow, journey: 
         attributed_click_id_value = EXCLUDED.attributed_click_id_value,
         confidence_score = EXCLUDED.confidence_score,
         attribution_reason = EXCLUDED.attribution_reason,
-        attributed_at = now(),
+        attributed_at = EXCLUDED.attributed_at,
         model_version = EXCLUDED.model_version
     `,
     [
@@ -689,6 +693,7 @@ async function persistAttribution(client: PoolClient, order: OrderRow, journey: 
       normalizeNullableString(primaryCredit.clickIdValue),
       journey.confidenceScore,
       primaryCredit.attributionReason,
+      matchedAt,
       ATTRIBUTION_MODEL_VERSION
     ]
   );
@@ -697,12 +702,20 @@ async function persistAttribution(client: PoolClient, order: OrderRow, journey: 
     `
       UPDATE shopify_orders
       SET
-        attribution_snapshot = $2::jsonb,
-        attribution_snapshot_updated_at = now()
+        attribution_tier = $2,
+        attribution_source = $3,
+        attribution_matched_at = $4,
+        attribution_reason = $5,
+        attribution_snapshot = $6::jsonb,
+        attribution_snapshot_updated_at = $4
       WHERE shopify_order_id = $1
     `,
     [
       order.shopify_order_id,
+      orderAttributionAudit.tier,
+      orderAttributionAudit.source,
+      orderAttributionAudit.matchedAt,
+      orderAttributionAudit.reason,
       JSON.stringify({
         confidenceScore: journey.confidenceScore,
         winner: journey.winner
