@@ -741,6 +741,10 @@ test('settings admin view renders queued, processing, completed, and failed back
 
     const completedText = mounted.container.textContent ?? '';
     assert.match(completedText, /Completed/);
+    assert.match(completedText, /Web orders only/);
+    assert.match(completedText, /No/);
+    assert.match(completedText, /Shopify writeback/);
+    assert.match(completedText, /Skipped/);
     assert.match(completedText, /Orders scanned/);
     assert.match(completedText, /150/);
     assert.match(completedText, /Recovered/);
@@ -793,6 +797,10 @@ test('settings admin view renders queued, processing, completed, and failed back
 
     const failedText = mounted.container.textContent ?? '';
     assert.match(failedText, /Failed/);
+    assert.match(failedText, /Web orders only/);
+    assert.match(failedText, /Yes/);
+    assert.match(failedText, /Shopify writeback/);
+    assert.match(failedText, /Allowed/);
     assert.match(failedText, /job-failed: Worker exited before finishing the backfill/);
     assert.match(failedText, /Orders scanned/);
     assert.match(failedText, /23/);

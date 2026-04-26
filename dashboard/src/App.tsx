@@ -11,6 +11,7 @@ import React, {
 } from 'react';
 import {
   ORDER_ATTRIBUTION_BACKFILL_DEFAULT_LIMIT,
+  type OrderAttributionBackfillSubmittedOptions,
   orderAttributionBackfillRequestSchema
 } from '../../packages/attribution-schema/index.js';
 
@@ -552,6 +553,15 @@ function formatOptionalDateTime(value: string | null | undefined, reportingTimez
   return value ? formatDateTimeLabel(value, reportingTimezone) : 'Not available';
 }
 
+function toBackfillOptionState(options: OrderAttributionBackfillSubmittedOptions) {
+  return {
+    dryRun: options.dryRun,
+    limit: String(options.limit),
+    webOrdersOnly: options.webOrdersOnly,
+    skipShopifyWriteback: options.skipShopifyWriteback
+  };
+}
+
 function AuthenticatedViewFallback({ title, description }: { title: string; description: string }) {
   return (
     <Panel title={title} description={description} wide>
@@ -717,6 +727,11 @@ function App() {
 
       try {
         const response = await fetchOrderAttributionBackfillJob(jobId);
+        setShopifyBackfillRange({
+          startDate: response.options.startDate,
+          endDate: response.options.endDate
+        });
+        setShopifyOrderAttributionBackfillOptions(toBackfillOptionState(response.options));
         setOrderAttributionBackfillJob({
           data: response,
           loading: false,
@@ -1326,6 +1341,11 @@ function App() {
       };
 
       storeOrderAttributionBackfillJobId(response.jobId);
+      setShopifyBackfillRange({
+        startDate: response.options.startDate,
+        endDate: response.options.endDate
+      });
+      setShopifyOrderAttributionBackfillOptions(toBackfillOptionState(response.options));
       setOrderAttributionBackfillJob({
         data: queuedJob,
         loading: false,

@@ -892,6 +892,16 @@ export default function SettingsAdminView({
                                   <dt>Order limit</dt>
                                   <dd>{latestOrderAttributionJob.options.limit}</dd>
                                 </div>
+                                <div>
+                                  <dt>Web orders only</dt>
+                                  <dd>{latestOrderAttributionJob.options.webOrdersOnly ? 'Yes' : 'No'}</dd>
+                                </div>
+                                <div>
+                                  <dt>Shopify writeback</dt>
+                                  <dd>
+                                    {latestOrderAttributionJob.options.skipShopifyWriteback ? 'Skipped' : 'Allowed'}
+                                  </dd>
+                                </div>
                               </DetailList>
 
                               {latestOrderAttributionJob.status === 'queued' || latestOrderAttributionJob.status === 'processing' ? (
