@@ -1,7 +1,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { Router } from 'express';
 import { z } from 'zod';
-import { normalizeAttributionString, normalizeAttributionUrl } from '../../../packages/attribution-schema/index.js';
+import { normalizeAttributionString } from '../../../packages/attribution-schema/index.js';
 import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
 import { logError, logInfo, logWarning } from '../../observability/index.js';
@@ -9,9 +9,9 @@ import { buildHashedContactProfile, normalizeEmailAddress } from '../../shared/p
 import { applySyntheticAttributionForOrder, enqueueAttributionForOrder } from '../attribution/index.js';
 import { attachAuthContext, requireAdmin } from '../auth/index.js';
 import { stitchKnownCustomerIdentity } from '../identity/index.js';
-import { buildCanonicalTouchpointDimensions } from '../marketing-dimensions/index.js';
 import { getReportingTimezone } from '../settings/index.js';
 import { buildRawPayloadStorageMetadata, logRawPayloadIntegrityMismatch } from '../../shared/raw-payload-storage.js';
+import { extractShopifyHintAttribution } from './attribution-hints.js';
 import { enqueueShopifyOrderWriteback } from './writeback.js';
 const OAUTH_STATE_TTL_MINUTES = 10;
 const SHOPIFY_WEBHOOK_TOPICS = [
@@ -750,15 +750,6 @@ function getAttributeValue(attributes, key) {
     const normalized = String(match.value).trim();
     return normalized ? normalized : null;
 }
-function getAttributeValueFromKeys(attributes, keys) {
-    for (const key of keys) {
-        const value = getAttributeValue(attributes, key);
-        if (value) {
-            return value;
-        }
-    }
-    return null;
-}
 function toNumericString(value) {
     if (value === undefined) {
         return '0';
@@ -784,85 +775,6 @@ function buildLineItemExternalId(orderId, lineItem, index) {
 }
 function normalizeLineItemText(value) {
     return normalizeNullableString(value);
-}
-function hasAttributionDimensions(value) {
-    return Boolean(value.source ||
-        value.medium ||
-        value.campaign ||
-        value.content ||
-        value.term ||
-        value.clickIdType ||
-        value.clickIdValue);
-}
-function extractShopifyHintAttribution(payload) {
-    const noteAttributes = payload.note_attributes;
-    const legacyAttributes = payload.attributes;
-    const rawDimensions = {
-        source: getAttributeValueFromKeys(noteAttributes, ['utm_source', 'roas_radar_utm_source']) ??
-            getAttributeValueFromKeys(legacyAttributes, ['utm_source', 'roas_radar_utm_source']),
-        medium: getAttributeValueFromKeys(noteAttributes, ['utm_medium', 'roas_radar_utm_medium']) ??
-            getAttributeValueFromKeys(legacyAttributes, ['utm_medium', 'roas_radar_utm_medium']),
-        campaign: getAttributeValueFromKeys(noteAttributes, ['utm_campaign', 'roas_radar_utm_campaign']) ??
-            getAttributeValueFromKeys(legacyAttributes, ['utm_campaign', 'roas_radar_utm_campaign']),
-        content: getAttributeValueFromKeys(noteAttributes, ['utm_content', 'roas_radar_utm_content']) ??
-            getAttributeValueFromKeys(legacyAttributes, ['utm_content', 'roas_radar_utm_content']),
-        term: getAttributeValueFromKeys(noteAttributes, ['utm_term', 'roas_radar_utm_term']) ??
-            getAttributeValueFromKeys(legacyAttributes, ['utm_term', 'roas_radar_utm_term']),
-        gclid: getAttributeValueFromKeys(noteAttributes, ['gclid', 'roas_radar_gclid']) ??
-            getAttributeValueFromKeys(legacyAttributes, ['gclid', 'roas_radar_gclid']),
-        gbraid: getAttributeValueFromKeys(noteAttributes, ['gbraid', 'roas_radar_gbraid']) ??
-            getAttributeValueFromKeys(legacyAttributes, ['gbraid', 'roas_radar_gbraid']),
-        wbraid: getAttributeValueFromKeys(noteAttributes, ['wbraid', 'roas_radar_wbraid']) ??
-            getAttributeValueFromKeys(legacyAttributes, ['wbraid', 'roas_radar_wbraid']),
-        fbclid: getAttributeValueFromKeys(noteAttributes, ['fbclid', 'roas_radar_fbclid']) ??
-            getAttributeValueFromKeys(legacyAttributes, ['fbclid', 'roas_radar_fbclid']),
-        ttclid: getAttributeValueFromKeys(noteAttributes, ['ttclid', 'roas_radar_ttclid']) ??
-            getAttributeValueFromKeys(legacyAttributes, ['ttclid', 'roas_radar_ttclid']),
-        msclkid: getAttributeValueFromKeys(noteAttributes, ['msclkid', 'roas_radar_msclkid']) ??
-            getAttributeValueFromKeys(legacyAttributes, ['msclkid', 'roas_radar_msclkid'])
-    };
-    const hintCandidates = [
-        payload.landing_site,
-        getAttributeValueFromKeys(noteAttributes, ['landing_url', 'page_url', 'roas_radar_landing_path', 'landing_site']),
-        getAttributeValueFromKeys(legacyAttributes, ['landing_url', 'page_url', 'roas_radar_landing_path', 'landing_site'])
-    ].filter((value) => Boolean(value));
-    for (const candidate of hintCandidates) {
-        try {
-            const url = new URL(normalizeAttributionUrl(candidate, 'https://shopify-hint.local') ?? candidate);
-            rawDimensions.source ??= normalizeNullableString(url.searchParams.get('utm_source'));
-            rawDimensions.medium ??= normalizeNullableString(url.searchParams.get('utm_medium'));
-            rawDimensions.campaign ??= normalizeNullableString(url.searchParams.get('utm_campaign'));
-            rawDimensions.content ??= normalizeNullableString(url.searchParams.get('utm_content'));
-            rawDimensions.term ??= normalizeNullableString(url.searchParams.get('utm_term'));
-            rawDimensions.gclid ??= normalizeNullableString(url.searchParams.get('gclid'));
-            rawDimensions.gbraid ??= normalizeNullableString(url.searchParams.get('gbraid'));
-            rawDimensions.wbraid ??= normalizeNullableString(url.searchParams.get('wbraid'));
-            rawDimensions.fbclid ??= normalizeNullableString(url.searchParams.get('fbclid'));
-            rawDimensions.ttclid ??= normalizeNullableString(url.searchParams.get('ttclid'));
-            rawDimensions.msclkid ??= normalizeNullableString(url.searchParams.get('msclkid'));
-        }
-        catch { }
-    }
-    const canonicalDimensions = buildCanonicalTouchpointDimensions({
-        source: rawDimensions.source,
-        medium: rawDimensions.medium,
-        campaign: rawDimensions.campaign,
-        content: rawDimensions.content,
-        term: rawDimensions.term,
-        gclid: rawDimensions.gclid,
-        gbraid: rawDimensions.gbraid,
-        wbraid: rawDimensions.wbraid,
-        fbclid: rawDimensions.fbclid,
-        ttclid: rawDimensions.ttclid,
-        msclkid: rawDimensions.msclkid
-    });
-    if (!hasAttributionDimensions(canonicalDimensions)) {
-        return null;
-    }
-    return {
-        ...canonicalDimensions,
-        confidenceScore: canonicalDimensions.clickIdValue ? 0.55 : 0.4
-    };
 }
 async function resolveLandingSessionId(client, payload) {
     const sessionExists = async (sessionId) => {
