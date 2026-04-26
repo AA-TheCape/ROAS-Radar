@@ -1,6 +1,8 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 
 import type { PoolClient } from 'pg';
+
+import { hashEmailAddress, normalizeEmailAddress } from '../../shared/privacy.js';
 
 type IdentityRecord = {
   id: string;
@@ -53,20 +55,8 @@ export type IdentityStitchResult = {
   linkedSessionIds: string[];
 };
 
-export function normalizeIdentityEmail(email: string | null | undefined): string | null {
-  const normalized = email?.trim().toLowerCase();
-  return normalized ? normalized : null;
-}
-
-export function hashIdentityEmail(email: string | null | undefined): string | null {
-  const normalized = normalizeIdentityEmail(email);
-
-  if (!normalized) {
-    return null;
-  }
-
-  return createHash('sha256').update(normalized).digest('hex');
-}
+export const normalizeIdentityEmail = normalizeEmailAddress;
+export const hashIdentityEmail = hashEmailAddress;
 
 export function resolveIdentityStitch(
   existingIdentities: IdentityRecord[],

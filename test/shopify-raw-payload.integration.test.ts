@@ -5,6 +5,7 @@ import test from 'node:test';
 process.env.DATABASE_URL ??= 'postgres://postgres:postgres@127.0.0.1:5432/roas_radar';
 
 const { __rawPayloadStorageTestUtils } = await import('../src/shared/raw-payload-storage.js');
+const { buildHashedContactProfile } = await import('../src/shared/privacy.js');
 
 let cachedModules:
   | {
@@ -147,6 +148,47 @@ async function fetchPersistedRawPayloads(shopifyOrderId: string) {
     order: orderResult.rows[0],
     receipt: receiptResult.rows[0],
     lineItem: lineItemResult.rows[0].raw_payload
+  };
+}
+
+async function fetchPersistedOrderIdentityState(shopifyOrderId: string) {
+  const { pool } = await getModules();
+
+  const [orderResult, customerResult] = await Promise.all([
+    pool.query<{
+      email: string | null;
+      email_hash: string | null;
+      phone_hash: string | null;
+      shopify_customer_id: string | null;
+    }>(
+      `
+        SELECT email, email_hash, phone_hash, shopify_customer_id
+        FROM shopify_orders
+        WHERE shopify_order_id = $1
+      `,
+      [shopifyOrderId]
+    ),
+    pool.query<{
+      email: string | null;
+      phone: string | null;
+      email_hash: string | null;
+      phone_hash: string | null;
+    }>(
+      `
+        SELECT email, phone, email_hash, phone_hash
+        FROM shopify_customers
+        WHERE shopify_customer_id = $1
+      `,
+      [`customer-${shopifyOrderId}`]
+    )
+  ]);
+
+  assert.equal(orderResult.rowCount, 1);
+  assert.equal(customerResult.rowCount, 1);
+
+  return {
+    order: orderResult.rows[0],
+    customer: customerResult.rows[0]
   };
 }
 
@@ -487,3 +529,27 @@ test(
     );
   }
 );
+
+test('Shopify ingestion stores only hashed contact identifiers in analytics tables', { concurrency: false }, async () => {
+  const order = buildRawOrder('hashed-order-1');
+  order.customer = {
+    ...(order.customer ?? {}),
+    phone: '(415) 555-2671'
+  };
+
+  await persistOrderViaIngress('orders/create', order);
+
+  const persisted = await fetchPersistedOrderIdentityState('hashed-order-1');
+  const hashes = buildHashedContactProfile({
+    email: order.email,
+    phone: order.customer?.phone ?? null
+  });
+
+  assert.equal(persisted.order.email, null);
+  assert.equal(persisted.customer.email, null);
+  assert.equal(persisted.customer.phone, null);
+  assert.equal(persisted.order.email_hash, hashes.emailHash);
+  assert.equal(persisted.customer.email_hash, hashes.emailHash);
+  assert.equal(persisted.order.phone_hash, hashes.phoneHash);
+  assert.equal(persisted.customer.phone_hash, hashes.phoneHash);
+});

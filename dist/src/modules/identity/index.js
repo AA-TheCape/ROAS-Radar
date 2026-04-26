@@ -1,15 +1,7 @@
-import { createHash, randomUUID } from 'node:crypto';
-export function normalizeIdentityEmail(email) {
-    const normalized = email?.trim().toLowerCase();
-    return normalized ? normalized : null;
-}
-export function hashIdentityEmail(email) {
-    const normalized = normalizeIdentityEmail(email);
-    if (!normalized) {
-        return null;
-    }
-    return createHash('sha256').update(normalized).digest('hex');
-}
+import { randomUUID } from 'node:crypto';
+import { hashEmailAddress, normalizeEmailAddress } from '../../shared/privacy.js';
+export const normalizeIdentityEmail = normalizeEmailAddress;
+export const hashIdentityEmail = hashEmailAddress;
 export function resolveIdentityStitch(existingIdentities, input) {
     const shopifyCustomerId = normalizeNullableString(input.shopifyCustomerId);
     const emailHash = input.emailHash ?? hashIdentityEmail(input.email);
