@@ -312,6 +312,53 @@ function formatGoogleAdsError(error: unknown): string {
   return String(error);
 }
 
+function parseRetryDelaySeconds(value: string): number | null {
+  const normalized = value.trim();
+
+  if (!normalized) {
+    return null;
+  }
+
+  const secondsMatch = /^(\d+)s$/i.exec(normalized);
+
+  if (secondsMatch) {
+    return Number.parseInt(secondsMatch[1] ?? '', 10);
+  }
+
+  return null;
+}
+
+function extractGoogleAdsProviderRetryDelaySeconds(details: unknown): number | null {
+  const stack: unknown[] = [details];
+
+  while (stack.length > 0) {
+    const current = stack.pop();
+
+    if (Array.isArray(current)) {
+      stack.push(...current);
+      continue;
+    }
+
+    if (!current || typeof current !== 'object') {
+      continue;
+    }
+
+    const record = current as Record<string, unknown>;
+
+    if (typeof record.retryDelay === 'string') {
+      const parsed = parseRetryDelaySeconds(record.retryDelay);
+
+      if (parsed !== null) {
+        return parsed;
+      }
+    }
+
+    stack.push(...Object.values(record));
+  }
+
+  return null;
+}
+
 function assertGoogleAdsConfig(): void {
   if (!env.GOOGLE_ADS_ENCRYPTION_KEY) {
     throw new GoogleAdsHttpError(500, 'google_ads_config_missing', 'Missing Google Ads configuration: GOOGLE_ADS_ENCRYPTION_KEY');
@@ -1297,16 +1344,19 @@ async function enqueueSyncDates(connectionId: number, dates: string[]): Promise<
         ON CONFLICT (connection_id, sync_date)
         DO UPDATE SET
           status = CASE
-            WHEN google_ads_sync_jobs.status = 'processing' THEN google_ads_sync_jobs.status
+            WHEN google_ads_sync_jobs.status IN ('pending', 'retry', 'processing') THEN google_ads_sync_jobs.status
             ELSE 'pending'
           END,
           available_at = CASE
-            WHEN google_ads_sync_jobs.status = 'processing' THEN google_ads_sync_jobs.available_at
+            WHEN google_ads_sync_jobs.status IN ('pending', 'retry', 'processing') THEN google_ads_sync_jobs.available_at
             ELSE now()
           END,
-          last_error = NULL,
+          last_error = CASE
+            WHEN google_ads_sync_jobs.status IN ('pending', 'retry', 'processing') THEN google_ads_sync_jobs.last_error
+            ELSE NULL
+          END,
           completed_at = CASE
-            WHEN google_ads_sync_jobs.status = 'processing' THEN google_ads_sync_jobs.completed_at
+            WHEN google_ads_sync_jobs.status IN ('pending', 'retry', 'processing') THEN google_ads_sync_jobs.completed_at
             ELSE NULL
           END,
           updated_at = now()
@@ -1331,13 +1381,13 @@ async function findMissingSyncDates(connectionId: number, dates: string[]): Prom
       FROM google_ads_sync_jobs
       WHERE connection_id = $1
         AND sync_date = ANY($2::date[])
-        AND status = 'completed'
+        AND status IN ('completed', 'pending', 'retry', 'processing')
     `,
     [connectionId, dates]
   );
 
-  const completed = new Set(result.rows.map((row) => row.sync_date));
-  return dates.filter((date) => !completed.has(date));
+  const unavailable = new Set(result.rows.map((row) => row.sync_date));
+  return dates.filter((date) => !unavailable.has(date));
 }
 
 async function runReconciliation(params: {
@@ -1714,9 +1764,12 @@ async function markSyncJobSucceeded(jobId: number, connectionId: number): Promis
 
 async function markSyncJobFailed(job: GoogleAdsSyncJobRow, error: unknown): Promise<void> {
   const lastError = formatGoogleAdsError(error);
-  const shouldRetry = job.attempts < env.GOOGLE_ADS_SYNC_MAX_RETRIES;
+  const providerRetryDelaySeconds =
+    error instanceof GoogleAdsApiError ? extractGoogleAdsProviderRetryDelaySeconds(error.details) : null;
+  const retryDelaySeconds = providerRetryDelaySeconds ?? computeRetryDelaySeconds(job.attempts);
+  const hasProviderRetryDelay = providerRetryDelaySeconds !== null;
+  const shouldRetry = hasProviderRetryDelay || job.attempts < env.GOOGLE_ADS_SYNC_MAX_RETRIES;
   const nextStatus = shouldRetry ? 'retry' : 'failed';
-  const retryDelaySeconds = computeRetryDelaySeconds(job.attempts);
 
   await query(
     `
@@ -2152,6 +2205,7 @@ export const __googleAdsTestUtils = {
   computeRetryDelaySeconds,
   normalizeSpendSnapshot,
   formatGoogleAdsError,
+  extractGoogleAdsProviderRetryDelaySeconds,
   createGoogleAdsApiErrorForTest: (statusCode: number, message: string, details: unknown) =>
     new GoogleAdsApiError(statusCode, message, details)
 };

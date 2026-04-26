@@ -136,3 +136,37 @@ test('formatGoogleAdsError includes API status and details payload', () => {
     'Google Ads API request failed (status 403; details={"error":{"code":403,"message":"The caller does not have permission","status":"PERMISSION_DENIED"}})'
   );
 });
+
+test('extractGoogleAdsProviderRetryDelaySeconds reads quota retry delay from Google API details', () => {
+  const retryDelaySeconds = __googleAdsTestUtils.extractGoogleAdsProviderRetryDelaySeconds([
+    {
+      error: {
+        code: 429,
+        message: 'Resource has been exhausted (e.g. check quota).',
+        status: 'RESOURCE_EXHAUSTED',
+        details: [
+          {
+            '@type': 'type.googleapis.com/google.ads.googleads.v22.errors.GoogleAdsFailure',
+            errors: [
+              {
+                errorCode: {
+                  quotaError: 'RESOURCE_EXHAUSTED'
+                },
+                message: 'Too many requests. Retry in 17941 seconds.',
+                details: {
+                  quotaErrorDetails: {
+                    rateScope: 'DEVELOPER',
+                    rateName: 'Number of operations for basic access',
+                    retryDelay: '17941s'
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]);
+
+  assert.equal(retryDelaySeconds, 17941);
+});
