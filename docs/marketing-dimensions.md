@@ -88,7 +88,7 @@ When UTM source or medium is missing, click IDs backfill the canonical channel:
 
 - Tracking ingestion writes canonical touchpoint dimensions into `tracking_sessions` and `tracking_events`.
 - Attribution resolution normalizes touchpoint dimensions again before writing `attribution_order_credits` and `attribution_results`, so older or partially normalized session data does not leak through.
-- Meta and Google spend ETL write canonical fields into `meta_ads_daily_spend` and `google_ads_daily_spend` alongside native platform IDs and names.
+- Meta and Google spend ETL write canonical fields into `meta_ads_daily_spend` and `google_ads_daily_spend` alongside native platform IDs and names. Those tables are derived reporting projections; exact upstream rows stay in `meta_ads_raw_spend_records` and `google_ads_raw_spend_records`.
 
 ## Unknown vs unmapped
 

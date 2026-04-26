@@ -1,9 +1,9 @@
-import { randomUUID } from 'node:crypto';
 import { Router as createRouter } from 'express';
 import { z } from 'zod';
-import { normalizeOrderAttributionBackfillRequest, orderAttributionBackfillEnqueueResponseSchema, orderAttributionBackfillJobResponseSchema, orderAttributionBackfillReportSchema, orderAttributionBackfillSubmittedOptionsSchema } from '../../../packages/attribution-schema/index.js';
-import { query } from '../../db/pool.js';
+import { normalizeOrderAttributionBackfillRequest } from '../../../packages/attribution-schema/index.js';
+import { emitOrderAttributionBackfillJobLifecycleLog } from '../../observability/index.js';
 import { attachAuthContext, requireAdmin } from '../auth/index.js';
+import { enqueueOrderAttributionBackfillRun, getOrderAttributionBackfillRun } from './backfill-run-store.js';
 class AttributionAdminHttpError extends Error {
     statusCode;
     code;
@@ -36,75 +36,12 @@ function getSubmittedBy(auth) {
     }
     return auth.user.email;
 }
-async function enqueueOrderAttributionBackfillRun(options, submittedBy) {
-    const jobId = randomUUID();
-    const submittedAt = new Date().toISOString();
-    await query(`
-      INSERT INTO order_attribution_backfill_runs (
-        id,
-        status,
-        submitted_at,
-        submitted_by,
-        options
-      )
-      VALUES (
-        $1,
-        'queued',
-        $2::timestamptz,
-        $3,
-        $4::jsonb
-      )
-    `, [jobId, submittedAt, submittedBy, JSON.stringify(options)]);
-    return orderAttributionBackfillEnqueueResponseSchema.parse({
-        ok: true,
-        jobId,
-        status: 'queued',
-        submittedAt,
-        submittedBy,
-        options
-    });
-}
-function mapBackfillRunRow(row) {
-    return orderAttributionBackfillJobResponseSchema.parse({
-        ok: true,
-        jobId: row.id,
-        status: row.status,
-        submittedAt: row.submitted_at.toISOString(),
-        submittedBy: row.submitted_by,
-        startedAt: row.started_at?.toISOString() ?? null,
-        completedAt: row.completed_at?.toISOString() ?? null,
-        options: orderAttributionBackfillSubmittedOptionsSchema.parse(row.options),
-        report: row.report == null ? null : orderAttributionBackfillReportSchema.parse(row.report),
-        error: row.error_code && row.error_message
-            ? {
-                code: row.error_code,
-                message: row.error_message
-            }
-            : null
-    });
-}
-async function getOrderAttributionBackfillRun(jobId) {
-    const result = await query(`
-      SELECT
-        id,
-        status,
-        submitted_at,
-        submitted_by,
-        started_at,
-        completed_at,
-        options,
-        report,
-        error_code,
-        error_message
-      FROM order_attribution_backfill_runs
-      WHERE id = $1
-      LIMIT 1
-    `, [jobId]);
-    const row = result.rows[0];
+async function loadOrderAttributionBackfillRun(jobId) {
+    const row = await getOrderAttributionBackfillRun(jobId);
     if (!row) {
         throw new AttributionAdminHttpError(404, 'backfill_job_not_found', 'Order attribution backfill job was not found');
     }
-    return mapBackfillRunRow(row);
+    return row;
 }
 export function createAttributionAdminRouter() {
     const router = createRouter();
@@ -115,6 +52,12 @@ export function createAttributionAdminRouter() {
             const auth = res.locals.auth;
             const options = parseBackfillRequest(req.body ?? {});
             const response = await enqueueOrderAttributionBackfillRun(options, getSubmittedBy(auth));
+            emitOrderAttributionBackfillJobLifecycleLog({
+                stage: 'enqueued',
+                jobId: response.jobId,
+                submittedAt: response.submittedAt,
+                options: response.options
+            });
             res.status(202).json(response);
         }
         catch (error) {
@@ -123,7 +66,7 @@ export function createAttributionAdminRouter() {
     });
     router.get('/orders/backfill/:jobId', async (req, res, next) => {
         try {
-            const response = await getOrderAttributionBackfillRun(req.params.jobId);
+            const response = await loadOrderAttributionBackfillRun(req.params.jobId);
             res.status(200).json(response);
         }
         catch (error) {

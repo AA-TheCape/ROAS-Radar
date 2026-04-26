@@ -1,5 +1,6 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
 
+import { env } from './config/env.js';
 import { checkDatabaseHealth } from './db/pool.js';
 import { createAuthRouter, createUserAdminRouter } from './modules/auth/index.js';
 import { createAttributionAdminRouter } from './modules/attribution/admin.js';
@@ -52,14 +53,18 @@ export function createApp() {
     }
   });
 
-  app.use('/webhooks/shopify', express.raw({ type: '*/*', limit: '2mb' }), createShopifyWebhookRouter());
+  app.use(
+    '/webhooks/shopify',
+    express.raw({ type: '*/*', limit: env.SHOPIFY_WEBHOOK_BODY_LIMIT }),
+    createShopifyWebhookRouter()
+  );
   app.use(
     '/track',
-    express.text({ type: 'text/plain', limit: '1mb' }),
-    express.json({ type: 'application/json', limit: '1mb' }),
+    express.text({ type: 'text/plain', limit: env.TRACKING_BODY_LIMIT }),
+    express.json({ type: 'application/json', limit: env.TRACKING_BODY_LIMIT }),
     createTrackingRouter()
   );
-  app.use(express.json({ limit: '1mb' }));
+  app.use(express.json({ limit: env.API_JSON_BODY_LIMIT }));
   app.use('/api/auth', createAuthRouter());
   app.use('/api/settings', createSettingsRouter());
   app.use('/api/reporting', createReportingRouter());
@@ -76,10 +81,20 @@ export function createApp() {
     const statusCode =
       typeof error === 'object' && error !== null && 'statusCode' in error && typeof error.statusCode === 'number'
         ? error.statusCode
+        : typeof error === 'object' &&
+            error !== null &&
+            'type' in error &&
+            (error as { type?: unknown }).type === 'entity.too.large'
+          ? 413
         : 500;
     const code =
       typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
         ? error.code
+        : typeof error === 'object' &&
+            error !== null &&
+            'type' in error &&
+            (error as { type?: unknown }).type === 'entity.too.large'
+          ? 'payload_too_large'
         : 'internal_server_error';
     const message = error instanceof Error ? error.message : 'Unexpected error';
     const details =

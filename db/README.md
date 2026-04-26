@@ -12,6 +12,8 @@ The `bootstrap/001_roles.sql` script applies the least-privilege grants expected
 - `roas_app` can read and write application tables and sequences, but cannot create or alter schema objects.
 - `roas_readonly` has read-only access for support and debugging use cases.
 
+For ad-platform ingestion, treat `meta_ads_raw_spend_records` and `google_ads_raw_spend_records` as the canonical raw-source tables. The corresponding `*_daily_spend` tables are derived projections for reporting and reconciliation, not the source-of-truth raw payload store.
+
 Run the bootstrap script once after provisioning the database and before deploying application services.
 
 ## Applying Migrations Locally

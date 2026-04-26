@@ -1,17 +1,15 @@
 import { z } from 'zod';
+export { ORDER_ATTRIBUTION_BACKFILL_DEFAULT_LIMIT, ORDER_ATTRIBUTION_BACKFILL_MAX_LIMIT, normalizeOrderAttributionBackfillRequest, orderAttributionBackfillEnqueueResponseSchema, orderAttributionBackfillFailureSchema, orderAttributionBackfillJobResponseSchema, orderAttributionBackfillJobStatusSchema, orderAttributionBackfillReportSchema, orderAttributionBackfillRequestSchema, orderAttributionBackfillSubmittedOptionsSchema } from './order-attribution-backfill.js';
 export const ATTRIBUTION_SCHEMA_VERSION = 1;
 export const MAX_ATTRIBUTION_URL_LENGTH = 2048;
 export const MAX_ATTRIBUTION_TEXT_LENGTH = 255;
 export const MAX_SESSION_ID_LENGTH = 36;
-export const ORDER_ATTRIBUTION_BACKFILL_DEFAULT_LIMIT = 500;
-export const ORDER_ATTRIBUTION_BACKFILL_MAX_LIMIT = 5000;
 export const ATTRIBUTION_CONSENT_STATES = ['granted', 'denied', 'unknown'];
 export const ATTRIBUTION_URL_FIELDS = ['landing_url', 'referrer_url', 'page_url'];
 export const ATTRIBUTION_UTM_FIELDS = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term'];
 export const ATTRIBUTION_CLICK_ID_FIELDS = ['gclid', 'gbraid', 'wbraid', 'fbclid', 'ttclid', 'msclkid'];
 const ISO_TIMESTAMP_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const DATE_ONLY_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 export function normalizeAttributionString(value) {
     const trimmed = value?.trim();
     return trimmed ? trimmed : null;
@@ -82,7 +80,6 @@ const isoTimestampSchema = z
     .trim()
     .refine((value) => ISO_TIMESTAMP_REGEX.test(value), 'Invalid ISO-8601 timestamp')
     .transform((value) => new Date(value).toISOString());
-const dateOnlySchema = z.string().trim().regex(DATE_ONLY_REGEX, 'Use YYYY-MM-DD.');
 export const attributionConsentStateSchema = z.enum(ATTRIBUTION_CONSENT_STATES).default('unknown');
 export const attributionCaptureV1Schema = z.object({
     schema_version: z.literal(ATTRIBUTION_SCHEMA_VERSION),
@@ -104,69 +101,9 @@ export const attributionCaptureV1Schema = z.object({
     ttclid: nullableClickIdSchema,
     msclkid: nullableClickIdSchema
 });
-export const orderAttributionBackfillRequestSchema = z
-    .object({
-    startDate: dateOnlySchema,
-    endDate: dateOnlySchema,
-    dryRun: z.boolean().default(true),
-    limit: z
-        .number()
-        .int('Limit must be a whole number.')
-        .positive('Limit must be greater than 0.')
-        .max(ORDER_ATTRIBUTION_BACKFILL_MAX_LIMIT, `Limit must be ${ORDER_ATTRIBUTION_BACKFILL_MAX_LIMIT} or less.`)
-        .default(ORDER_ATTRIBUTION_BACKFILL_DEFAULT_LIMIT),
-    webOrdersOnly: z.boolean().default(true),
-    skipShopifyWriteback: z.boolean().default(false)
-})
-    .refine((value) => value.startDate <= value.endDate, {
-    message: 'Start date must be on or before end date.',
-    path: ['endDate']
-});
-export const orderAttributionBackfillSubmittedOptionsSchema = orderAttributionBackfillRequestSchema;
-export const orderAttributionBackfillJobStatusSchema = z.enum(['queued', 'processing', 'completed', 'failed']);
-export const orderAttributionBackfillFailureSchema = z.object({
-    orderId: z.string().nullable(),
-    code: z.string(),
-    message: z.string()
-});
-export const orderAttributionBackfillReportSchema = z.object({
-    scanned: z.number().int().nonnegative(),
-    recovered: z.number().int().nonnegative(),
-    unrecoverable: z.number().int().nonnegative(),
-    writebackCompleted: z.number().int().nonnegative(),
-    failures: z.array(orderAttributionBackfillFailureSchema)
-});
-export const orderAttributionBackfillEnqueueResponseSchema = z.object({
-    ok: z.literal(true),
-    jobId: z.string(),
-    status: orderAttributionBackfillJobStatusSchema,
-    submittedAt: isoTimestampSchema,
-    submittedBy: z.string(),
-    options: orderAttributionBackfillSubmittedOptionsSchema
-});
-export const orderAttributionBackfillJobResponseSchema = z.object({
-    ok: z.literal(true),
-    jobId: z.string(),
-    status: orderAttributionBackfillJobStatusSchema,
-    submittedAt: isoTimestampSchema,
-    submittedBy: z.string(),
-    startedAt: isoTimestampSchema.nullable(),
-    completedAt: isoTimestampSchema.nullable(),
-    options: orderAttributionBackfillSubmittedOptionsSchema,
-    report: orderAttributionBackfillReportSchema.nullable(),
-    error: z
-        .object({
-        code: z.string(),
-        message: z.string()
-    })
-        .nullable()
-});
 export function normalizeAttributionCaptureV1(input) {
     return attributionCaptureV1Schema.parse(input);
 }
 export function normalizeAttributionConsentState(input) {
     return attributionConsentStateSchema.parse(input);
-}
-export function normalizeOrderAttributionBackfillRequest(input) {
-    return orderAttributionBackfillRequestSchema.parse(input);
 }

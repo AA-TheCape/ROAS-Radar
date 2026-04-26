@@ -154,7 +154,7 @@ Key fields:
 - `shopify_cart_token`, `shopify_checkout_token`: later used for deterministic attribution
 - `client_event_id`: optional storefront idempotency key
 - `customer_identity_id`: backfilled when identity stitching links the session later
-- `raw_payload`: normalized input plus derived marketing dimensions
+- `raw_payload`: exact parsed browser or capture payload as received at ingestion time
 
 Interpretation notes:
 
