@@ -208,6 +208,171 @@ test('getOrderAttributionBackfillRun maps persisted failure details into the sha
   }
 });
 
+test('getOrderAttributionBackfillRun maps queued, processing, and completed records into the shared status shape', async () => {
+  const rowsByJobId = new Map([
+    [
+      'job-queued',
+      {
+        id: 'job-queued',
+        status: 'queued',
+        submitted_at: new Date('2026-04-25T09:00:00.000Z'),
+        submitted_by: 'internal',
+        started_at: null,
+        completed_at: null,
+        options: {
+          startDate: '2026-04-01',
+          endDate: '2026-04-05',
+          dryRun: true,
+          limit: 500,
+          webOrdersOnly: true,
+          skipShopifyWriteback: false
+        },
+        report: null,
+        error_code: null,
+        error_message: null
+      }
+    ],
+    [
+      'job-processing',
+      {
+        id: 'job-processing',
+        status: 'processing',
+        submitted_at: new Date('2026-04-25T09:05:00.000Z'),
+        submitted_by: 'admin@example.com',
+        started_at: new Date('2026-04-25T09:06:00.000Z'),
+        completed_at: null,
+        options: {
+          startDate: '2026-04-06',
+          endDate: '2026-04-08',
+          dryRun: false,
+          limit: 5000,
+          webOrdersOnly: false,
+          skipShopifyWriteback: true
+        },
+        report: null,
+        error_code: null,
+        error_message: null
+      }
+    ],
+    [
+      'job-completed',
+      {
+        id: 'job-completed',
+        status: 'completed',
+        submitted_at: new Date('2026-04-25T09:10:00.000Z'),
+        submitted_by: 'admin@example.com',
+        started_at: new Date('2026-04-25T09:11:00.000Z'),
+        completed_at: new Date('2026-04-25T09:12:00.000Z'),
+        options: {
+          startDate: '2026-04-09',
+          endDate: '2026-04-12',
+          dryRun: false,
+          limit: 250,
+          webOrdersOnly: true,
+          skipShopifyWriteback: false
+        },
+        report: {
+          scanned: 250,
+          recovered: 80,
+          unrecoverable: 20,
+          writebackCompleted: 80,
+          failures: [
+            {
+              orderId: 'order-17',
+              code: 'shopify_writeback_failed',
+              message: 'Shopify writeback failed for order-17'
+            }
+          ]
+        },
+        error_code: null,
+        error_message: null
+      }
+    ]
+  ]);
+
+  pool.query = (async (_text: string, params?: unknown[]) => ({
+    rows: params?.[0] ? [rowsByJobId.get(String(params[0]))].filter(Boolean) : []
+  })) as typeof pool.query;
+
+  try {
+    const queued = await getOrderAttributionBackfillRun('job-queued');
+    const processing = await getOrderAttributionBackfillRun('job-processing');
+    const completed = await getOrderAttributionBackfillRun('job-completed');
+
+    assert.deepEqual(queued, {
+      ok: true,
+      jobId: 'job-queued',
+      status: 'queued',
+      submittedAt: '2026-04-25T09:00:00.000Z',
+      submittedBy: 'internal',
+      startedAt: null,
+      completedAt: null,
+      options: {
+        startDate: '2026-04-01',
+        endDate: '2026-04-05',
+        dryRun: true,
+        limit: 500,
+        webOrdersOnly: true,
+        skipShopifyWriteback: false
+      },
+      report: null,
+      error: null
+    });
+    assert.deepEqual(processing, {
+      ok: true,
+      jobId: 'job-processing',
+      status: 'processing',
+      submittedAt: '2026-04-25T09:05:00.000Z',
+      submittedBy: 'admin@example.com',
+      startedAt: '2026-04-25T09:06:00.000Z',
+      completedAt: null,
+      options: {
+        startDate: '2026-04-06',
+        endDate: '2026-04-08',
+        dryRun: false,
+        limit: 5000,
+        webOrdersOnly: false,
+        skipShopifyWriteback: true
+      },
+      report: null,
+      error: null
+    });
+    assert.deepEqual(completed, {
+      ok: true,
+      jobId: 'job-completed',
+      status: 'completed',
+      submittedAt: '2026-04-25T09:10:00.000Z',
+      submittedBy: 'admin@example.com',
+      startedAt: '2026-04-25T09:11:00.000Z',
+      completedAt: '2026-04-25T09:12:00.000Z',
+      options: {
+        startDate: '2026-04-09',
+        endDate: '2026-04-12',
+        dryRun: false,
+        limit: 250,
+        webOrdersOnly: true,
+        skipShopifyWriteback: false
+      },
+      report: {
+        scanned: 250,
+        recovered: 80,
+        unrecoverable: 20,
+        writebackCompleted: 80,
+        failures: [
+          {
+            orderId: 'order-17',
+            code: 'shopify_writeback_failed',
+            message: 'Shopify writeback failed for order-17'
+          }
+        ]
+      },
+      error: null
+    });
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+  }
+});
+
 test.after(() => {
   pool.query = originalPoolQuery as typeof pool.query;
   pool.connect = originalPoolConnect as typeof pool.connect;

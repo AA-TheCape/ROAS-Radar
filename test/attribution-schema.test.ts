@@ -97,6 +97,26 @@ test('order attribution backfill request normalizes defaults', () => {
   });
 });
 
+test('order attribution backfill request preserves explicit execution flags at the limit cap', () => {
+  const request = normalizeOrderAttributionBackfillRequest({
+    startDate: '2026-04-01',
+    endDate: '2026-04-15',
+    dryRun: false,
+    limit: ORDER_ATTRIBUTION_BACKFILL_MAX_LIMIT,
+    webOrdersOnly: false,
+    skipShopifyWriteback: true
+  });
+
+  assert.deepEqual(request, {
+    startDate: '2026-04-01',
+    endDate: '2026-04-15',
+    dryRun: false,
+    limit: ORDER_ATTRIBUTION_BACKFILL_MAX_LIMIT,
+    webOrdersOnly: false,
+    skipShopifyWriteback: true
+  });
+});
+
 test('order attribution backfill request rejects invalid date windows and oversized limits', () => {
   assert.throws(
     () =>
@@ -115,6 +135,18 @@ test('order attribution backfill request rejects invalid date windows and oversi
         limit: ORDER_ATTRIBUTION_BACKFILL_MAX_LIMIT + 1
       }),
     /Limit must be 5000 or less\./
+  );
+});
+
+test('order attribution backfill request rejects non-positive limits', () => {
+  assert.throws(
+    () =>
+      normalizeOrderAttributionBackfillRequest({
+        startDate: '2026-04-01',
+        endDate: '2026-04-15',
+        limit: 0
+      }),
+    /Limit must be greater than 0\./
   );
 });
 
@@ -159,4 +191,38 @@ test('order attribution backfill responses accept normalized enqueue and job pay
   assert.equal(enqueueResponse.submittedAt, '2026-04-25T12:34:56.000Z');
   assert.equal(jobResponse.startedAt, '2026-04-25T12:35:00.000Z');
   assert.equal(jobResponse.report?.failures[0]?.code, 'shopify_writeback_failed');
+});
+
+test('order attribution backfill job responses accept queued and processing payloads without reports', () => {
+  const queuedJob = orderAttributionBackfillJobResponseSchema.parse({
+    ok: true,
+    jobId: '0ed2f8d7-3867-4bad-a91b-487080ec2a47',
+    status: 'queued',
+    submittedAt: '2026-04-25T12:34:56Z',
+    submittedBy: 'admin@example.com',
+    startedAt: null,
+    completedAt: null,
+    options: {
+      startDate: '2026-04-01',
+      endDate: '2026-04-15',
+      dryRun: true,
+      limit: 500,
+      webOrdersOnly: true,
+      skipShopifyWriteback: false
+    },
+    report: null,
+    error: null
+  });
+
+  const processingJob = orderAttributionBackfillJobResponseSchema.parse({
+    ...queuedJob,
+    status: 'processing',
+    startedAt: '2026-04-25T12:35:00Z'
+  });
+
+  assert.equal(queuedJob.startedAt, null);
+  assert.equal(queuedJob.report, null);
+  assert.equal(processingJob.startedAt, '2026-04-25T12:35:00.000Z');
+  assert.equal(processingJob.completedAt, null);
+  assert.equal(processingJob.error, null);
 });

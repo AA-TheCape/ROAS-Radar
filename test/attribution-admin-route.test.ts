@@ -396,3 +396,140 @@ test('order attribution backfill admin route returns persisted partial reports f
     await closeServer(server);
   }
 });
+
+test('order attribution backfill admin route returns queued and completed polling payloads with the shared status contract', async () => {
+  const rowsByJobId = new Map([
+    [
+      'job-queued',
+      {
+        id: 'job-queued',
+        status: 'queued',
+        submitted_at: new Date('2026-04-25T10:00:00.000Z'),
+        submitted_by: 'internal',
+        started_at: null,
+        completed_at: null,
+        options: {
+          startDate: '2026-04-01',
+          endDate: '2026-04-05',
+          dryRun: true,
+          limit: 500,
+          webOrdersOnly: true,
+          skipShopifyWriteback: false
+        },
+        report: null,
+        error_code: null,
+        error_message: null
+      }
+    ],
+    [
+      'job-completed',
+      {
+        id: 'job-completed',
+        status: 'completed',
+        submitted_at: new Date('2026-04-25T11:00:00.000Z'),
+        submitted_by: 'admin@example.com',
+        started_at: new Date('2026-04-25T11:00:05.000Z'),
+        completed_at: new Date('2026-04-25T11:01:00.000Z'),
+        options: {
+          startDate: '2026-04-06',
+          endDate: '2026-04-08',
+          dryRun: false,
+          limit: 5000,
+          webOrdersOnly: false,
+          skipShopifyWriteback: true
+        },
+        report: {
+          scanned: 100,
+          recovered: 9,
+          unrecoverable: 9,
+          writebackCompleted: 0,
+          failures: [
+            {
+              orderId: 'order-22',
+              code: 'shopify_timeout',
+              message: 'Shopify API timed out while checking writeback state'
+            }
+          ]
+        },
+        error_code: null,
+        error_message: null
+      }
+    ]
+  ]);
+
+  pool.query = (async (_text: string, params?: unknown[]) => ({
+    rows: params?.[0] ? [rowsByJobId.get(String(params[0]))].filter(Boolean) : []
+  })) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const queuedResult = await requestJson(server, '/api/admin/attribution/orders/backfill/job-queued', {
+      headers: {
+        authorization: 'Bearer test-reporting-token'
+      }
+    });
+    const completedResult = await requestJson(server, '/api/admin/attribution/orders/backfill/job-completed', {
+      headers: {
+        authorization: 'Bearer test-reporting-token'
+      }
+    });
+
+    assert.equal(queuedResult.response.status, 200);
+    assert.deepEqual(queuedResult.body, {
+      ok: true,
+      jobId: 'job-queued',
+      status: 'queued',
+      submittedAt: '2026-04-25T10:00:00.000Z',
+      submittedBy: 'internal',
+      startedAt: null,
+      completedAt: null,
+      options: {
+        startDate: '2026-04-01',
+        endDate: '2026-04-05',
+        dryRun: true,
+        limit: 500,
+        webOrdersOnly: true,
+        skipShopifyWriteback: false
+      },
+      report: null,
+      error: null
+    });
+
+    assert.equal(completedResult.response.status, 200);
+    assert.deepEqual(completedResult.body, {
+      ok: true,
+      jobId: 'job-completed',
+      status: 'completed',
+      submittedAt: '2026-04-25T11:00:00.000Z',
+      submittedBy: 'admin@example.com',
+      startedAt: '2026-04-25T11:00:05.000Z',
+      completedAt: '2026-04-25T11:01:00.000Z',
+      options: {
+        startDate: '2026-04-06',
+        endDate: '2026-04-08',
+        dryRun: false,
+        limit: 5000,
+        webOrdersOnly: false,
+        skipShopifyWriteback: true
+      },
+      report: {
+        scanned: 100,
+        recovered: 9,
+        unrecoverable: 9,
+        writebackCompleted: 0,
+        failures: [
+          {
+            orderId: 'order-22',
+            code: 'shopify_timeout',
+            message: 'Shopify API timed out while checking writeback state'
+          }
+        ]
+      },
+      error: null
+    });
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
