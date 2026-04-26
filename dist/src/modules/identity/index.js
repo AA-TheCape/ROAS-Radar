@@ -411,12 +411,42 @@ async function registerIdentityEdgeIngestion(client, input) {
         outcome_reason
       FROM identity_edge_ingestion_runs
       WHERE idempotency_key = $1
+      FOR UPDATE
       LIMIT 1
     `, [input.idempotencyKey]);
+    const existingRun = existingResult.rows[0] ?? null;
+    if (!existingRun) {
+        throw new Error(`identity edge ingestion run disappeared for idempotency key ${input.idempotencyKey}`);
+    }
+    if (existingRun.status === 'completed' || existingRun.status === 'conflicted') {
+        return {
+            deduplicated: true,
+            existingJourneyId: existingRun.journey_id,
+            existingOutcome: existingRun.outcome_reason
+        };
+    }
+    await client.query(`
+      UPDATE identity_edge_ingestion_runs
+      SET
+        evidence_source = $2,
+        source_table = $3,
+        source_record_id = $4,
+        source_timestamp = $5,
+        status = 'started',
+        journey_id = NULL,
+        outcome_reason = NULL,
+        processed_nodes = 0,
+        attached_nodes = 0,
+        rehomed_nodes = 0,
+        quarantined_nodes = 0,
+        processed_at = NULL,
+        updated_at = now()
+      WHERE idempotency_key = $1
+    `, [input.idempotencyKey, input.evidenceSource, input.sourceTable, input.sourceRecordId, input.sourceTimestamp]);
     return {
-        deduplicated: true,
-        existingJourneyId: existingResult.rows[0]?.journey_id ?? null,
-        existingOutcome: existingResult.rows[0]?.outcome_reason ?? null
+        deduplicated: false,
+        existingJourneyId: null,
+        existingOutcome: null
     };
 }
 async function completeIdentityEdgeIngestion(client, input) {

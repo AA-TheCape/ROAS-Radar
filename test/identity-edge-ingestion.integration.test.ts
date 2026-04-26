@@ -189,6 +189,106 @@ test('identity edge ingestion is idempotent for repeated runs', async () => {
   assert.equal(countResult.rows[0]?.run_count, '1');
 });
 
+test('identity edge ingestion reprocesses an existing non-terminal run instead of replaying a null journey result', async () => {
+  const sessionId = '123e4567-e89b-42d3-a456-426614174099';
+  const { pool } = await import('../src/db/pool.js');
+  const { withTransaction, ingestIdentityEdges } = await getIdentityModules();
+
+  await pool.query(
+    `
+      INSERT INTO identity_edge_ingestion_runs (
+        idempotency_key,
+        evidence_source,
+        source_table,
+        source_record_id,
+        source_timestamp,
+        status,
+        journey_id,
+        outcome_reason,
+        processed_nodes,
+        attached_nodes,
+        rehomed_nodes,
+        quarantined_nodes,
+        processed_at,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        'identity-interrupted-1',
+        'tracking_event',
+        'tracking_events',
+        'event-interrupted-stale',
+        '2026-04-20T09:59:00.000Z',
+        'started',
+        NULL,
+        'linked',
+        99,
+        99,
+        99,
+        99,
+        '2026-04-20T09:59:30.000Z',
+        now(),
+        now()
+      )
+    `
+  );
+
+  const result = await withTransaction((client) =>
+    ingestIdentityEdges(client, {
+      sourceTimestamp: '2026-04-20T10:00:00.000Z',
+      evidenceSource: 'tracking_event',
+      sourceTable: 'tracking_events',
+      sourceRecordId: 'event-interrupted-retry',
+      idempotencyKey: 'identity-interrupted-1',
+      sessionId,
+      checkoutToken: 'co-interrupted-1'
+    })
+  );
+
+  assert.equal(result.outcome, 'linked');
+  assert.equal(result.deduplicated, false);
+  assert.ok(result.journeyId);
+  assert.deepEqual(result.linkedSessionIds, []);
+
+  const ingestionRun = await pool.query<{
+    status: string;
+    journey_id: string | null;
+    outcome_reason: string | null;
+    processed_nodes: number;
+    attached_nodes: number;
+    rehomed_nodes: number;
+    quarantined_nodes: number;
+    processed_at: Date | null;
+    source_record_id: string | null;
+  }>(
+    `
+      SELECT
+        status,
+        journey_id::text AS journey_id,
+        outcome_reason,
+        processed_nodes,
+        attached_nodes,
+        rehomed_nodes,
+        quarantined_nodes,
+        processed_at,
+        source_record_id
+      FROM identity_edge_ingestion_runs
+      WHERE idempotency_key = 'identity-interrupted-1'
+    `
+  );
+
+  assert.equal(ingestionRun.rowCount, 1);
+  assert.equal(ingestionRun.rows[0]?.status, 'completed');
+  assert.equal(ingestionRun.rows[0]?.journey_id, result.journeyId);
+  assert.equal(ingestionRun.rows[0]?.outcome_reason, 'created_new_journey');
+  assert.equal(ingestionRun.rows[0]?.processed_nodes, 2);
+  assert.equal(ingestionRun.rows[0]?.attached_nodes, 2);
+  assert.equal(ingestionRun.rows[0]?.rehomed_nodes, 0);
+  assert.equal(ingestionRun.rows[0]?.quarantined_nodes, 0);
+  assert.ok(ingestionRun.rows[0]?.processed_at);
+  assert.equal(ingestionRun.rows[0]?.source_record_id, 'event-interrupted-retry');
+});
+
 test('identity edge ingestion preserves first_seen and last_seen across out-of-order events', async () => {
   const sessionId = '123e4567-e89b-42d3-a456-426614174001';
   const { withTransaction, ingestIdentityEdges } = await getIdentityModules();
