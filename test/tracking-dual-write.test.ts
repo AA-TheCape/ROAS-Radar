@@ -31,6 +31,33 @@ const validTrackPayload = {
   }
 };
 
+const rawPayloadWithExtraFields = {
+  ...validTrackPayload,
+  shopifyCartToken: '  cart-token-with-whitespace  ',
+  shopifyCheckoutToken: '  checkout-token-with-whitespace  ',
+  clientEventId: '  browser-event-with-whitespace  ',
+  context: {
+    ...validTrackPayload.context,
+    userAgent: '  Mozilla/5.0 Test Browser  ',
+    nested: {
+      viewport: {
+        width: 1440,
+        height: 900
+      }
+    }
+  },
+  pageMetadata: {
+    abTests: ['hero-a', 'pricing-b'],
+    flags: {
+      subscribed: false
+    }
+  },
+  optionalFields: {
+    emptyString: '',
+    explicitNull: null
+  }
+};
+
 async function getModules() {
   if (cachedModules) {
     return cachedModules;
@@ -212,6 +239,7 @@ test('tracking endpoint dual-writes browser events into the attribution touch st
     assert.ok(browserEventInsert);
     assert.equal(browserEventInsert.params?.[20], 'denied');
     assert.equal(browserEventInsert.params?.[22], 'browser');
+    assert.deepEqual(JSON.parse(String(browserEventInsert.params?.[23])), validTrackPayload);
 
     const touchInsert = queries.find(
       (entry) => entry.transaction === 2 && entry.text.includes('INSERT INTO session_attribution_touch_events')
@@ -223,6 +251,71 @@ test('tracking endpoint dual-writes browser events into the attribution touch st
     assert.equal(touchInsert.params?.[11], 'ABC123');
     assert.equal(touchInsert.params?.[17], 'denied');
     assert.equal(touchInsert.params?.[18], 'server');
+    assert.deepEqual(JSON.parse(String(touchInsert.params?.[20])), validTrackPayload);
+  } finally {
+    await closeServer(server);
+  }
+});
+
+test('tracking endpoint persists the full raw browser payload before schema filtering or normalization', async () => {
+  const { pool, createServer, closeServer } = await getModules();
+  const queries: Array<{ transaction: number; text: string; params?: unknown[] }> = [];
+  let connectCalls = 0;
+
+  pool.query = (async (text: string) => {
+    if (text.includes('WHERE client_event_id = $1')) {
+      return { rowCount: 0, rows: [] };
+    }
+
+    if (text.includes('ingestion_source = ANY($5::text[])')) {
+      return { rowCount: 0, rows: [] };
+    }
+
+    if (text.includes('FROM tracking_events') && text.includes('WHERE ingestion_fingerprint = $1')) {
+      return { rowCount: 0, rows: [] };
+    }
+
+    if (text.includes('FROM session_attribution_touch_events')) {
+      return { rowCount: 0, rows: [] };
+    }
+
+    throw new Error(`Unexpected pool.query call: ${text}`);
+  }) as typeof pool.query;
+
+  pool.connect = (async () => {
+    connectCalls += 1;
+
+    return {
+      query: buildClientQueryHandler(queries, connectCalls),
+      release: () => undefined
+    };
+  }) as typeof pool.connect;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await postTrack(server, rawPayloadWithExtraFields);
+
+    assert.equal(response.status, 200);
+    assert.equal(body.ok, true);
+    assert.equal(connectCalls, 2);
+
+    const browserEventInsert = queries.find(
+      (entry) => entry.transaction === 1 && entry.text.includes('INSERT INTO tracking_events')
+    );
+    assert.ok(browserEventInsert);
+    assert.equal(browserEventInsert.params?.[17], 'cart-token-with-whitespace');
+    assert.equal(browserEventInsert.params?.[18], 'checkout-token-with-whitespace');
+    assert.equal(browserEventInsert.params?.[19], 'browser-event-with-whitespace');
+    assert.deepEqual(JSON.parse(String(browserEventInsert.params?.[23])), rawPayloadWithExtraFields);
+
+    const touchInsert = queries.find(
+      (entry) => entry.transaction === 2 && entry.text.includes('INSERT INTO session_attribution_touch_events')
+    );
+    assert.ok(touchInsert);
+    assert.equal(touchInsert.params?.[23], 'cart-token-with-whitespace');
+    assert.equal(touchInsert.params?.[24], 'checkout-token-with-whitespace');
+    assert.deepEqual(JSON.parse(String(touchInsert.params?.[20])), rawPayloadWithExtraFields);
   } finally {
     await closeServer(server);
   }

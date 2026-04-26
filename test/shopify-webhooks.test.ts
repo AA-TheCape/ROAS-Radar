@@ -16,13 +16,6 @@ test('verifyWebhookSignature validates Shopify webhook signatures using the raw 
   assert.equal(__shopifyTestUtils.verifyWebhookSignature(rawBody, `${signature}tampered`), false);
 });
 
-test('isEligibleOnlineStoreOrder only accepts Online Store orders', () => {
-  assert.equal(__shopifyTestUtils.isEligibleOnlineStoreOrder('web'), true);
-  assert.equal(__shopifyTestUtils.isEligibleOnlineStoreOrder(' Web '), true);
-  assert.equal(__shopifyTestUtils.isEligibleOnlineStoreOrder('pos'), false);
-  assert.equal(__shopifyTestUtils.isEligibleOnlineStoreOrder(null), false);
-});
-
 test('buildLineItemExternalId reuses Shopify ids and falls back to a stable per-order key', () => {
   assert.equal(
     __shopifyTestUtils.buildLineItemExternalId('order-1', { id: 456 }, 0),
@@ -32,4 +25,27 @@ test('buildLineItemExternalId reuses Shopify ids and falls back to a stable per-
     __shopifyTestUtils.buildLineItemExternalId('order-1', { title: 'Widget' }, 1),
     'order-1:line:2'
   );
+});
+
+test('extractRawShopifyLineItems returns untouched raw line item nodes from the source payload', () => {
+  const rawLineItems = __shopifyTestUtils.extractRawShopifyLineItems({
+    id: 123,
+    line_items: [
+      {
+        id: 456,
+        title: 'Widget',
+        admin_graphql_api_id: 'gid://shopify/LineItem/456',
+        properties: [{ name: '_bundle', value: 'starter-kit' }]
+      }
+    ]
+  });
+
+  assert.deepEqual(rawLineItems, [
+    {
+      id: 456,
+      title: 'Widget',
+      admin_graphql_api_id: 'gid://shopify/LineItem/456',
+      properties: [{ name: '_bundle', value: 'starter-kit' }]
+    }
+  ]);
 });

@@ -7,6 +7,12 @@ import { z } from 'zod';
 
 import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
+import {
+  buildRawPayloadStorageMetadata,
+  logRawPayloadIntegrityMismatch,
+  type RawPayloadIntegrityRow
+} from '../../shared/raw-payload-storage.js';
+import { parseJsonResponsePayload, recordAdSyncApiTransaction } from '../ad-sync-audit/index.js';
 import { attachAuthContext, requireAdmin } from '../auth/index.js';
 import { buildCanonicalSpendDimensions } from '../marketing-dimensions/index.js';
 import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
@@ -211,6 +217,13 @@ type GoogleAdsNormalizedSpendRow = {
   impressions: number;
   clicks: number;
   rawPayload: Record<string, unknown>;
+};
+
+type GoogleAdsSyncAuditContext = {
+  connectionId: number;
+  syncJobId: number;
+  transactionSource: string;
+  sourceMetadata?: Record<string, unknown>;
 };
 
 export type GoogleAdsQueueProcessOptions = {
@@ -639,7 +652,7 @@ async function exchangeAuthorizationCode(config: GoogleAdsResolvedConfig, code: 
     body: buildAuthorizationCodeRequestBody(config, code)
   });
   const text = await response.text();
-  const payload = text ? (JSON.parse(text) as GoogleAdsAccessTokenResponse) : {};
+  const payload = (parseJsonResponsePayload(text) as GoogleAdsAccessTokenResponse) ?? {};
 
   if (!response.ok || !payload.access_token || !payload.refresh_token) {
     throw new GoogleAdsApiError(
@@ -661,7 +674,7 @@ async function exchangeRefreshToken(connection: GoogleAdsConnectionSecretRow): P
     body: buildAccessTokenRequestBody(connection)
   });
   const text = await response.text();
-  const payload = text ? (JSON.parse(text) as GoogleAdsAccessTokenResponse) : {};
+  const payload = (parseJsonResponsePayload(text) as GoogleAdsAccessTokenResponse) ?? {};
 
   if (!response.ok || !payload.access_token) {
     throw new GoogleAdsApiError(
@@ -679,10 +692,15 @@ async function googleAdsSearch<T>(params: {
   connection: GoogleAdsConnectionSecretRow;
   accessToken: string;
   gaql: string;
+  audit?: GoogleAdsSyncAuditContext;
 }): Promise<T[]> {
   const url = new URL(
     `${GOOGLE_ADS_API_BASE_URL}/${env.GOOGLE_ADS_API_VERSION}/customers/${params.connection.customer_id}/googleAds:searchStream`
   );
+  const requestStartedAt = new Date();
+  const requestPayload = {
+    query: params.gaql
+  };
   const response = await fetch(url, {
     method: 'POST',
     headers: {
@@ -696,7 +714,26 @@ async function googleAdsSearch<T>(params: {
     })
   });
   const text = await response.text();
-  const payload = text ? (JSON.parse(text) as Array<{ results?: T[] }> | Record<string, unknown>) : [];
+  const payload = parseJsonResponsePayload(text) as Array<{ results?: T[] }> | Record<string, unknown>;
+  const responseReceivedAt = new Date();
+
+  if (params.audit) {
+    await recordAdSyncApiTransaction({
+      platform: 'google_ads',
+      connectionId: params.audit.connectionId,
+      syncJobId: params.audit.syncJobId,
+      transactionSource: params.audit.transactionSource,
+      sourceMetadata: params.audit.sourceMetadata,
+      requestMethod: 'POST',
+      requestUrl: url.toString(),
+      requestPayload,
+      requestStartedAt,
+      responseStatus: response.status,
+      responsePayload: payload,
+      responseReceivedAt,
+      errorMessage: response.ok ? null : `HTTP ${response.status}`
+    });
+  }
 
   if (!response.ok) {
     const details = payload;
@@ -712,7 +749,11 @@ async function googleAdsSearch<T>(params: {
 
 async function fetchCustomerMetadata(
   connection: GoogleAdsConnectionSecretRow,
-  accessToken: string
+  accessToken: string,
+  audit?: {
+    connectionId: number;
+    syncJobId: number;
+  }
 ): Promise<GoogleAdsCustomerMetadata> {
   const rows = await googleAdsSearch<{
     customer?: {
@@ -723,7 +764,17 @@ async function fetchCustomerMetadata(
   }>({
     connection,
     accessToken,
-    gaql: 'SELECT customer.id, customer.descriptive_name, customer.currency_code FROM customer LIMIT 1'
+    gaql: 'SELECT customer.id, customer.descriptive_name, customer.currency_code FROM customer LIMIT 1',
+    audit: audit
+      ? {
+          connectionId: audit.connectionId,
+          syncJobId: audit.syncJobId,
+          transactionSource: 'google_ads_customer_search',
+          sourceMetadata: {
+            customerId: connection.customer_id
+          }
+        }
+      : undefined
   });
 
   const row = rows[0]?.customer;
@@ -782,24 +833,50 @@ function buildAdSpendQuery(syncDate: string): string {
 async function fetchCampaignSpendRows(
   connection: GoogleAdsConnectionSecretRow,
   accessToken: string,
-  syncDate: string
+  syncDate: string,
+  audit: {
+    connectionId: number;
+    syncJobId: number;
+  }
 ): Promise<GoogleAdsCampaignApiRow[]> {
   return googleAdsSearch<GoogleAdsCampaignApiRow>({
     connection,
     accessToken,
-    gaql: buildCampaignSpendQuery(syncDate)
+    gaql: buildCampaignSpendQuery(syncDate),
+    audit: {
+      connectionId: audit.connectionId,
+      syncJobId: audit.syncJobId,
+      transactionSource: 'google_ads_campaign_search',
+      sourceMetadata: {
+        customerId: connection.customer_id,
+        syncDate
+      }
+    }
   });
 }
 
 async function fetchAdSpendRows(
   connection: GoogleAdsConnectionSecretRow,
   accessToken: string,
-  syncDate: string
+  syncDate: string,
+  audit: {
+    connectionId: number;
+    syncJobId: number;
+  }
 ): Promise<GoogleAdsAdApiRow[]> {
   return googleAdsSearch<GoogleAdsAdApiRow>({
     connection,
     accessToken,
-    gaql: buildAdSpendQuery(syncDate)
+    gaql: buildAdSpendQuery(syncDate),
+    audit: {
+      connectionId: audit.connectionId,
+      syncJobId: audit.syncJobId,
+      transactionSource: 'google_ads_ad_search',
+      sourceMetadata: {
+        customerId: connection.customer_id,
+        syncDate
+      }
+    }
   });
 }
 
@@ -1012,7 +1089,10 @@ async function upsertGoogleAdsConnection(params: {
   refreshToken: string;
   customer: GoogleAdsCustomerMetadata;
 }): Promise<void> {
-  await query(
+  const rawPayloadMetadata = buildRawPayloadStorageMetadata(params.customer.rawPayload);
+  const { rawPayloadJson, payloadSizeBytes, payloadHash } = rawPayloadMetadata;
+
+  const upsertResult = await query<RawPayloadIntegrityRow>(
     `
       INSERT INTO google_ads_connections (
         customer_id,
@@ -1027,6 +1107,9 @@ async function upsertGoogleAdsConnection(params: {
         customer_descriptive_name,
         currency_code,
         raw_customer_data,
+        raw_customer_external_id,
+        raw_customer_payload_size_bytes,
+        raw_customer_payload_hash,
         updated_at
       )
       VALUES (
@@ -1042,6 +1125,9 @@ async function upsertGoogleAdsConnection(params: {
         $8,
         $9,
         $10::jsonb,
+        $11,
+        $12,
+        $13,
         now()
       )
       ON CONFLICT (customer_id)
@@ -1057,7 +1143,14 @@ async function upsertGoogleAdsConnection(params: {
         customer_descriptive_name = $8,
         currency_code = $9,
         raw_customer_data = $10::jsonb,
+        raw_customer_external_id = $11,
+        raw_customer_payload_size_bytes = $12,
+        raw_customer_payload_hash = $13,
         updated_at = now()
+      RETURNING
+        raw_customer_payload_size_bytes AS "storedPayloadSizeBytes",
+        raw_customer_payload_hash AS "storedPayloadHash",
+        raw_customer_data AS "persistedRawPayload"
     `,
     [
       params.customerId,
@@ -1069,9 +1162,18 @@ async function upsertGoogleAdsConnection(params: {
       env.GOOGLE_ADS_ENCRYPTION_KEY,
       params.customer.descriptiveName,
       params.customer.currencyCode,
-      JSON.stringify(params.customer.rawPayload)
+      rawPayloadJson,
+      params.customerId,
+      payloadSizeBytes,
+      payloadHash
     ]
   );
+
+  logRawPayloadIntegrityMismatch(rawPayloadMetadata, upsertResult.rows[0], {
+    surface: 'google_ads_connections.raw_customer_data',
+    operation: 'upsert',
+    recordId: params.customerId
+  });
 }
 
 async function getGoogleAdsConnectionById(connectionId: number): Promise<GoogleAdsConnectionSecretRow> {
@@ -1329,11 +1431,12 @@ async function persistDailySpendSnapshot(
   for (const row of params.campaignRows) {
     const entityId = row.campaign?.id ?? null;
 
-    if (!entityId) {
-      continue;
-    }
+    const rawPayloadMetadata = buildRawPayloadStorageMetadata(row);
+    const { rawPayloadJson, payloadSizeBytes, payloadHash } = rawPayloadMetadata;
 
-    await client.query(
+    // docs/raw-payload-persistence-contract.md governs this table: persist the
+    // decoded Google Ads API row exactly before any projection or normalization.
+    const insertResult = await client.query<{ id: number } & RawPayloadIntegrityRow>(
       `
         INSERT INTO google_ads_raw_spend_records (
           connection_id,
@@ -1341,26 +1444,52 @@ async function persistDailySpendSnapshot(
           report_date,
           level,
           entity_id,
+          payload_external_id,
           currency,
           spend,
           impressions,
           clicks,
           raw_payload,
+          payload_size_bytes,
+          payload_hash,
           updated_at
         )
-        VALUES ($1, $2, $3::date, 'campaign', $4, $5, $6::numeric, $7, $8, $9::jsonb, now())
+        VALUES ($1, $2, $3::date, 'campaign', $4, $5, $6, $7::numeric, $8, $9, $10::jsonb, $11, $12, now())
+        RETURNING
+          id,
+          payload_size_bytes AS "storedPayloadSizeBytes",
+          payload_hash AS "storedPayloadHash",
+          raw_payload AS "persistedRawPayload"
       `,
       [
         params.connectionId,
         params.syncJobId,
         params.syncDate,
         entityId,
+        entityId,
         row.customer?.currencyCode ?? null,
         parseMicrosToDecimal(row.metrics?.costMicros),
         parseMetricInteger(row.metrics?.impressions),
         parseMetricInteger(row.metrics?.clicks),
-        JSON.stringify(row)
+        rawPayloadJson,
+        payloadSizeBytes,
+        payloadHash
       ]
+    );
+
+    logRawPayloadIntegrityMismatch(
+      rawPayloadMetadata,
+      insertResult.rows[0],
+      {
+        surface: 'google_ads_raw_spend_records',
+        operation: 'insert',
+        recordId: insertResult.rows[0].id,
+        fields: {
+          level: 'campaign',
+          entityId,
+          syncJobId: params.syncJobId
+        }
+      }
     );
   }
 
@@ -1369,11 +1498,12 @@ async function persistDailySpendSnapshot(
   for (const row of params.adRows) {
     const entityId = row.adGroupAd?.ad?.id ?? null;
 
-    if (!entityId) {
-      continue;
-    }
+    const rawPayloadMetadata = buildRawPayloadStorageMetadata(row);
+    const { rawPayloadJson, payloadSizeBytes, payloadHash } = rawPayloadMetadata;
 
-    const insertResult = await client.query<{ id: number }>(
+    // docs/raw-payload-persistence-contract.md governs this table: persist the
+    // decoded Google Ads API row exactly before any projection or normalization.
+    const insertResult = await client.query<{ id: number } & RawPayloadIntegrityRow>(
       `
         INSERT INTO google_ads_raw_spend_records (
           connection_id,
@@ -1381,33 +1511,62 @@ async function persistDailySpendSnapshot(
           report_date,
           level,
           entity_id,
+          payload_external_id,
           currency,
           spend,
           impressions,
           clicks,
           raw_payload,
+          payload_size_bytes,
+          payload_hash,
           updated_at
         )
-        VALUES ($1, $2, $3::date, 'ad', $4, $5, $6::numeric, $7, $8, $9::jsonb, now())
-        RETURNING id
+        VALUES ($1, $2, $3::date, 'ad', $4, $5, $6, $7::numeric, $8, $9, $10::jsonb, $11, $12, now())
+        RETURNING
+          id,
+          payload_size_bytes AS "storedPayloadSizeBytes",
+          payload_hash AS "storedPayloadHash",
+          raw_payload AS "persistedRawPayload"
       `,
       [
         params.connectionId,
         params.syncJobId,
         params.syncDate,
         entityId,
+        entityId,
         row.customer?.currencyCode ?? null,
         parseMicrosToDecimal(row.metrics?.costMicros),
         parseMetricInteger(row.metrics?.impressions),
         parseMetricInteger(row.metrics?.clicks),
-        JSON.stringify(row)
+        rawPayloadJson,
+        payloadSizeBytes,
+        payloadHash
       ]
     );
 
-    rawRecordIdsByAdId.set(entityId, insertResult.rows[0].id);
+    logRawPayloadIntegrityMismatch(
+      rawPayloadMetadata,
+      insertResult.rows[0],
+      {
+        surface: 'google_ads_raw_spend_records',
+        operation: 'insert',
+        recordId: insertResult.rows[0].id,
+        fields: {
+          level: 'ad',
+          entityId,
+          syncJobId: params.syncJobId
+        }
+      }
+    );
+
+    if (entityId) {
+      rawRecordIdsByAdId.set(entityId, insertResult.rows[0].id);
+    }
   }
 
   for (const normalizedRow of params.normalizedRows) {
+    // google_ads_daily_spend is a derived reporting projection. The raw API rows above remain
+    // the canonical source-payload storage even when a row cannot be projected cleanly.
     await client.query(
       `
         INSERT INTO google_ads_daily_spend (
@@ -1579,9 +1738,19 @@ async function processSyncJob(job: GoogleAdsSyncJobRow): Promise<void> {
   const attemptJob = async (): Promise<void> => {
     const connection = await getGoogleAdsConnectionById(job.connection_id);
     const accessToken = await exchangeRefreshToken(connection);
-    const customer = await fetchCustomerMetadata(connection, accessToken);
-    const campaignRows = await fetchCampaignSpendRows(connection, accessToken, job.sync_date);
-    const adRows = await fetchAdSpendRows(connection, accessToken, job.sync_date);
+    // Preserve decoded Google Ads API responses before any projection into spend rows.
+    const customer = await fetchCustomerMetadata(connection, accessToken, {
+      connectionId: job.connection_id,
+      syncJobId: job.id
+    });
+    const campaignRows = await fetchCampaignSpendRows(connection, accessToken, job.sync_date, {
+      connectionId: job.connection_id,
+      syncJobId: job.id
+    });
+    const adRows = await fetchAdSpendRows(connection, accessToken, job.sync_date, {
+      connectionId: job.connection_id,
+      syncJobId: job.id
+    });
     const normalizedRows = normalizeSpendSnapshot({
       customer,
       campaignRows,
@@ -1599,18 +1768,45 @@ async function processSyncJob(job: GoogleAdsSyncJobRow): Promise<void> {
       });
     });
 
-    await query(
+    const rawPayloadMetadata = buildRawPayloadStorageMetadata(customer.rawPayload);
+    const { rawPayloadJson, payloadSizeBytes, payloadHash } = rawPayloadMetadata;
+
+    const updateResult = await query<RawPayloadIntegrityRow>(
       `
         UPDATE google_ads_connections
         SET
           customer_descriptive_name = $2,
           currency_code = $3,
           raw_customer_data = $4::jsonb,
+          raw_customer_external_id = $5,
+          raw_customer_payload_size_bytes = $6,
+          raw_customer_payload_hash = $7,
           updated_at = now()
         WHERE id = $1
+        RETURNING
+          raw_customer_payload_size_bytes AS "storedPayloadSizeBytes",
+          raw_customer_payload_hash AS "storedPayloadHash",
+          raw_customer_data AS "persistedRawPayload"
       `,
-      [job.connection_id, customer.descriptiveName, customer.currencyCode, JSON.stringify(customer.rawPayload)]
+      [
+        job.connection_id,
+        customer.descriptiveName,
+        customer.currencyCode,
+        rawPayloadJson,
+        customer.customerId,
+        payloadSizeBytes,
+        payloadHash
+      ]
     );
+
+    logRawPayloadIntegrityMismatch(rawPayloadMetadata, updateResult.rows[0], {
+      surface: 'google_ads_connections.raw_customer_data',
+      operation: 'update',
+      recordId: job.connection_id,
+      fields: {
+        syncJobId: job.id
+      }
+    });
   };
 
   try {

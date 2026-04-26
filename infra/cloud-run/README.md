@@ -37,11 +37,22 @@ The deploy script expects the following Secret Manager secrets to exist for each
 The environment files also carry non-secret runtime settings that must be populated before deployment, including:
 
 - `TRACKING_ALLOWED_ORIGINS`
+- `API_JSON_BODY_LIMIT`
+- `TRACKING_BODY_LIMIT`
+- `SHOPIFY_WEBHOOK_BODY_LIMIT`
 - `SHOPIFY_APP_BASE_URL`
 - `SHOPIFY_APP_API_VERSION`
 - `SHOPIFY_APP_SCOPES`
 - `SHOPIFY_APP_POST_INSTALL_REDIRECT_URL`
 - `DASHBOARD_API_BASE_URL`
+- `API_CPU`
+- `API_MEMORY`
+- `API_CONCURRENCY`
+- `API_TIMEOUT_SECONDS`
+- `WORKER_CPU`
+- `WORKER_MEMORY`
+- `WORKER_CONCURRENCY`
+- `WORKER_TIMEOUT_SECONDS`
 - `META_ADS_JOB_NAME`
 - `GOOGLE_ADS_JOB_NAME`
 - `META_ADS_SCHEDULER_JOB_NAME`
@@ -89,3 +100,26 @@ Recommended trigger settings:
 - branch regex: `^main$`
 - region: the same region used by Cloud Run and Artifact Registry
 - build config: `cloudbuild.staging.yaml`
+
+## Large Payload Throughput
+
+The API service is configured for larger raw JSON ingestion by combining:
+
+- Cloud Run sizing from the environment files
+- env-driven Express parser limits for `/track`, general JSON APIs, and Shopify webhooks
+- lower service concurrency than the Cloud Run default so request fan-in stays closer to the Cloud SQL pool size
+
+Recommended starting points in this repository:
+
+- API staging: `2` vCPU, `2Gi`, concurrency `16`, timeout `900s`
+- API production: `2` vCPU, `2Gi`, concurrency `24`, timeout `900s`
+- Worker staging: `2` vCPU, `1Gi`, concurrency `2`, timeout `900s`
+- Worker production: `2` vCPU, `1Gi`, concurrency `4`, timeout `900s`
+- request parser limits: `20mb` for API JSON, tracking JSON, and Shopify raw webhook bodies
+
+Keep request parser limits below the Cloud Run hard request-body ceiling. Cloud Run still rejects requests above its platform limit even if the app parser limit is higher.
+
+## Staging Verification
+
+After deploying staging, run the large-payload smoke/load test against the public API:
+

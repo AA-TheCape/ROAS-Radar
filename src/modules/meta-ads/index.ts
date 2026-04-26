@@ -7,7 +7,17 @@ import { z } from 'zod';
 
 import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
+import {
+  buildRawPayloadStorageMetadata,
+  logRawPayloadIntegrityMismatch,
+  type RawPayloadIntegrityRow
+} from '../../shared/raw-payload-storage.js';
 import { attachAuthContext, requireAdmin } from '../auth/index.js';
+import {
+  buildSearchParamsAuditPayload,
+  parseJsonResponsePayload,
+  recordAdSyncApiTransaction
+} from '../ad-sync-audit/index.js';
 import { buildCanonicalSpendDimensions } from '../marketing-dimensions/index.js';
 import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
 
@@ -172,6 +182,13 @@ type MetaAdsNormalizedSpendRow = {
 type MetaAdsPersistableSpendRow = {
   rawRecordId: number | null;
   normalizedRow: MetaAdsNormalizedSpendRow;
+};
+
+type MetaAdsSyncAuditContext = {
+  connectionId: number;
+  syncJobId: number;
+  transactionSource: string;
+  sourceMetadata?: Record<string, unknown>;
 };
 
 export type MetaAdsQueueProcessOptions = {
@@ -688,14 +705,41 @@ function buildMetaLog(event: string, payload: Record<string, unknown>): string {
   });
 }
 
-async function metaFetchJson<T>(url: URL, retryCount = 2): Promise<T> {
+async function metaFetchJson<T>(url: URL, retryCount = 2, audit?: MetaAdsSyncAuditContext): Promise<T> {
   let lastError: unknown;
+  const requestUrl = `${url.origin}${url.pathname}`;
+  const requestPayload = buildSearchParamsAuditPayload(url.searchParams, ['access_token']);
 
   for (let attempt = 1; attempt <= retryCount + 1; attempt += 1) {
+    const requestStartedAt = new Date();
+
     try {
       const response = await fetch(url);
       const text = await response.text();
-      const json = text ? (JSON.parse(text) as T | MetaAdsApiErrorBody) : ({} as T);
+      const json = parseJsonResponsePayload(text) as T | MetaAdsApiErrorBody;
+      const responseReceivedAt = new Date();
+
+      if (audit) {
+        await recordAdSyncApiTransaction({
+          platform: 'meta_ads',
+          connectionId: audit.connectionId,
+          syncJobId: audit.syncJobId,
+          transactionSource: audit.transactionSource,
+          sourceMetadata: {
+            ...(audit.sourceMetadata ?? {}),
+            attempt
+          },
+          requestMethod: 'GET',
+          requestUrl,
+          requestPayload,
+          requestStartedAt,
+          responseStatus: response.status,
+          responsePayload: json,
+          responseReceivedAt,
+          errorMessage:
+            response.ok ? null : (json as MetaAdsApiErrorBody | null)?.error?.message ?? `HTTP ${response.status}`
+        });
+      }
 
       if (!response.ok) {
         const errorBody = (json as MetaAdsApiErrorBody) ?? null;
@@ -707,6 +751,27 @@ async function metaFetchJson<T>(url: URL, retryCount = 2): Promise<T> {
       return json as T;
     } catch (error) {
       lastError = error;
+
+      if (audit && !(error instanceof MetaAdsApiError)) {
+        await recordAdSyncApiTransaction({
+          platform: 'meta_ads',
+          connectionId: audit.connectionId,
+          syncJobId: audit.syncJobId,
+          transactionSource: audit.transactionSource,
+          sourceMetadata: {
+            ...(audit.sourceMetadata ?? {}),
+            attempt
+          },
+          requestMethod: 'GET',
+          requestUrl,
+          requestPayload,
+          requestStartedAt,
+          responseStatus: null,
+          responsePayload: null,
+          responseReceivedAt: null,
+          errorMessage: error instanceof Error ? error.message : String(error)
+        });
+      }
 
       if (
         attempt > retryCount ||
@@ -798,7 +863,10 @@ async function upsertMetaAdsConnection(params: {
   account: MetaAdsAccountResponse;
   encryptionKey: string;
 }): Promise<void> {
-  await query(
+  const rawPayloadMetadata = buildRawPayloadStorageMetadata(params.account);
+  const { rawPayloadJson, payloadSizeBytes, payloadHash } = rawPayloadMetadata;
+
+  const upsertResult = await query<RawPayloadIntegrityRow>(
     `
       INSERT INTO meta_ads_connections (
         ad_account_id,
@@ -811,6 +879,9 @@ async function upsertMetaAdsConnection(params: {
         account_name,
         account_currency,
         raw_account_data,
+        raw_account_external_id,
+        raw_account_payload_size_bytes,
+        raw_account_payload_hash,
         updated_at
       )
       VALUES (
@@ -824,6 +895,9 @@ async function upsertMetaAdsConnection(params: {
         $7,
         $8,
         $9::jsonb,
+        $10,
+        $11,
+        $12,
         now()
       )
       ON CONFLICT (ad_account_id)
@@ -837,7 +911,14 @@ async function upsertMetaAdsConnection(params: {
         account_name = $7,
         account_currency = $8,
         raw_account_data = $9::jsonb,
+        raw_account_external_id = $10,
+        raw_account_payload_size_bytes = $11,
+        raw_account_payload_hash = $12,
         updated_at = now()
+      RETURNING
+        raw_account_payload_size_bytes AS "storedPayloadSizeBytes",
+        raw_account_payload_hash AS "storedPayloadHash",
+        raw_account_data AS "persistedRawPayload"
     `,
     [
       params.adAccountId,
@@ -848,9 +929,18 @@ async function upsertMetaAdsConnection(params: {
       params.tokenExpiresAt,
       params.account.name ?? null,
       params.account.currency ?? params.account.account_currency ?? null,
-      JSON.stringify(params.account)
+      rawPayloadJson,
+      params.adAccountId,
+      payloadSizeBytes,
+      payloadHash
     ]
   );
+
+  logRawPayloadIntegrityMismatch(rawPayloadMetadata, upsertResult.rows[0], {
+    surface: 'meta_ads_connections.raw_account_data',
+    operation: 'upsert',
+    recordId: params.adAccountId
+  });
 }
 
 async function getActiveMetaAdsConnection(): Promise<MetaAdsConnectionRow | null> {
@@ -1027,6 +1117,10 @@ async function claimSyncJobs(workerId: string, limit: number): Promise<MetaAdsSy
 }
 
 async function fetchInsightsForLevel(
+  audit: {
+    connectionId: number;
+    syncJobId: number;
+  },
   accessToken: string,
   adAccountId: string,
   syncDate: string,
@@ -1049,16 +1143,34 @@ async function fetchInsightsForLevel(
     const page: {
       data?: MetaAdsInsightRow[];
       paging?: { next?: string };
-    } = await metaFetchJson(nextUrl);
+    } = await metaFetchJson(nextUrl, 2, {
+      connectionId: audit.connectionId,
+      syncJobId: audit.syncJobId,
+      transactionSource: 'meta_ads_insights',
+      sourceMetadata: {
+        adAccountId,
+        syncDate,
+        level
+      }
+    });
 
     rows.push(...(page.data ?? []));
     nextUrl = page.paging?.next ? new URL(page.paging.next) : null;
   }
 
-  return rows.filter((row) => buildInsightsEntityId(level, row));
+  return rows;
 }
 
-async function fetchCreativeMap(accessToken: string, adIds: string[]): Promise<MetaAdsCreativeMap> {
+async function fetchCreativeMap(
+  audit: {
+    connectionId: number;
+    syncJobId: number;
+    adAccountId: string;
+    syncDate: string;
+  },
+  accessToken: string,
+  adIds: string[]
+): Promise<MetaAdsCreativeMap> {
   const creativeMap: MetaAdsCreativeMap = {};
 
   for (let index = 0; index < adIds.length; index += 50) {
@@ -1073,7 +1185,16 @@ async function fetchCreativeMap(accessToken: string, adIds: string[]): Promise<M
     url.searchParams.set('ids', chunk.join(','));
     url.searchParams.set('fields', 'creative{id,name}');
 
-    const response = await metaFetchJson<Record<string, { creative?: { id?: string; name?: string } }>>(url);
+    const response = await metaFetchJson<Record<string, { creative?: { id?: string; name?: string } }>>(url, 2, {
+      connectionId: audit.connectionId,
+      syncJobId: audit.syncJobId,
+      transactionSource: 'meta_ads_creatives',
+      sourceMetadata: {
+        adAccountId: audit.adAccountId,
+        syncDate: audit.syncDate,
+        adIds: chunk
+      }
+    });
 
     for (const adId of chunk) {
       const creative = response[adId]?.creative;
@@ -1111,13 +1232,14 @@ async function persistDailySpendSnapshot(
 
   for (const level of META_SPEND_LEVELS) {
     for (const row of params.rowsByLevel[level]) {
-      const entityId = buildInsightsEntityId(level, row);
+      const entityId = buildInsightsEntityId(level, row) || null;
 
-      if (!entityId) {
-        continue;
-      }
+      const rawPayloadMetadata = buildRawPayloadStorageMetadata(row);
+      const { rawPayloadJson, payloadSizeBytes, payloadHash } = rawPayloadMetadata;
 
-      const rawInsert = await client.query<{ id: number }>(
+      // docs/raw-payload-persistence-contract.md governs this table: persist the
+      // decoded Meta insight row exactly before any normalization or rollup logic.
+      const rawInsert = await client.query<{ id: number } & RawPayloadIntegrityRow>(
         `
           INSERT INTO meta_ads_raw_spend_records (
             connection_id,
@@ -1125,15 +1247,22 @@ async function persistDailySpendSnapshot(
             report_date,
             level,
             entity_id,
+            payload_external_id,
             currency,
             spend,
             impressions,
             clicks,
             raw_payload,
+            payload_size_bytes,
+            payload_hash,
             updated_at
           )
-          VALUES ($1, $2, $3::date, $4, $5, $6, $7::numeric, $8, $9, $10::jsonb, now())
-          RETURNING id
+          VALUES ($1, $2, $3::date, $4, $5, $6, $7, $8::numeric, $9, $10, $11::jsonb, $12, $13, now())
+          RETURNING
+            id,
+            payload_size_bytes AS "storedPayloadSizeBytes",
+            payload_hash AS "storedPayloadHash",
+            raw_payload AS "persistedRawPayload"
         `,
         [
           params.connectionId,
@@ -1141,15 +1270,40 @@ async function persistDailySpendSnapshot(
           params.syncDate,
           level,
           entityId,
+          entityId,
           params.currency,
           parseMetricDecimal(row.spend),
           parseMetricInteger(row.impressions),
           parseMetricInteger(row.clicks),
-          JSON.stringify(row)
+          rawPayloadJson,
+          payloadSizeBytes,
+          payloadHash
         ]
       );
 
+      logRawPayloadIntegrityMismatch(
+        rawPayloadMetadata,
+        rawInsert.rows[0],
+        {
+          surface: 'meta_ads_raw_spend_records',
+          operation: 'insert',
+          recordId: rawInsert.rows[0].id,
+          fields: {
+            level,
+            entityId,
+            syncJobId: params.syncJobId
+          }
+        }
+      );
+
+      // Raw spend records are the canonical source-payload surface. Projection rows are
+      // derived later and are allowed to skip malformed rows that cannot produce entity keys.
       const rawRecordId = rawInsert.rows[0].id;
+
+      if (!entityId) {
+        continue;
+      }
+
       const normalizedRows = normalizeInsightRows(row, params.creativeMap, params.currency);
 
       for (const normalizedRow of normalizedRows) {
@@ -1164,6 +1318,8 @@ async function persistDailySpendSnapshot(
   for (const row of rollupPersistableSpendRows(normalizedRowsToInsert)) {
     const normalizedRow = row.normalizedRow;
 
+    // meta_ads_daily_spend is a derived reporting projection, not the canonical raw-source
+    // retention surface. It intentionally stores normalized rollups linked back to raw rows.
     await client.query(
       `
         INSERT INTO meta_ads_daily_spend (
@@ -1336,14 +1492,48 @@ async function processSyncJob(job: MetaAdsSyncJobRow): Promise<void> {
 
   try {
     const rowsByLevel = {
-      account: await fetchInsightsForLevel(connection.access_token, job.ad_account_id, job.sync_date, 'account'),
-      campaign: await fetchInsightsForLevel(connection.access_token, job.ad_account_id, job.sync_date, 'campaign'),
-      adset: await fetchInsightsForLevel(connection.access_token, job.ad_account_id, job.sync_date, 'adset'),
-      ad: await fetchInsightsForLevel(connection.access_token, job.ad_account_id, job.sync_date, 'ad')
+      // Keep the decoded API responses in audit storage before row-level normalization.
+      account: await fetchInsightsForLevel(
+        { connectionId: job.connection_id, syncJobId: job.id },
+        connection.access_token,
+        job.ad_account_id,
+        job.sync_date,
+        'account'
+      ),
+      campaign: await fetchInsightsForLevel(
+        { connectionId: job.connection_id, syncJobId: job.id },
+        connection.access_token,
+        job.ad_account_id,
+        job.sync_date,
+        'campaign'
+      ),
+      adset: await fetchInsightsForLevel(
+        { connectionId: job.connection_id, syncJobId: job.id },
+        connection.access_token,
+        job.ad_account_id,
+        job.sync_date,
+        'adset'
+      ),
+      ad: await fetchInsightsForLevel(
+        { connectionId: job.connection_id, syncJobId: job.id },
+        connection.access_token,
+        job.ad_account_id,
+        job.sync_date,
+        'ad'
+      )
     } satisfies Record<MetaSpendLevel, MetaAdsInsightRow[]>;
 
     const adIds = [...new Set(rowsByLevel.ad.map((row) => row.ad_id).filter((value): value is string => Boolean(value)))];
-    const creativeMap = await fetchCreativeMap(connection.access_token, adIds);
+    const creativeMap = await fetchCreativeMap(
+      {
+        connectionId: job.connection_id,
+        syncJobId: job.id,
+        adAccountId: job.ad_account_id,
+        syncDate: job.sync_date
+      },
+      connection.access_token,
+      adIds
+    );
     await withTransaction(async (client) => {
       await persistDailySpendSnapshot(client, {
         connectionId: job.connection_id,
@@ -1362,16 +1552,49 @@ async function processSyncJob(job: MetaAdsSyncJobRow): Promise<void> {
 
       try {
         const rowsByLevel = {
-          account: await fetchInsightsForLevel(connection.access_token, job.ad_account_id, job.sync_date, 'account'),
-          campaign: await fetchInsightsForLevel(connection.access_token, job.ad_account_id, job.sync_date, 'campaign'),
-          adset: await fetchInsightsForLevel(connection.access_token, job.ad_account_id, job.sync_date, 'adset'),
-          ad: await fetchInsightsForLevel(connection.access_token, job.ad_account_id, job.sync_date, 'ad')
+          account: await fetchInsightsForLevel(
+            { connectionId: job.connection_id, syncJobId: job.id },
+            connection.access_token,
+            job.ad_account_id,
+            job.sync_date,
+            'account'
+          ),
+          campaign: await fetchInsightsForLevel(
+            { connectionId: job.connection_id, syncJobId: job.id },
+            connection.access_token,
+            job.ad_account_id,
+            job.sync_date,
+            'campaign'
+          ),
+          adset: await fetchInsightsForLevel(
+            { connectionId: job.connection_id, syncJobId: job.id },
+            connection.access_token,
+            job.ad_account_id,
+            job.sync_date,
+            'adset'
+          ),
+          ad: await fetchInsightsForLevel(
+            { connectionId: job.connection_id, syncJobId: job.id },
+            connection.access_token,
+            job.ad_account_id,
+            job.sync_date,
+            'ad'
+          )
         } satisfies Record<MetaSpendLevel, MetaAdsInsightRow[]>;
 
         const adIds = [
           ...new Set(rowsByLevel.ad.map((row) => row.ad_id).filter((value): value is string => Boolean(value)))
         ];
-        const creativeMap = await fetchCreativeMap(connection.access_token, adIds);
+        const creativeMap = await fetchCreativeMap(
+          {
+            connectionId: job.connection_id,
+            syncJobId: job.id,
+            adAccountId: job.ad_account_id,
+            syncDate: job.sync_date
+          },
+          connection.access_token,
+          adIds
+        );
 
         await withTransaction(async (client) => {
           await persistDailySpendSnapshot(client, {

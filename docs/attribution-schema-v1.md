@@ -11,6 +11,8 @@ This document is the exhaustive reader-facing contract for the current implement
 - database and Shopify storage mappings
 - backward-compatibility and schema evolution rules
 
+Use `docs/raw-payload-persistence-contract.md` alongside this document when you are changing Shopify, Meta Ads, or Google Ads raw-source JSONB persistence. This document defines canonical attribution fields and normalization behavior. The raw-payload contract defines the stricter exact-as-received storage requirement for covered external-source JSONB columns.
+
 The current schema version is `1`.
 
 ## Canonical Package
@@ -103,7 +105,7 @@ These fields are not part of the shared `AttributionCaptureV1` object, but they 
 | `shopify_cart_token` | `string \| null` | `255` | `tracking_events`, `session_attribution_touch_events`, raw payload snapshots | Shopify cart token observed at capture time. Used for deterministic order/session stitching. |
 | `shopify_checkout_token` | `string \| null` | `255` | `tracking_events`, `session_attribution_touch_events`, raw payload snapshots | Shopify checkout token observed at capture time. Used for deterministic order/session stitching. |
 | `ingestion_source` | text | `64` in `session_attribution_touch_events` | `tracking_events`, `session_attribution_touch_events` | How the event entered the system. Current persisted values include `browser`, `server`, and `request_query`. |
-| `raw_payload` | `jsonb` | n/a | `tracking_events`, `session_attribution_touch_events`, `shopify_orders` snapshots | Original or enriched payload retained for debugging, replay, and migration compatibility. |
+| `raw_payload` | `jsonb` | n/a | `tracking_events`, `session_attribution_touch_events`, `shopify_orders` snapshots, ad raw spend tables | Storage surface for payload snapshots. For Shopify, Meta Ads, and Google Ads external-source raw tables, exact parsed-payload requirements are governed by `docs/raw-payload-persistence-contract.md`. Derived tables may retain normalized snapshots separately. |
 | `retained_until` | timestamptz | n/a | `session_attribution_identities`, `session_attribution_touch_events`, `order_attribution_links` | Retention cutoff used by cleanup jobs. Not a business attribution field. |
 | `first_captured_at` | timestamptz | n/a | `session_attribution_identities` | Earliest capture timestamp retained for the session snapshot lifecycle. |
 | `last_captured_at` | timestamptz | n/a | `session_attribution_identities` | Latest capture timestamp retained for the session snapshot lifecycle. |
@@ -121,6 +123,13 @@ For nullable string fields:
 3. persist `string | null`, never raw `undefined`
 
 This rule applies to URL fields, UTM fields, click IDs, and adjacent token fields where the pipeline accepts nullable strings.
+
+Raw-source JSONB retention is stricter:
+
+- these normalization rules apply to typed columns and canonical capture objects
+- they do not authorize trimming, lowercasing, key projection, or reconstruction inside covered raw-source `raw_payload` columns
+- Shopify, Meta Ads, and Google Ads external-source exactness rules are defined in `docs/raw-payload-persistence-contract.md`
+- for ad-platform spend ingestion, this exactness requirement applies to `meta_ads_raw_spend_records.raw_payload` and `google_ads_raw_spend_records.raw_payload`, while `*_daily_spend.raw_payload` remains a derived projection field
 
 ### URL fields
 
@@ -341,7 +350,7 @@ Notes:
 
 - this table is the most complete event-level attribution capture history
 - it includes both canonical schema fields and operational join fields used for deterministic order matching
-- `raw_payload` keeps canonical field names for compatibility and troubleshooting
+- `raw_payload` keeps canonical field names for compatibility and troubleshooting on attribution-capture surfaces
 
 ### Shopify order snapshot
 
@@ -399,7 +408,8 @@ Engineering and analytics readers will often encounter additional columns alongs
 - `shopify_cart_token` and `shopify_checkout_token` are deterministic stitching aids, not marketing dimensions
 - `ingestion_source` explains provenance of the event record and should not be treated as campaign source/medium
 - `retained_until` is retention metadata only and should not be surfaced as user-facing attribution time
-- `raw_payload` is a debug and recovery surface; canonical analytics should prefer normalized top-level columns when they exist
+- `raw_payload` in attribution-capture tables is mainly a debug and recovery surface; canonical analytics should prefer normalized top-level columns when they exist
+- `raw_payload` in covered Shopify, Meta Ads, and Google Ads raw-source tables is governed by `docs/raw-payload-persistence-contract.md` and must remain exact parsed source payload
 
 ## Backward Compatibility Expectations
 
@@ -443,6 +453,7 @@ A new schema version is usually not required when:
 ## Related Docs
 
 - [Implementation Guide](implementation-guide.md)
+- [Raw Payload Persistence Contract](raw-payload-persistence-contract.md)
 - [Shopify App Setup](shopify-app-setup.md)
 - [Visitor Identity Stitching](visitor-identity-stitching.md)
 - [Analytics Playbook](analytics-playbook.md)
