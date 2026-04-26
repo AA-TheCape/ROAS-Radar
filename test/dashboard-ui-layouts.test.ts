@@ -466,13 +466,22 @@ test('settings admin view explains recovery actions in recommended operator orde
   try {
     const text = mounted.container.textContent ?? '';
     assert.match(text, /Recovery tools/);
-    assert.match(text, /Use these in order for the selected date window/);
-    assert.match(text, /Backfill Shopify orders/);
+    assert.match(
+      text,
+      /Use these in order for the selected date window: import Shopify orders first, recover attribution hints second, and queue the broader attribution backfill last/
+    );
+    assert.match(text, /Import Shopify orders/);
     assert.match(text, /Run this first to import historical Shopify orders for the window/);
     assert.match(text, /Recover attribution hints/);
-    assert.match(text, /Run this after order import when web orders are still unattributed/);
+    assert.match(
+      text,
+      /Run this second when imported Shopify web orders are still unattributed; it retries deterministic relinking/
+    );
     assert.match(text, /Select attribution backfill/);
-    assert.match(text, /Run this last to queue the broader attribution backfill for the same window/);
+    assert.match(
+      text,
+      /Run this last to queue the broader asynchronous attribution backfill for the same window; always do a dry run first/
+    );
   } finally {
     mounted.cleanup();
   }
@@ -498,9 +507,16 @@ test('settings admin view reveals attribution options with safe defaults only af
     const text = mounted.container.textContent ?? '';
     assert.match(text, /Attribution backfill options/);
     assert.match(text, /Review these before queueing the asynchronous attribution backfill/);
-    assert.match(text, /Enabled by default so the first run analyzes the window without writing attribution changes/);
-    assert.match(text, /Keep the backfill focused on web orders/);
-    assert.match(text, /Leave Shopify untouched even on a non-dry run/);
+    assert.match(text, /Run a dry run first for this exact window/);
+    assert.match(
+      text,
+      /Defaults to enabled\. Keep this on for the first run so the job analyzes the window without writing attribution changes/
+    );
+    assert.match(text, /Defaults to enabled\. Keep the backfill focused on Shopify web orders/);
+    assert.match(
+      text,
+      /Defaults to off\. Turn this on only when you want local attribution updates without Shopify writeback/
+    );
 
     const limitInput = mounted.container.querySelector('#shopify-order-attribution-limit') as HTMLInputElement | null;
     const dryRunInput = mounted.container.querySelector('#shopify-order-attribution-dry-run') as HTMLInputElement | null;

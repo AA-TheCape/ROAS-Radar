@@ -298,9 +298,13 @@ test('settings recovery harness preserves the existing recovery actions and subm
     const mounted = await mountUi(h(SettingsHarness));
 
     try {
-      assert.match(mounted.container.textContent ?? '', /Backfill Shopify orders/);
+      assert.match(mounted.container.textContent ?? '', /Import Shopify orders/);
       assert.match(mounted.container.textContent ?? '', /Recover attribution hints/);
       assert.match(mounted.container.textContent ?? '', /Select attribution backfill/);
+      assert.match(
+        mounted.container.textContent ?? '',
+        /Use these in order for the selected date window: import Shopify orders first, recover attribution hints second/
+      );
 
       const recoverButton = await waitForButton(mounted.container, 'Recover attribution hints');
       click(recoverButton);
@@ -316,6 +320,18 @@ test('settings recovery harness preserves the existing recovery actions and subm
       const selectButton = await waitForButton(mounted.container, 'Select attribution backfill');
       click(selectButton);
       await tick();
+
+      const optionsText = mounted.container.textContent ?? '';
+      assert.match(optionsText, /Run a dry run first for this exact window, then keep the same dates/);
+      assert.match(
+        optionsText,
+        /Defaults to enabled\. Keep this on for the first run so the job analyzes the window without writing attribution changes/
+      );
+      assert.match(optionsText, /Defaults to enabled\. Keep the backfill focused on Shopify web orders/);
+      assert.match(
+        optionsText,
+        /Defaults to off\. Turn this on only when you want local attribution updates without Shopify writeback/
+      );
 
       const limitInput = mounted.container.querySelector('#shopify-order-attribution-limit') as HTMLInputElement | null;
       const dryRunInput = mounted.container.querySelector('#shopify-order-attribution-dry-run') as HTMLInputElement | null;

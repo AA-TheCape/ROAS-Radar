@@ -671,7 +671,7 @@ export default function SettingsAdminView({
                     <Card padding="compact" className="border-line/60 bg-canvas-tint/80 shadow-none">
                       <Eyebrow>Recovery tools</Eyebrow>
                       <p className="mt-2 text-body text-ink-soft">
-                        Use these in order for the selected date window so operators import missing orders first, then recover attribution, then queue the broader backfill only if the earlier steps still leave gaps.
+                        Use these in order for the selected date window: import Shopify orders first, recover attribution hints second, and queue the broader attribution backfill last only if the earlier steps still leave gaps.
                       </p>
                     </Card>
 
@@ -692,12 +692,12 @@ export default function SettingsAdminView({
                     <div className="grid gap-3 xl:grid-cols-3">
                       <RecoveryAction
                         type="submit"
-                        label="Backfill Shopify orders"
+                        label="Import Shopify orders"
                         loadingLabel="Backfilling…"
                         isLoading={actionFeedback.loading === 'shopify-backfill'}
                         disabled={Boolean(shopifyBackfillError) || !shopifyConnection.data?.connected}
                         onClick={() => setSelectedRecoveryAction('shopify-backfill')}
-                        description="Run this first to import historical Shopify orders for the window; it can pull a large backlog, so use the narrowest range that fixes the gap."
+                        description="Run this first to import historical Shopify orders for the window; it can pull a large backlog, so start with the narrowest range that fixes the gap."
                       />
                       <RecoveryAction
                         label="Recover attribution hints"
@@ -708,7 +708,7 @@ export default function SettingsAdminView({
                           setSelectedRecoveryAction('shopify-attribution-recovery');
                           void onShopifyAttributionRecovery();
                         }}
-                        description="Run this after order import when web orders are still unattributed; it applies Shopify-hint fallback only where deterministic matching still failed."
+                        description="Run this second when imported Shopify web orders are still unattributed; it retries deterministic relinking, then applies Shopify-hint fallback only where matching still failed."
                       />
                       <RecoveryAction
                         label={
@@ -721,7 +721,7 @@ export default function SettingsAdminView({
                         disabled={!shopifyConnection.data?.connected}
                         selected={selectedRecoveryAction === 'shopify-order-attribution-backfill'}
                         onClick={() => setSelectedRecoveryAction('shopify-order-attribution-backfill')}
-                        description="Run this last to queue the broader attribution backfill for the same window; it can touch many orders asynchronously, so avoid it until the earlier recovery steps are done."
+                        description="Run this last to queue the broader asynchronous attribution backfill for the same window; always do a dry run first before turning on write-enabled recovery."
                       />
                     </div>
 
@@ -732,6 +732,9 @@ export default function SettingsAdminView({
                             <Eyebrow>Attribution backfill options</Eyebrow>
                             <p className="text-body text-ink-soft">
                               Review these before queueing the asynchronous attribution backfill for the selected date window.
+                            </p>
+                            <p className="text-body text-ink-soft">
+                              Run a dry run first for this exact window, then keep the same dates when you queue a write-enabled run.
                             </p>
                           </div>
 
@@ -767,7 +770,7 @@ export default function SettingsAdminView({
                             <CheckboxField
                               label="Dry run"
                               htmlFor="shopify-order-attribution-dry-run"
-                              description="Enabled by default so the first run analyzes the window without writing attribution changes."
+                              description="Defaults to enabled. Keep this on for the first run so the job analyzes the window without writing attribution changes."
                             >
                               <input
                                 id="shopify-order-attribution-dry-run"
@@ -785,7 +788,7 @@ export default function SettingsAdminView({
                             <CheckboxField
                               label="Web orders only"
                               htmlFor="shopify-order-attribution-web-only"
-                              description="Keep the backfill focused on web orders unless you explicitly need other order sources."
+                              description="Defaults to enabled. Keep the backfill focused on Shopify web orders unless you explicitly need other order sources."
                             >
                               <input
                                 id="shopify-order-attribution-web-only"
@@ -803,7 +806,7 @@ export default function SettingsAdminView({
                             <CheckboxField
                               label="Skip Shopify writeback"
                               htmlFor="shopify-order-attribution-skip-writeback"
-                              description="Leave Shopify untouched even on a non-dry run when you only want local attribution updates."
+                              description="Defaults to off. Turn this on only when you want local attribution updates without Shopify writeback."
                             >
                               <input
                                 id="shopify-order-attribution-skip-writeback"
