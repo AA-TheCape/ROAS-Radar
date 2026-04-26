@@ -126,6 +126,8 @@ type GoogleAdsReconciliationRow = {
   checked_at: Date;
 };
 
+type GoogleAdsSyncJobOutcome = 'succeeded' | 'failed';
+
 type GoogleAdsAccessTokenResponse = {
   access_token?: string;
   expires_in?: number;
@@ -266,6 +268,48 @@ class GoogleAdsApiError extends Error {
     this.statusCode = statusCode;
     this.details = details;
   }
+}
+
+function truncateLogValue(value: string, limit = 2_000): string {
+  return value.length <= limit ? value : `${value.slice(0, limit)}…`;
+}
+
+function serializeGoogleAdsErrorDetails(details: unknown): string {
+  if (details === null || typeof details === 'undefined') {
+    return '';
+  }
+
+  if (typeof details === 'string') {
+    return truncateLogValue(details);
+  }
+
+  try {
+    return truncateLogValue(JSON.stringify(details));
+  } catch {
+    return truncateLogValue(String(details));
+  }
+}
+
+function formatGoogleAdsError(error: unknown): string {
+  if (error instanceof GoogleAdsApiError) {
+    const details = serializeGoogleAdsErrorDetails(error.details);
+    return details
+      ? `${error.message} (status ${error.statusCode}; details=${details})`
+      : `${error.message} (status ${error.statusCode})`;
+  }
+
+  if (error instanceof GoogleAdsHttpError) {
+    const details = serializeGoogleAdsErrorDetails(error.details);
+    return details
+      ? `${error.message} (status ${error.statusCode}; code=${error.code}; details=${details})`
+      : `${error.message} (status ${error.statusCode}; code=${error.code})`;
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
 }
 
 function assertGoogleAdsConfig(): void {
@@ -1669,7 +1713,7 @@ async function markSyncJobSucceeded(jobId: number, connectionId: number): Promis
 }
 
 async function markSyncJobFailed(job: GoogleAdsSyncJobRow, error: unknown): Promise<void> {
-  const lastError = error instanceof Error ? error.message : String(error);
+  const lastError = formatGoogleAdsError(error);
   const shouldRetry = job.attempts < env.GOOGLE_ADS_SYNC_MAX_RETRIES;
   const nextStatus = shouldRetry ? 'retry' : 'failed';
   const retryDelaySeconds = computeRetryDelaySeconds(job.attempts);
@@ -1721,7 +1765,7 @@ async function markSyncJobFailed(job: GoogleAdsSyncJobRow, error: unknown): Prom
   );
 }
 
-async function processSyncJob(job: GoogleAdsSyncJobRow): Promise<void> {
+async function processSyncJob(job: GoogleAdsSyncJobRow): Promise<GoogleAdsSyncJobOutcome> {
   await query(
     `
       UPDATE google_ads_connections
@@ -1812,20 +1856,22 @@ async function processSyncJob(job: GoogleAdsSyncJobRow): Promise<void> {
   try {
     await attemptJob();
     await markSyncJobSucceeded(job.id, job.connection_id);
+    return 'succeeded';
   } catch (error) {
     if (error instanceof GoogleAdsApiError && [401, 403, 429, 500, 502, 503, 504].includes(error.statusCode)) {
       try {
         await delay(500);
         await attemptJob();
         await markSyncJobSucceeded(job.id, job.connection_id);
-        return;
+        return 'succeeded';
       } catch (retryError) {
         await markSyncJobFailed(job, retryError);
-        return;
+        return 'failed';
       }
     }
 
     await markSyncJobFailed(job, error);
+    return 'failed';
   }
 }
 
@@ -1853,12 +1899,12 @@ export async function processGoogleAdsSyncQueue(
   let failedJobs = 0;
 
   for (const job of jobs) {
-    try {
-      await processSyncJob(job);
+    const outcome = await processSyncJob(job);
+
+    if (outcome === 'succeeded') {
       succeededJobs += 1;
-    } catch (error) {
+    } else {
       failedJobs += 1;
-      await markSyncJobFailed(job, error);
     }
   }
 
@@ -2104,5 +2150,8 @@ export const __googleAdsTestUtils = {
   buildPlanningDates,
   buildReconciliationWindow,
   computeRetryDelaySeconds,
-  normalizeSpendSnapshot
+  normalizeSpendSnapshot,
+  formatGoogleAdsError,
+  createGoogleAdsApiErrorForTest: (statusCode: number, message: string, details: unknown) =>
+    new GoogleAdsApiError(statusCode, message, details)
 };

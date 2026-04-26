@@ -119,3 +119,20 @@ test('normalizeSpendSnapshot maps ad groups into Meta-aligned adset fields and e
   assert.equal(rows[1].canonicalContent, 'unknown');
   assert.equal(rows[4].canonicalContent, 'headline a');
 });
+
+test('formatGoogleAdsError includes API status and details payload', () => {
+  const error = __googleAdsTestUtils.createGoogleAdsApiErrorForTest(403, 'Google Ads API request failed', {
+    error: {
+      code: 403,
+      message: 'The caller does not have permission',
+      status: 'PERMISSION_DENIED'
+    }
+  });
+
+  const message = __googleAdsTestUtils.formatGoogleAdsError(error);
+
+  assert.equal(
+    message,
+    'Google Ads API request failed (status 403; details={"error":{"code":403,"message":"The caller does not have permission","status":"PERMISSION_DENIED"}})'
+  );
+});
