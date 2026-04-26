@@ -216,6 +216,24 @@ export function requireAdmin(req, res, next) {
     }
     next();
 }
+export function requireInternalService(req, res, next) {
+    const auth = res.locals.auth;
+    if (!auth) {
+        res.status(401).json({
+            error: 'unauthorized',
+            message: 'Authentication required'
+        });
+        return;
+    }
+    if (auth.kind !== 'internal') {
+        res.status(403).json({
+            error: 'forbidden',
+            message: 'Internal service token required'
+        });
+        return;
+    }
+    next();
+}
 export function createAuthRouter() {
     const router = Router();
     router.use(attachAuthContext);

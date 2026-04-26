@@ -10,6 +10,7 @@ import { createReportingRouter } from './modules/reporting/index.js';
 import { createSettingsRouter } from './modules/settings/index.js';
 import { createShopifyAdminRouter, createShopifyPublicRouter, createShopifyWebhookRouter } from './modules/shopify/index.js';
 import { createTrackingRouter } from './modules/tracking/index.js';
+import { createInternalIdentityRouter } from './modules/identity/read-api.js';
 import { createRequestLoggingMiddleware, logHttpError } from './observability/index.js';
 
 export function createApp() {
@@ -68,6 +69,7 @@ export function createApp() {
   app.use('/api/auth', createAuthRouter());
   app.use('/api/settings', createSettingsRouter());
   app.use('/api/reporting', createReportingRouter());
+  app.use('/api/internal/identity', createInternalIdentityRouter());
   app.use('/api/admin/users', createUserAdminRouter());
   app.use('/api/admin/attribution', createAttributionAdminRouter());
   app.use('/shopify', createShopifyPublicRouter());
