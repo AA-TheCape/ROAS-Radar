@@ -145,7 +145,7 @@ test('authenticated dashboard, order details, and settings pass automated access
     AuthenticatedAppShell,
     'dashboard',
     h(ReportingDashboard, {
-      filters: { startDate: '2026-04-01', endDate: '2026-04-20', source: '', campaign: '' },
+      filters: { startDate: '2026-04-01', endDate: '2026-04-20', source: '', campaign: '', attributionTier: '' },
       onFiltersChange() {},
       groupBy: 'day',
       onGroupByChange() {},

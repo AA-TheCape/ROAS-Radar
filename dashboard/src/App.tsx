@@ -73,6 +73,7 @@ import {
   type TimeseriesGroupBy,
   type TimeseriesPoint
 } from './lib/api';
+import { isAttributionTier } from './lib/attributionTier';
 import {
   formatCurrency,
   formatDateLabel,
@@ -278,7 +279,7 @@ function normalizeReportingFilters(filters: ReportingFilters): ReportingFilters 
   return filters;
 }
 
-const DASHBOARD_QUERY_PARAM_KEYS = ['startDate', 'endDate', 'source', 'campaign', 'attributionModel', 'groupBy'] as const;
+const DASHBOARD_QUERY_PARAM_KEYS = ['startDate', 'endDate', 'source', 'campaign', 'attributionModel', 'attributionTier', 'groupBy'] as const;
 const REPORTING_FILTER_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const ATTRIBUTION_MODELS = new Set<NonNullable<ReportingFilters['attributionModel']>>([
   'first_touch',
@@ -293,7 +294,8 @@ export function createDefaultReportingFilters(reportingTimezone = DEFAULT_REPORT
   return {
     ...buildRange(30, reportingTimezone),
     source: '',
-    campaign: ''
+    campaign: '',
+    attributionTier: ''
   };
 }
 
@@ -323,6 +325,7 @@ export function readDashboardStateFromSearch(
   const source = params.get('source');
   const campaign = params.get('campaign');
   const attributionModel = params.get('attributionModel');
+  const attributionTier = params.get('attributionTier');
   const groupBy = params.get('groupBy');
 
   return {
@@ -331,7 +334,8 @@ export function readDashboardStateFromSearch(
       endDate: isValidDateInput(endDate) ? endDate : defaults.endDate,
       source: source ?? '',
       campaign: campaign ?? '',
-      attributionModel: isAttributionModel(attributionModel) ? attributionModel : undefined
+      attributionModel: isAttributionModel(attributionModel) ? attributionModel : undefined,
+      attributionTier: isAttributionTier(attributionTier) ? attributionTier : ''
     }),
     groupBy: isTimeseriesGroupBy(groupBy) ? groupBy : DEFAULT_GROUP_BY
   };
@@ -361,6 +365,10 @@ export function applyDashboardStateToSearch(
 
   if (filters.attributionModel?.trim()) {
     params.set('attributionModel', filters.attributionModel.trim());
+  }
+
+  if (filters.attributionTier?.trim()) {
+    params.set('attributionTier', filters.attributionTier.trim());
   }
 
   params.set('groupBy', groupBy);
@@ -679,9 +687,11 @@ function App() {
       startDate: filters.startDate,
       endDate: filters.endDate,
       source: (deferredSource ?? '').trim(),
-      campaign: (deferredCampaign ?? '').trim()
+      campaign: (deferredCampaign ?? '').trim(),
+      attributionModel: filters.attributionModel,
+      attributionTier: filters.attributionTier ?? ''
     }),
-    [deferredCampaign, deferredSource, filters.endDate, filters.startDate]
+    [deferredCampaign, deferredSource, filters.attributionModel, filters.attributionTier, filters.endDate, filters.startDate]
   );
 
   const dashboard = useDashboardData(appliedFilters, groupBy, authState.user !== null, dashboardRefreshKey);

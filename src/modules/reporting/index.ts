@@ -23,11 +23,18 @@ class ReportingHttpError extends Error {
 }
 
 const dateStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const attributionTierSchema = z.enum([
+  'deterministic_first_party',
+  'deterministic_shopify_hint',
+  'ga4_fallback',
+  'unattributed'
+]);
 
 const baseFiltersObjectSchema = z.object({
   startDate: dateStringSchema,
   endDate: dateStringSchema,
   attributionModel: z.enum(ATTRIBUTION_MODELS).optional().default('last_touch'),
+  attributionTier: attributionTierSchema.optional(),
   source: z.string().trim().min(1).optional(),
   campaign: z.string().trim().min(1).optional()
 });
@@ -219,7 +226,8 @@ function buildMetricDimensionFilters(
 function buildOrderAttributionFilters(
   attributionModel: string,
   source: string | undefined,
-  campaign: string | undefined
+  campaign: string | undefined,
+  attributionTier?: z.infer<typeof attributionTierSchema>
 ): { sql: string; params: string[] } {
   const params: string[] = [attributionModel];
   const filters: string[] = [];
@@ -232,6 +240,11 @@ function buildOrderAttributionFilters(
   if (campaign) {
     params.push(campaign);
     filters.push(`c.attributed_campaign = $${params.length + 2}`);
+  }
+
+  if (attributionTier) {
+    params.push(attributionTier);
+    filters.push(`COALESCE(o.attribution_tier, 'unattributed') = $${params.length + 2}`);
   }
 
   return {
@@ -567,7 +580,7 @@ export function createReportingRouter(): Router {
   router.get('/orders', async (req, res, next) => {
     try {
       const input = parseInput(ordersQuerySchema, req.query);
-      const filters = buildOrderAttributionFilters(input.attributionModel, input.source, input.campaign);
+      const filters = buildOrderAttributionFilters(input.attributionModel, input.source, input.campaign, input.attributionTier);
       const reportingTimezone = await getReportingTimezone();
       const result = await query<OrderAttributionRow>(
         `

@@ -17,9 +17,16 @@ export type {
   OrderAttributionBackfillSubmittedOptions
 };
 
+export type AttributionTier =
+  | 'deterministic_first_party'
+  | 'deterministic_shopify_hint'
+  | 'ga4_fallback'
+  | 'unattributed';
+
 export type ReportingFilters = {
   startDate: string;
   endDate: string;
+  attributionTier?: AttributionTier | '';
   attributionModel?:
     | 'first_touch'
     | 'last_touch'
@@ -127,7 +134,7 @@ export type OrderRow = {
   medium: string | null;
   campaign: string | null;
   attributionReason: string;
-  attributionTier: 'deterministic_first_party' | 'deterministic_shopify_hint' | 'ga4_fallback' | 'unattributed';
+  attributionTier: AttributionTier;
   attributionSource: string | null;
   attributionMatchedAt: string | null;
   confidenceScore: number | null;
@@ -196,7 +203,7 @@ export type OrderDetail = {
   cartToken: string | null;
   sourceName: string | null;
   orderOccurredAtUtc: string;
-  attributionTier: 'deterministic_first_party' | 'deterministic_shopify_hint' | 'ga4_fallback' | 'unattributed';
+  attributionTier: AttributionTier;
   attributionSource: string | null;
   attributionMatchedAt: string | null;
   attributionReason: string;
@@ -582,6 +589,10 @@ function buildSearchParams(filters: ReportingFilters, extras: Record<string, str
 
   if (filters.attributionModel?.trim()) {
     params.set('attributionModel', filters.attributionModel.trim());
+  }
+
+  if (filters.attributionTier?.trim()) {
+    params.set('attributionTier', filters.attributionTier.trim());
   }
 
   for (const [key, value] of Object.entries(extras)) {

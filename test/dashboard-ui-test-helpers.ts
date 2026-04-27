@@ -291,7 +291,8 @@ export function createReportingDashboardProps(
       startDate: '2026-04-01',
       endDate: '2026-04-20',
       source: '',
-      campaign: ''
+      campaign: '',
+      attributionTier: ''
     },
     onFiltersChange: noop,
     groupBy: 'day' as const,
@@ -388,6 +389,21 @@ export function createReportingDashboardProps(
           attributionSource: 'shopify_marketing_hint',
           attributionMatchedAt: '2026-04-19T18:00:15.000Z',
           confidenceScore: 0.55,
+          sessionId: null
+        },
+        {
+          shopifyOrderId: '1103',
+          processedAt: '2026-04-18T18:00:00.000Z',
+          orderOccurredAtUtc: '2026-04-18T18:00:00.000Z',
+          source: null,
+          medium: null,
+          campaign: null,
+          totalPrice: 89,
+          attributionReason: 'unattributed',
+          attributionTier: 'unattributed',
+          attributionSource: 'unattributed',
+          attributionMatchedAt: null,
+          confidenceScore: null,
           sessionId: null
         }
       ],

@@ -372,7 +372,10 @@ test('reporting orders returns order-level attribution details for debugging', a
     }
 
     assert.match(text, /LEFT JOIN LATERAL/);
-    assert.deepEqual(params, ['2026-04-01', '2026-04-10', 'last_touch', 'facebook', 'America/Los_Angeles', 1]);
+    assert.deepEqual(
+      params,
+      ['2026-04-01', '2026-04-10', 'last_touch', 'facebook', 'deterministic_first_party', 'America/Los_Angeles', 1]
+    );
 
     return {
       rows: [
@@ -406,7 +409,7 @@ test('reporting orders returns order-level attribution details for debugging', a
   try {
     const { response, body } = await requestJson(
       server,
-      '/api/reporting/orders?startDate=2026-04-01&endDate=2026-04-10&source=facebook&limit=1'
+      '/api/reporting/orders?startDate=2026-04-01&endDate=2026-04-10&source=facebook&attributionTier=deterministic_first_party&limit=1'
     );
 
     assert.equal(response.status, 200);

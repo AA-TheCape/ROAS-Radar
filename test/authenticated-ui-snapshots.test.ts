@@ -145,7 +145,8 @@ async function renderSnapshots() {
         startDate: '2026-04-01',
         endDate: '2026-04-20',
         source: '',
-        campaign: ''
+        campaign: '',
+        attributionTier: ''
       },
       onFiltersChange: noop,
       groupBy: 'day',

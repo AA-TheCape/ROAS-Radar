@@ -139,7 +139,9 @@ test('reporting dashboard search and order drill-in stay wired for high-traffic 
 
   try {
     assert.match(mounted.container.textContent ?? '', /Campaign performance/);
-    assert.match(mounted.container.textContent ?? '', /Attributed orders/);
+    assert.match(mounted.container.textContent ?? '', /Order attribution rows/);
+    assert.match(mounted.container.textContent ?? '', /Deterministic first-party/);
+    assert.match(mounted.container.textContent ?? '', /Unattributed/);
 
     const orderButton = mounted.container.querySelector('button[aria-label="Open order details for Shopify order 1105"]');
     assert.ok(orderButton);
