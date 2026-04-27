@@ -8,6 +8,10 @@ async function getTestUtils() {
   return attributionModule.__attributionTestUtils;
 }
 
+async function getResolverModule() {
+  return import('../src/modules/attribution/resolver.js');
+}
+
 type TestUtils = Awaited<ReturnType<typeof getTestUtils>>;
 type TestTouchpoint = Parameters<TestUtils['dedupeDeterministicCandidates']>[0][number];
 type TierResolverInput = Parameters<TestUtils['resolveAttributionTier']>[0];
@@ -411,4 +415,353 @@ test('resolveAttributionTier is deterministic across repeated runs and returns u
   );
   assert.equal(first.tier, 'unattributed');
   assert.equal(first.winner, null);
+});
+
+test('isDirectTouchpoint only treats fully empty marketing metadata as direct', async () => {
+  const resolverModule = await getResolverModule();
+
+  assert.equal(
+    resolverModule.isDirectTouchpoint({
+      source: null,
+      medium: null,
+      campaign: null,
+      content: null,
+      term: null,
+      clickIdValue: null
+    }),
+    true
+  );
+
+  assert.equal(
+    resolverModule.isDirectTouchpoint({
+      source: null,
+      medium: null,
+      campaign: null,
+      content: null,
+      term: null,
+      clickIdValue: 'fbclid-1'
+    }),
+    false
+  );
+});
+
+test('confidenceScoreForWinner covers every tier source and null winner', async () => {
+  const testUtils = await getTestUtils();
+
+  assert.equal(testUtils.confidenceScoreForWinner(null), 0);
+  assert.equal(testUtils.confidenceScoreForWinner({ ingestionSource: 'landing_session_id' }), 1);
+  assert.equal(testUtils.confidenceScoreForWinner({ ingestionSource: 'checkout_token' }), 1);
+  assert.equal(testUtils.confidenceScoreForWinner({ ingestionSource: 'cart_token' }), 0.9);
+  assert.equal(testUtils.confidenceScoreForWinner({ ingestionSource: 'customer_identity' }), 0.6);
+  assert.equal(testUtils.confidenceScoreForWinner({ ingestionSource: 'shopify_marketing_hint' }), 0.55);
+  assert.equal(testUtils.confidenceScoreForWinner({ ingestionSource: 'ga4_fallback' }), 0.35);
+});
+
+test('dedupe ignores deterministic candidates without a session id and keeps timeline ordering stable', async () => {
+  const testUtils = await getTestUtils();
+
+  const deduped = testUtils.dedupeDeterministicCandidates([
+    buildTouchpoint('session-b', '2026-04-03T10:00:00.000Z'),
+    buildTouchpoint('session-missing', '2026-04-02T10:00:00.000Z', {
+      sessionId: null,
+      sourceTouchEventId: 'missing-event'
+    }),
+    buildTouchpoint('session-a', '2026-04-01T10:00:00.000Z')
+  ]);
+
+  assert.deepEqual(
+    deduped.map((touchpoint) => touchpoint.sessionId),
+    ['session-a', 'session-b']
+  );
+});
+
+test('resolveAttributionTier returns unattributed when the order timestamp is missing', async () => {
+  const testUtils = await getTestUtils();
+
+  const resolved = testUtils.resolveAttributionTier({
+    orderOccurredAtUtc: null,
+    deterministicFirstParty: [
+      buildTierCandidate('session-first-party', '2026-04-07T10:00:00.000Z')
+    ],
+    shopifyHint: [
+      buildTierCandidate('shopify-hint', '2026-04-07T11:00:00.000Z', {
+        sessionId: null,
+        sourceTouchEventId: null,
+        ingestionSource: 'shopify_marketing_hint',
+        attributionReason: 'shopify_hint_derived',
+        confidenceScore: 0.55,
+        isSynthetic: true
+      })
+    ],
+    ga4Fallback: [
+      buildTierCandidate('ga4-hint', '2026-04-07T11:00:00.000Z', {
+        sessionId: null,
+        sourceTouchEventId: null,
+        ingestionSource: 'ga4_fallback',
+        attributionReason: 'ga4_fallback_match',
+        confidenceScore: 0.35,
+        isSynthetic: true
+      })
+    ]
+  });
+
+  assert.equal(resolved.tier, 'unattributed');
+  assert.equal(resolved.winner, null);
+  assert.deepEqual(resolved.touchpoints, []);
+  assert.equal(resolved.confidenceScore, 0);
+});
+
+test('resolveAttributionTier ignores ineligible higher-tier timestamps and still evaluates lower tiers', async () => {
+  const testUtils = await getTestUtils();
+
+  const resolved = testUtils.resolveAttributionTier({
+    orderOccurredAtUtc: new Date('2026-04-08T12:00:00.000Z'),
+    deterministicFirstParty: [
+      buildTierCandidate('deterministic-future', '2026-04-08T12:00:01.000Z', {
+        ingestionSource: 'landing_session_id',
+        attributionReason: 'matched_by_landing_session',
+        confidenceScore: 1
+      }),
+      buildTierCandidate('deterministic-invalid', '2026-04-07T12:00:00.000Z', {
+        occurredAtUtc: new Date('invalid'),
+        ingestionSource: 'checkout_token',
+        attributionReason: 'matched_by_checkout_token',
+        confidenceScore: 1
+      })
+    ],
+    shopifyHint: [
+      buildTierCandidate('shopify-eligible', '2026-04-07T11:00:00.000Z', {
+        sessionId: null,
+        ingestionSource: 'shopify_marketing_hint',
+        attributionReason: 'shopify_hint_derived',
+        confidenceScore: 0.55,
+        isSynthetic: true
+      })
+    ],
+    ga4Fallback: [
+      buildTierCandidate('ga4-eligible', '2026-04-07T10:00:00.000Z', {
+        sessionId: null,
+        sourceTouchEventId: null,
+        ingestionSource: 'ga4_fallback',
+        attributionReason: 'ga4_fallback_match',
+        confidenceScore: 0.35,
+        isSynthetic: true
+      })
+    ]
+  });
+
+  assert.equal(resolved.tier, 'deterministic_shopify_hint');
+  assert.equal(resolved.winner?.sourceTouchEventId, 'shopify-eligible-event');
+});
+
+test('resolveAttributionTier treats the 7-day Shopify hint lookback as inclusive and excludes older or future hints', async () => {
+  const testUtils = await getTestUtils();
+
+  const resolved = testUtils.resolveAttributionTier({
+    orderOccurredAtUtc: new Date('2026-04-08T12:00:00.000Z'),
+    deterministicFirstParty: [],
+    shopifyHint: [
+      buildTierCandidate('shopify-too-old', '2026-04-01T11:59:59.999Z', {
+        sessionId: null,
+        ingestionSource: 'shopify_marketing_hint',
+        attributionReason: 'shopify_hint_derived',
+        confidenceScore: 0.55,
+        isSynthetic: true
+      }),
+      buildTierCandidate('shopify-boundary', '2026-04-01T12:00:00.000Z', {
+        sessionId: null,
+        ingestionSource: 'shopify_marketing_hint',
+        attributionReason: 'shopify_hint_derived',
+        confidenceScore: 0.55,
+        isSynthetic: true
+      }),
+      buildTierCandidate('shopify-future', '2026-04-08T12:00:00.001Z', {
+        sessionId: null,
+        ingestionSource: 'shopify_marketing_hint',
+        attributionReason: 'shopify_hint_derived',
+        confidenceScore: 0.55,
+        isSynthetic: true
+      })
+    ],
+    ga4Fallback: []
+  });
+
+  assert.equal(resolved.tier, 'deterministic_shopify_hint');
+  assert.deepEqual(
+    resolved.touchpoints.map((touchpoint) => touchpoint.sourceTouchEventId),
+    ['shopify-boundary-event']
+  );
+});
+
+test('resolveAttributionTier breaks Shopify hint ties by click id, then recency, then source key', async () => {
+  const testUtils = await getTestUtils();
+
+  const winnerFromClickId = testUtils.resolveAttributionTier({
+    orderOccurredAtUtc: new Date('2026-04-08T12:00:00.000Z'),
+    deterministicFirstParty: [],
+    shopifyHint: [
+      buildTierCandidate('shopify-newer-utm', '2026-04-08T11:00:00.000Z', {
+        sessionId: null,
+        ingestionSource: 'shopify_marketing_hint',
+        attributionReason: 'shopify_hint_derived',
+        confidenceScore: 0.55,
+        isSynthetic: true
+      }),
+      buildTierCandidate('shopify-older-click-id', '2026-04-08T10:00:00.000Z', {
+        sessionId: null,
+        ingestionSource: 'shopify_marketing_hint',
+        attributionReason: 'shopify_hint_derived',
+        confidenceScore: 0.55,
+        clickIdType: 'fbclid',
+        clickIdValue: 'fbclid-1',
+        isSynthetic: true
+      })
+    ],
+    ga4Fallback: []
+  });
+
+  assert.equal(winnerFromClickId.winner?.sourceTouchEventId, 'shopify-older-click-id-event');
+
+  const winnerFromLexicalKey = testUtils.resolveAttributionTier({
+    orderOccurredAtUtc: new Date('2026-04-08T12:00:00.000Z'),
+    deterministicFirstParty: [],
+    shopifyHint: [
+      buildTierCandidate('shopify-b', '2026-04-08T11:00:00.000Z', {
+        sessionId: null,
+        ingestionSource: 'shopify_marketing_hint',
+        attributionReason: 'shopify_hint_derived',
+        confidenceScore: 0.55,
+        isSynthetic: true
+      }),
+      buildTierCandidate('shopify-a', '2026-04-08T11:00:00.000Z', {
+        sessionId: null,
+        ingestionSource: 'shopify_marketing_hint',
+        attributionReason: 'shopify_hint_derived',
+        confidenceScore: 0.55,
+        isSynthetic: true
+      })
+    ],
+    ga4Fallback: []
+  });
+
+  assert.equal(winnerFromLexicalKey.winner?.sourceTouchEventId, 'shopify-a-event');
+});
+
+test('resolveAttributionTier treats the 7-day GA4 lookback as inclusive and excludes older or future fallback candidates', async () => {
+  const testUtils = await getTestUtils();
+
+  const resolved = testUtils.resolveAttributionTier({
+    orderOccurredAtUtc: new Date('2026-04-08T12:00:00.000Z'),
+    deterministicFirstParty: [],
+    shopifyHint: [],
+    ga4Fallback: [
+      buildTierCandidate('ga4-too-old', '2026-04-01T11:59:59.999Z', {
+        sessionId: null,
+        ingestionSource: 'ga4_fallback',
+        attributionReason: 'ga4_fallback_match',
+        confidenceScore: 0.35,
+        isSynthetic: true
+      }),
+      buildTierCandidate('ga4-boundary', '2026-04-01T12:00:00.000Z', {
+        sessionId: null,
+        ingestionSource: 'ga4_fallback',
+        attributionReason: 'ga4_fallback_match',
+        confidenceScore: 0.35,
+        isSynthetic: true
+      }),
+      buildTierCandidate('ga4-future', '2026-04-08T12:00:00.001Z', {
+        sessionId: null,
+        ingestionSource: 'ga4_fallback',
+        attributionReason: 'ga4_fallback_match',
+        confidenceScore: 0.35,
+        isSynthetic: true
+      })
+    ]
+  });
+
+  assert.equal(resolved.tier, 'ga4_fallback');
+  assert.deepEqual(
+    resolved.touchpoints.map((touchpoint) => touchpoint.sourceTouchEventId),
+    ['ga4-boundary-event']
+  );
+});
+
+test('resolveAttributionTier breaks GA4 ties by recency, then click id, then source key', async () => {
+  const testUtils = await getTestUtils();
+
+  const winnerFromClickId = testUtils.resolveAttributionTier({
+    orderOccurredAtUtc: new Date('2026-04-08T12:00:00.000Z'),
+    deterministicFirstParty: [],
+    shopifyHint: [],
+    ga4Fallback: [
+      buildTierCandidate('ga4-a', '2026-04-08T11:00:00.000Z', {
+        sessionId: null,
+        ingestionSource: 'ga4_fallback',
+        attributionReason: 'ga4_fallback_match',
+        confidenceScore: 0.35,
+        isSynthetic: true
+      }),
+      buildTierCandidate('ga4-b', '2026-04-08T11:00:00.000Z', {
+        sessionId: null,
+        ingestionSource: 'ga4_fallback',
+        attributionReason: 'ga4_fallback_match',
+        confidenceScore: 0.35,
+        clickIdType: 'gclid',
+        clickIdValue: 'gclid-1',
+        isSynthetic: true
+      })
+    ]
+  });
+
+  assert.equal(winnerFromClickId.winner?.sourceTouchEventId, 'ga4-b-event');
+
+  const winnerFromRecency = testUtils.resolveAttributionTier({
+    orderOccurredAtUtc: new Date('2026-04-08T12:00:00.000Z'),
+    deterministicFirstParty: [],
+    shopifyHint: [],
+    ga4Fallback: [
+      buildTierCandidate('ga4-older-click-id', '2026-04-08T10:00:00.000Z', {
+        sessionId: null,
+        ingestionSource: 'ga4_fallback',
+        attributionReason: 'ga4_fallback_match',
+        confidenceScore: 0.35,
+        clickIdType: 'gclid',
+        clickIdValue: 'gclid-1',
+        isSynthetic: true
+      }),
+      buildTierCandidate('ga4-newer-no-click', '2026-04-08T11:00:00.000Z', {
+        sessionId: null,
+        ingestionSource: 'ga4_fallback',
+        attributionReason: 'ga4_fallback_match',
+        confidenceScore: 0.35,
+        isSynthetic: true
+      })
+    ]
+  });
+
+  assert.equal(winnerFromRecency.winner?.sourceTouchEventId, 'ga4-newer-no-click-event');
+
+  const winnerFromLexicalKey = testUtils.resolveAttributionTier({
+    orderOccurredAtUtc: new Date('2026-04-08T12:00:00.000Z'),
+    deterministicFirstParty: [],
+    shopifyHint: [],
+    ga4Fallback: [
+      buildTierCandidate('ga4-b', '2026-04-08T11:00:00.000Z', {
+        sessionId: null,
+        ingestionSource: 'ga4_fallback',
+        attributionReason: 'ga4_fallback_match',
+        confidenceScore: 0.35,
+        isSynthetic: true
+      }),
+      buildTierCandidate('ga4-a', '2026-04-08T11:00:00.000Z', {
+        sessionId: null,
+        ingestionSource: 'ga4_fallback',
+        attributionReason: 'ga4_fallback_match',
+        confidenceScore: 0.35,
+        isSynthetic: true
+      })
+    ]
+  });
+
+  assert.equal(winnerFromLexicalKey.winner?.sourceTouchEventId, 'ga4-a-event');
 });
