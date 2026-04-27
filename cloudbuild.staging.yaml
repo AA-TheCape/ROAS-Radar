@@ -30,6 +30,8 @@ steps:
     args:
       - -ceu
       - |
+        chmod +x ./infra/cloud-run/bootstrap-iam.sh ./infra/cloud-run/deploy.sh
+        ./infra/cloud-run/bootstrap-iam.sh staging
         SHORT_SHA="$SHORT_SHA" \
         SKIP_BUILDS=true \
         RUN_MIGRATIONS_ON_DEPLOY="${_RUN_MIGRATIONS_ON_DEPLOY}" \

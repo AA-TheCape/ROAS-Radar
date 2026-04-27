@@ -6,7 +6,7 @@ export default defineConfig({
   build: {
     rollupOptions: {
       output: {
-        manualChunks(id) {
+        manualChunks: (id) => {
           if (id.indexOf('/@nivo/') !== -1) {
             return 'nivo';
           }
