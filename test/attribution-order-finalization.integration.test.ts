@@ -318,29 +318,40 @@ async function insertGa4FallbackCandidate(input: {
   source?: string | null;
   medium?: string | null;
   campaign?: string | null;
+  content?: string | null;
+  term?: string | null;
   clickIdType?: string | null;
   clickIdValue?: string | null;
   ga4ClientId?: string | null;
   ga4SessionId?: string | null;
+  sessionHasRequiredFields?: boolean;
 }): Promise<void> {
   const { upsertGa4FallbackCandidates } = await getModules();
+  const source = input.source === undefined ? 'google' : input.source;
+  const medium = input.medium === undefined ? 'cpc' : input.medium;
+  const campaign = input.campaign === undefined ? 'ga4-campaign' : input.campaign;
+  const content = input.content === undefined ? null : input.content;
+  const term = input.term === undefined ? null : input.term;
+  const ga4ClientId = input.ga4ClientId === undefined ? 'ga4-client-1' : input.ga4ClientId;
+  const ga4SessionId = input.ga4SessionId === undefined ? 'ga4-session-1' : input.ga4SessionId;
+
   await upsertGa4FallbackCandidates([
     {
       occurredAt: input.occurredAt,
-      ga4UserKey: input.ga4ClientId ?? 'ga4-user-1',
-      ga4ClientId: input.ga4ClientId ?? 'ga4-client-1',
-      ga4SessionId: input.ga4SessionId ?? 'ga4-session-1',
+      ga4UserKey: ga4ClientId ?? 'ga4-user-1',
+      ga4ClientId,
+      ga4SessionId,
       transactionId: input.transactionId ?? null,
       emailHash: input.emailHash ?? null,
       customerIdentityId: input.customerIdentityId ?? null,
-      source: input.source ?? 'google',
-      medium: input.medium ?? 'cpc',
-      campaign: input.campaign ?? 'ga4-campaign',
-      content: null,
-      term: null,
+      source,
+      medium,
+      campaign,
+      content,
+      term,
       clickIdType: input.clickIdType ?? null,
       clickIdValue: input.clickIdValue ?? null,
-      sessionHasRequiredFields: true,
+      sessionHasRequiredFields: input.sessionHasRequiredFields ?? true,
       sourceExportHour: '2026-04-07T09:00:00.000Z',
       sourceDataset: 'ga4_export',
       sourceTableType: 'events'
@@ -397,6 +408,46 @@ async function fetchOrderSnapshot(shopifyOrderId: string) {
   );
 
   return result.rows[0].attribution_snapshot;
+}
+
+async function fetchAttributionCredits(shopifyOrderId: string) {
+  const { pool } = await getModules();
+  const result = await pool.query<{
+    attribution_model: string;
+    touchpoint_position: number;
+    session_id: string | null;
+    attributed_source: string | null;
+    attributed_medium: string | null;
+    attributed_campaign: string | null;
+    attributed_click_id_type: string | null;
+    attributed_click_id_value: string | null;
+    attribution_reason: string;
+    match_source: string;
+    confidence_label: string;
+    is_primary: boolean;
+  }>(
+    `
+      SELECT
+        attribution_model,
+        touchpoint_position,
+        session_id::text AS session_id,
+        attributed_source,
+        attributed_medium,
+        attributed_campaign,
+        attributed_click_id_type,
+        attributed_click_id_value,
+        attribution_reason,
+        match_source,
+        confidence_label,
+        is_primary
+      FROM attribution_order_credits
+      WHERE shopify_order_id = $1
+      ORDER BY attribution_model, touchpoint_position
+    `,
+    [shopifyOrderId]
+  );
+
+  return result.rows;
 }
 
 async function resetIntegrationDatabase() {
@@ -1067,6 +1118,14 @@ test('Shopify hint fallback wins before GA4 fallback when deterministic matching
       ga4SessionId: null,
       isDirect: false
     });
+
+    const credits = await fetchAttributionCredits('order-shopify-before-ga4-1');
+    assert.equal(credits.length, 6);
+    for (const credit of credits) {
+      assert.equal(credit.match_source, 'shopify_hint_fallback');
+      assert.equal(credit.confidence_label, 'low');
+      assert.equal(credit.session_id, null);
+    }
   } finally {
     await resetIntegrationDatabase();
   }
@@ -1160,6 +1219,14 @@ test('deterministic winners suppress GA4 fallback even when a GA4 candidate is a
       ga4SessionId: null,
       isDirect: false
     });
+
+    const credits = await fetchAttributionCredits('order-ga4-suppressed-1');
+    assert.equal(credits.length, 6);
+    for (const credit of credits) {
+      assert.equal(credit.match_source, 'checkout_token');
+      assert.equal(credit.confidence_label, 'high');
+      assert.equal(credit.session_id, checkoutSessionId);
+    }
   } finally {
     await resetIntegrationDatabase();
   }
@@ -1232,6 +1299,15 @@ test('GA4 fallback resolves only after deterministic and Shopify hint paths fail
       ga4SessionId: 'ga4-session-77',
       isDirect: false
     });
+
+    const credits = await fetchAttributionCredits('order-ga4-fallback-1');
+    assert.equal(credits.length, 6);
+    for (const credit of credits) {
+      assert.equal(credit.match_source, 'ga4_fallback');
+      assert.equal(credit.confidence_label, 'low');
+      assert.equal(credit.session_id, null);
+      assert.equal(credit.attributed_campaign, 'ga4-fallback');
+    }
   } finally {
     await resetIntegrationDatabase();
   }
@@ -1300,6 +1376,73 @@ test('GA4 fallback without click ids stays low-confidence and preserves campaign
       ingestionSource: null,
       ga4ClientId: 'ga4-client-utm-only',
       ga4SessionId: 'ga4-session-utm-only',
+      isDirect: false
+    });
+  } finally {
+    await resetIntegrationDatabase();
+  }
+});
+
+test('GA4 fallback can resolve from transaction id when GA4 session identifiers are missing', async () => {
+  await resetIntegrationDatabase();
+  const { pool } = await getModules();
+
+  try {
+    await insertGa4FallbackCandidate({
+      occurredAt: '2026-04-07T08:50:00.000Z',
+      transactionId: 'order-ga4-transaction-only-1',
+      source: 'google',
+      medium: 'cpc',
+      campaign: 'ga4-transaction-only',
+      content: 'hero-banner',
+      ga4ClientId: null,
+      ga4SessionId: null
+    });
+
+    await insertShopifyOrder(pool, {
+      shopifyOrderId: 'order-ga4-transaction-only-1',
+      processedAt: '2026-04-07T09:05:00.000Z',
+      rawPayload: JSON.stringify({
+        id: 'order-ga4-transaction-only-1',
+        source_name: 'web',
+        landing_site: 'https://store.example/products/widget'
+      })
+    });
+
+    await processOrder('order-ga4-transaction-only-1');
+
+    const attributionResult = await fetchAttributionResult('order-ga4-transaction-only-1');
+    assert.deepEqual(attributionResult, {
+      session_id: null,
+      attributed_source: 'google',
+      attributed_medium: 'cpc',
+      attributed_campaign: 'ga4-transaction-only',
+      attributed_click_id_type: null,
+      attributed_click_id_value: null,
+      match_source: 'ga4_fallback',
+      confidence_score: '0.25',
+      confidence_label: 'low',
+      attribution_reason: 'ga4_fallback_derived'
+    });
+
+    const snapshot = await fetchOrderSnapshot('order-ga4-transaction-only-1');
+    assert.deepEqual(snapshot?.winner, {
+      sessionId: null,
+      sourceTouchEventId: null,
+      occurredAt: '2026-04-07T08:50:00.000Z',
+      source: 'google',
+      medium: 'cpc',
+      campaign: 'ga4-transaction-only',
+      content: 'hero-banner',
+      term: null,
+      clickIdType: null,
+      clickIdValue: null,
+      attributionReason: 'ga4_fallback_derived',
+      matchSource: 'ga4_fallback',
+      confidenceLabel: 'low',
+      ingestionSource: null,
+      ga4ClientId: null,
+      ga4SessionId: null,
       isDirect: false
     });
   } finally {
@@ -1465,6 +1608,90 @@ test('orders with no deterministic candidates persist an unattributed fallback s
     assert.equal(snapshot?.confidenceLabel, 'none');
     assert.equal(snapshot?.winner, null);
     assert.deepEqual(snapshot?.timeline, []);
+  } finally {
+    await resetIntegrationDatabase();
+  }
+});
+
+test('orders stay unattributed when every GA4 fallback candidate is ineligible', async () => {
+  await resetIntegrationDatabase();
+  const { pool } = await getModules();
+
+  try {
+    await insertGa4FallbackCandidate({
+      occurredAt: '2026-04-07T09:10:00.000Z',
+      transactionId: 'order-ga4-ineligible-1',
+      source: 'google',
+      medium: 'cpc',
+      campaign: 'future-candidate',
+      clickIdType: 'gclid',
+      clickIdValue: 'gclid-future'
+    });
+    await insertGa4FallbackCandidate({
+      occurredAt: '2026-04-07T08:55:00.000Z',
+      transactionId: 'order-ga4-ineligible-1',
+      source: null,
+      medium: null,
+      campaign: null,
+      content: null,
+      term: null,
+      clickIdType: null,
+      clickIdValue: null
+    });
+    await insertGa4FallbackCandidate({
+      occurredAt: '2026-04-07T08:45:00.000Z',
+      transactionId: 'order-ga4-ineligible-1',
+      source: 'meta',
+      medium: 'paid_social',
+      campaign: 'missing-required-fields',
+      clickIdType: 'fbclid',
+      clickIdValue: 'fbclid-missing-fields',
+      sessionHasRequiredFields: false,
+      ga4ClientId: 'ga4-client-ineligible',
+      ga4SessionId: 'ga4-session-ineligible'
+    });
+
+    await insertShopifyOrder(pool, {
+      shopifyOrderId: 'order-ga4-ineligible-1',
+      processedAt: '2026-04-07T09:05:00.000Z',
+      rawPayload: JSON.stringify({
+        id: 'order-ga4-ineligible-1',
+        source_name: 'web',
+        landing_site: 'https://store.example/products/widget'
+      })
+    });
+
+    await processOrder('order-ga4-ineligible-1');
+
+    const attributionResult = await fetchAttributionResult('order-ga4-ineligible-1');
+    assert.deepEqual(attributionResult, {
+      session_id: null,
+      attributed_source: null,
+      attributed_medium: null,
+      attributed_campaign: null,
+      attributed_click_id_type: null,
+      attributed_click_id_value: null,
+      match_source: 'unattributed',
+      confidence_score: '0.00',
+      confidence_label: 'none',
+      attribution_reason: 'unattributed'
+    });
+
+    const snapshot = await fetchOrderSnapshot('order-ga4-ineligible-1');
+    assert.ok(snapshot);
+    assert.equal(snapshot?.confidenceScore, 0);
+    assert.equal(snapshot?.confidenceLabel, 'none');
+    assert.equal(snapshot?.winner, null);
+    assert.deepEqual(snapshot?.timeline, []);
+
+    const credits = await fetchAttributionCredits('order-ga4-ineligible-1');
+    assert.equal(credits.length, 6);
+    for (const credit of credits) {
+      assert.equal(credit.match_source, 'unattributed');
+      assert.equal(credit.confidence_label, 'none');
+      assert.equal(credit.session_id, null);
+      assert.equal(credit.attribution_reason, 'unattributed');
+    }
   } finally {
     await resetIntegrationDatabase();
   }
