@@ -142,6 +142,17 @@ CREATE INDEX IF NOT EXISTS identity_edges_conflict_lookup_idx
   ON identity_edges (conflict_code, last_observed_at DESC)
   WHERE conflict_code IS NOT NULL;
 
+CREATE TEMP TABLE normalized_customer_identities AS
+SELECT
+  ci.id,
+  ci.shopify_customer_id,
+  ci.hashed_email,
+  ci.created_at,
+  ci.updated_at,
+  LEAST(ci.created_at, COALESCE(ci.last_stitched_at, ci.created_at, now())) AS normalized_first_seen_at,
+  GREATEST(ci.created_at, COALESCE(ci.last_stitched_at, ci.created_at, now())) AS normalized_last_seen_at
+FROM customer_identities ci;
+
 INSERT INTO identity_journeys (
   id,
   authoritative_shopify_customer_id,
@@ -167,9 +178,9 @@ SELECT
   ci.hashed_email,
   'active',
   1,
-  COALESCE(ci.last_stitched_at, ci.created_at, now()),
-  COALESCE(ci.last_stitched_at, ci.created_at, now()) + interval '30 days',
-  COALESCE(ci.last_stitched_at, ci.created_at, now()),
+  ci.normalized_last_seen_at,
+  ci.normalized_last_seen_at + interval '30 days',
+  ci.normalized_last_seen_at,
   'backfill',
   'customer_identities',
   ci.id::text,
@@ -178,8 +189,8 @@ SELECT
   ci.id::text,
   ci.created_at,
   ci.updated_at,
-  ci.last_stitched_at
-FROM customer_identities ci
+  ci.normalized_last_seen_at
+FROM normalized_customer_identities ci
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO identity_nodes (
@@ -197,11 +208,11 @@ SELECT
   ci.shopify_customer_id,
   true,
   false,
-  ci.created_at,
-  ci.last_stitched_at,
+  ci.normalized_first_seen_at,
+  ci.normalized_last_seen_at,
   ci.created_at,
   ci.updated_at
-FROM customer_identities ci
+FROM normalized_customer_identities ci
 WHERE ci.shopify_customer_id IS NOT NULL
 ON CONFLICT (node_type, node_key) DO NOTHING;
 
@@ -220,11 +231,11 @@ SELECT
   ci.hashed_email,
   false,
   false,
-  ci.created_at,
-  ci.last_stitched_at,
+  ci.normalized_first_seen_at,
+  ci.normalized_last_seen_at,
   ci.created_at,
   ci.updated_at
-FROM customer_identities ci
+FROM normalized_customer_identities ci
 WHERE ci.hashed_email IS NOT NULL
 ON CONFLICT (node_type, node_key) DO NOTHING;
 
@@ -251,11 +262,11 @@ SELECT
   'customer_identities',
   ci.id::text,
   true,
-  ci.created_at,
-  ci.last_stitched_at,
+  ci.normalized_first_seen_at,
+  ci.normalized_last_seen_at,
   ci.created_at,
   ci.updated_at
-FROM customer_identities ci
+FROM normalized_customer_identities ci
 INNER JOIN identity_nodes nodes
   ON nodes.node_type = 'shopify_customer_id'
  AND nodes.node_key = ci.shopify_customer_id
@@ -290,11 +301,11 @@ SELECT
   'customer_identities',
   ci.id::text,
   true,
-  ci.created_at,
-  ci.last_stitched_at,
+  ci.normalized_first_seen_at,
+  ci.normalized_last_seen_at,
   ci.created_at,
   ci.updated_at
-FROM customer_identities ci
+FROM normalized_customer_identities ci
 INNER JOIN identity_nodes nodes
   ON nodes.node_type = 'hashed_email'
  AND nodes.node_key = ci.hashed_email
