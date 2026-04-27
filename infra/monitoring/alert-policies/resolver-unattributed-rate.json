@@ -8,6 +8,11 @@
   "enabled": true,
   "severity": "WARNING",
   "notificationChannels": __ALERT_NOTIFICATION_CHANNELS__,
+  "alertStrategy": {
+    "notificationRateLimit": {
+      "period": "3600s"
+    }
+  },
   "conditions": [
     {
       "displayName": "Resolver unattributed outcome is emitted",

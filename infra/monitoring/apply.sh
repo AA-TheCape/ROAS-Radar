@@ -80,6 +80,8 @@ render_template() {
     -e "s|__DASHBOARD_DISPLAY_NAME__|$(escape_for_sed "$OBSERVABILITY_DASHBOARD_DISPLAY_NAME")|g"
 }
 
+python3 "$SCRIPT_DIR/validate.py"
+
 upsert_log_metric() {
   template_path="$1"
   metric_name=$(sed -n 's/.*"name": "\([^"]*\)".*/\1/p' "$template_path" | head -n 1)
