@@ -657,9 +657,10 @@ async function persistAttribution(client, order, journey, options = {}) {
         $12,
         $13,
         $14,
+        $15,
         now(),
         1,
-        $15
+        $16
       )
       ON CONFLICT (shopify_order_id)
       DO UPDATE SET

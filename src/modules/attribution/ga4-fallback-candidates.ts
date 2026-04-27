@@ -132,8 +132,6 @@ export function buildGa4FallbackCandidateKey(input: {
   ga4SessionId?: string | null;
   ga4ClientId?: string | null;
   transactionId?: string | null;
-  emailHash?: string | null;
-  customerIdentityId?: string | null;
 }): string {
   const digest = createHash('sha256');
   digest.update(
@@ -142,9 +140,7 @@ export function buildGa4FallbackCandidateKey(input: {
       ga4UserKey: input.ga4UserKey,
       ga4SessionId: normalizeNullableString(input.ga4SessionId),
       ga4ClientId: normalizeNullableString(input.ga4ClientId),
-      transactionId: normalizeNullableString(input.transactionId),
-      emailHash: normalizeEmailHash(input.emailHash),
-      customerIdentityId: normalizeNullableString(input.customerIdentityId)
+      transactionId: normalizeNullableString(input.transactionId)
     })
   );
 
@@ -193,6 +189,48 @@ async function ensureTouchedPartitions(db: QueryExecutor, occurredAtValues: stri
 
 type QueryExecutor = PoolClient | null | undefined;
 
+function buildGa4SignalSql(alias: string): string {
+  return `(${alias}.click_id_value IS NOT NULL
+    OR ${alias}.source IS NOT NULL
+    OR ${alias}.medium IS NOT NULL
+    OR ${alias}.campaign IS NOT NULL
+    OR ${alias}.content IS NOT NULL
+    OR ${alias}.term IS NOT NULL)`;
+}
+
+function buildGa4DimensionCountSql(alias: string): string {
+  return `(
+    (${alias}.source IS NOT NULL)::int
+    + (${alias}.medium IS NOT NULL)::int
+    + (${alias}.campaign IS NOT NULL)::int
+    + (${alias}.content IS NOT NULL)::int
+    + (${alias}.term IS NOT NULL)::int
+  )`;
+}
+
+function buildShouldReplaceGa4BundleSql(currentAlias: string, incomingAlias: string): string {
+  const currentHasSignal = buildGa4SignalSql(currentAlias);
+  const incomingHasSignal = buildGa4SignalSql(incomingAlias);
+  const currentDimensionCount = buildGa4DimensionCountSql(currentAlias);
+  const incomingDimensionCount = buildGa4DimensionCountSql(incomingAlias);
+
+  return `(
+    CASE
+      WHEN NOT ${currentHasSignal} AND ${incomingHasSignal} THEN true
+      WHEN ${currentHasSignal} AND NOT ${incomingHasSignal} THEN false
+      WHEN (${incomingAlias}.click_id_value IS NOT NULL)::int <> (${currentAlias}.click_id_value IS NOT NULL)::int
+      THEN ${incomingAlias}.click_id_value IS NOT NULL
+      WHEN ${incomingDimensionCount} <> ${currentDimensionCount}
+      THEN ${incomingDimensionCount} > ${currentDimensionCount}
+      WHEN ${incomingAlias}.source_export_hour <> ${currentAlias}.source_export_hour
+      THEN ${incomingAlias}.source_export_hour > ${currentAlias}.source_export_hour
+      WHEN ${incomingAlias}.source_table_type <> ${currentAlias}.source_table_type
+      THEN ${incomingAlias}.source_table_type = 'events'
+      ELSE false
+    END
+  )`;
+}
+
 async function executeQuery<TResult extends Record<string, unknown> = Record<string, unknown>>(
   client: QueryExecutor,
   text: string,
@@ -220,6 +258,7 @@ export async function upsertGa4FallbackCandidates(
   );
 
   let upsertedRows = 0;
+  const shouldReplaceBundleSql = buildShouldReplaceGa4BundleSql('ga4_fallback_candidates', 'EXCLUDED');
 
   for (const candidate of candidates) {
     const normalized = {
@@ -322,17 +361,37 @@ export async function upsertGa4FallbackCandidates(
           transaction_id = COALESCE(EXCLUDED.transaction_id, ga4_fallback_candidates.transaction_id),
           email_hash = COALESCE(EXCLUDED.email_hash, ga4_fallback_candidates.email_hash),
           customer_identity_id = COALESCE(EXCLUDED.customer_identity_id, ga4_fallback_candidates.customer_identity_id),
-          source = COALESCE(EXCLUDED.source, ga4_fallback_candidates.source),
-          medium = COALESCE(EXCLUDED.medium, ga4_fallback_candidates.medium),
-          campaign = COALESCE(EXCLUDED.campaign, ga4_fallback_candidates.campaign),
-          content = COALESCE(EXCLUDED.content, ga4_fallback_candidates.content),
-          term = COALESCE(EXCLUDED.term, ga4_fallback_candidates.term),
-          click_id_type = COALESCE(EXCLUDED.click_id_type, ga4_fallback_candidates.click_id_type),
-          click_id_value = COALESCE(EXCLUDED.click_id_value, ga4_fallback_candidates.click_id_value),
-          session_has_required_fields = EXCLUDED.session_has_required_fields,
-          source_export_hour = GREATEST(ga4_fallback_candidates.source_export_hour, EXCLUDED.source_export_hour),
-          source_dataset = EXCLUDED.source_dataset,
-          source_table_type = EXCLUDED.source_table_type,
+          source = CASE WHEN ${shouldReplaceBundleSql} THEN EXCLUDED.source ELSE ga4_fallback_candidates.source END,
+          medium = CASE WHEN ${shouldReplaceBundleSql} THEN EXCLUDED.medium ELSE ga4_fallback_candidates.medium END,
+          campaign = CASE WHEN ${shouldReplaceBundleSql} THEN EXCLUDED.campaign ELSE ga4_fallback_candidates.campaign END,
+          content = CASE WHEN ${shouldReplaceBundleSql} THEN EXCLUDED.content ELSE ga4_fallback_candidates.content END,
+          term = CASE WHEN ${shouldReplaceBundleSql} THEN EXCLUDED.term ELSE ga4_fallback_candidates.term END,
+          click_id_type = CASE
+            WHEN ${shouldReplaceBundleSql}
+            THEN EXCLUDED.click_id_type
+            ELSE ga4_fallback_candidates.click_id_type
+          END,
+          click_id_value = CASE
+            WHEN ${shouldReplaceBundleSql}
+            THEN EXCLUDED.click_id_value
+            ELSE ga4_fallback_candidates.click_id_value
+          END,
+          session_has_required_fields = ga4_fallback_candidates.session_has_required_fields OR EXCLUDED.session_has_required_fields,
+          source_export_hour = CASE
+            WHEN ${shouldReplaceBundleSql}
+            THEN EXCLUDED.source_export_hour
+            ELSE ga4_fallback_candidates.source_export_hour
+          END,
+          source_dataset = CASE
+            WHEN ${shouldReplaceBundleSql}
+            THEN EXCLUDED.source_dataset
+            ELSE ga4_fallback_candidates.source_dataset
+          END,
+          source_table_type = CASE
+            WHEN ${shouldReplaceBundleSql}
+            THEN EXCLUDED.source_table_type
+            ELSE ga4_fallback_candidates.source_table_type
+          END,
           retained_until = GREATEST(ga4_fallback_candidates.retained_until, EXCLUDED.retained_until),
           updated_at = now()
       `,
@@ -370,6 +429,15 @@ function countPopulatedDimensions(row: Pick<LookupRow, 'source' | 'medium' | 'ca
   return [row.source, row.medium, row.campaign, row.content, row.term].filter(Boolean).length;
 }
 
+function compareSourceTableType(left: 'events' | 'intraday', right: 'events' | 'intraday'): number {
+  const precedence = {
+    events: 0,
+    intraday: 1
+  } as const;
+
+  return precedence[left] - precedence[right];
+}
+
 function compareLexical(left: string | null, right: string | null): number {
   return (left ?? '').localeCompare(right ?? '');
 }
@@ -383,6 +451,16 @@ function compareLookupRows(left: LookupRow, right: LookupRow): number {
   const clickComparison = Number(Boolean(right.click_id_value)) - Number(Boolean(left.click_id_value));
   if (clickComparison !== 0) {
     return clickComparison;
+  }
+
+  const exportFreshnessComparison = right.source_export_hour.getTime() - left.source_export_hour.getTime();
+  if (exportFreshnessComparison !== 0) {
+    return exportFreshnessComparison;
+  }
+
+  const sourceTableTypeComparison = compareSourceTableType(left.source_table_type, right.source_table_type);
+  if (sourceTableTypeComparison !== 0) {
+    return sourceTableTypeComparison;
   }
 
   const dimensionComparison = countPopulatedDimensions(right) - countPopulatedDimensions(left);

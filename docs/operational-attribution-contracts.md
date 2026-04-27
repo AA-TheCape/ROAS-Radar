@@ -131,6 +131,11 @@ Persistence and provenance rules:
 
 GA4-specific behavior is governed by `docs/ga4-fallback-attribution-contract-v1.md`.
 
+Operational note:
+
+- repeated GA4 candidate ingestion must deduplicate on the stable session candidate key instead of enrichment-only fields
+- GA4 campaign metadata is reconciled as one bundle, so operators should not expect a stored fallback row to mix `campaign` from one export with `content` from another
+
 ## Shopify Writeback Contract
 
 `src/modules/shopify/writeback.ts` is responsible for durable Shopify order note-attribute writeback after attribution or reconciliation identifies a canonical session snapshot.

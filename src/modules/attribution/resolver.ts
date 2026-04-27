@@ -233,6 +233,18 @@ function populatedDimensionCount(
   return [candidate.source, candidate.medium, candidate.campaign, candidate.content, candidate.term].filter(Boolean).length;
 }
 
+function compareSourceTableType(
+  left: PersistedGa4FallbackCandidate['sourceTableType'],
+  right: PersistedGa4FallbackCandidate['sourceTableType']
+): number {
+  const precedence = {
+    events: 0,
+    intraday: 1
+  } as const;
+
+  return precedence[left] - precedence[right];
+}
+
 function compareGa4FallbackCandidates(
   left: PersistedGa4FallbackCandidate,
   right: PersistedGa4FallbackCandidate
@@ -245,6 +257,17 @@ function compareGa4FallbackCandidates(
   const clickIdComparison = Number(Boolean(right.clickIdValue)) - Number(Boolean(left.clickIdValue));
   if (clickIdComparison !== 0) {
     return clickIdComparison;
+  }
+
+  const exportFreshnessComparison =
+    new Date(right.sourceExportHour).getTime() - new Date(left.sourceExportHour).getTime();
+  if (exportFreshnessComparison !== 0) {
+    return exportFreshnessComparison;
+  }
+
+  const sourceTableTypeComparison = compareSourceTableType(left.sourceTableType, right.sourceTableType);
+  if (sourceTableTypeComparison !== 0) {
+    return sourceTableTypeComparison;
   }
 
   const dimensionComparison = populatedDimensionCount(right) - populatedDimensionCount(left);

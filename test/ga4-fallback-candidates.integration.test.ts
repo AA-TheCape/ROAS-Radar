@@ -158,3 +158,118 @@ test('GA4 fallback candidate store upserts normalized rows and resolves keyed lo
     ]
   );
 });
+
+test('GA4 fallback candidate store deduplicates repeated ingestion and keeps coherent attribution bundles', { concurrency: false }, async () => {
+  const emailHash = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+
+  const [{ upsertGa4FallbackCandidates, listGa4FallbackCandidates, lookupGa4FallbackCandidates }, { pool }] =
+    await Promise.all([
+      import('../src/modules/attribution/ga4-fallback-candidates.js'),
+      import('../src/db/pool.js')
+    ]);
+
+  const insertedCount = await upsertGa4FallbackCandidates([
+    {
+      occurredAt: '2026-04-26T11:00:00.000Z',
+      ga4UserKey: 'user-repeat',
+      ga4ClientId: 'client-repeat',
+      ga4SessionId: 'session-repeat',
+      transactionId: 'shopify-order-repeat',
+      emailHash: null,
+      customerIdentityId: null,
+      source: 'google',
+      medium: 'cpc',
+      campaign: 'brand',
+      content: 'hero',
+      term: 'boots',
+      clickIdType: 'gclid',
+      clickIdValue: 'gclid-older',
+      sessionHasRequiredFields: true,
+      sourceExportHour: '2026-04-26T10:00:00.000Z',
+      sourceDataset: 'ga4_export',
+      sourceTableType: 'intraday'
+    },
+    {
+      occurredAt: '2026-04-26T11:00:00.000Z',
+      ga4UserKey: 'user-repeat',
+      ga4ClientId: 'client-repeat',
+      ga4SessionId: 'session-repeat',
+      transactionId: 'shopify-order-repeat',
+      emailHash,
+      customerIdentityId: null,
+      source: 'meta',
+      medium: 'paid_social',
+      campaign: 'retargeting',
+      content: 'story',
+      term: 'sandals',
+      clickIdType: 'fbclid',
+      clickIdValue: 'fbclid-newer',
+      sessionHasRequiredFields: true,
+      sourceExportHour: '2026-04-26T12:00:00.000Z',
+      sourceDataset: 'ga4_export',
+      sourceTableType: 'events'
+    },
+    {
+      occurredAt: '2026-04-26T11:00:00.000Z',
+      ga4UserKey: 'user-repeat',
+      ga4ClientId: 'client-repeat',
+      ga4SessionId: 'session-repeat',
+      transactionId: 'shopify-order-repeat',
+      emailHash,
+      customerIdentityId: null,
+      source: null,
+      medium: null,
+      campaign: 'conflict-should-not-stick',
+      content: null,
+      term: null,
+      clickIdType: null,
+      clickIdValue: null,
+      sessionHasRequiredFields: false,
+      sourceExportHour: '2026-04-26T13:00:00.000Z',
+      sourceDataset: 'ga4_export',
+      sourceTableType: 'events'
+    }
+  ]);
+
+  assert.equal(insertedCount, 3);
+
+  const persisted = await listGa4FallbackCandidates(pool);
+  assert.equal(persisted.length, 1);
+  assert.deepEqual(persisted[0], {
+    candidateKey: persisted[0]?.candidateKey,
+    occurredAt: '2026-04-26T11:00:00.000Z',
+    ga4UserKey: 'user-repeat',
+    ga4ClientId: 'client-repeat',
+    ga4SessionId: 'session-repeat',
+    transactionId: 'shopify-order-repeat',
+    emailHash,
+    customerIdentityId: null,
+    source: 'meta',
+    medium: 'paid_social',
+    campaign: 'retargeting',
+    content: 'story',
+    term: 'sandals',
+    clickIdType: 'fbclid',
+    clickIdValue: 'fbclid-newer',
+    sessionHasRequiredFields: true,
+    sourceExportHour: '2026-04-26T12:00:00.000Z',
+    sourceDataset: 'ga4_export',
+    sourceTableType: 'events',
+    retainedUntil: persisted[0]?.retainedUntil
+  });
+
+  const resolvedCandidates = await lookupGa4FallbackCandidates(
+    {
+      orderOccurredAt: '2026-04-27T12:00:00.000Z',
+      customerIdentityId: null,
+      emailHash,
+      transactionId: 'shopify-order-repeat'
+    },
+    pool
+  );
+
+  assert.equal(resolvedCandidates.length, 1);
+  assert.equal(resolvedCandidates[0]?.campaign, 'retargeting');
+  assert.equal(resolvedCandidates[0]?.content, 'story');
+  assert.equal(resolvedCandidates[0]?.clickIdValue, 'fbclid-newer');
+});

@@ -329,6 +329,47 @@ test('GA4 fallback same-timestamp ties prefer click ids, then richer dimensions,
   assert.equal(lexicalWinner?.candidateKey, 'session-a');
 });
 
+test('GA4 fallback same-timestamp ties prefer fresher exports, then finalized events tables', async () => {
+  const testUtils = await getTestUtils();
+  const fresherExportWinner = testUtils.selectGa4FallbackWinner(
+    [
+      buildGa4Candidate('2026-04-02T10:00:00.000Z', {
+        candidateKey: 'older-export',
+        ga4SessionId: 'session-a',
+        sourceExportHour: '2026-04-02T10:00:00.000Z'
+      }),
+      buildGa4Candidate('2026-04-02T10:00:00.000Z', {
+        candidateKey: 'newer-export',
+        ga4SessionId: 'session-b',
+        sourceExportHour: '2026-04-02T11:00:00.000Z'
+      })
+    ],
+    new Date('2026-04-03T00:00:00.000Z')
+  );
+
+  assert.equal(fresherExportWinner?.candidateKey, 'newer-export');
+
+  const finalizedEventsWinner = testUtils.selectGa4FallbackWinner(
+    [
+      buildGa4Candidate('2026-04-02T10:00:00.000Z', {
+        candidateKey: 'intraday-export',
+        ga4SessionId: 'session-a',
+        sourceExportHour: '2026-04-02T11:00:00.000Z',
+        sourceTableType: 'intraday'
+      }),
+      buildGa4Candidate('2026-04-02T10:00:00.000Z', {
+        candidateKey: 'events-export',
+        ga4SessionId: 'session-b',
+        sourceExportHour: '2026-04-02T11:00:00.000Z',
+        sourceTableType: 'events'
+      })
+    ],
+    new Date('2026-04-03T00:00:00.000Z')
+  );
+
+  assert.equal(finalizedEventsWinner?.candidateKey, 'events-export');
+});
+
 test('GA4 fallback rejects future-dated and empty candidates', async () => {
   const testUtils = await getTestUtils();
   const winner = testUtils.selectGa4FallbackWinner(

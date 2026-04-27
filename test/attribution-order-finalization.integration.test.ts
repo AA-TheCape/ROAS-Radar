@@ -1144,6 +1144,132 @@ test('GA4 fallback resolves only after deterministic and Shopify hint paths fail
   }
 });
 
+test('GA4 fallback stays stable across repeated conflicting candidate ingestion', async () => {
+  await resetIntegrationDatabase();
+  const { pool, upsertGa4FallbackCandidates } = await getModules();
+  const customerIdentityId = '66666666-6666-4666-8666-666666666666';
+  const emailHash = createHash('sha256').update('ga4-repeat@example.com').digest('hex');
+
+  try {
+    await insertCustomerIdentity(pool, customerIdentityId);
+    await upsertGa4FallbackCandidates([
+      {
+        occurredAt: '2026-04-07T08:55:00.000Z',
+        ga4UserKey: 'ga4-user-repeat',
+        ga4ClientId: 'ga4-client-repeat',
+        ga4SessionId: 'ga4-session-repeat',
+        transactionId: 'order-ga4-repeat-1',
+        emailHash: null,
+        customerIdentityId,
+        source: 'google',
+        medium: 'cpc',
+        campaign: 'older-campaign',
+        content: 'hero',
+        term: 'boots',
+        clickIdType: 'gclid',
+        clickIdValue: 'gclid-older',
+        sessionHasRequiredFields: true,
+        sourceExportHour: '2026-04-07T09:00:00.000Z',
+        sourceDataset: 'ga4_export',
+        sourceTableType: 'intraday'
+      },
+      {
+        occurredAt: '2026-04-07T08:55:00.000Z',
+        ga4UserKey: 'ga4-user-repeat',
+        ga4ClientId: 'ga4-client-repeat',
+        ga4SessionId: 'ga4-session-repeat',
+        transactionId: 'order-ga4-repeat-1',
+        emailHash,
+        customerIdentityId,
+        source: 'meta',
+        medium: 'paid_social',
+        campaign: 'newer-campaign',
+        content: 'story',
+        term: 'sandals',
+        clickIdType: 'fbclid',
+        clickIdValue: 'fbclid-newer',
+        sessionHasRequiredFields: true,
+        sourceExportHour: '2026-04-07T10:00:00.000Z',
+        sourceDataset: 'ga4_export',
+        sourceTableType: 'events'
+      },
+      {
+        occurredAt: '2026-04-07T08:55:00.000Z',
+        ga4UserKey: 'ga4-user-repeat',
+        ga4ClientId: 'ga4-client-repeat',
+        ga4SessionId: 'ga4-session-repeat',
+        transactionId: 'order-ga4-repeat-1',
+        emailHash,
+        customerIdentityId,
+        source: null,
+        medium: null,
+        campaign: 'null-heavy-conflict',
+        content: null,
+        term: null,
+        clickIdType: null,
+        clickIdValue: null,
+        sessionHasRequiredFields: false,
+        sourceExportHour: '2026-04-07T11:00:00.000Z',
+        sourceDataset: 'ga4_export',
+        sourceTableType: 'events'
+      }
+    ]);
+
+    await insertShopifyOrder(pool, {
+      shopifyOrderId: 'order-ga4-repeat-1',
+      processedAt: '2026-04-07T09:05:00.000Z',
+      customerIdentityId,
+      rawPayload: JSON.stringify({
+        id: 'order-ga4-repeat-1',
+        source_name: 'web',
+        landing_site: 'https://store.example/products/widget'
+      })
+    });
+
+    await processOrder('order-ga4-repeat-1');
+
+    const attributionResult = await fetchAttributionResult('order-ga4-repeat-1');
+    assert.deepEqual(attributionResult, {
+      session_id: null,
+      attributed_source: 'meta',
+      attributed_medium: 'paid_social',
+      attributed_campaign: 'newer-campaign',
+      attributed_click_id_type: 'fbclid',
+      attributed_click_id_value: 'fbclid-newer',
+      match_source: 'ga4_fallback',
+      confidence_score: '0.35',
+      confidence_label: 'low',
+      attribution_reason: 'ga4_fallback_derived'
+    });
+
+    const snapshot = await fetchOrderSnapshot('order-ga4-repeat-1');
+    assert.deepEqual(snapshot?.winner, {
+      sessionId: null,
+      sourceTouchEventId: null,
+      occurredAt: '2026-04-07T08:55:00.000Z',
+      source: 'meta',
+      medium: 'paid_social',
+      campaign: 'newer-campaign',
+      content: 'story',
+      term: 'sandals',
+      clickIdType: 'fbclid',
+      clickIdValue: 'fbclid-newer',
+      attributionReason: 'ga4_fallback_derived',
+      matchSource: 'ga4_fallback',
+      confidenceLabel: 'low',
+      ingestionSource: null,
+      ga4ClientId: 'ga4-client-repeat',
+      ga4SessionId: 'ga4-session-repeat',
+      isDirect: false
+    });
+
+    const candidateCount = await pool.query<{ total: string }>('SELECT COUNT(*)::text AS total FROM ga4_fallback_candidates');
+    assert.equal(candidateCount.rows[0]?.total, '1');
+  } finally {
+    await resetIntegrationDatabase();
+  }
+});
+
 test('orders with no deterministic candidates persist an unattributed fallback snapshot and result row', async () => {
   await resetIntegrationDatabase();
   const { pool } = await getModules();

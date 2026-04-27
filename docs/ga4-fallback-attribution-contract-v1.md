@@ -136,14 +136,49 @@ If multiple eligible GA4 candidates remain:
 
 1. prefer the latest `occurredAt`
 2. if tied, prefer a candidate with a supported click ID
-3. if still tied, prefer the candidate with more populated canonical dimensions among `source`, `medium`, `campaign`, `content`, `term`
-4. if still tied, prefer the lexicographically smaller stable identifier in this order:
+3. if still tied, prefer the freshest valid export by `sourceExportHour`
+4. if still tied, prefer finalized `sourceTableType = 'events'` ahead of `intraday`
+5. if still tied, prefer the candidate with more populated canonical dimensions among `source`, `medium`, `campaign`, `content`, `term`
+6. if still tied, prefer the lexicographically smaller stable identifier in this order:
    - `ga4SessionId`
    - `ga4ClientId`
    - `transactionId`
-5. if still tied, select deterministically by original sorted order and persist that same order in tests
+7. if still tied, select deterministically by original sorted order and persist that same order in tests
 
 ROAS Radar must not create multiple primary fallback rows for the same order.
+
+## Reconciliation And Deduplication Rules
+
+Repeated ingestion for the same GA4 candidate must collapse into one persisted row. The dedup identity is the stable session candidate key derived from:
+
+- `occurredAt`
+- `ga4UserKey`
+- `ga4SessionId`
+- `ga4ClientId`
+- `transactionId`
+
+It must not include enrichment-only fields such as:
+
+- `emailHash`
+- `customerIdentityId`
+- canonical campaign dimensions
+- click ID values
+
+### Conflict policy for repeated ingestion
+
+When two imports target the same GA4 candidate row:
+
+1. preserve lookup and identity enrichment with additive `COALESCE` behavior
+2. treat marketing fields as one attribution bundle: `source`, `medium`, `campaign`, `content`, `term`, `clickIdType`, `clickIdValue`, `sourceExportHour`, `sourceDataset`, `sourceTableType`
+3. never synthesize a mixed bundle by taking `campaign` from one import and `content` from another
+4. replace the existing bundle only when the incoming bundle is stronger under this order:
+   - has any attribution signal when the existing row is null-heavy
+   - has a supported click ID when the existing row does not
+   - has more populated canonical dimensions
+   - has a fresher `sourceExportHour`
+   - is finalized `events` data when export freshness ties with `intraday`
+5. a null-heavy or partially empty import must not overwrite a richer stored bundle
+6. `sessionHasRequiredFields` may only move from `false` to `true`, not regress from `true` to `false`
 
 ## Confidence Contract
 
