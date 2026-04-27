@@ -69,10 +69,15 @@ test('buildGa4SessionAttributionHourlyQuery targets daily and intraday exports f
 
   assert.match(query.query, /FROM `analytics-prod1\.ga4_export\.events_\*`/);
   assert.match(query.query, /FROM `analytics-prod1\.ga4_export\.events_intraday_\*`/);
+  assert.match(query.query, /FROM `analytics-prod1\.google_ads_transfer\.p_ads_\*`/);
+  assert.match(query.query, /LEFT JOIN ads_linked_campaigns/);
   assert.equal(query.params.window_start, '2026-04-27T11:00:00.000Z');
   assert.equal(query.params.window_end, '2026-04-27T12:00:00.000Z');
   assert.equal(query.params.start_date_suffix, '20260427');
   assert.equal(query.params.end_date_suffix, '20260427');
+  assert.equal(query.params.ads_metadata_lookback_days, 14);
+  assert.deepEqual(query.params.google_ads_customer_ids, []);
+  assert.equal(query.params.google_ads_customer_id_count, 0);
 });
 
 test('extractGa4SessionAttributionForHour normalizes stable session and user keys', async () => {
@@ -91,11 +96,19 @@ test('extractGa4SessionAttributionForHour normalizes stable session and user key
             last_event_at: '2026-04-27T11:14:00.000Z',
             source: ' Google ',
             medium: ' CPC ',
-            campaign: 'Spring Launch',
+            campaign_id: '9001',
+            campaign: 'Brand Search',
             content: 'Hero',
             term: 'boots',
             click_id_type: null,
             click_id_value: null,
+            account_id: '1234567890',
+            account_name: ' Example Ads ',
+            channel_type: ' SEARCH ',
+            channel_subtype: ' SEARCH_MOBILE_APP ',
+            campaign_metadata_source: 'google_ads_transfer',
+            account_metadata_source: 'google_ads_transfer',
+            channel_metadata_source: 'google_ads_transfer',
             gclid: 'abc123',
             gbraid: null,
             wbraid: null,
@@ -122,11 +135,19 @@ test('extractGa4SessionAttributionForHour normalizes stable session and user key
       lastEventAt: '2026-04-27T11:14:00.000Z',
       source: 'google',
       medium: 'cpc',
-      campaign: 'Spring Launch',
+      campaignId: '9001',
+      campaign: 'Brand Search',
       content: 'Hero',
       term: 'boots',
       clickIdType: 'gclid',
       clickIdValue: 'abc123',
+      accountId: '1234567890',
+      accountName: 'Example Ads',
+      channelType: 'SEARCH',
+      channelSubtype: 'SEARCH_MOBILE_APP',
+      campaignMetadataSource: 'google_ads_transfer',
+      accountMetadataSource: 'google_ads_transfer',
+      channelMetadataSource: 'google_ads_transfer',
       sourceExportHour: '2026-04-27T11:00:00.000Z',
       sourceDataset: 'ga4_export',
       sourceTableType: 'events'

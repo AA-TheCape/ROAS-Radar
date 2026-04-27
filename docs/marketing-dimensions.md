@@ -89,6 +89,19 @@ When UTM source or medium is missing, click IDs backfill the canonical channel:
 - Tracking ingestion writes canonical touchpoint dimensions into `tracking_sessions` and `tracking_events`.
 - Attribution resolution normalizes touchpoint dimensions again before writing `attribution_order_credits` and `attribution_results`, so older or partially normalized session data does not leak through.
 - Meta and Google spend ETL write canonical fields into `meta_ads_daily_spend` and `google_ads_daily_spend` alongside native platform IDs and names. Those tables are derived reporting projections; exact upstream rows stay in `meta_ads_raw_spend_records` and `google_ads_raw_spend_records`.
+- GA4 session attribution ingestion keeps canonical `source`, `medium`, `content`, and `term` from GA4 raw export, but can enrich `campaign`, `campaign_id`, `account_id`, `account_name`, and Google Ads channel fields from linked Google Ads transfer tables when a campaign join succeeds.
+
+## GA4 linked Google Ads enrichment
+
+When GA4 export includes Google Ads-linked campaign identifiers, ROAS Radar joins those identifiers to Google Ads transfer `Campaign` tables to fill campaign metadata.
+
+- Join key precedence: `session_traffic_source_last_click.google_ads_campaign.campaign_id`, then `session_traffic_source_last_click.manual_campaign.campaign_id`
+- Campaign text precedence: Google Ads transfer `campaign_name`, then GA4 `google_ads_campaign.campaign_name`, then GA4 raw/manual campaign text
+- Account precedence: Google Ads transfer `customer_id` and `customer_descriptive_name`, then GA4 `google_ads_campaign.customer_id` and `account_name`
+- Channel precedence: Google Ads transfer `campaign_advertising_channel_type` and `campaign_advertising_channel_sub_type`
+- Unresolved joins remain nullable and are tagged with lineage `unresolved`
+
+Lineage is persisted separately for campaign, account, and channel metadata so analysts can distinguish values that came from GA4 raw export versus Ads-linked transfer tables.
 
 ## Unknown vs unmapped
 
