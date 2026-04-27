@@ -134,7 +134,10 @@ export type OrderRow = {
   medium: string | null;
   campaign: string | null;
   attributionReason: string;
+  primaryCreditAttributionReason: string;
   attributionTier: AttributionTier;
+  attributionTierLabel: string;
+  attributionTierDescription: string;
   attributionSource: string | null;
   attributionMatchedAt: string | null;
   confidenceScore: number | null;
@@ -204,6 +207,8 @@ export type OrderDetail = {
   sourceName: string | null;
   orderOccurredAtUtc: string;
   attributionTier: AttributionTier;
+  attributionTierLabel: string;
+  attributionTierDescription: string;
   attributionSource: string | null;
   attributionMatchedAt: string | null;
   attributionReason: string;

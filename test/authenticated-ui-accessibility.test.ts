@@ -202,8 +202,12 @@ test('authenticated dashboard, order details, and settings pass automated access
             medium: 'cpc',
             campaign: 'Spring Search',
             totalPrice: 195,
-            attributionReason: 'last-touch',
+            attributionReason: 'matched_by_landing_session',
+            primaryCreditAttributionReason: 'matched_by_landing_session',
             attributionTier: 'deterministic_first_party',
+            attributionTierLabel: 'Deterministic first-party',
+            attributionTierDescription:
+              'Resolved from durable ROAS Radar first-party evidence such as a landing session, checkout token, cart token, or stitched identity path.',
             attributionSource: 'landing_session_id',
             attributionMatchedAt: '2026-04-20T18:00:30.000Z',
             confidenceScore: 1,
@@ -264,6 +268,9 @@ test('authenticated dashboard, order details, and settings pass automated access
             sourceName: 'web',
             orderOccurredAtUtc: '2026-04-20T18:00:00.000Z',
             attributionTier: 'deterministic_first_party',
+            attributionTierLabel: 'Deterministic first-party',
+            attributionTierDescription:
+              'Resolved from durable ROAS Radar first-party evidence such as a landing session, checkout token, cart token, or stitched identity path.',
             attributionSource: 'landing_session_id',
             attributionMatchedAt: '2026-04-20T18:00:30.000Z',
             attributionReason: 'matched_by_landing_session',
@@ -362,6 +369,18 @@ test('authenticated dashboard, order details, and settings pass automated access
       },
       shopifyBackfillRange: { startDate: '2026-04-01', endDate: '2026-04-20' },
       setShopifyBackfillRange() {},
+      shopifyOrderAttributionBackfillOptions: {
+        dryRun: true,
+        limit: '500',
+        webOrdersOnly: true,
+        skipShopifyWriteback: false
+      },
+      setShopifyOrderAttributionBackfillOptions() {},
+      orderAttributionBackfillJob: {
+        data: null,
+        loading: false,
+        error: null
+      },
       metaConnection: {
         data: {
           config: {
@@ -439,6 +458,7 @@ test('authenticated dashboard, order details, and settings pass automated access
       onShopifyWebhookSync() {},
       onShopifyAttributionRecovery() {},
       onShopifyOrderAttributionBackfill() {},
+      onOrderAttributionBackfillRefresh() {},
       onMetaConnect() {},
       onMetaSync() {},
       onGoogleSync() {},

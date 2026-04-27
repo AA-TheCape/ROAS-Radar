@@ -385,6 +385,7 @@ test('reporting orders returns order-level attribution details for debugging', a
           total_price: '120.00',
           attribution_tier: 'deterministic_first_party',
           attribution_source: 'checkout_token',
+          order_attribution_reason: 'matched_by_checkout_token',
           attribution_matched_at: new Date('2026-04-10T13:01:00.000Z'),
           attribution_snapshot: {
             confidenceScore: 1,
@@ -398,7 +399,7 @@ test('reporting orders returns order-level attribution details for debugging', a
           attributed_source: 'facebook',
           attributed_medium: 'paid_social',
           attributed_campaign: 'prospecting-us',
-          attribution_reason: 'matched_by_checkout_token'
+          primary_credit_attribution_reason: 'matched_by_checkout_token'
         }
       ]
     };
@@ -424,7 +425,11 @@ test('reporting orders returns order-level attribution details for debugging', a
           medium: 'paid_social',
           campaign: 'prospecting-us',
           attributionReason: 'matched_by_checkout_token',
+          primaryCreditAttributionReason: 'matched_by_checkout_token',
           attributionTier: 'deterministic_first_party',
+          attributionTierLabel: 'Deterministic first-party',
+          attributionTierDescription:
+            'Resolved from durable ROAS Radar first-party evidence such as a landing session, checkout token, cart token, or stitched identity path.',
           attributionSource: 'checkout_token',
           attributionMatchedAt: '2026-04-10T13:01:00.000Z',
           confidenceScore: 1,
@@ -515,6 +520,8 @@ test('reporting order details expose attribution tier metadata additively', asyn
     assert.equal(body.order.shopifyOrderId, '1234567890');
     assert.equal(body.order.orderOccurredAtUtc, '2026-04-10T13:00:00.000Z');
     assert.equal(body.order.attributionTier, 'deterministic_first_party');
+    assert.equal(body.order.attributionTierLabel, 'Deterministic first-party');
+    assert.match(body.order.attributionTierDescription, /durable ROAS Radar first-party evidence/);
     assert.equal(body.order.attributionSource, 'landing_session_id');
     assert.equal(body.order.attributionMatchedAt, '2026-04-10T13:01:00.000Z');
     assert.equal(body.order.attributionReason, 'matched_by_landing_session');

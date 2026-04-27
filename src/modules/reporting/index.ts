@@ -29,6 +29,25 @@ const attributionTierSchema = z.enum([
   'ga4_fallback',
   'unattributed'
 ]);
+type ReportingAttributionTier = z.infer<typeof attributionTierSchema>;
+
+const ATTRIBUTION_TIER_LABELS: Record<ReportingAttributionTier, string> = {
+  deterministic_first_party: 'Deterministic first-party',
+  deterministic_shopify_hint: 'Deterministic Shopify hint',
+  ga4_fallback: 'GA4 fallback',
+  unattributed: 'Unattributed'
+};
+
+const ATTRIBUTION_TIER_DESCRIPTIONS: Record<ReportingAttributionTier, string> = {
+  deterministic_first_party:
+    'Resolved from durable ROAS Radar first-party evidence such as a landing session, checkout token, cart token, or stitched identity path.',
+  deterministic_shopify_hint:
+    'Recovered synthetically from Shopify marketing hints after first-party resolution failed.',
+  ga4_fallback:
+    'Recovered from the GA4 fallback contract only after first-party and Shopify-hint matches were unavailable.',
+  unattributed:
+    'No eligible first-party, Shopify hint, or GA4 fallback match qualified, or the required timing data could not be normalized.'
+};
 
 const baseFiltersObjectSchema = z.object({
   startDate: dateStringSchema,
@@ -111,12 +130,13 @@ type OrderAttributionRow = {
   total_price: string | number;
   attribution_tier: string | null;
   attribution_source: string | null;
+  order_attribution_reason: string | null;
   attribution_matched_at: Date | null;
   attribution_snapshot: unknown;
   attributed_source: string | null;
   attributed_medium: string | null;
   attributed_campaign: string | null;
-  attribution_reason: string | null;
+  primary_credit_attribution_reason: string | null;
 };
 
 type OrderDetailsRow = {
@@ -307,6 +327,10 @@ function extractOrderAttributionMetadata(snapshot: unknown): OrderAttributionMet
       clickIdValue: readNullableString(winnerRecord?.clickIdValue)
     }
   };
+}
+
+function normalizeAttributionTier(value: string | null | undefined): ReportingAttributionTier {
+  return attributionTierSchema.safeParse(value).success ? (value as ReportingAttributionTier) : 'unattributed';
 }
 
 function countDaysInRange(startDate: string, endDate: string): number {
@@ -590,12 +614,13 @@ export function createReportingRouter(): Router {
             o.total_price,
             o.attribution_tier,
             o.attribution_source,
+            o.attribution_reason AS order_attribution_reason,
             o.attribution_matched_at,
             o.attribution_snapshot,
             c.attributed_source,
             c.attributed_medium,
             c.attributed_campaign,
-            c.attribution_reason
+            c.attribution_reason AS primary_credit_attribution_reason
           FROM shopify_orders o
           LEFT JOIN LATERAL (
             SELECT
@@ -622,6 +647,8 @@ export function createReportingRouter(): Router {
       res.json({
         rows: result.rows.map((row) => {
           const metadata = extractOrderAttributionMetadata(row.attribution_snapshot);
+          const attributionTier = normalizeAttributionTier(row.attribution_tier);
+          const orderAttributionReason = row.order_attribution_reason ?? 'unattributed';
 
           return {
             shopifyOrderId: row.shopify_order_id,
@@ -631,8 +658,11 @@ export function createReportingRouter(): Router {
             source: row.attributed_source,
             medium: row.attributed_medium,
             campaign: row.attributed_campaign,
-            attributionReason: row.attribution_reason ?? 'unattributed',
-            attributionTier: row.attribution_tier ?? 'unattributed',
+            attributionReason: orderAttributionReason,
+            primaryCreditAttributionReason: row.primary_credit_attribution_reason ?? orderAttributionReason,
+            attributionTier,
+            attributionTierLabel: ATTRIBUTION_TIER_LABELS[attributionTier],
+            attributionTierDescription: ATTRIBUTION_TIER_DESCRIPTIONS[attributionTier],
             attributionSource: row.attribution_source,
             attributionMatchedAt: row.attribution_matched_at?.toISOString() ?? null,
             confidenceScore: metadata.confidenceScore,
@@ -766,7 +796,9 @@ export function createReportingRouter(): Router {
             order.processed_at?.toISOString() ??
             order.created_at_shopify?.toISOString() ??
             order.ingested_at.toISOString(),
-          attributionTier: order.attribution_tier ?? 'unattributed',
+          attributionTier: normalizeAttributionTier(order.attribution_tier),
+          attributionTierLabel: ATTRIBUTION_TIER_LABELS[normalizeAttributionTier(order.attribution_tier)],
+          attributionTierDescription: ATTRIBUTION_TIER_DESCRIPTIONS[normalizeAttributionTier(order.attribution_tier)],
           attributionSource: order.attribution_source,
           attributionMatchedAt: order.attribution_matched_at?.toISOString() ?? null,
           attributionReason: order.attribution_reason ?? 'unattributed',

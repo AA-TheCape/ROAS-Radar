@@ -881,7 +881,20 @@ const ReportingDashboard = memo(function ReportingDashboard({
   const filteredOrders = useMemo(
     () =>
       orders.filter((row) =>
-        matchesQuery([row.shopifyOrderId, row.source, row.medium, row.campaign, row.attributionReason, row.attributionTier, row.totalPrice], orderSearch)
+        matchesQuery(
+          [
+            row.shopifyOrderId,
+            row.source,
+            row.medium,
+            row.campaign,
+            row.attributionReason,
+            row.primaryCreditAttributionReason,
+            row.attributionTier,
+            row.attributionTierLabel,
+            row.totalPrice
+          ],
+          orderSearch
+        )
       ),
     [orderSearch, orders]
   );
@@ -1184,7 +1197,7 @@ const ReportingDashboard = memo(function ReportingDashboard({
 
       <Panel
         title="Order attribution rows"
-        description="Order-level attribution rows remain intact so operators can inspect deterministic, fallback, and unattributed outcomes without leaving the dashboard."
+        description="Order-level rows lead with the persisted attribution tier contract; match reasons stay visible as secondary diagnostics for the selected model."
         wide
       >
         <SectionState
@@ -1200,7 +1213,7 @@ const ReportingDashboard = memo(function ReportingDashboard({
           <>
             <DataTableToolbar
               title="Order attribution list"
-              description="Shared list controls keep order lookup, tier inspection, and pagination consistent with every other authenticated table."
+              description="Tier contract, source, and model-credit diagnostics stay together so operators do not infer winner strength from reason codes alone."
               summary={
                 <>
                   <TableMeta currentCount={filteredOrders.length} totalCount={orders.length} label="orders" />
@@ -1220,7 +1233,7 @@ const ReportingDashboard = memo(function ReportingDashboard({
                     setOrderSearch(value);
                     setOrderPage(1);
                   }}
-                  placeholder="Order ID, source, campaign, reason, tier"
+                  placeholder="Order ID, source, campaign, tier, reason"
                 />
                 <Field label="Sort by" htmlFor="orders-table-sort">
                   <Select
@@ -1272,7 +1285,7 @@ const ReportingDashboard = memo(function ReportingDashboard({
                     </SortableTableHeaderCell>
                     <TableHeaderCell>
                       <span className="inline-flex items-center gap-2">
-                        Tier
+                        Tier contract
                         <span
                           className="cursor-help text-ink-muted"
                           aria-label={ATTRIBUTION_TIER_PRECEDENCE_TOOLTIP}
@@ -1296,7 +1309,7 @@ const ReportingDashboard = memo(function ReportingDashboard({
                     >
                       Total
                     </SortableTableHeaderCell>
-                    <TableHeaderCell>Reason</TableHeaderCell>
+                    <TableHeaderCell>Match reason</TableHeaderCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -1330,12 +1343,23 @@ const ReportingDashboard = memo(function ReportingDashboard({
                         </PrimaryCell>
                       </TableCell>
                       <TableCell>
-                        <AttributionTierBadge tier={row.attributionTier} withTooltip />
+                        <PrimaryCell className="gap-1">
+                          <AttributionTierBadge tier={row.attributionTier} withTooltip />
+                          <span>{row.attributionSource ?? 'No persisted source'}</span>
+                        </PrimaryCell>
                       </TableCell>
                       <TableCell>{row.campaign ?? (row.attributionTier === 'unattributed' ? 'No attributed campaign' : 'No campaign')}</TableCell>
                       <TableCell>{formatCurrency(row.totalPrice)}</TableCell>
                       <TableCell>
-                        <Badge tone={row.attributionTier === 'unattributed' ? 'danger' : 'teal'}>{row.attributionReason}</Badge>
+                        <PrimaryCell className="gap-1">
+                          <strong>{row.attributionReason}</strong>
+                          <span>
+                            Primary credit:{' '}
+                            {row.primaryCreditAttributionReason === row.attributionReason
+                              ? 'Aligned with persisted order reason'
+                              : row.primaryCreditAttributionReason}
+                          </span>
+                        </PrimaryCell>
                       </TableCell>
                     </TableRow>
                   ))}

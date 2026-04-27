@@ -238,8 +238,8 @@ export default function OrderDetailsView({
           />
           <MetricCard
             label="Attribution tier"
-            value={order ? formatAttributionTierLabel(order.attributionTier) : 'Not available'}
-            detail={formatOptionalValue(order?.attributionReason)}
+            value={order?.attributionTierLabel ?? (order ? formatAttributionTierLabel(order.attributionTier) : 'Not available')}
+            detail={order?.attributionTierDescription ?? 'No attribution tier description was returned.'}
           />
           <MetricCard
             label="Attributed credits"
@@ -251,7 +251,7 @@ export default function OrderDetailsView({
         <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1.2fr)_minmax(0,0.95fr)]">
           <DetailCard
             title="Attribution outcome"
-            description="Canonical tier, precedence semantics, and winning attribution metadata returned by the backend."
+            description="Canonical tier, precedence semantics, and winning attribution metadata returned by the backend. Read tier first; use reason as the within-tier diagnostic."
           >
             <div className="grid gap-4">
               <div className="flex flex-wrap items-start justify-between gap-3 rounded-card border border-line/60 bg-surface-alt/55 px-4 py-4">
@@ -259,7 +259,7 @@ export default function OrderDetailsView({
                   <Eyebrow>Winning tier</Eyebrow>
                   {order ? <AttributionTierBadge tier={order.attributionTier} withTooltip /> : <Badge tone="neutral">Not available</Badge>}
                   <p className="max-w-2xl text-body text-ink-muted">
-                    {order ? getAttributionTierDescription(order.attributionTier) : 'No attribution tier was returned for this order.'}
+                    {order?.attributionTierDescription ?? (order ? getAttributionTierDescription(order.attributionTier) : 'No attribution tier was returned for this order.')}
                   </p>
                 </div>
                 <Tooltip content={ATTRIBUTION_TIER_PRECEDENCE_TOOLTIP}>
@@ -270,6 +270,10 @@ export default function OrderDetailsView({
                 <div>
                   <dt>Attribution reason</dt>
                   <dd>{formatOptionalValue(order?.attributionReason)}</dd>
+                </div>
+                <div>
+                  <dt>Tier label</dt>
+                  <dd>{formatOptionalValue(order?.attributionTierLabel)}</dd>
                 </div>
                 <div>
                   <dt>Attribution source</dt>

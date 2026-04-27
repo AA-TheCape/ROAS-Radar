@@ -220,6 +220,9 @@ async function renderSnapshots() {
             sourceName: 'web',
             orderOccurredAtUtc: '2026-04-20T18:00:00.000Z',
             attributionTier: 'deterministic_first_party',
+            attributionTierLabel: 'Deterministic first-party',
+            attributionTierDescription:
+              'Resolved from durable ROAS Radar first-party evidence such as a landing session, checkout token, cart token, or stitched identity path.',
             attributionSource: 'landing_session_id',
             attributionMatchedAt: '2026-04-20T18:00:30.000Z',
             attributionReason: 'matched_by_landing_session',
