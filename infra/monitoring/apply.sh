@@ -28,12 +28,23 @@ require_var() {
   fi
 }
 
-for var in GCP_PROJECT_ID GCP_REGION OBSERVABILITY_DASHBOARD_DISPLAY_NAME RUNBOOK_BASE_URL; do
+for var in GCP_PROJECT_ID GCP_REGION OBSERVABILITY_DASHBOARD_DISPLAY_NAME; do
   require_var "$var"
 done
 
 escape_for_sed() {
   printf '%s' "$1" | sed 's/[\/&]/\\&/g'
+}
+
+build_runbook_url() {
+  path="$1"
+
+  if [ -z "${RUNBOOK_BASE_URL:-}" ]; then
+    printf '%s' ""
+    return
+  fi
+
+  printf '%s' "${RUNBOOK_BASE_URL%/}/$path"
 }
 
 notification_channels_json='[]'
@@ -60,11 +71,11 @@ fi
 render_template() {
   sed \
     -e "s|__ENVIRONMENT__|$(escape_for_sed "$ENVIRONMENT")|g" \
-    -e "s|__RUNBOOK_URL_INGESTION__|$(escape_for_sed "$RUNBOOK_BASE_URL/ingestion-failures.md")|g" \
-    -e "s|__RUNBOOK_URL_ATTRIBUTION__|$(escape_for_sed "$RUNBOOK_BASE_URL/attribution-worker-backlog.md")|g" \
-    -e "s|__RUNBOOK_URL_ATTRIBUTION_COMPLETENESS__|$(escape_for_sed "$RUNBOOK_BASE_URL/attribution-completeness.md")|g" \
-    -e "s|__RUNBOOK_URL_API_LATENCY__|$(escape_for_sed "$RUNBOOK_BASE_URL/api-latency.md")|g" \
-    -e "s|__RUNBOOK_URL_DATA_QUALITY__|$(escape_for_sed "$RUNBOOK_BASE_URL/identity-data-quality.md")|g" \
+    -e "s|__RUNBOOK_URL_INGESTION__|$(escape_for_sed "$(build_runbook_url "ingestion-failures.md")")|g" \
+    -e "s|__RUNBOOK_URL_ATTRIBUTION__|$(escape_for_sed "$(build_runbook_url "attribution-worker-backlog.md")")|g" \
+    -e "s|__RUNBOOK_URL_ATTRIBUTION_COMPLETENESS__|$(escape_for_sed "$(build_runbook_url "attribution-completeness.md")")|g" \
+    -e "s|__RUNBOOK_URL_API_LATENCY__|$(escape_for_sed "$(build_runbook_url "api-latency.md")")|g" \
+    -e "s|__RUNBOOK_URL_DATA_QUALITY__|$(escape_for_sed "$(build_runbook_url "identity-data-quality.md")")|g" \
     -e "s|__ALERT_NOTIFICATION_CHANNELS__|$notification_channels_json|g" \
     -e "s|__DASHBOARD_DISPLAY_NAME__|$(escape_for_sed "$OBSERVABILITY_DASHBOARD_DISPLAY_NAME")|g"
 }
