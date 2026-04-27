@@ -1637,7 +1637,20 @@ function App() {
   }
 
   const authenticatedUser = authState.user;
-  const isAdmin = authenticatedUser?.isAdmin ?? false;
+
+  if (!authenticatedUser) {
+    return (
+      <AuthGate
+        eyebrow="Authentication"
+        title="Authentication unavailable"
+        description="Please sign in again to continue."
+      >
+        <Banner tone="error">Authentication state is missing. Refresh and try signing in again.</Banner>
+      </AuthGate>
+    );
+  }
+
+  const isAdmin = authenticatedUser.isAdmin;
   const activeNavKey = currentPage;
   const shellNavItems: AppShellNavItem[] =
     currentPage === 'order-details'
