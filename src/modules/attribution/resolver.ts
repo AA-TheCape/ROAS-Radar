@@ -1,4 +1,5 @@
 import type { AttributionTouchpoint } from './engine.js';
+import type { PersistedGa4FallbackCandidate } from './ga4-fallback-candidates.js';
 
 export const DETERMINISTIC_INGESTION_SOURCES = [
   'landing_session_id',
@@ -8,16 +9,30 @@ export const DETERMINISTIC_INGESTION_SOURCES = [
 ] as const;
 
 export type DeterministicIngestionSource = (typeof DETERMINISTIC_INGESTION_SOURCES)[number];
+export const ATTRIBUTION_MATCH_SOURCES = [
+  ...DETERMINISTIC_INGESTION_SOURCES,
+  'shopify_hint_fallback',
+  'ga4_fallback',
+  'unattributed'
+] as const;
+
+export type AttributionMatchSource = (typeof ATTRIBUTION_MATCH_SOURCES)[number];
+export type AttributionConfidenceLabel = 'high' | 'medium' | 'low' | 'none';
 
 export type ResolvedAttributionTouchpoint = AttributionTouchpoint & {
   sourceTouchEventId: string | null;
-  ingestionSource: DeterministicIngestionSource;
+  ingestionSource: DeterministicIngestionSource | null;
+  matchSource: AttributionMatchSource;
+  confidenceLabel: AttributionConfidenceLabel;
+  ga4ClientId: string | null;
+  ga4SessionId: string | null;
 };
 
 export type ResolvedJourney = {
   touchpoints: ResolvedAttributionTouchpoint[];
   winner: ResolvedAttributionTouchpoint | null;
   confidenceScore: number;
+  confidenceLabel: AttributionConfidenceLabel;
 };
 
 const INGESTION_SOURCE_PRECEDENCE: Record<DeterministicIngestionSource, number> = {
@@ -39,8 +54,13 @@ function compareDatesAscending(left: Date, right: Date): number {
   return left.getTime() - right.getTime();
 }
 
-function compareIngestionSource(left: DeterministicIngestionSource, right: DeterministicIngestionSource): number {
-  return INGESTION_SOURCE_PRECEDENCE[left] - INGESTION_SOURCE_PRECEDENCE[right];
+function compareIngestionSource(
+  left: DeterministicIngestionSource | null,
+  right: DeterministicIngestionSource | null
+): number {
+  const leftPrecedence = left ? INGESTION_SOURCE_PRECEDENCE[left] : Number.MAX_SAFE_INTEGER;
+  const rightPrecedence = right ? INGESTION_SOURCE_PRECEDENCE[right] : Number.MAX_SAFE_INTEGER;
+  return leftPrecedence - rightPrecedence;
 }
 
 function compareLexical(left: string | null, right: string | null): number {
@@ -152,13 +172,13 @@ export function selectLastNonDirectWinner(
 }
 
 export function confidenceScoreForWinner(
-  winner: Pick<ResolvedAttributionTouchpoint, 'ingestionSource'> | null
+  winner: Pick<ResolvedAttributionTouchpoint, 'matchSource' | 'clickIdValue'> | null
 ): number {
   if (!winner) {
     return 0;
   }
 
-  switch (winner.ingestionSource) {
+  switch (winner.matchSource) {
     case 'landing_session_id':
     case 'checkout_token':
       return 1;
@@ -166,5 +186,122 @@ export function confidenceScoreForWinner(
       return 0.9;
     case 'customer_identity':
       return 0.6;
+    case 'shopify_hint_fallback':
+      return winner.clickIdValue ? 0.55 : 0.4;
+    case 'ga4_fallback':
+      return winner.clickIdValue ? 0.35 : 0.25;
+    case 'unattributed':
+      return 0;
   }
+}
+
+export function confidenceLabelForScore(score: number): AttributionConfidenceLabel {
+  if (score >= 0.9) {
+    return 'high';
+  }
+
+  if (score >= 0.6) {
+    return 'medium';
+  }
+
+  if (score > 0) {
+    return 'low';
+  }
+
+  return 'none';
+}
+
+function hasAttributionSignal(
+  candidate: Pick<
+    PersistedGa4FallbackCandidate,
+    'source' | 'medium' | 'campaign' | 'content' | 'term' | 'clickIdValue'
+  >
+): boolean {
+  return Boolean(
+    candidate.clickIdValue ||
+      candidate.source ||
+      candidate.medium ||
+      candidate.campaign ||
+      candidate.content ||
+      candidate.term
+  );
+}
+
+function populatedDimensionCount(
+  candidate: Pick<PersistedGa4FallbackCandidate, 'source' | 'medium' | 'campaign' | 'content' | 'term'>
+): number {
+  return [candidate.source, candidate.medium, candidate.campaign, candidate.content, candidate.term].filter(Boolean).length;
+}
+
+function compareGa4FallbackCandidates(
+  left: PersistedGa4FallbackCandidate,
+  right: PersistedGa4FallbackCandidate
+): number {
+  const occurredAtComparison = compareDatesDescending(new Date(left.occurredAt), new Date(right.occurredAt));
+  if (occurredAtComparison !== 0) {
+    return occurredAtComparison;
+  }
+
+  const clickIdComparison = Number(Boolean(right.clickIdValue)) - Number(Boolean(left.clickIdValue));
+  if (clickIdComparison !== 0) {
+    return clickIdComparison;
+  }
+
+  const dimensionComparison = populatedDimensionCount(right) - populatedDimensionCount(left);
+  if (dimensionComparison !== 0) {
+    return dimensionComparison;
+  }
+
+  const sessionIdComparison = compareLexical(left.ga4SessionId, right.ga4SessionId);
+  if (sessionIdComparison !== 0) {
+    return sessionIdComparison;
+  }
+
+  const clientIdComparison = compareLexical(left.ga4ClientId, right.ga4ClientId);
+  if (clientIdComparison !== 0) {
+    return clientIdComparison;
+  }
+
+  const transactionIdComparison = compareLexical(left.transactionId, right.transactionId);
+  if (transactionIdComparison !== 0) {
+    return transactionIdComparison;
+  }
+
+  return compareLexical(left.candidateKey, right.candidateKey);
+}
+
+export function isEligibleGa4FallbackCandidate(
+  candidate: PersistedGa4FallbackCandidate,
+  orderOccurredAt: Date
+): boolean {
+  const candidateOccurredAt = new Date(candidate.occurredAt);
+  if (candidateOccurredAt.getTime() > orderOccurredAt.getTime()) {
+    return false;
+  }
+
+  if (!candidate.sessionHasRequiredFields) {
+    return false;
+  }
+
+  if (!hasAttributionSignal(candidate)) {
+    return false;
+  }
+
+  if (!candidate.ga4ClientId && !candidate.ga4SessionId && !candidate.transactionId) {
+    return false;
+  }
+
+  return true;
+}
+
+export function selectGa4FallbackWinner(
+  candidates: PersistedGa4FallbackCandidate[],
+  orderOccurredAt: Date
+): PersistedGa4FallbackCandidate | null {
+  const eligibleCandidates = candidates.filter((candidate) => isEligibleGa4FallbackCandidate(candidate, orderOccurredAt));
+  if (eligibleCandidates.length === 0) {
+    return null;
+  }
+
+  return eligibleCandidates.slice().sort(compareGa4FallbackCandidates)[0] ?? null;
 }

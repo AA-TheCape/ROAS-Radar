@@ -12,14 +12,20 @@ import {
   type AttributionCredit
 } from './engine.js';
 import {
+  confidenceLabelForScore,
   confidenceScoreForWinner,
   dedupeDeterministicCandidates,
   isDirectTouchpoint,
+  selectGa4FallbackWinner,
   selectLastNonDirectWinner,
+  type AttributionConfidenceLabel,
+  type AttributionMatchSource,
   type DeterministicIngestionSource,
   type ResolvedAttributionTouchpoint,
   type ResolvedJourney
 } from './resolver.js';
+import { lookupGa4FallbackCandidates } from './ga4-fallback-candidates.js';
+import { extractShopifyHintAttribution } from './shopify-hints.js';
 
 const ATTRIBUTION_MODEL_VERSION = 1;
 const ATTRIBUTION_WINDOW_DAYS = 7;
@@ -38,6 +44,8 @@ type OrderRow = {
   processed_at: Date | null;
   created_at_shopify: Date | null;
   ingested_at: Date;
+  source_name: string | null;
+  raw_payload: unknown;
   landing_session_id: string | null;
   checkout_token: string | null;
   cart_token: string | null;
@@ -85,7 +93,10 @@ type SyntheticAttributionInput = {
   clickIdType?: string | null;
   clickIdValue?: string | null;
   attributionReason: string;
+  matchSource: Exclude<AttributionMatchSource, DeterministicIngestionSource | 'unattributed'>;
   confidenceScore?: number;
+  ga4ClientId?: string | null;
+  ga4SessionId?: string | null;
 };
 
 function normalizeNullableString(value: string | null | undefined): string | null {
@@ -283,6 +294,8 @@ async function fetchOrder(client: PoolClient, shopifyOrderId: string): Promise<O
         processed_at,
         created_at_shopify,
         ingested_at,
+        source_name,
+        raw_payload,
         landing_session_id::text,
         checkout_token,
         cart_token,
@@ -302,13 +315,65 @@ function resolveOrderOccurredAt(order: OrderRow): Date {
   return order.processed_at ?? order.created_at_shopify ?? order.ingested_at;
 }
 
+function buildResolvedTouchpointFromValues(input: {
+  sessionId: string | null;
+  sourceTouchEventId: string | null;
+  occurredAt: Date;
+  source: string | null;
+  medium: string | null;
+  campaign: string | null;
+  content: string | null;
+  term: string | null;
+  clickIdType: string | null;
+  clickIdValue: string | null;
+  attributionReason: string;
+  matchSource: AttributionMatchSource;
+  ingestionSource: DeterministicIngestionSource | null;
+  isForced: boolean;
+  ga4ClientId?: string | null;
+  ga4SessionId?: string | null;
+}): ResolvedAttributionTouchpoint {
+  const confidenceScore = confidenceScoreForWinner({
+    matchSource: input.matchSource,
+    clickIdValue: input.clickIdValue
+  });
+
+  return {
+    sessionId: input.sessionId,
+    sourceTouchEventId: input.sourceTouchEventId,
+    occurredAt: input.occurredAt,
+    source: input.source,
+    medium: input.medium,
+    campaign: input.campaign,
+    content: input.content,
+    term: input.term,
+    clickIdType: input.clickIdType,
+    clickIdValue: input.clickIdValue,
+    attributionReason: input.attributionReason,
+    matchSource: input.matchSource,
+    ingestionSource: input.ingestionSource,
+    confidenceLabel: confidenceLabelForScore(confidenceScore),
+    ga4ClientId: input.ga4ClientId ?? null,
+    ga4SessionId: input.ga4SessionId ?? null,
+    isDirect: isDirectTouchpoint({
+      source: input.source,
+      medium: input.medium,
+      campaign: input.campaign,
+      content: input.content,
+      term: input.term,
+      clickIdValue: input.clickIdValue
+    }),
+    isForced: input.isForced
+  };
+}
+
 function buildResolvedTouchpoint(
   row: SessionCandidateRow,
   ingestionSource: DeterministicIngestionSource,
   attributionReason: string,
   isForced: boolean
 ): ResolvedAttributionTouchpoint {
-  return {
+  return buildResolvedTouchpointFromValues({
     sessionId: row.session_id,
     sourceTouchEventId: row.source_touch_event_id,
     occurredAt: row.occurred_at,
@@ -320,17 +385,10 @@ function buildResolvedTouchpoint(
     clickIdType: row.click_id_type,
     clickIdValue: row.click_id_value,
     attributionReason,
+    matchSource: ingestionSource,
     ingestionSource,
-    isDirect: isDirectTouchpoint({
-      source: row.source,
-      medium: row.medium,
-      campaign: row.campaign,
-      content: row.content,
-      term: row.term,
-      clickIdValue: row.click_id_value
-    }),
     isForced
-  };
+  });
 }
 
 function serializeResolvedTouchpoint(touchpoint: ResolvedAttributionTouchpoint) {
@@ -346,7 +404,11 @@ function serializeResolvedTouchpoint(touchpoint: ResolvedAttributionTouchpoint) 
     clickIdType: touchpoint.clickIdType,
     clickIdValue: touchpoint.clickIdValue,
     attributionReason: touchpoint.attributionReason,
+    matchSource: touchpoint.matchSource,
+    confidenceLabel: touchpoint.confidenceLabel,
     ingestionSource: touchpoint.ingestionSource,
+    ga4ClientId: touchpoint.ga4ClientId,
+    ga4SessionId: touchpoint.ga4SessionId,
     isDirect: touchpoint.isDirect
   };
 }
@@ -578,15 +640,95 @@ async function collectDeterministicCandidates(client: PoolClient, order: OrderRo
   return candidates;
 }
 
+function resolveShopifyHintFallback(order: OrderRow): ResolvedAttributionTouchpoint | null {
+  if (normalizeNullableString(order.source_name) !== 'web') {
+    return null;
+  }
+
+  const hint = extractShopifyHintAttribution(order.raw_payload);
+  if (!hint) {
+    return null;
+  }
+
+  return buildResolvedTouchpointFromValues({
+    sessionId: null,
+    sourceTouchEventId: null,
+    occurredAt: resolveOrderOccurredAt(order),
+    source: normalizeNullableString(hint.source),
+    medium: normalizeNullableString(hint.medium),
+    campaign: normalizeNullableString(hint.campaign),
+    content: normalizeNullableString(hint.content),
+    term: normalizeNullableString(hint.term),
+    clickIdType: normalizeNullableString(hint.clickIdType),
+    clickIdValue: normalizeNullableString(hint.clickIdValue),
+    attributionReason: 'shopify_hint_derived',
+    matchSource: 'shopify_hint_fallback',
+    ingestionSource: null,
+    isForced: true
+  });
+}
+
+async function resolveGa4Fallback(
+  client: PoolClient,
+  order: OrderRow,
+  orderOccurredAt: Date
+): Promise<ResolvedAttributionTouchpoint | null> {
+  if (normalizeNullableString(order.source_name) !== 'web') {
+    return null;
+  }
+
+  const winner = selectGa4FallbackWinner(
+    await lookupGa4FallbackCandidates(
+      {
+        orderOccurredAt: orderOccurredAt.toISOString(),
+        customerIdentityId: order.customer_identity_id,
+        emailHash: order.email_hash,
+        transactionId: order.shopify_order_id
+      },
+      client
+    ),
+    orderOccurredAt
+  );
+
+  if (!winner) {
+    return null;
+  }
+
+  return buildResolvedTouchpointFromValues({
+    sessionId: null,
+    sourceTouchEventId: null,
+    occurredAt: new Date(winner.occurredAt),
+    source: normalizeNullableString(winner.source),
+    medium: normalizeNullableString(winner.medium),
+    campaign: normalizeNullableString(winner.campaign),
+    content: normalizeNullableString(winner.content),
+    term: normalizeNullableString(winner.term),
+    clickIdType: normalizeNullableString(winner.clickIdType),
+    clickIdValue: normalizeNullableString(winner.clickIdValue),
+    attributionReason: 'ga4_fallback_derived',
+    matchSource: 'ga4_fallback',
+    ingestionSource: null,
+    isForced: true,
+    ga4ClientId: normalizeNullableString(winner.ga4ClientId),
+    ga4SessionId: normalizeNullableString(winner.ga4SessionId)
+  });
+}
+
 async function resolveAttributionJourney(client: PoolClient, order: OrderRow): Promise<ResolvedJourney> {
-  const candidates = await collectDeterministicCandidates(client, order);
-  const touchpoints = dedupeDeterministicCandidates(candidates);
-  const winner = selectLastNonDirectWinner(touchpoints);
+  const orderOccurredAt = resolveOrderOccurredAt(order);
+  const deterministicCandidates = await collectDeterministicCandidates(client, order);
+  const touchpoints = dedupeDeterministicCandidates(deterministicCandidates);
+  const winner =
+    selectLastNonDirectWinner(touchpoints) ??
+    resolveShopifyHintFallback(order) ??
+    (await resolveGa4Fallback(client, order, orderOccurredAt));
+  const confidenceScore = confidenceScoreForWinner(winner);
 
   return {
-    touchpoints,
+    touchpoints: winner && touchpoints.length === 0 ? [winner] : touchpoints,
     winner,
-    confidenceScore: confidenceScoreForWinner(winner)
+    confidenceScore,
+    confidenceLabel: confidenceLabelForScore(confidenceScore)
   };
 }
 
@@ -594,7 +736,68 @@ function selectPrimaryCredit(credits: AttributionCredit[]): AttributionCredit | 
   return credits.find((credit) => credit.isPrimary) ?? credits[credits.length - 1];
 }
 
-async function persistAttribution(client: PoolClient, order: OrderRow, journey: ResolvedJourney): Promise<void> {
+function touchpointForCredit(
+  journey: ResolvedJourney,
+  credit: AttributionCredit
+): Pick<ResolvedAttributionTouchpoint, 'matchSource' | 'confidenceLabel' | 'ga4ClientId' | 'ga4SessionId'> {
+  return (
+    journey.touchpoints[credit.touchpointPosition] ?? {
+      matchSource: 'unattributed',
+      confidenceLabel: 'none',
+      ga4ClientId: null,
+      ga4SessionId: null
+    }
+  );
+}
+
+type ExistingAttributionOutcomeRow = {
+  match_source: AttributionMatchSource;
+  confidence_score: string;
+};
+
+async function shouldPersistSyntheticAttribution(
+  client: PoolClient,
+  shopifyOrderId: string,
+  matchSource: AttributionMatchSource,
+  confidenceScore: number
+): Promise<boolean> {
+  const result = await client.query<ExistingAttributionOutcomeRow>(
+    `
+      SELECT match_source, confidence_score::text
+      FROM attribution_results
+      WHERE shopify_order_id = $1
+      LIMIT 1
+    `,
+    [shopifyOrderId]
+  );
+
+  const existing = result.rows[0];
+  if (!existing) {
+    return true;
+  }
+
+  if (
+    existing.match_source === 'landing_session_id' ||
+    existing.match_source === 'checkout_token' ||
+    existing.match_source === 'cart_token' ||
+    existing.match_source === 'customer_identity'
+  ) {
+    return false;
+  }
+
+  if (existing.match_source === 'shopify_hint_fallback' && matchSource === 'ga4_fallback') {
+    return false;
+  }
+
+  return Number.parseFloat(existing.confidence_score) <= confidenceScore;
+}
+
+async function persistAttribution(
+  client: PoolClient,
+  order: OrderRow,
+  journey: ResolvedJourney,
+  options: { preventDowngrade?: boolean } = {}
+): Promise<void> {
   const orderOccurredAt = resolveOrderOccurredAt(order);
   const outputs = computeAttributionOutputs(journey.touchpoints, {
     orderOccurredAt,
@@ -613,12 +816,25 @@ async function persistAttribution(client: PoolClient, order: OrderRow, journey: 
     throw new Error(`Failed to compute attribution credits for Shopify order ${order.shopify_order_id}`);
   }
 
+  if (
+    options.preventDowngrade &&
+    !(await shouldPersistSyntheticAttribution(
+      client,
+      order.shopify_order_id,
+      journey.winner?.matchSource ?? 'unattributed',
+      journey.confidenceScore
+    ))
+  ) {
+    return;
+  }
+
   await client.query('DELETE FROM attribution_order_credits WHERE shopify_order_id = $1', [order.shopify_order_id]);
 
   for (const model of ATTRIBUTION_MODELS) {
     const modelCredits = outputs[model];
 
     for (const credit of modelCredits) {
+      const touchpoint = touchpointForCredit(journey, credit);
       await client.query(
         `
           INSERT INTO attribution_order_credits (
@@ -638,6 +854,8 @@ async function persistAttribution(client: PoolClient, order: OrderRow, journey: 
             revenue_credit,
             is_primary,
             attribution_reason,
+            match_source,
+            confidence_label,
             model_version
           )
           VALUES (
@@ -657,7 +875,9 @@ async function persistAttribution(client: PoolClient, order: OrderRow, journey: 
             $14,
             $15,
             $16,
-            $17
+            $17,
+            $18,
+            $19
           )
         `,
         [
@@ -677,6 +897,8 @@ async function persistAttribution(client: PoolClient, order: OrderRow, journey: 
           credit.revenueCredit,
           credit.isPrimary,
           credit.attributionReason,
+          touchpoint.matchSource,
+          touchpoint.confidenceLabel,
           ATTRIBUTION_MODEL_VERSION
         ]
       );
@@ -696,8 +918,12 @@ async function persistAttribution(client: PoolClient, order: OrderRow, journey: 
         attributed_term,
         attributed_click_id_type,
         attributed_click_id_value,
+        match_source,
         confidence_score,
+        confidence_label,
         attribution_reason,
+        ga4_client_id,
+        ga4_session_id,
         attributed_at,
         reprocess_version,
         model_version
@@ -715,9 +941,13 @@ async function persistAttribution(client: PoolClient, order: OrderRow, journey: 
         $9,
         $10,
         $11,
+        $12,
+        $13,
+        $14,
+        $15,
         now(),
         1,
-        $12
+        $16
       )
       ON CONFLICT (shopify_order_id)
       DO UPDATE SET
@@ -730,8 +960,12 @@ async function persistAttribution(client: PoolClient, order: OrderRow, journey: 
         attributed_term = EXCLUDED.attributed_term,
         attributed_click_id_type = EXCLUDED.attributed_click_id_type,
         attributed_click_id_value = EXCLUDED.attributed_click_id_value,
+        match_source = EXCLUDED.match_source,
         confidence_score = EXCLUDED.confidence_score,
+        confidence_label = EXCLUDED.confidence_label,
         attribution_reason = EXCLUDED.attribution_reason,
+        ga4_client_id = EXCLUDED.ga4_client_id,
+        ga4_session_id = EXCLUDED.ga4_session_id,
         attributed_at = now(),
         model_version = EXCLUDED.model_version
     `,
@@ -745,8 +979,12 @@ async function persistAttribution(client: PoolClient, order: OrderRow, journey: 
       normalizeNullableString(primaryCredit.term),
       normalizeNullableString(primaryCredit.clickIdType),
       normalizeNullableString(primaryCredit.clickIdValue),
+      journey.winner?.matchSource ?? 'unattributed',
       journey.confidenceScore,
+      journey.confidenceLabel,
       primaryCredit.attributionReason,
+      journey.winner?.ga4ClientId ?? null,
+      journey.winner?.ga4SessionId ?? null,
       ATTRIBUTION_MODEL_VERSION
     ]
   );
@@ -763,6 +1001,7 @@ async function persistAttribution(client: PoolClient, order: OrderRow, journey: 
       order.shopify_order_id,
       JSON.stringify({
         confidenceScore: journey.confidenceScore,
+        confidenceLabel: journey.confidenceLabel,
         winner: journey.winner ? serializeResolvedTouchpoint(journey.winner) : null,
         timeline: journey.touchpoints.map(serializeResolvedTouchpoint)
       })
@@ -856,7 +1095,8 @@ export async function applySyntheticAttributionForOrder(
     }
 
     const orderOccurredAt = resolveOrderOccurredAt(order);
-    const touchpoint: ResolvedAttributionTouchpoint = {
+    const confidenceScore = input.confidenceScore ?? (input.matchSource === 'shopify_hint_fallback' ? 0.4 : 0.25);
+    const touchpoint = buildResolvedTouchpointFromValues({
       sessionId: null,
       sourceTouchEventId: null,
       occurredAt: input.occurredAt ?? orderOccurredAt,
@@ -868,22 +1108,20 @@ export async function applySyntheticAttributionForOrder(
       clickIdType: normalizeNullableString(input.clickIdType),
       clickIdValue: normalizeNullableString(input.clickIdValue),
       attributionReason: input.attributionReason,
-      ingestionSource: 'customer_identity',
-      isDirect: isDirectTouchpoint({
-        source: normalizeNullableString(input.source),
-        medium: normalizeNullableString(input.medium),
-        campaign: normalizeNullableString(input.campaign),
-        content: normalizeNullableString(input.content),
-        term: normalizeNullableString(input.term),
-        clickIdValue: normalizeNullableString(input.clickIdValue)
-      }),
-      isForced: true
-    };
+      matchSource: input.matchSource,
+      ingestionSource: null,
+      isForced: true,
+      ga4ClientId: normalizeNullableString(input.ga4ClientId),
+      ga4SessionId: normalizeNullableString(input.ga4SessionId)
+    });
 
     await persistAttribution(db, order, {
       touchpoints: [touchpoint],
       winner: touchpoint,
-      confidenceScore: input.confidenceScore ?? 0.35
+      confidenceScore,
+      confidenceLabel: confidenceLabelForScore(confidenceScore)
+    }, {
+      preventDowngrade: true
     });
 
     const metricDate = formatDateInTimezone(orderOccurredAt, await getReportingTimezone(db));
@@ -975,5 +1213,7 @@ export const __attributionTestUtils = {
   buildProcessingMetricsLog,
   dedupeDeterministicCandidates,
   selectLastNonDirectWinner,
-  confidenceScoreForWinner
+  confidenceScoreForWinner,
+  confidenceLabelForScore,
+  selectGa4FallbackWinner
 };

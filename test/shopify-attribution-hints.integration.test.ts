@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Pool } from 'pg';
@@ -83,6 +84,7 @@ async function insertTrackingSession(pool: Pool, input: TrackingSessionInput): P
 }
 
 async function insertTrackingEvent(pool: Pool, input: TrackingEventInput): Promise<void> {
+  const rawPayload = '{}';
   await pool.query(
     `
       INSERT INTO tracking_events (
@@ -96,9 +98,11 @@ async function insertTrackingEvent(pool: Pool, input: TrackingEventInput): Promi
         gclid,
         shopify_checkout_token,
         shopify_cart_token,
-        raw_payload
+        raw_payload,
+        payload_size_bytes,
+        payload_hash
       )
-      VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, '{}'::jsonb)
+      VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13)
     `,
     [
       input.sessionId,
@@ -110,12 +114,16 @@ async function insertTrackingEvent(pool: Pool, input: TrackingEventInput): Promi
       input.utmCampaign ?? null,
       input.gclid ?? null,
       input.shopifyCheckoutToken ?? null,
-      input.shopifyCartToken ?? null
+      input.shopifyCartToken ?? null,
+      rawPayload,
+      Buffer.byteLength(rawPayload, 'utf8'),
+      createHash('sha256').update(rawPayload).digest('hex')
     ]
   );
 }
 
 async function insertShopifyOrder(pool: Pool, input: ShopifyOrderInput): Promise<void> {
+  const rawPayload = input.rawPayload ?? JSON.stringify({ id: input.shopifyOrderId });
   await pool.query(
     `
       INSERT INTO shopify_orders (
@@ -129,6 +137,8 @@ async function insertShopifyOrder(pool: Pool, input: ShopifyOrderInput): Promise
         cart_token,
         source_name,
         raw_payload,
+        payload_size_bytes,
+        payload_hash,
         ingested_at
       )
       VALUES (
@@ -142,6 +152,8 @@ async function insertShopifyOrder(pool: Pool, input: ShopifyOrderInput): Promise
         $5,
         $6,
         $7::jsonb,
+        $8,
+        $9,
         now()
       )
     `,
@@ -152,7 +164,9 @@ async function insertShopifyOrder(pool: Pool, input: ShopifyOrderInput): Promise
       input.checkoutToken ?? null,
       input.cartToken ?? null,
       input.sourceName ?? 'web',
-      input.rawPayload ?? JSON.stringify({ id: input.shopifyOrderId })
+      rawPayload,
+      Buffer.byteLength(rawPayload, 'utf8'),
+      createHash('sha256').update(rawPayload).digest('hex')
     ]
   );
 }
@@ -191,7 +205,9 @@ async function fetchAttributionResult(shopifyOrderId: string) {
     attributed_campaign: string | null;
     attributed_click_id_type: string | null;
     attributed_click_id_value: string | null;
+    match_source: string;
     confidence_score: string;
+    confidence_label: string;
     attribution_reason: string;
   }>(
     `
@@ -202,7 +218,9 @@ async function fetchAttributionResult(shopifyOrderId: string) {
         attributed_campaign,
         attributed_click_id_type,
         attributed_click_id_value,
+        match_source,
         confidence_score::text,
+        confidence_label,
         attribution_reason
       FROM attribution_results
       WHERE shopify_order_id = $1
@@ -278,13 +296,16 @@ test('recoverShopifyAttributionHints applies click-id-backed synthetic attributi
       attributed_campaign: null,
       attributed_click_id_type: 'fbclid',
       attributed_click_id_value: 'FB-CLICK-123',
+      match_source: 'shopify_hint_fallback',
       confidence_score: '0.55',
+      confidence_label: 'low',
       attribution_reason: 'shopify_hint_derived'
     });
 
     const snapshot = await fetchOrderSnapshot('order-shopify-hint-click-id-1');
     assert.ok(snapshot);
     assert.equal(snapshot?.confidenceScore, 0.55);
+    assert.equal(snapshot?.confidenceLabel, 'low');
     assert.deepEqual(snapshot?.winner, {
       sessionId: null,
       sourceTouchEventId: null,
@@ -297,7 +318,11 @@ test('recoverShopifyAttributionHints applies click-id-backed synthetic attributi
       clickIdType: 'fbclid',
       clickIdValue: 'FB-CLICK-123',
       attributionReason: 'shopify_hint_derived',
-      ingestionSource: 'customer_identity',
+      matchSource: 'shopify_hint_fallback',
+      confidenceLabel: 'low',
+      ingestionSource: null,
+      ga4ClientId: null,
+      ga4SessionId: null,
       isDirect: false
     });
     assert.deepEqual(snapshot?.timeline, [snapshot?.winner]);
@@ -416,13 +441,16 @@ test('recoverShopifyAttributionHints suppresses Shopify fallback when checkout o
       attributed_campaign: 'brand-search',
       attributed_click_id_type: 'gclid',
       attributed_click_id_value: 'gclid-123',
+      match_source: 'landing_session_id',
       confidence_score: '1.00',
+      confidence_label: 'high',
       attribution_reason: 'matched_by_landing_session'
     });
 
     const snapshot = await fetchOrderSnapshot('order-shopify-hint-suppressed-1');
     assert.ok(snapshot);
     assert.equal(snapshot?.confidenceScore, 1);
+    assert.equal(snapshot?.confidenceLabel, 'high');
     assert.deepEqual(snapshot?.winner, {
       sessionId: checkoutSessionId,
       sourceTouchEventId: snapshot?.winner && typeof snapshot.winner === 'object' ? (snapshot.winner as Record<string, unknown>).sourceTouchEventId : null,
@@ -435,7 +463,11 @@ test('recoverShopifyAttributionHints suppresses Shopify fallback when checkout o
       clickIdType: 'gclid',
       clickIdValue: 'gclid-123',
       attributionReason: 'matched_by_landing_session',
+      matchSource: 'landing_session_id',
+      confidenceLabel: 'high',
       ingestionSource: 'landing_session_id',
+      ga4ClientId: null,
+      ga4SessionId: null,
       isDirect: false
     });
   } finally {

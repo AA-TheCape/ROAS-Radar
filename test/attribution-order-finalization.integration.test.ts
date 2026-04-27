@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Pool } from 'pg';
@@ -10,11 +11,13 @@ process.env.SHOPIFY_WEBHOOK_SECRET ??= 'test-webhook-secret';
 async function getModules() {
   const poolModule = await import('../src/db/pool.js');
   const attributionModule = await import('../src/modules/attribution/index.js');
+  const ga4FallbackModule = await import('../src/modules/attribution/ga4-fallback-candidates.js');
 
   return {
     pool: poolModule.pool,
     enqueueAttributionForOrder: attributionModule.enqueueAttributionForOrder,
-    processAttributionQueue: attributionModule.processAttributionQueue
+    processAttributionQueue: attributionModule.processAttributionQueue,
+    upsertGa4FallbackCandidates: ga4FallbackModule.upsertGa4FallbackCandidates
   };
 }
 
@@ -159,6 +162,7 @@ async function insertTrackingSession(pool: Pool, input: TrackingSessionInput): P
 }
 
 async function insertTrackingEvent(pool: Pool, input: TrackingEventInput): Promise<string> {
+  const rawPayload = '{}';
   const result = await pool.query<{ id: string }>(
     `
       INSERT INTO tracking_events (
@@ -180,7 +184,9 @@ async function insertTrackingEvent(pool: Pool, input: TrackingEventInput): Promi
         msclkid,
         shopify_checkout_token,
         shopify_cart_token,
-        raw_payload
+        raw_payload,
+        payload_size_bytes,
+        payload_hash
       )
       VALUES (
         $1::uuid,
@@ -201,7 +207,9 @@ async function insertTrackingEvent(pool: Pool, input: TrackingEventInput): Promi
         $16,
         $17,
         $18,
-        '{}'::jsonb
+        $19::jsonb,
+        $20,
+        $21
       )
       RETURNING id::text
     `,
@@ -223,7 +231,10 @@ async function insertTrackingEvent(pool: Pool, input: TrackingEventInput): Promi
       input.ttclid ?? null,
       input.msclkid ?? null,
       input.shopifyCheckoutToken ?? null,
-      input.shopifyCartToken ?? null
+      input.shopifyCartToken ?? null,
+      rawPayload,
+      Buffer.byteLength(rawPayload, 'utf8'),
+      createHash('sha256').update(rawPayload).digest('hex')
     ]
   );
 
@@ -231,6 +242,7 @@ async function insertTrackingEvent(pool: Pool, input: TrackingEventInput): Promi
 }
 
 async function insertShopifyOrder(pool: Pool, input: ShopifyOrderInput): Promise<void> {
+  const rawPayload = input.rawPayload ?? JSON.stringify({ id: input.shopifyOrderId });
   await pool.query(
     `
       INSERT INTO shopify_orders (
@@ -245,6 +257,8 @@ async function insertShopifyOrder(pool: Pool, input: ShopifyOrderInput): Promise
         customer_identity_id,
         source_name,
         raw_payload,
+        payload_size_bytes,
+        payload_hash,
         ingested_at
       )
       VALUES (
@@ -259,6 +273,8 @@ async function insertShopifyOrder(pool: Pool, input: ShopifyOrderInput): Promise
         $8::uuid,
         $9,
         $10::jsonb,
+        $11,
+        $12,
         now()
       )
     `,
@@ -272,7 +288,9 @@ async function insertShopifyOrder(pool: Pool, input: ShopifyOrderInput): Promise
       input.cartToken ?? null,
       input.customerIdentityId ?? null,
       input.sourceName ?? 'web',
-      input.rawPayload ?? JSON.stringify({ id: input.shopifyOrderId })
+      rawPayload,
+      Buffer.byteLength(rawPayload, 'utf8'),
+      createHash('sha256').update(rawPayload).digest('hex')
     ]
   );
 }
@@ -292,6 +310,44 @@ async function processOrder(shopifyOrderId: string) {
   assert.equal(queueResult.failedJobs, 0);
 }
 
+async function insertGa4FallbackCandidate(input: {
+  occurredAt: string;
+  customerIdentityId?: string | null;
+  emailHash?: string | null;
+  transactionId?: string | null;
+  source?: string | null;
+  medium?: string | null;
+  campaign?: string | null;
+  clickIdType?: string | null;
+  clickIdValue?: string | null;
+  ga4ClientId?: string | null;
+  ga4SessionId?: string | null;
+}): Promise<void> {
+  const { upsertGa4FallbackCandidates } = await getModules();
+  await upsertGa4FallbackCandidates([
+    {
+      occurredAt: input.occurredAt,
+      ga4UserKey: input.ga4ClientId ?? 'ga4-user-1',
+      ga4ClientId: input.ga4ClientId ?? 'ga4-client-1',
+      ga4SessionId: input.ga4SessionId ?? 'ga4-session-1',
+      transactionId: input.transactionId ?? null,
+      emailHash: input.emailHash ?? null,
+      customerIdentityId: input.customerIdentityId ?? null,
+      source: input.source ?? 'google',
+      medium: input.medium ?? 'cpc',
+      campaign: input.campaign ?? 'ga4-campaign',
+      content: null,
+      term: null,
+      clickIdType: input.clickIdType ?? null,
+      clickIdValue: input.clickIdValue ?? null,
+      sessionHasRequiredFields: true,
+      sourceExportHour: '2026-04-07T09:00:00.000Z',
+      sourceDataset: 'ga4_export',
+      sourceTableType: 'events'
+    }
+  ]);
+}
+
 async function fetchAttributionResult(shopifyOrderId: string) {
   const { pool } = await getModules();
 
@@ -302,7 +358,9 @@ async function fetchAttributionResult(shopifyOrderId: string) {
     attributed_campaign: string | null;
     attributed_click_id_type: string | null;
     attributed_click_id_value: string | null;
+    match_source: string;
     confidence_score: string;
+    confidence_label: string;
     attribution_reason: string;
   }>(
     `
@@ -313,7 +371,9 @@ async function fetchAttributionResult(shopifyOrderId: string) {
         attributed_campaign,
         attributed_click_id_type,
         attributed_click_id_value,
+        match_source,
         confidence_score::text,
+        confidence_label,
         attribution_reason
       FROM attribution_results
       WHERE shopify_order_id = $1
@@ -346,6 +406,7 @@ async function resetIntegrationDatabase() {
     TRUNCATE TABLE
       attribution_jobs,
       shopify_order_writeback_jobs,
+      ga4_fallback_candidates,
       attribution_order_credits,
       attribution_results,
       daily_reporting_metrics,
@@ -407,7 +468,9 @@ test('order finalization persists a deterministic last non-direct winner snapsho
           utm_medium,
           utm_campaign,
           gclid,
-          raw_payload
+          raw_payload,
+          payload_size_bytes,
+          payload_hash
         )
         VALUES (
           $1::uuid,
@@ -419,7 +482,9 @@ test('order finalization persists a deterministic last non-direct winner snapsho
           'cpc',
           'brand-search',
           'gclid-123',
-          '{}'::jsonb
+          '{}'::jsonb,
+          2,
+          '44136fa355b3678a1146ad16f7e8649e94fb4fc21fE77e8310c060f61caaff8a'
         )
         RETURNING id::text
       `,
@@ -452,7 +517,9 @@ test('order finalization persists a deterministic last non-direct winner snapsho
           occurred_at,
           page_url,
           shopify_checkout_token,
-          raw_payload
+          raw_payload,
+          payload_size_bytes,
+          payload_hash
         )
         VALUES (
           $1::uuid,
@@ -460,7 +527,9 @@ test('order finalization persists a deterministic last non-direct winner snapsho
           '2026-04-03T09:00:00.000Z',
           'https://store.example/checkout',
           'checkout-direct-1',
-          '{}'::jsonb
+          '{}'::jsonb,
+          2,
+          '44136fa355b3678a1146ad16f7e8649e94fb4fc21fE77e8310c060f61caaff8a'
         )
       `,
       [directSessionId]
@@ -478,6 +547,8 @@ test('order finalization persists a deterministic last non-direct winner snapsho
           checkout_token,
           source_name,
           raw_payload,
+          payload_size_bytes,
+          payload_hash,
           ingested_at
         )
         VALUES (
@@ -490,6 +561,8 @@ test('order finalization persists a deterministic last non-direct winner snapsho
           'checkout-direct-1',
           'web',
           '{"id":"order-finalization-1"}'::jsonb,
+          28,
+          'c15b0db248f5ab1ba4e5ec8d6d4f251f47a7a2d43b7a9578535971a6dd2ed6fb',
           now()
         )
       `,
@@ -557,7 +630,11 @@ test('order finalization persists a deterministic last non-direct winner snapsho
       clickIdType: 'gclid',
       clickIdValue: 'gclid-123',
       attributionReason: 'matched_by_landing_session',
+      matchSource: 'landing_session_id',
+      confidenceLabel: 'high',
       ingestionSource: 'landing_session_id',
+      ga4ClientId: null,
+      ga4SessionId: null,
       isDirect: false
     });
     assert.equal(Array.isArray(snapshot?.timeline), true);
@@ -641,7 +718,9 @@ test('latest non-direct winner survives a multi-touch timeline with a later dire
       attributed_campaign: 'retargeting',
       attributed_click_id_type: null,
       attributed_click_id_value: null,
+      match_source: 'customer_identity',
       confidence_score: '0.60',
+      confidence_label: 'medium',
       attribution_reason: 'matched_by_customer_identity'
     });
 
@@ -704,7 +783,9 @@ test('click-id-only identity touches stay non-direct and beat later direct revis
       attributed_campaign: null,
       attributed_click_id_type: 'fbclid',
       attributed_click_id_value: 'fbclid-abc',
+      match_source: 'customer_identity',
       confidence_score: '0.60',
+      confidence_label: 'medium',
       attribution_reason: 'matched_by_customer_identity'
     });
   } finally {
@@ -825,7 +906,11 @@ test('same-session evidence is deduped before winner selection and keeps the str
       clickIdType: null,
       clickIdValue: null,
       attributionReason: 'matched_by_landing_session',
+      matchSource: 'landing_session_id',
+      confidenceLabel: 'high',
       ingestionSource: 'landing_session_id',
+      ga4ClientId: null,
+      ga4SessionId: null,
       isDirect: false
     });
   } finally {
@@ -906,8 +991,153 @@ test('out-of-window and future-dated candidates are excluded so in-window direct
       attributed_campaign: null,
       attributed_click_id_type: null,
       attributed_click_id_value: null,
+      match_source: 'customer_identity',
       confidence_score: '0.60',
+      confidence_label: 'medium',
       attribution_reason: 'matched_by_customer_identity'
+    });
+  } finally {
+    await resetIntegrationDatabase();
+  }
+});
+
+test('Shopify hint fallback wins before GA4 fallback when deterministic matching fails', async () => {
+  await resetIntegrationDatabase();
+  const { pool } = await getModules();
+  const customerIdentityId = '44444444-4444-4444-8444-444444444444';
+
+  try {
+    await insertCustomerIdentity(pool, customerIdentityId);
+    await insertGa4FallbackCandidate({
+      occurredAt: '2026-04-07T08:30:00.000Z',
+      customerIdentityId,
+      source: 'google',
+      medium: 'cpc',
+      campaign: 'ga4-candidate',
+      clickIdType: 'gclid',
+      clickIdValue: 'gclid-ga4-1'
+    });
+
+    await insertShopifyOrder(pool, {
+      shopifyOrderId: 'order-shopify-before-ga4-1',
+      processedAt: '2026-04-07T09:05:00.000Z',
+      customerIdentityId,
+      rawPayload: JSON.stringify({
+        id: 'order-shopify-before-ga4-1',
+        source_name: 'web',
+        landing_site:
+          'https://store.example/products/widget?utm_source=klaviyo&utm_medium=email&utm_campaign=spring-drop'
+      })
+    });
+
+    await processOrder('order-shopify-before-ga4-1');
+
+    const attributionResult = await fetchAttributionResult('order-shopify-before-ga4-1');
+    assert.deepEqual(attributionResult, {
+      session_id: null,
+      attributed_source: 'email',
+      attributed_medium: 'email',
+      attributed_campaign: 'spring-drop',
+      attributed_click_id_type: null,
+      attributed_click_id_value: null,
+      match_source: 'shopify_hint_fallback',
+      confidence_score: '0.40',
+      confidence_label: 'low',
+      attribution_reason: 'shopify_hint_derived'
+    });
+
+    const snapshot = await fetchOrderSnapshot('order-shopify-before-ga4-1');
+    assert.equal(snapshot?.confidenceLabel, 'low');
+    assert.deepEqual(snapshot?.winner, {
+      sessionId: null,
+      sourceTouchEventId: null,
+      occurredAt: '2026-04-07T09:05:00.000Z',
+      source: 'email',
+      medium: 'email',
+      campaign: 'spring-drop',
+      content: null,
+      term: null,
+      clickIdType: null,
+      clickIdValue: null,
+      attributionReason: 'shopify_hint_derived',
+      matchSource: 'shopify_hint_fallback',
+      confidenceLabel: 'low',
+      ingestionSource: null,
+      ga4ClientId: null,
+      ga4SessionId: null,
+      isDirect: false
+    });
+  } finally {
+    await resetIntegrationDatabase();
+  }
+});
+
+test('GA4 fallback resolves only after deterministic and Shopify hint paths fail', async () => {
+  await resetIntegrationDatabase();
+  const { pool } = await getModules();
+  const customerIdentityId = '55555555-5555-4555-8555-555555555555';
+
+  try {
+    await insertCustomerIdentity(pool, customerIdentityId);
+    await insertGa4FallbackCandidate({
+      occurredAt: '2026-04-07T08:55:00.000Z',
+      customerIdentityId,
+      source: 'google',
+      medium: 'cpc',
+      campaign: 'ga4-fallback',
+      clickIdType: 'gclid',
+      clickIdValue: 'gclid-ga4-win',
+      ga4ClientId: 'ga4-client-77',
+      ga4SessionId: 'ga4-session-77'
+    });
+
+    await insertShopifyOrder(pool, {
+      shopifyOrderId: 'order-ga4-fallback-1',
+      processedAt: '2026-04-07T09:05:00.000Z',
+      customerIdentityId,
+      rawPayload: JSON.stringify({
+        id: 'order-ga4-fallback-1',
+        source_name: 'web',
+        landing_site: 'https://store.example/products/widget'
+      })
+    });
+
+    await processOrder('order-ga4-fallback-1');
+
+    const attributionResult = await fetchAttributionResult('order-ga4-fallback-1');
+    assert.deepEqual(attributionResult, {
+      session_id: null,
+      attributed_source: 'google',
+      attributed_medium: 'cpc',
+      attributed_campaign: 'ga4-fallback',
+      attributed_click_id_type: 'gclid',
+      attributed_click_id_value: 'gclid-ga4-win',
+      match_source: 'ga4_fallback',
+      confidence_score: '0.35',
+      confidence_label: 'low',
+      attribution_reason: 'ga4_fallback_derived'
+    });
+
+    const snapshot = await fetchOrderSnapshot('order-ga4-fallback-1');
+    assert.equal(snapshot?.confidenceLabel, 'low');
+    assert.deepEqual(snapshot?.winner, {
+      sessionId: null,
+      sourceTouchEventId: null,
+      occurredAt: '2026-04-07T08:55:00.000Z',
+      source: 'google',
+      medium: 'cpc',
+      campaign: 'ga4-fallback',
+      content: null,
+      term: null,
+      clickIdType: 'gclid',
+      clickIdValue: 'gclid-ga4-win',
+      attributionReason: 'ga4_fallback_derived',
+      matchSource: 'ga4_fallback',
+      confidenceLabel: 'low',
+      ingestionSource: null,
+      ga4ClientId: 'ga4-client-77',
+      ga4SessionId: 'ga4-session-77',
+      isDirect: false
     });
   } finally {
     await resetIntegrationDatabase();
@@ -934,13 +1164,16 @@ test('orders with no deterministic candidates persist an unattributed fallback s
       attributed_campaign: null,
       attributed_click_id_type: null,
       attributed_click_id_value: null,
+      match_source: 'unattributed',
       confidence_score: '0.00',
+      confidence_label: 'none',
       attribution_reason: 'unattributed'
     });
 
     const snapshot = await fetchOrderSnapshot('order-unattributed-1');
     assert.ok(snapshot);
     assert.equal(snapshot?.confidenceScore, 0);
+    assert.equal(snapshot?.confidenceLabel, 'none');
     assert.equal(snapshot?.winner, null);
     assert.deepEqual(snapshot?.timeline, []);
   } finally {

@@ -10,6 +10,7 @@ async function getTestUtils() {
 
 type TestUtils = Awaited<ReturnType<typeof getTestUtils>>;
 type TestTouchpoint = Parameters<TestUtils['dedupeDeterministicCandidates']>[0][number];
+type TestGa4Candidate = Parameters<TestUtils['selectGa4FallbackWinner']>[0][number];
 
 function buildTouchpoint(
   sessionId: string,
@@ -31,6 +32,35 @@ function buildTouchpoint(
     ingestionSource: 'customer_identity',
     isDirect: false,
     isForced: false,
+    ...overrides
+  };
+}
+
+function buildGa4Candidate(
+  occurredAt: string,
+  overrides: Partial<TestGa4Candidate> = {}
+): TestGa4Candidate {
+  return {
+    candidateKey: `candidate-${occurredAt}`,
+    occurredAt,
+    ga4UserKey: 'user-1',
+    ga4ClientId: 'client-1',
+    ga4SessionId: 'session-1',
+    transactionId: null,
+    emailHash: null,
+    customerIdentityId: null,
+    source: 'google',
+    medium: 'cpc',
+    campaign: 'spring-search',
+    content: null,
+    term: null,
+    clickIdType: null,
+    clickIdValue: null,
+    sessionHasRequiredFields: true,
+    sourceExportHour: '2026-04-01T10:00:00.000Z',
+    sourceDataset: 'ga4_export',
+    sourceTableType: 'events',
+    retainedUntil: '2026-05-01T10:00:00.000Z',
     ...overrides
   };
 }
@@ -209,4 +239,116 @@ test('latest non-direct wins even when the newer touch has UTMs and no click id'
   );
 
   assert.equal(winner?.sessionId, 'session-newer-utm');
+});
+
+test('GA4 fallback chooses the latest eligible candidate and keeps low confidence buckets', async () => {
+  const testUtils = await getTestUtils();
+  const winner = testUtils.selectGa4FallbackWinner(
+    [
+      buildGa4Candidate('2026-04-01T10:00:00.000Z', {
+        clickIdType: 'gclid',
+        clickIdValue: 'gclid-older'
+      }),
+      buildGa4Candidate('2026-04-02T10:00:00.000Z', {
+        candidateKey: 'latest-utm-only',
+        ga4SessionId: 'session-2',
+        clickIdType: null,
+        clickIdValue: null
+      })
+    ],
+    new Date('2026-04-03T00:00:00.000Z')
+  );
+
+  assert.equal(winner?.candidateKey, 'latest-utm-only');
+  assert.equal(testUtils.confidenceLabelForScore(0.35), 'low');
+  assert.equal(testUtils.confidenceLabelForScore(0.25), 'low');
+});
+
+test('GA4 fallback same-timestamp ties prefer click ids, then richer dimensions, then lexical identifiers', async () => {
+  const testUtils = await getTestUtils();
+  const clickIdWinner = testUtils.selectGa4FallbackWinner(
+    [
+      buildGa4Candidate('2026-04-02T10:00:00.000Z', {
+        candidateKey: 'utm-only',
+        ga4SessionId: 'session-b',
+        clickIdType: null,
+        clickIdValue: null
+      }),
+      buildGa4Candidate('2026-04-02T10:00:00.000Z', {
+        candidateKey: 'click-id',
+        ga4SessionId: 'session-a',
+        clickIdType: 'fbclid',
+        clickIdValue: 'FB-CLICK-1'
+      })
+    ],
+    new Date('2026-04-03T00:00:00.000Z')
+  );
+  assert.equal(clickIdWinner?.candidateKey, 'click-id');
+
+  const richerDimensionsWinner = testUtils.selectGa4FallbackWinner(
+    [
+      buildGa4Candidate('2026-04-02T10:00:00.000Z', {
+        candidateKey: 'one-dimension',
+        ga4SessionId: 'session-b',
+        clickIdType: null,
+        clickIdValue: null,
+        medium: null,
+        campaign: null
+      }),
+      buildGa4Candidate('2026-04-02T10:00:00.000Z', {
+        candidateKey: 'more-dimensions',
+        ga4SessionId: 'session-c',
+        clickIdType: null,
+        clickIdValue: null,
+        campaign: 'retargeting'
+      })
+    ],
+    new Date('2026-04-03T00:00:00.000Z')
+  );
+  assert.equal(richerDimensionsWinner?.candidateKey, 'more-dimensions');
+
+  const lexicalWinner = testUtils.selectGa4FallbackWinner(
+    [
+      buildGa4Candidate('2026-04-02T10:00:00.000Z', {
+        candidateKey: 'session-b',
+        ga4SessionId: 'session-b',
+        clickIdType: null,
+        clickIdValue: null,
+        campaign: null
+      }),
+      buildGa4Candidate('2026-04-02T10:00:00.000Z', {
+        candidateKey: 'session-a',
+        ga4SessionId: 'session-a',
+        clickIdType: null,
+        clickIdValue: null,
+        campaign: null
+      })
+    ],
+    new Date('2026-04-03T00:00:00.000Z')
+  );
+  assert.equal(lexicalWinner?.candidateKey, 'session-a');
+});
+
+test('GA4 fallback rejects future-dated and empty candidates', async () => {
+  const testUtils = await getTestUtils();
+  const winner = testUtils.selectGa4FallbackWinner(
+    [
+      buildGa4Candidate('2026-04-04T10:00:00.000Z', {
+        candidateKey: 'future-candidate'
+      }),
+      buildGa4Candidate('2026-04-02T10:00:00.000Z', {
+        candidateKey: 'empty-candidate',
+        source: null,
+        medium: null,
+        campaign: null,
+        content: null,
+        term: null,
+        clickIdType: null,
+        clickIdValue: null
+      })
+    ],
+    new Date('2026-04-03T00:00:00.000Z')
+  );
+
+  assert.equal(winner, null);
 });
