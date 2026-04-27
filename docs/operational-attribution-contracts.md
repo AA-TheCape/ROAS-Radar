@@ -11,6 +11,7 @@ Use it together with:
 
 - `docs/attribution-schema-v1.md` for field names, normalization, and canonical Shopify keys
 - `docs/analytics-playbook.md` for reporting interpretation
+- `docs/ga4-fallback-attribution-contract-v1.md` for the approved GA4 fallback eligibility, precedence, and persistence contract
 - `docs/runbooks/attribution-completeness.md` for incidents affecting capture, writeback, or resolver quality
 - `docs/runbooks/ingestion-failures.md` for `/track` and Shopify webhook ingestion failures
 - `docs/runbooks/attribution-worker-backlog.md` for stuck attribution or writeback queues
@@ -20,6 +21,7 @@ Use it together with:
 This contract covers:
 
 - deterministic order-to-session resolver precedence
+- fallback precedence across Shopify hints, GA4, and unattributed outcomes
 - last-non-direct primary winner semantics
 - Shopify order note-attribute writeback behavior
 - retry, dead-letter, and reconciliation semantics
@@ -35,6 +37,9 @@ The attribution worker in `src/modules/attribution/index.ts` collects determinis
 2. `checkout_token`
 3. `cart_token`
 4. stitched `identity_journey`
+5. `shopify_hint_fallback`
+6. `ga4_fallback`
+7. `unattributed`
 
 Current attribution window:
 
@@ -61,7 +66,18 @@ Current confidence semantics:
 - `1.00`: `landing_session_id` or `checkout_token`
 - `0.90`: `cart_token`
 - `0.60`: stitched `identity_journey` fallback
+- `0.55`: Shopify hint fallback with a supported click ID
+- `0.40`: Shopify hint fallback with canonical UTMs and no click ID
+- `0.35`: GA4 fallback with a supported click ID
+- `0.25`: GA4 fallback with canonical UTMs and no click ID
 - `0.00`: no deterministic winner
+
+Current confidence labels:
+
+- `high`: `1.00`, `0.90`
+- `medium`: `0.60`
+- `low`: `0.55`, `0.40`, `0.35`, `0.25`
+- `none`: `0.00`
 
 ### Last Non-Direct winner behavior
 
@@ -83,6 +99,7 @@ Classification rules:
 Related references:
 
 - `docs/analytics-playbook.md`
+- `docs/ga4-fallback-attribution-contract-v1.md`
 - `docs/last-non-direct-touch-approval-matrix.md`
 - `docs/visitor-identity-stitching.md`
 
@@ -90,6 +107,29 @@ Rollout note:
 
 - the attribution worker still reads the dual-written `customer_identity_id` compatibility alias internally in some paths
 - operators should treat `identity_journey_id` as the canonical contract and `customer_identity_id` as transitional storage only
+
+## Fallback Precedence Contract
+
+When deterministic resolution produces no winner, the resolver may continue through approved fallback steps in this order:
+
+1. Shopify synthetic hint fallback
+2. GA4 fallback
+3. unattributed
+
+Hard rules:
+
+- Shopify hint fallback is recovery-only and must never override a deterministic winner
+- GA4 fallback is eligible only when deterministic resolution has no winner and Shopify hint fallback has no match
+- GA4 fallback may replace an otherwise unattributed outcome, but it must not replace deterministic or Shopify hint outcomes
+
+Persistence and provenance rules:
+
+- downstream-facing surfaces must persist first-class provenance in `match_source`
+- `match_source` values for current primary outcomes are `landing_session_id`, `checkout_token`, `cart_token`, `customer_identity`, `shopify_hint_fallback`, `ga4_fallback`, and `unattributed`
+- `attribution_reason` explains why the system chose the outcome, while `match_source` explains where the winning match came from
+- fallback outcomes can keep `session_id = null` when no first-party ROAS Radar session was resolved
+
+GA4-specific behavior is governed by `docs/ga4-fallback-attribution-contract-v1.md`.
 
 ## Shopify Writeback Contract
 
