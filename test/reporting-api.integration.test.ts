@@ -217,6 +217,85 @@ test('reporting spend details and lowest buckets are scoped to the requested dat
   }
 });
 
+test('reporting orders only returns online store Shopify orders', async () => {
+  await resetE2EDatabase();
+  await pool.query(
+    `INSERT INTO shopify_orders (
+      shopify_order_id,
+      shopify_order_number,
+      currency_code,
+      subtotal_price,
+      total_price,
+      processed_at,
+      source_name,
+      raw_payload
+    ) VALUES
+      ($1, $2, 'USD', '75.00', '80.00', $3, 'web', '{}'::jsonb),
+      ($4, $5, 'USD', '45.00', '50.00', $6, 'pos', '{}'::jsonb)`,
+    [
+      'web-order-1',
+      '18387',
+      '2026-04-10T13:00:00.000Z',
+      'pos-order-1',
+      '18388',
+      '2026-04-10T14:00:00.000Z'
+    ]
+  );
+
+  await pool.query(
+    `INSERT INTO attribution_order_credits (
+      shopify_order_id,
+      attribution_model,
+      touchpoint_position,
+      session_id,
+      touchpoint_occurred_at,
+      attributed_source,
+      attributed_medium,
+      attributed_campaign,
+      credit_weight,
+      revenue_credit,
+      is_primary,
+      attribution_reason,
+      model_version
+    ) VALUES
+      ($1, 'last_touch', 1, NULL, $2, 'facebook', 'paid_social', 'prospecting-us', '1.0', '80.00', true, 'matched_by_checkout_token', 1),
+      ($3, 'last_touch', 1, NULL, $4, 'pos', 'offline', 'retail', '1.0', '50.00', true, 'matched_by_checkout_token', 1)`,
+    [
+      'web-order-1',
+      '2026-04-10T12:55:00.000Z',
+      'pos-order-1',
+      '2026-04-10T13:55:00.000Z'
+    ]
+  );
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(
+      server,
+      '/api/reporting/orders?startDate=2026-04-10&endDate=2026-04-10&limit=10'
+    );
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(body, {
+      rows: [
+        {
+          shopifyOrderId: 'web-order-1',
+          processedAt: '2026-04-10T13:00:00.000Z',
+          totalPrice: 80,
+          source: 'facebook',
+          medium: 'paid_social',
+          campaign: 'prospecting-us',
+          attributionReason: 'matched_by_checkout_token'
+        }
+      ]
+    });
+  } finally {
+    await closeServer(server);
+    await resetE2EDatabase();
+  }
+});
+
 test.after(async () => {
   await pool.end();
 });

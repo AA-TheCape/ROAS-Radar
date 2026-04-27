@@ -372,6 +372,7 @@ test('reporting orders returns order-level attribution details for debugging', a
     }
 
     assert.match(text, /LEFT JOIN LATERAL/);
+    assert.match(text, /COALESCE\(o\.source_name, ''\) = 'web'/);
     assert.deepEqual(params, ['2026-04-01', '2026-04-10', 'last_touch', 'facebook', 'America/Los_Angeles', 1]);
 
     return {
