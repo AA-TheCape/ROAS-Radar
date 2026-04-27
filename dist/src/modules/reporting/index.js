@@ -19,10 +19,17 @@ class ReportingHttpError extends Error {
     }
 }
 const dateStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const attributionTierSchema = z.enum([
+    'deterministic_first_party',
+    'deterministic_shopify_hint',
+    'ga4_fallback',
+    'unattributed'
+]);
 const baseFiltersObjectSchema = z.object({
     startDate: dateStringSchema,
     endDate: dateStringSchema,
     attributionModel: z.enum(ATTRIBUTION_MODELS).optional().default('last_touch'),
+    attributionTier: attributionTierSchema.optional(),
     source: z.string().trim().min(1).optional(),
     campaign: z.string().trim().min(1).optional()
 });
@@ -81,7 +88,7 @@ function buildMetricDimensionFilters(attributionModel, source, campaign, alias =
         params
     };
 }
-function buildOrderAttributionFilters(attributionModel, source, campaign) {
+function buildOrderAttributionFilters(attributionModel, source, campaign, attributionTier) {
     const params = [attributionModel];
     const filters = [];
     if (source) {
@@ -91,6 +98,10 @@ function buildOrderAttributionFilters(attributionModel, source, campaign) {
     if (campaign) {
         params.push(campaign);
         filters.push(`c.attributed_campaign = $${params.length + 2}`);
+    }
+    if (attributionTier) {
+        params.push(attributionTier);
+        filters.push(`COALESCE(o.attribution_tier, 'unattributed') = $${params.length + 2}`);
     }
     return {
         sql: filters.length > 0 ? ` AND ${filters.join(' AND ')}` : '',
@@ -355,7 +366,7 @@ export function createReportingRouter() {
     router.get('/orders', async (req, res, next) => {
         try {
             const input = parseInput(ordersQuerySchema, req.query);
-            const filters = buildOrderAttributionFilters(input.attributionModel, input.source, input.campaign);
+            const filters = buildOrderAttributionFilters(input.attributionModel, input.source, input.campaign, input.attributionTier);
             const reportingTimezone = await getReportingTimezone();
             const result = await query(`
           SELECT

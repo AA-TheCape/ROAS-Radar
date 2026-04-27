@@ -1,4 +1,4 @@
-import type { DeterministicIngestionSource, ResolvedIngestionSource, ResolvedAttributionTouchpoint } from './resolver.js';
+import type { DeterministicIngestionSource, ResolvedIngestionSource, ResolvedJourney } from './resolver.js';
 
 export const ORDER_ATTRIBUTION_TIERS = [
   'deterministic_first_party',
@@ -41,44 +41,44 @@ function mapAttributionSource(source: ResolvedIngestionSource): string {
 }
 
 export function buildOrderAttributionAuditRecord(
-  winner: Pick<ResolvedAttributionTouchpoint, 'attributionReason' | 'ingestionSource'> | null,
+  journey: Pick<ResolvedJourney, 'tier' | 'winner' | 'attributionReason'>,
   matchedAt: Date
 ): OrderAttributionAuditRecord {
-  if (!winner || winner.attributionReason === 'unattributed') {
+  if (journey.tier === 'unattributed' || !journey.winner) {
     return {
       tier: 'unattributed',
       source: 'unattributed',
       matchedAt,
-      reason: 'unattributed'
+      reason: journey.attributionReason
     };
   }
 
-  if (winner.ingestionSource === 'shopify_marketing_hint' || winner.attributionReason === 'shopify_hint_derived') {
+  if (journey.tier === 'deterministic_shopify_hint') {
     return {
       tier: 'deterministic_shopify_hint',
       source: 'shopify_marketing_hint',
       matchedAt,
-      reason: winner.attributionReason
+      reason: journey.attributionReason
     };
   }
 
-  if (winner.ingestionSource === 'ga4_fallback') {
+  if (journey.tier === 'ga4_fallback') {
     return {
       tier: 'ga4_fallback',
       source: 'ga4_fallback',
       matchedAt,
-      reason: winner.attributionReason
+      reason: journey.attributionReason
     };
   }
 
-  if (!winner.ingestionSource) {
+  if (!journey.winner.ingestionSource) {
     throw new Error('Deterministic attribution winner is missing an ingestion source');
   }
 
   return {
     tier: 'deterministic_first_party',
-    source: mapAttributionSource(winner.ingestionSource),
+    source: mapAttributionSource(journey.winner.ingestionSource),
     matchedAt,
-    reason: winner.attributionReason
+    reason: journey.attributionReason
   };
 }

@@ -30,6 +30,13 @@ export type ResolvedJourney = {
   touchpoints: ResolvedAttributionTouchpoint[];
   winner: ResolvedAttributionTouchpoint | null;
   confidenceScore: number;
+  attributionReason: string;
+  orderOccurredAtUtc: Date | null;
+  normalizationFailures: Array<{
+    scope: 'order' | 'shopify_hint' | 'ga4_fallback';
+    reason: string;
+    sourceKey: string | null;
+  }>;
 };
 
 export type TieredAttributionCandidate = {
@@ -56,6 +63,11 @@ export type TieredAttributionResolverInput = {
   deterministicFirstParty: TieredAttributionCandidate[];
   shopifyHint: TieredAttributionCandidate[];
   ga4Fallback: TieredAttributionCandidate[];
+  normalizationFailures?: Array<{
+    scope: 'order' | 'shopify_hint' | 'ga4_fallback';
+    reason: string;
+    sourceKey: string | null;
+  }>;
 };
 
 const INGESTION_SOURCE_PRECEDENCE: Record<DeterministicIngestionSource, number> = {
@@ -284,6 +296,30 @@ function compareGa4FallbackCandidates(left: TieredAttributionCandidate, right: T
   return left.sourceKey.localeCompare(right.sourceKey);
 }
 
+function dedupeTierCandidatesBySourceKey(
+  candidates: TieredAttributionCandidate[],
+  compare: (left: TieredAttributionCandidate, right: TieredAttributionCandidate) => number
+): TieredAttributionCandidate[] {
+  const deduped = new Map<string, TieredAttributionCandidate>();
+
+  for (const candidate of candidates) {
+    const existing = deduped.get(candidate.sourceKey);
+    if (!existing || compare(candidate, existing) < 0) {
+      deduped.set(candidate.sourceKey, candidate);
+    }
+  }
+
+  return Array.from(deduped.values()).sort(compare);
+}
+
+function resolveUnattributedReason(input: TieredAttributionResolverInput): string {
+  if (!input.orderOccurredAtUtc) {
+    return input.normalizationFailures?.find((failure) => failure.scope === 'order')?.reason ?? 'missing_order_timestamp';
+  }
+
+  return input.normalizationFailures?.[0]?.reason ?? 'unattributed';
+}
+
 export function resolveAttributionTier(input: TieredAttributionResolverInput): ResolvedJourney {
   const orderOccurredAtUtc = input.orderOccurredAtUtc;
 
@@ -292,7 +328,10 @@ export function resolveAttributionTier(input: TieredAttributionResolverInput): R
       tier: 'unattributed',
       touchpoints: [],
       winner: null,
-      confidenceScore: 0
+      confidenceScore: 0,
+      attributionReason: resolveUnattributedReason(input),
+      orderOccurredAtUtc: null,
+      normalizationFailures: input.normalizationFailures ?? []
     };
   }
 
@@ -308,14 +347,17 @@ export function resolveAttributionTier(input: TieredAttributionResolverInput): R
       tier: 'deterministic_first_party',
       touchpoints: deterministicTouchpoints,
       winner: deterministicWinner,
-      confidenceScore: confidenceScoreForWinner(deterministicWinner)
+      confidenceScore: confidenceScoreForWinner(deterministicWinner),
+      attributionReason: deterministicWinner.attributionReason,
+      orderOccurredAtUtc,
+      normalizationFailures: input.normalizationFailures ?? []
     };
   }
 
-  const shopifyHintTouchpoints = input.shopifyHint
-    .filter((candidate) => isWithinLookbackWindow(orderOccurredAtUtc, candidate.occurredAtUtc))
-    .slice()
-    .sort(compareShopifyHintCandidates);
+  const shopifyHintTouchpoints = dedupeTierCandidatesBySourceKey(
+    input.shopifyHint.filter((candidate) => isWithinLookbackWindow(orderOccurredAtUtc, candidate.occurredAtUtc)),
+    compareShopifyHintCandidates
+  );
   const shopifyHintWinnerCandidate = shopifyHintTouchpoints[0] ?? null;
   const shopifyHintWinner = shopifyHintWinnerCandidate ? mapCandidateToResolvedTouchpoint(shopifyHintWinnerCandidate) : null;
 
@@ -324,14 +366,17 @@ export function resolveAttributionTier(input: TieredAttributionResolverInput): R
       tier: 'deterministic_shopify_hint',
       touchpoints: shopifyHintTouchpoints.map(mapCandidateToResolvedTouchpoint),
       winner: shopifyHintWinner,
-      confidenceScore: shopifyHintWinnerCandidate?.confidenceScore ?? confidenceScoreForWinner(shopifyHintWinner)
+      confidenceScore: shopifyHintWinnerCandidate?.confidenceScore ?? confidenceScoreForWinner(shopifyHintWinner),
+      attributionReason: shopifyHintWinner.attributionReason,
+      orderOccurredAtUtc,
+      normalizationFailures: input.normalizationFailures ?? []
     };
   }
 
-  const ga4FallbackTouchpoints = input.ga4Fallback
-    .filter((candidate) => isWithinLookbackWindow(orderOccurredAtUtc, candidate.occurredAtUtc))
-    .slice()
-    .sort(compareGa4FallbackCandidates);
+  const ga4FallbackTouchpoints = dedupeTierCandidatesBySourceKey(
+    input.ga4Fallback.filter((candidate) => isWithinLookbackWindow(orderOccurredAtUtc, candidate.occurredAtUtc)),
+    compareGa4FallbackCandidates
+  );
   const ga4FallbackWinnerCandidate = ga4FallbackTouchpoints[0] ?? null;
   const ga4FallbackWinner = ga4FallbackWinnerCandidate ? mapCandidateToResolvedTouchpoint(ga4FallbackWinnerCandidate) : null;
 
@@ -340,7 +385,10 @@ export function resolveAttributionTier(input: TieredAttributionResolverInput): R
       tier: 'ga4_fallback',
       touchpoints: ga4FallbackTouchpoints.map(mapCandidateToResolvedTouchpoint),
       winner: ga4FallbackWinner,
-      confidenceScore: ga4FallbackWinnerCandidate?.confidenceScore ?? confidenceScoreForWinner(ga4FallbackWinner)
+      confidenceScore: ga4FallbackWinnerCandidate?.confidenceScore ?? confidenceScoreForWinner(ga4FallbackWinner),
+      attributionReason: ga4FallbackWinner.attributionReason,
+      orderOccurredAtUtc,
+      normalizationFailures: input.normalizationFailures ?? []
     };
   }
 
@@ -348,6 +396,9 @@ export function resolveAttributionTier(input: TieredAttributionResolverInput): R
     tier: 'unattributed',
     touchpoints: [],
     winner: null,
-    confidenceScore: 0
+    confidenceScore: 0,
+    attributionReason: resolveUnattributedReason(input),
+    orderOccurredAtUtc,
+    normalizationFailures: input.normalizationFailures ?? []
   };
 }

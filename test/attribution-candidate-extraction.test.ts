@@ -118,6 +118,67 @@ test('extractAttributionCandidatesForOrder records timestamp failures and drops 
   ]);
 });
 
+test('extractAttributionCandidatesForOrder records non-order normalization failures and dedupes GA4 candidates by stable key', async () => {
+  const testUtils = await getTestUtils();
+
+  const fakeClient = {} as never;
+  const result = await testUtils.extractAttributionCandidatesForOrder(
+    fakeClient,
+    {
+      shopifyOrderId: 'order-3',
+      processedAt: '2026-04-02T14:00:00.000Z',
+      createdAtShopify: null,
+      ingestedAt: '2026-04-02T14:05:00.000Z',
+      landingSessionId: null,
+      checkoutToken: null,
+      cartToken: null,
+      rawPayload: 'not-an-object'
+    },
+    {
+      loadDeterministicFirstPartyCandidates: async () => [],
+      loadGa4Candidates: async () => [
+        {
+          stableIdentifier: 'ga4-dup',
+          occurredAt: '2026-04-02T13:30:00.000Z',
+          source: 'google',
+          medium: 'cpc'
+        },
+        {
+          stableIdentifier: 'ga4-dup',
+          occurredAt: '2026-04-02T13:45:00.000Z',
+          source: 'google',
+          medium: 'cpc',
+          clickIdType: 'gclid',
+          clickIdValue: 'gclid-1'
+        },
+        {
+          stableIdentifier: 'ga4-future',
+          occurredAt: '2026-04-02T14:30:00.000Z',
+          source: 'google',
+          medium: 'cpc'
+        }
+      ]
+    }
+  );
+
+  assert.equal(result.orderOccurredAtUtc?.toISOString(), '2026-04-02T14:00:00.000Z');
+  assert.equal(result.ga4Fallback.length, 1);
+  assert.equal(result.ga4Fallback[0].sourceKey, 'ga4-dup');
+  assert.equal(result.ga4Fallback[0].clickIdValue, 'gclid-1');
+  assert.deepEqual(result.normalizationFailures, [
+    {
+      scope: 'shopify_hint',
+      reason: 'invalid_shopify_payload_shape',
+      sourceKey: 'order-3'
+    },
+    {
+      scope: 'ga4_fallback',
+      reason: 'future_dated_candidate',
+      sourceKey: 'ga4-future'
+    }
+  ]);
+});
+
 test('normalizeTimestampToUtc rejects naive timestamp strings and accepts zoned timestamps', async () => {
   const candidateModule = await import('../src/modules/attribution/candidate-extraction.js');
   assert.equal(candidateModule.normalizeTimestampToUtc('2026-04-02T14:00:00'), null);

@@ -324,6 +324,7 @@ test('resolveAttributionTier only considers Shopify hints inside the 7-day lookb
   assert.equal(resolved.winner?.ingestionSource, 'shopify_marketing_hint');
   assert.equal(resolved.winner?.clickIdType, 'fbclid');
   assert.equal(resolved.touchpoints.length, 1);
+  assert.equal(resolved.attributionReason, 'shopify_hint_derived');
 });
 
 test('resolveAttributionTier falls back to GA4 only when higher tiers are missing or ineligible', async () => {
@@ -368,6 +369,7 @@ test('resolveAttributionTier falls back to GA4 only when higher tiers are missin
   assert.equal(resolved.winner?.ingestionSource, 'ga4_fallback');
   assert.equal(resolved.winner?.clickIdType, 'gclid');
   assert.equal(resolved.touchpoints.length, 1);
+  assert.equal(resolved.attributionReason, 'ga4_fallback_match');
 });
 
 test('resolveAttributionTier is deterministic across repeated runs and returns unattributed when nothing qualifies', async () => {
@@ -415,6 +417,7 @@ test('resolveAttributionTier is deterministic across repeated runs and returns u
   );
   assert.equal(first.tier, 'unattributed');
   assert.equal(first.winner, null);
+  assert.equal(first.attributionReason, 'unattributed');
 });
 
 test('isDirectTouchpoint only treats fully empty marketing metadata as direct', async () => {
@@ -509,6 +512,90 @@ test('resolveAttributionTier returns unattributed when the order timestamp is mi
   assert.equal(resolved.winner, null);
   assert.deepEqual(resolved.touchpoints, []);
   assert.equal(resolved.confidenceScore, 0);
+  assert.equal(resolved.attributionReason, 'missing_order_timestamp');
+});
+
+test('resolveAttributionTier dedupes Shopify and GA4 candidates by stable source key before selecting a winner', async () => {
+  const testUtils = await getTestUtils();
+
+  const shopifyResolved = testUtils.resolveAttributionTier({
+    orderOccurredAtUtc: new Date('2026-04-08T12:00:00.000Z'),
+    deterministicFirstParty: [],
+    shopifyHint: [
+      buildTierCandidate('shopify-dup', '2026-04-07T09:00:00.000Z', {
+        sessionId: null,
+        sourceTouchEventId: null,
+        ingestionSource: 'shopify_marketing_hint',
+        clickIdType: null,
+        clickIdValue: null,
+        confidenceScore: 0.4,
+        isSynthetic: true
+      }),
+      buildTierCandidate('shopify-dup', '2026-04-07T10:00:00.000Z', {
+        sessionId: null,
+        sourceTouchEventId: null,
+        ingestionSource: 'shopify_marketing_hint',
+        clickIdType: 'fbclid',
+        clickIdValue: 'fbclid-1',
+        confidenceScore: 0.55,
+        isSynthetic: true
+      })
+    ],
+    ga4Fallback: []
+  });
+
+  assert.equal(shopifyResolved.touchpoints.length, 1);
+  assert.equal(shopifyResolved.winner?.clickIdValue, 'fbclid-1');
+
+  const ga4Resolved = testUtils.resolveAttributionTier({
+    orderOccurredAtUtc: new Date('2026-04-08T12:00:00.000Z'),
+    deterministicFirstParty: [],
+    shopifyHint: [],
+    ga4Fallback: [
+      buildTierCandidate('ga4-dup', '2026-04-08T09:00:00.000Z', {
+        sessionId: null,
+        sourceTouchEventId: null,
+        ingestionSource: 'ga4_fallback',
+        clickIdType: null,
+        clickIdValue: null,
+        confidenceScore: 0.25,
+        isSynthetic: true
+      }),
+      buildTierCandidate('ga4-dup', '2026-04-08T10:00:00.000Z', {
+        sessionId: null,
+        sourceTouchEventId: null,
+        ingestionSource: 'ga4_fallback',
+        clickIdType: 'gclid',
+        clickIdValue: 'gclid-1',
+        confidenceScore: 0.35,
+        isSynthetic: true
+      })
+    ]
+  });
+
+  assert.equal(ga4Resolved.touchpoints.length, 1);
+  assert.equal(ga4Resolved.winner?.clickIdValue, 'gclid-1');
+});
+
+test('resolveAttributionTier carries normalization failure reasons into unattributed outcomes when order time exists', async () => {
+  const testUtils = await getTestUtils();
+
+  const resolved = testUtils.resolveAttributionTier({
+    orderOccurredAtUtc: new Date('2026-04-08T12:00:00.000Z'),
+    deterministicFirstParty: [],
+    shopifyHint: [],
+    ga4Fallback: [],
+    normalizationFailures: [
+      {
+        scope: 'ga4_fallback',
+        reason: 'invalid_candidate_timestamp',
+        sourceKey: 'ga4-bad'
+      }
+    ]
+  });
+
+  assert.equal(resolved.tier, 'unattributed');
+  assert.equal(resolved.attributionReason, 'invalid_candidate_timestamp');
 });
 
 test('resolveAttributionTier ignores ineligible higher-tier timestamps and still evaluates lower tiers', async () => {

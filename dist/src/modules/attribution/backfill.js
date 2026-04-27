@@ -339,14 +339,20 @@ async function resolveAttributionJourney(client, order) {
 function selectPrimaryCredit(credits) {
     return credits.find((credit) => credit.isPrimary) ?? credits[credits.length - 1];
 }
+function isSameResolvedTouchpoint(left, right) {
+    return left.sessionId === right.sessionId &&
+        left.sourceTouchEventId === right.sourceTouchEventId &&
+        left.ingestionSource === right.ingestionSource &&
+        left.occurredAt.getTime() === right.occurredAt.getTime();
+}
 async function persistAttribution(client, order, journey) {
-    const orderOccurredAt = resolveOrderOccurredAt(order);
+    const orderOccurredAt = journey.orderOccurredAtUtc ?? resolveOrderOccurredAt(order);
     const outputs = computeAttributionOutputs(journey.touchpoints, {
         orderOccurredAt,
         orderRevenue: order.total_price
     });
     if (journey.winner) {
-        const winnerIndex = journey.touchpoints.findIndex((touchpoint) => touchpoint.sessionId === journey.winner?.sessionId);
+        const winnerIndex = journey.touchpoints.findIndex((touchpoint) => isSameResolvedTouchpoint(touchpoint, journey.winner));
         if (winnerIndex >= 0) {
             outputs.last_touch = computeSingleWinnerCredits('last_touch', journey.touchpoints, winnerIndex, order.total_price);
         }
@@ -356,7 +362,7 @@ async function persistAttribution(client, order, journey) {
         throw new Error(`Failed to compute attribution credits for Shopify order ${order.shopify_order_id}`);
     }
     const matchedAt = new Date();
-    const orderAttributionAudit = buildOrderAttributionAuditRecord(journey.winner, matchedAt);
+    const orderAttributionAudit = buildOrderAttributionAuditRecord(journey, matchedAt);
     await client.query('DELETE FROM attribution_order_credits WHERE shopify_order_id = $1', [order.shopify_order_id]);
     for (const model of ATTRIBUTION_MODELS) {
         for (const credit of outputs[model]) {
@@ -502,6 +508,10 @@ async function persistAttribution(client, order, journey) {
         orderAttributionAudit.matchedAt,
         orderAttributionAudit.reason,
         JSON.stringify({
+            tier: journey.tier,
+            attributionReason: journey.attributionReason,
+            orderOccurredAtUtc: journey.orderOccurredAtUtc?.toISOString() ?? null,
+            normalizationFailures: journey.normalizationFailures,
             confidenceScore: journey.confidenceScore,
             winner: journey.winner
                 ? {
