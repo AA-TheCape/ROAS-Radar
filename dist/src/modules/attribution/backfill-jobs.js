@@ -1,7 +1,8 @@
 import { orderAttributionBackfillReportSchema, } from '../../../packages/attribution-schema/index.js';
 import { emitOrderAttributionBackfillJobLifecycleLog, logInfo } from '../../observability/index.js';
 import { backfillRecentOrdersWithRecoveredAttribution, OrderAttributionBackfillRunError, toOrderAttributionBackfillJobReport } from './backfill.js';
-import { claimOrderAttributionBackfillRuns, markOrderAttributionBackfillRunCompleted, markOrderAttributionBackfillRunFailed } from './backfill-run-store.js';
+import { claimOrderAttributionBackfillRuns, markOrderAttributionBackfillRunCompleted, markOrderAttributionBackfillRunFailed, updateOrderAttributionBackfillRunProgress } from './backfill-run-store.js';
+import { buildEmptyOrderAttributionBackfillProgress } from './backfill-progress.js';
 const DEFAULT_ORDER_ATTRIBUTION_BACKFILL_RUN_BATCH_SIZE = 1;
 function toUtcWindowStart(dateOnly) {
     return new Date(`${dateOnly}T00:00:00.000Z`);
@@ -40,7 +41,8 @@ export async function processOrderAttributionBackfillRuns(options) {
         submittedBy: 'submittedBy' in run ? run.submittedBy : run.submitted_by,
         options: run.options,
         submittedAt: run.submittedAt ?? null,
-        startedAt: run.startedAt ?? null
+        startedAt: run.startedAt ?? null,
+        progress: 'progress' in run ? run.progress : buildEmptyOrderAttributionBackfillProgress()
     }));
     let completedRuns = 0;
     let failedRuns = 0;
@@ -56,7 +58,12 @@ export async function processOrderAttributionBackfillRuns(options) {
         });
         try {
             const executionOptions = buildBackfillExecutionOptions(run, options.workerId);
-            const detailedReport = await executeBackfillRun(executionOptions);
+            const detailedReport = await executeBackfillRun({
+                ...executionOptions,
+                runId: run.id,
+                progress: run.progress,
+                onProgress: async (progress) => updateOrderAttributionBackfillRunProgress(run.id, progress, new Date())
+            });
             const finalReport = orderAttributionBackfillReportSchema.parse(toOrderAttributionBackfillJobReport(detailedReport));
             const completedAt = new Date();
             await markRunCompleted(run.id, finalReport, completedAt);

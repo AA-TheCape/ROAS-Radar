@@ -11,6 +11,13 @@ import {
   type OrderAttributionBackfillSubmittedOptions
 } from '../../../packages/attribution-schema/index.js';
 import { query, withTransaction } from '../../db/pool.js';
+import {
+  buildEmptyOrderAttributionBackfillProgress,
+  parseOrderAttributionBackfillProgress,
+  type OrderAttributionBackfillProgress
+} from './backfill-progress.js';
+
+const ORDER_ATTRIBUTION_BACKFILL_STALE_AFTER_MINUTES = 15;
 
 type OrderAttributionBackfillRunRow = {
   id: string;
@@ -20,9 +27,11 @@ type OrderAttributionBackfillRunRow = {
   started_at: Date | null;
   completed_at: Date | null;
   options: unknown;
+  progress: unknown;
   report: unknown;
   error_code: string | null;
   error_message: string | null;
+  last_heartbeat_at: Date | null;
 };
 
 export type OrderAttributionBackfillClaimedRun = {
@@ -31,6 +40,7 @@ export type OrderAttributionBackfillClaimedRun = {
   options: OrderAttributionBackfillSubmittedOptions;
   submittedAt: string;
   startedAt: string | null;
+  progress: OrderAttributionBackfillProgress;
 };
 
 function normalizeErrorCode(error: unknown): string {
@@ -93,17 +103,21 @@ export async function enqueueOrderAttributionBackfillRun(
         status,
         submitted_at,
         submitted_by,
-        options
+        options,
+        progress,
+        last_heartbeat_at
       )
       VALUES (
         $1,
         'queued',
         $2::timestamptz,
         $3,
-        $4::jsonb
+        $4::jsonb,
+        $5::jsonb,
+        $2::timestamptz
       )
     `,
-    [jobId, submittedAt, submittedBy, JSON.stringify(options)]
+    [jobId, submittedAt, submittedBy, JSON.stringify(options), JSON.stringify(buildEmptyOrderAttributionBackfillProgress())]
   );
 
   return orderAttributionBackfillEnqueueResponseSchema.parse({
@@ -127,9 +141,11 @@ export async function getOrderAttributionBackfillRun(jobId: string): Promise<Ord
         started_at,
         completed_at,
         options,
+        progress,
         report,
         error_code,
-        error_message
+        error_message,
+        last_heartbeat_at
       FROM order_attribution_backfill_runs
       WHERE id = $1
       LIMIT 1
@@ -155,6 +171,10 @@ export async function claimOrderAttributionBackfillRuns(
           SELECT id
           FROM order_attribution_backfill_runs
           WHERE status = 'queued'
+             OR (
+               status = 'processing'
+               AND COALESCE(last_heartbeat_at, started_at, submitted_at) <= $1 - interval '${ORDER_ATTRIBUTION_BACKFILL_STALE_AFTER_MINUTES} minutes'
+             )
           ORDER BY submitted_at ASC, id ASC
           LIMIT $2
           FOR UPDATE SKIP LOCKED
@@ -164,6 +184,7 @@ export async function claimOrderAttributionBackfillRuns(
           status = 'processing',
           started_at = COALESCE(runs.started_at, $1),
           completed_at = NULL,
+          last_heartbeat_at = $1,
           report = NULL,
           updated_at = $1,
           error_code = NULL,
@@ -178,9 +199,11 @@ export async function claimOrderAttributionBackfillRuns(
           runs.started_at,
           runs.completed_at,
           runs.options,
+          runs.progress,
           runs.report,
           runs.error_code,
-          runs.error_message
+          runs.error_message,
+          runs.last_heartbeat_at
       `,
       [now, limit]
     )
@@ -194,9 +217,31 @@ export async function claimOrderAttributionBackfillRuns(
       submittedBy: row.submitted_by,
       submittedAt: row.submitted_at.toISOString(),
       startedAt: row.started_at?.toISOString() ?? null,
-      options
+      options,
+      progress: parseOrderAttributionBackfillProgress(row.progress)
     };
   });
+}
+
+export async function updateOrderAttributionBackfillRunProgress(
+  runId: string,
+  progress: OrderAttributionBackfillProgress,
+  now: Date
+): Promise<void> {
+  const normalizedProgress = parseOrderAttributionBackfillProgress(progress);
+
+  await query(
+    `
+      UPDATE order_attribution_backfill_runs
+      SET
+        status = 'processing',
+        progress = $3::jsonb,
+        last_heartbeat_at = $2,
+        updated_at = $2
+      WHERE id = $1
+    `,
+    [runId, now, JSON.stringify(normalizedProgress)]
+  );
 }
 
 export async function markOrderAttributionBackfillRunCompleted(
@@ -213,6 +258,7 @@ export async function markOrderAttributionBackfillRunCompleted(
         status = 'completed',
         completed_at = $2,
         report = $3::jsonb,
+        last_heartbeat_at = $2,
         error_code = NULL,
         error_message = NULL,
         updated_at = $2
@@ -237,6 +283,7 @@ export async function markOrderAttributionBackfillRunFailed(
         status = 'failed',
         completed_at = $2,
         report = $3::jsonb,
+        last_heartbeat_at = $2,
         error_code = $4,
         error_message = $5,
         updated_at = $2
