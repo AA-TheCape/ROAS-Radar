@@ -1,13 +1,171 @@
 {
   "displayName": "__DASHBOARD_DISPLAY_NAME__",
   "mosaicLayout": {
+    "columns": 12,
     "tiles": [
-      { "widget": { "title": "Capture Rate" } },
-      { "widget": { "title": "Missing Session ID Rate" } },
-      { "widget": { "title": "Dual Write Mismatch Rate" } },
-      { "widget": { "title": "Shopify Writeback Success Rate" } },
-      { "widget": { "title": "Resolver Outcomes" } },
-      { "widget": { "title": "Capture Completeness by Source" } }
+      {
+        "xPos": 0,
+        "yPos": 0,
+        "width": 12,
+        "height": 2,
+        "widget": {
+          "title": "ROAS Radar observability",
+          "text": {
+            "content": "# __DASHBOARD_DISPLAY_NAME__\nDeploy-time dashboard for ingestion, attribution, API latency, and background job health.",
+            "format": "MARKDOWN"
+          }
+        }
+      },
+      {
+        "xPos": 0,
+        "yPos": 2,
+        "width": 4,
+        "height": 4,
+        "widget": {
+          "title": "API latency p95 (10m)",
+          "scorecard": {
+            "timeSeriesQuery": {
+              "timeSeriesFilter": {
+                "filter": "metric.type=\"logging.googleapis.com/user/roas_api_latency_ms\" resource.type=\"cloud_run_revision\"",
+                "aggregation": {
+                  "alignmentPeriod": "600s",
+                  "perSeriesAligner": "ALIGN_PERCENTILE_95",
+                  "crossSeriesReducer": "REDUCE_MEAN"
+                }
+              },
+              "unitOverride": "ms"
+            },
+            "sparkChartView": {
+              "sparkChartType": "SPARK_LINE"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 4,
+        "yPos": 2,
+        "width": 4,
+        "height": 4,
+        "widget": {
+          "title": "Ingestion errors (10m)",
+          "scorecard": {
+            "timeSeriesQuery": {
+              "timeSeriesFilter": {
+                "filter": "metric.type=\"logging.googleapis.com/user/roas_ingestion_errors\" resource.type=\"cloud_run_revision\"",
+                "aggregation": {
+                  "alignmentPeriod": "600s",
+                  "perSeriesAligner": "ALIGN_SUM",
+                  "crossSeriesReducer": "REDUCE_SUM"
+                }
+              },
+              "unitOverride": "1"
+            },
+            "sparkChartView": {
+              "sparkChartType": "SPARK_BAR"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 8,
+        "yPos": 2,
+        "width": 4,
+        "height": 4,
+        "widget": {
+          "title": "Attribution failures (15m)",
+          "scorecard": {
+            "timeSeriesQuery": {
+              "timeSeriesFilter": {
+                "filter": "metric.type=\"logging.googleapis.com/user/roas_attribution_failures\" resource.type=\"cloud_run_revision\"",
+                "aggregation": {
+                  "alignmentPeriod": "900s",
+                  "perSeriesAligner": "ALIGN_SUM",
+                  "crossSeriesReducer": "REDUCE_SUM"
+                }
+              },
+              "unitOverride": "1"
+            },
+            "sparkChartView": {
+              "sparkChartType": "SPARK_BAR"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 0,
+        "yPos": 6,
+        "width": 4,
+        "height": 4,
+        "widget": {
+          "title": "Data quality alerts (10m)",
+          "scorecard": {
+            "timeSeriesQuery": {
+              "timeSeriesFilter": {
+                "filter": "metric.type=\"logging.googleapis.com/user/roas_data_quality_alerts\" resource.type=\"cloud_run_revision\"",
+                "aggregation": {
+                  "alignmentPeriod": "600s",
+                  "perSeriesAligner": "ALIGN_SUM",
+                  "crossSeriesReducer": "REDUCE_SUM"
+                }
+              },
+              "unitOverride": "1"
+            },
+            "sparkChartView": {
+              "sparkChartType": "SPARK_BAR"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 4,
+        "yPos": 6,
+        "width": 4,
+        "height": 4,
+        "widget": {
+          "title": "Order backfill failures (15m)",
+          "scorecard": {
+            "timeSeriesQuery": {
+              "timeSeriesFilter": {
+                "filter": "metric.type=\"logging.googleapis.com/user/roas_order_attribution_backfill_jobs\" resource.type=\"cloud_run_revision\" metric.labels.stage=\"failed\"",
+                "aggregation": {
+                  "alignmentPeriod": "900s",
+                  "perSeriesAligner": "ALIGN_SUM",
+                  "crossSeriesReducer": "REDUCE_SUM"
+                }
+              },
+              "unitOverride": "1"
+            },
+            "sparkChartView": {
+              "sparkChartType": "SPARK_BAR"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 8,
+        "yPos": 6,
+        "width": 4,
+        "height": 4,
+        "widget": {
+          "title": "Capture completeness",
+          "scorecard": {
+            "timeSeriesQuery": {
+              "timeSeriesFilter": {
+                "filter": "metric.type=\"logging.googleapis.com/user/roas_attribution_capture_completeness\" resource.type=\"cloud_run_revision\"",
+                "aggregation": {
+                  "alignmentPeriod": "600s",
+                  "perSeriesAligner": "ALIGN_SUM",
+                  "crossSeriesReducer": "REDUCE_SUM"
+                }
+              },
+              "unitOverride": "1"
+            },
+            "sparkChartView": {
+              "sparkChartType": "SPARK_BAR"
+            }
+          }
+        }
+      }
     ]
   }
 }

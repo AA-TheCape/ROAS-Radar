@@ -10,6 +10,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent
 METRICS_DIR = ROOT / "log-metrics"
 ALERTS_DIR = ROOT / "alert-policies"
+DASHBOARD_PATH = ROOT / "dashboard.json"
 
 
 def load_json(path: pathlib.Path) -> dict:
@@ -57,6 +58,40 @@ def validate_alert(path: pathlib.Path) -> list[str]:
     return issues
 
 
+def validate_dashboard(path: pathlib.Path) -> list[str]:
+    data = load_json(path)
+    issues: list[str] = []
+    dashboard = data.get("mosaicLayout") or {}
+    tiles = dashboard.get("tiles", [])
+
+    if not tiles:
+        return [f"{path.name}: must define at least one dashboard tile"]
+
+    for index, tile in enumerate(tiles):
+        for key in ("xPos", "yPos", "width", "height"):
+            value = tile.get(key)
+            if not isinstance(value, int):
+                issues.append(f"{path.name}: tiles[{index}].{key} must be an integer")
+                continue
+            if key in {"xPos", "yPos"} and value < 0:
+                issues.append(f"{path.name}: tiles[{index}].{key} must be non-negative")
+            if key in {"width", "height"} and value < 1:
+                issues.append(f"{path.name}: tiles[{index}].{key} must be at least 1")
+
+        widget = tile.get("widget")
+        if not isinstance(widget, dict):
+            issues.append(f"{path.name}: tiles[{index}].widget must be an object")
+            continue
+
+        widget_kinds = [key for key in widget if key in {"text", "scorecard", "xyChart", "blank"}]
+        if len(widget_kinds) != 1:
+            issues.append(
+                f"{path.name}: tiles[{index}].widget must define exactly one supported widget kind, found {widget_kinds or 'none'}"
+            )
+
+    return issues
+
+
 def main() -> int:
     issues: list[str] = []
 
@@ -65,6 +100,8 @@ def main() -> int:
 
     for path in sorted(ALERTS_DIR.glob("*.json")):
         issues.extend(validate_alert(path))
+
+    issues.extend(validate_dashboard(DASHBOARD_PATH))
 
     if issues:
         for issue in issues:
