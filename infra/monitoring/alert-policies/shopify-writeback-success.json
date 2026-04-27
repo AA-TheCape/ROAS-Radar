@@ -1,12 +1,19 @@
 {
-  "displayName": "ROAS Radar __ENVIRONMENT__ Shopify Writeback Success",
+  "displayName": "ROAS Radar __ENVIRONMENT__ Shopify Writeback Failures",
   "documentation": {
-    "content": "Shopify attribution attribute writeback success fell below the expected floor. Runbook: __RUNBOOK_URL_ATTRIBUTION_COMPLETENESS__",
+    "content": "Shopify attribution attribute writeback is failing during reconciliation or backfill. Runbook: __RUNBOOK_URL_ATTRIBUTION_COMPLETENESS__",
     "mimeType": "text/markdown"
   },
+  "combiner": "OR",
+  "enabled": true,
+  "severity": "WARNING",
+  "notificationChannels": __ALERT_NOTIFICATION_CHANNELS__,
   "conditions": [
     {
-      "displayName": "Shopify writeback success rate drops below 90% for 15 minutes"
+      "displayName": "Shopify writeback failure is emitted",
+      "conditionMatchedLog": {
+        "filter": "resource.type=\"cloud_run_revision\" AND (jsonPayload.event=\"order_attribution_backfill_shopify_writeback_failed\" OR jsonPayload.event=\"shopify_writeback_failed\")"
+      }
     }
   ]
 }

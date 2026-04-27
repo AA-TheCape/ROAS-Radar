@@ -4,9 +4,16 @@
     "content": "The deterministic resolver is returning unattributed outcomes too often. Runbook: __RUNBOOK_URL_ATTRIBUTION_COMPLETENESS__",
     "mimeType": "text/markdown"
   },
+  "combiner": "OR",
+  "enabled": true,
+  "severity": "WARNING",
+  "notificationChannels": __ALERT_NOTIFICATION_CHANNELS__,
   "conditions": [
     {
-      "displayName": "Resolver unattributed rate exceeds 20% for 15 minutes"
+      "displayName": "Resolver unattributed outcome is emitted",
+      "conditionMatchedLog": {
+        "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"attribution_resolver_outcome\" AND jsonPayload.resolverOutcome=\"unattributed\""
+      }
     }
   ]
 }

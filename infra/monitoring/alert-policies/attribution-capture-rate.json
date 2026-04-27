@@ -1,12 +1,19 @@
 {
   "displayName": "ROAS Radar __ENVIRONMENT__ Attribution Capture Rate",
   "documentation": {
-    "content": "Attribution capture completeness dropped below the expected floor. Runbook: __RUNBOOK_URL_ATTRIBUTION_COMPLETENESS__",
+    "content": "Attribution capture observations are arriving incomplete or rejected. Runbook: __RUNBOOK_URL_ATTRIBUTION_COMPLETENESS__",
     "mimeType": "text/markdown"
   },
+  "combiner": "OR",
+  "enabled": true,
+  "severity": "WARNING",
+  "notificationChannels": __ALERT_NOTIFICATION_CHANNELS__,
   "conditions": [
     {
-      "displayName": "Capture completeness rate drops below 95% for 15 minutes"
+      "displayName": "Incomplete attribution capture observation is emitted",
+      "conditionMatchedLog": {
+        "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"attribution_capture_observed\" AND (jsonPayload.captureStatus=\"partial\" OR jsonPayload.captureStatus=\"missing_session_id\" OR jsonPayload.accepted=false)"
+      }
     }
   ]
 }

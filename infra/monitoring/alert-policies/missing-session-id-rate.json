@@ -4,9 +4,16 @@
     "content": "Tracking or attribution capture requests are arriving without a usable `roas_radar_session_id`. Runbook: __RUNBOOK_URL_ATTRIBUTION_COMPLETENESS__",
     "mimeType": "text/markdown"
   },
+  "combiner": "OR",
+  "enabled": true,
+  "severity": "WARNING",
+  "notificationChannels": __ALERT_NOTIFICATION_CHANNELS__,
   "conditions": [
     {
-      "displayName": "Missing session id rate exceeds 2% for 15 minutes"
+      "displayName": "Missing session id attribution capture is emitted",
+      "conditionMatchedLog": {
+        "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"attribution_capture_observed\" AND jsonPayload.captureStatus=\"missing_session_id\""
+      }
     }
   ]
 }
