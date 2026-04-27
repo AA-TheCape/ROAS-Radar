@@ -3,7 +3,12 @@ import test from 'node:test';
 
 process.env.DATABASE_URL ??= 'postgres://postgres:postgres@localhost:5432/roas_radar_test';
 
-const { buildGa4SessionAttributionHourlyQuery, extractGa4SessionAttributionForHour, planGa4SessionAttributionHourlyWindows } =
+const {
+  buildGa4SessionAttributionHourlyQuery,
+  extractAllowedGa4ClickIdsFromEventParams,
+  extractGa4SessionAttributionForHour,
+  planGa4SessionAttributionHourlyWindows
+} =
   await import('../src/modules/attribution/ga4-session-attribution.js');
 
 const enabledConfig = {
@@ -71,6 +76,9 @@ test('buildGa4SessionAttributionHourlyQuery targets daily and intraday exports f
   assert.match(query.query, /FROM `analytics-prod1\.ga4_export\.events_intraday_\*`/);
   assert.match(query.query, /FROM `analytics-prod1\.google_ads_transfer\.p_ads_\*`/);
   assert.match(query.query, /LEFT JOIN ads_linked_campaigns/);
+  assert.match(query.query, /LOWER\(ep\.key\) = 'gclid'/);
+  assert.match(query.query, /LOWER\(ep\.key\) = 'dclid'/);
+  assert.match(query.query, /AS dclid/);
   assert.equal(query.params.window_start, '2026-04-27T11:00:00.000Z');
   assert.equal(query.params.window_end, '2026-04-27T12:00:00.000Z');
   assert.equal(query.params.start_date_suffix, '20260427');
@@ -78,6 +86,59 @@ test('buildGa4SessionAttributionHourlyQuery targets daily and intraday exports f
   assert.equal(query.params.ads_metadata_lookback_days, 14);
   assert.deepEqual(query.params.google_ads_customer_ids, []);
   assert.equal(query.params.google_ads_customer_id_count, 0);
+});
+
+test('extractAllowedGa4ClickIdsFromEventParams normalizes allowed keys and rejects malformed values', () => {
+  const extracted = extractAllowedGa4ClickIdsFromEventParams([
+    {
+      key: ' GCLID ',
+      value: {
+        string_value: '  ABC123  '
+      }
+    },
+    {
+      key: 'DCLID',
+      value: {
+        string_value: 'DCLID-9'
+      }
+    },
+    {
+      key: 'gbraid',
+      value: {
+        int_value: 12345
+      }
+    },
+    {
+      key: 'wbraid',
+      value: {
+        string_value: 'BAD VALUE'
+      }
+    },
+    {
+      key: 'fbclid',
+      value: {
+        string_value: 'bad\u0000value'
+      }
+    },
+    {
+      key: 'ignored_key',
+      value: {
+        string_value: 'SHOULD-NOT-APPEAR'
+      }
+    },
+    {
+      key: 'gclid',
+      value: {
+        string_value: 'SECOND-VALUE-IGNORED'
+      }
+    }
+  ]);
+
+  assert.deepEqual(extracted, {
+    gclid: 'ABC123',
+    dclid: 'DCLID-9',
+    gbraid: '12345'
+  });
 });
 
 test('extractGa4SessionAttributionForHour normalizes stable session and user keys', async () => {
@@ -151,6 +212,88 @@ test('extractGa4SessionAttributionForHour normalizes stable session and user key
       sourceExportHour: '2026-04-27T11:00:00.000Z',
       sourceDataset: 'ga4_export',
       sourceTableType: 'events'
+    }
+  ]);
+});
+
+test('extractGa4SessionAttributionForHour falls back to nested event_params click ids with session linkage metadata', async () => {
+  const result = await extractGa4SessionAttributionForHour({
+    config: enabledConfig,
+    hourStart: '2026-04-27T11:00:00.000Z',
+    executor: {
+      async runQuery() {
+        return [
+          {
+            ga4_session_key: 'pseudo-3:98765',
+            ga4_user_key: 'pseudo-3',
+            ga4_client_id: 'pseudo-3',
+            ga4_session_id: '98765',
+            session_started_at: '2026-04-27T11:07:00.000Z',
+            last_event_at: '2026-04-27T11:19:00.000Z',
+            source: ' Google ',
+            medium: ' CPC ',
+            campaign_id: null,
+            campaign: 'Demand Gen',
+            content: null,
+            term: null,
+            click_id_type: null,
+            click_id_value: null,
+            account_id: null,
+            account_name: null,
+            channel_type: null,
+            channel_subtype: null,
+            campaign_metadata_source: 'ga4_raw',
+            account_metadata_source: 'unresolved',
+            channel_metadata_source: 'unresolved',
+            event_params: [
+              {
+                key: 'WBRAID',
+                value: {
+                  string_value: ' WB-456 '
+                }
+              },
+              {
+                key: 'dclid',
+                value: {
+                  string_value: 'DCLID-should-lose'
+                }
+              }
+            ],
+            source_export_hour: '2026-04-27T11:00:00.000Z',
+            source_dataset: 'ga4_export',
+            source_table_type: 'intraday'
+          }
+        ];
+      }
+    }
+  });
+
+  assert.deepEqual(result.rows, [
+    {
+      ga4SessionKey: 'pseudo-3:98765',
+      ga4UserKey: 'pseudo-3',
+      ga4ClientId: 'pseudo-3',
+      ga4SessionId: '98765',
+      sessionStartedAt: '2026-04-27T11:07:00.000Z',
+      lastEventAt: '2026-04-27T11:19:00.000Z',
+      source: 'google',
+      medium: 'cpc',
+      campaignId: null,
+      campaign: 'Demand Gen',
+      content: null,
+      term: null,
+      clickIdType: 'dclid',
+      clickIdValue: 'DCLID-should-lose',
+      accountId: null,
+      accountName: null,
+      channelType: null,
+      channelSubtype: null,
+      campaignMetadataSource: 'ga4_raw',
+      accountMetadataSource: 'unresolved',
+      channelMetadataSource: 'unresolved',
+      sourceExportHour: '2026-04-27T11:00:00.000Z',
+      sourceDataset: 'ga4_export',
+      sourceTableType: 'intraday'
     }
   ]);
 });

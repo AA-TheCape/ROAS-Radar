@@ -8,6 +8,18 @@ import {
 
 const GA4_SESSION_ATTRIBUTION_PIPELINE = 'ga4_session_attribution';
 const HOUR_IN_MILLISECONDS = 60 * 60 * 1000;
+const GA4_CLICK_ID_VALUE_MAX_LENGTH = 255;
+const GA4_ALLOWED_CLICK_ID_KEYS = [
+  'gclid',
+  'dclid',
+  'gbraid',
+  'wbraid',
+  'fbclid',
+  'ttclid',
+  'msclkid'
+] as const;
+
+type Ga4AllowedClickIdKey = (typeof GA4_ALLOWED_CLICK_ID_KEYS)[number];
 
 type EnabledGa4BigQueryIngestionConfig = Extract<Ga4BigQueryIngestionConfig, { enabled: true }>;
 
@@ -45,6 +57,18 @@ type PersistedGa4SessionAttributionRow = {
 };
 
 type BigQueryQueryRow = Record<string, unknown>;
+
+type Ga4EventParamValue = {
+  string_value?: unknown;
+  int_value?: unknown;
+  double_value?: unknown;
+  float_value?: unknown;
+};
+
+type Ga4EventParam = {
+  key?: unknown;
+  value?: Ga4EventParamValue | null;
+};
 
 type MetadataLineage = 'ga4_raw' | 'google_ads_transfer' | 'unresolved';
 
@@ -159,6 +183,77 @@ function normalizeNullableString(value: unknown, { lowerCase = false }: { lowerC
   return lowerCase ? trimmed.toLowerCase() : trimmed;
 }
 
+function normalizeGa4ClickIdValue(value: unknown): string | null {
+  if (typeof value !== 'string' && typeof value !== 'number') {
+    return null;
+  }
+
+  const normalized = String(value).trim();
+
+  if (!normalized) {
+    return null;
+  }
+
+  if (normalized.length > GA4_CLICK_ID_VALUE_MAX_LENGTH) {
+    return null;
+  }
+
+  if (/\s/.test(normalized) || /[\u0000-\u001f\u007f]/.test(normalized)) {
+    return null;
+  }
+
+  return normalized;
+}
+
+function normalizeGa4ClickIdKey(value: unknown): Ga4AllowedClickIdKey | null {
+  const normalized = normalizeNullableString(value, { lowerCase: true });
+
+  if (!normalized) {
+    return null;
+  }
+
+  return GA4_ALLOWED_CLICK_ID_KEYS.find((candidate) => candidate === normalized) ?? null;
+}
+
+function readGa4EventParamValue(value: Ga4EventParamValue | null | undefined): string | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  return (
+    normalizeGa4ClickIdValue(value.string_value) ??
+    normalizeGa4ClickIdValue(value.int_value) ??
+    normalizeGa4ClickIdValue(value.double_value) ??
+    normalizeGa4ClickIdValue(value.float_value)
+  );
+}
+
+export function extractAllowedGa4ClickIdsFromEventParams(
+  eventParams: unknown
+): Partial<Record<Ga4AllowedClickIdKey, string>> {
+  if (!Array.isArray(eventParams)) {
+    return {};
+  }
+
+  const extracted: Partial<Record<Ga4AllowedClickIdKey, string>> = {};
+
+  for (const candidate of eventParams as Ga4EventParam[]) {
+    const key = normalizeGa4ClickIdKey(candidate?.key);
+    if (!key || extracted[key]) {
+      continue;
+    }
+
+    const value = readGa4EventParamValue(candidate?.value);
+    if (!value) {
+      continue;
+    }
+
+    extracted[key] = value;
+  }
+
+  return extracted;
+}
+
 function normalizeRequiredString(value: unknown, fieldName: string): string {
   const normalized = normalizeNullableString(value);
 
@@ -220,6 +315,7 @@ function compareIsoDescending(left: string, right: string): number {
 function selectPreferredClickId(row: Record<string, string | null>): { type: string | null; value: string | null } {
   const clickIdPreference: Array<{ type: string; value: string | null }> = [
     { type: 'gclid', value: row.gclid ?? null },
+    { type: 'dclid', value: row.dclid ?? null },
     { type: 'gbraid', value: row.gbraid ?? null },
     { type: 'wbraid', value: row.wbraid ?? null },
     { type: 'fbclid', value: row.fbclid ?? null },
@@ -404,6 +500,29 @@ export function buildGa4SessionAttributionHourlyQuery(input: {
   const startDateSuffix = hourStart.slice(0, 10).replaceAll('-', '');
   const endDateSuffix = hourEndExclusive.slice(0, 10).replaceAll('-', '');
 
+  const buildClickIdSelect = (key: Ga4AllowedClickIdKey): string => `
+          (
+            SELECT ARRAY_AGG(click_id_value IGNORE NULLS ORDER BY param_offset ASC LIMIT 1)[SAFE_OFFSET(0)]
+            FROM (
+              SELECT
+                TRIM(
+                  COALESCE(
+                    ep.value.string_value,
+                    CAST(ep.value.int_value AS STRING),
+                    CAST(ep.value.double_value AS STRING),
+                    CAST(ep.value.float_value AS STRING)
+                  )
+                ) AS click_id_value,
+                param_offset
+              FROM UNNEST(event_params) ep WITH OFFSET param_offset
+              WHERE LOWER(ep.key) = '${key}'
+            )
+            WHERE click_id_value IS NOT NULL
+              AND click_id_value != ''
+              AND LENGTH(click_id_value) <= ${GA4_CLICK_ID_VALUE_MAX_LENGTH}
+              AND NOT REGEXP_CONTAINS(click_id_value, r'[[:space:][:cntrl:]]')
+          ) AS ${key}`;
+
   return {
     location: config.ga4.location,
     params: {
@@ -436,12 +555,7 @@ export function buildGa4SessionAttributionHourlyQuery(input: {
           NULLIF(session_traffic_source_last_click.google_ads_campaign.account_name, '') AS ga4_google_ads_account_name,
           NULLIF(session_traffic_source_last_click.google_ads_campaign.campaign_id, '') AS ga4_google_ads_campaign_id,
           NULLIF(session_traffic_source_last_click.google_ads_campaign.campaign_name, '') AS ga4_google_ads_campaign_name,
-          NULLIF((SELECT ep.value.string_value FROM UNNEST(event_params) ep WHERE ep.key = 'gclid' LIMIT 1), '') AS gclid,
-          NULLIF((SELECT ep.value.string_value FROM UNNEST(event_params) ep WHERE ep.key = 'gbraid' LIMIT 1), '') AS gbraid,
-          NULLIF((SELECT ep.value.string_value FROM UNNEST(event_params) ep WHERE ep.key = 'wbraid' LIMIT 1), '') AS wbraid,
-          NULLIF((SELECT ep.value.string_value FROM UNNEST(event_params) ep WHERE ep.key = 'fbclid' LIMIT 1), '') AS fbclid,
-          NULLIF((SELECT ep.value.string_value FROM UNNEST(event_params) ep WHERE ep.key = 'ttclid' LIMIT 1), '') AS ttclid,
-          NULLIF((SELECT ep.value.string_value FROM UNNEST(event_params) ep WHERE ep.key = 'msclkid' LIMIT 1), '') AS msclkid
+          ${GA4_ALLOWED_CLICK_ID_KEYS.map((key) => buildClickIdSelect(key)).join(',\n')}
         FROM ${config.ga4.eventsTableExpression}
         WHERE NOT STARTS_WITH(_TABLE_SUFFIX, 'intraday_')
           AND _TABLE_SUFFIX BETWEEN @start_date_suffix AND @end_date_suffix
@@ -467,12 +581,7 @@ export function buildGa4SessionAttributionHourlyQuery(input: {
           NULLIF(session_traffic_source_last_click.google_ads_campaign.account_name, '') AS ga4_google_ads_account_name,
           NULLIF(session_traffic_source_last_click.google_ads_campaign.campaign_id, '') AS ga4_google_ads_campaign_id,
           NULLIF(session_traffic_source_last_click.google_ads_campaign.campaign_name, '') AS ga4_google_ads_campaign_name,
-          NULLIF((SELECT ep.value.string_value FROM UNNEST(event_params) ep WHERE ep.key = 'gclid' LIMIT 1), '') AS gclid,
-          NULLIF((SELECT ep.value.string_value FROM UNNEST(event_params) ep WHERE ep.key = 'gbraid' LIMIT 1), '') AS gbraid,
-          NULLIF((SELECT ep.value.string_value FROM UNNEST(event_params) ep WHERE ep.key = 'wbraid' LIMIT 1), '') AS wbraid,
-          NULLIF((SELECT ep.value.string_value FROM UNNEST(event_params) ep WHERE ep.key = 'fbclid' LIMIT 1), '') AS fbclid,
-          NULLIF((SELECT ep.value.string_value FROM UNNEST(event_params) ep WHERE ep.key = 'ttclid' LIMIT 1), '') AS ttclid,
-          NULLIF((SELECT ep.value.string_value FROM UNNEST(event_params) ep WHERE ep.key = 'msclkid' LIMIT 1), '') AS msclkid
+          ${GA4_ALLOWED_CLICK_ID_KEYS.map((key) => buildClickIdSelect(key)).join(',\n')}
         FROM ${config.ga4.intradayTableExpression}
         WHERE _TABLE_SUFFIX BETWEEN @start_date_suffix AND @end_date_suffix
           AND TIMESTAMP_MICROS(event_timestamp) >= TIMESTAMP(@window_start)
@@ -507,6 +616,7 @@ export function buildGa4SessionAttributionHourlyQuery(input: {
           ARRAY_AGG(ga4_google_ads_campaign_id IGNORE NULLS ORDER BY occurred_at DESC LIMIT 1)[SAFE_OFFSET(0)] AS ga4_google_ads_campaign_id,
           ARRAY_AGG(ga4_google_ads_campaign_name IGNORE NULLS ORDER BY occurred_at DESC LIMIT 1)[SAFE_OFFSET(0)] AS ga4_google_ads_campaign_name,
           ARRAY_AGG(gclid IGNORE NULLS ORDER BY occurred_at DESC LIMIT 1)[SAFE_OFFSET(0)] AS gclid,
+          ARRAY_AGG(dclid IGNORE NULLS ORDER BY occurred_at DESC LIMIT 1)[SAFE_OFFSET(0)] AS dclid,
           ARRAY_AGG(gbraid IGNORE NULLS ORDER BY occurred_at DESC LIMIT 1)[SAFE_OFFSET(0)] AS gbraid,
           ARRAY_AGG(wbraid IGNORE NULLS ORDER BY occurred_at DESC LIMIT 1)[SAFE_OFFSET(0)] AS wbraid,
           ARRAY_AGG(fbclid IGNORE NULLS ORDER BY occurred_at DESC LIMIT 1)[SAFE_OFFSET(0)] AS fbclid,
@@ -561,6 +671,7 @@ export function buildGa4SessionAttributionHourlyQuery(input: {
         session_rollup.term,
         CASE
           WHEN session_rollup.gclid IS NOT NULL THEN 'gclid'
+          WHEN session_rollup.dclid IS NOT NULL THEN 'dclid'
           WHEN session_rollup.gbraid IS NOT NULL THEN 'gbraid'
           WHEN session_rollup.wbraid IS NOT NULL THEN 'wbraid'
           WHEN session_rollup.fbclid IS NOT NULL THEN 'fbclid'
@@ -570,6 +681,7 @@ export function buildGa4SessionAttributionHourlyQuery(input: {
         END AS click_id_type,
         COALESCE(
           session_rollup.gclid,
+          session_rollup.dclid,
           session_rollup.gbraid,
           session_rollup.wbraid,
           session_rollup.fbclid,
@@ -645,13 +757,15 @@ export async function extractGa4SessionAttributionForHour(input: {
     hourStart: hourStartIso,
     rows: rows.map((row) => {
       const normalizedRow = mapBigQueryRowToNormalizedRow(row);
+      const extractedClickIds = extractAllowedGa4ClickIdsFromEventParams((row as Record<string, unknown>).event_params);
       const clickId = selectPreferredClickId({
-        gclid: normalizeNullableString((row as Record<string, unknown>).gclid),
-        gbraid: normalizeNullableString((row as Record<string, unknown>).gbraid),
-        wbraid: normalizeNullableString((row as Record<string, unknown>).wbraid),
-        fbclid: normalizeNullableString((row as Record<string, unknown>).fbclid),
-        ttclid: normalizeNullableString((row as Record<string, unknown>).ttclid),
-        msclkid: normalizeNullableString((row as Record<string, unknown>).msclkid)
+        gclid: normalizeGa4ClickIdValue((row as Record<string, unknown>).gclid) ?? extractedClickIds.gclid ?? null,
+        dclid: normalizeGa4ClickIdValue((row as Record<string, unknown>).dclid) ?? extractedClickIds.dclid ?? null,
+        gbraid: normalizeGa4ClickIdValue((row as Record<string, unknown>).gbraid) ?? extractedClickIds.gbraid ?? null,
+        wbraid: normalizeGa4ClickIdValue((row as Record<string, unknown>).wbraid) ?? extractedClickIds.wbraid ?? null,
+        fbclid: normalizeGa4ClickIdValue((row as Record<string, unknown>).fbclid) ?? extractedClickIds.fbclid ?? null,
+        ttclid: normalizeGa4ClickIdValue((row as Record<string, unknown>).ttclid) ?? extractedClickIds.ttclid ?? null,
+        msclkid: normalizeGa4ClickIdValue((row as Record<string, unknown>).msclkid) ?? extractedClickIds.msclkid ?? null
       });
 
       return {
