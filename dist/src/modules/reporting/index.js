@@ -104,6 +104,32 @@ function normalizeContent(value) {
     const trimmed = value.trim();
     return trimmed.length > 0 ? trimmed : null;
 }
+function asObjectRecord(value) {
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+}
+function readNullableString(value) {
+    return typeof value === 'string' && value.trim() ? value : null;
+}
+function readNullableNumber(value) {
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+function extractOrderAttributionMetadata(snapshot) {
+    const snapshotRecord = asObjectRecord(snapshot);
+    const winnerRecord = asObjectRecord(snapshotRecord?.winner);
+    return {
+        confidenceScore: readNullableNumber(snapshotRecord?.confidenceScore),
+        winner: {
+            sessionId: readNullableString(winnerRecord?.sessionId),
+            source: readNullableString(winnerRecord?.source),
+            medium: readNullableString(winnerRecord?.medium),
+            campaign: readNullableString(winnerRecord?.campaign),
+            content: readNullableString(winnerRecord?.content),
+            term: readNullableString(winnerRecord?.term),
+            clickIdType: readNullableString(winnerRecord?.clickIdType),
+            clickIdValue: readNullableString(winnerRecord?.clickIdValue)
+        }
+    };
+}
 function countDaysInRange(startDate, endDate) {
     const start = Date.parse(`${startDate}T00:00:00.000Z`);
     const end = Date.parse(`${endDate}T00:00:00.000Z`);
@@ -336,6 +362,10 @@ export function createReportingRouter() {
             o.shopify_order_id,
             COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) AS processed_at,
             o.total_price,
+            o.attribution_tier,
+            o.attribution_source,
+            o.attribution_matched_at,
+            o.attribution_snapshot,
             c.attributed_source,
             c.attributed_medium,
             c.attributed_campaign,
@@ -361,15 +391,24 @@ export function createReportingRouter() {
           LIMIT $${filters.params.length + 4}
         `, [input.startDate, input.endDate, ...filters.params, reportingTimezone, input.limit]);
             res.json({
-                rows: result.rows.map((row) => ({
-                    shopifyOrderId: row.shopify_order_id,
-                    processedAt: row.processed_at?.toISOString() ?? null,
-                    totalPrice: Number(row.total_price),
-                    source: row.attributed_source,
-                    medium: row.attributed_medium,
-                    campaign: row.attributed_campaign,
-                    attributionReason: row.attribution_reason ?? 'unattributed'
-                }))
+                rows: result.rows.map((row) => {
+                    const metadata = extractOrderAttributionMetadata(row.attribution_snapshot);
+                    return {
+                        shopifyOrderId: row.shopify_order_id,
+                        processedAt: row.processed_at?.toISOString() ?? null,
+                        orderOccurredAtUtc: row.processed_at?.toISOString() ?? null,
+                        totalPrice: Number(row.total_price),
+                        source: row.attributed_source,
+                        medium: row.attributed_medium,
+                        campaign: row.attributed_campaign,
+                        attributionReason: row.attribution_reason ?? 'unattributed',
+                        attributionTier: row.attribution_tier ?? 'unattributed',
+                        attributionSource: row.attribution_source,
+                        attributionMatchedAt: row.attribution_matched_at?.toISOString() ?? null,
+                        confidenceScore: metadata.confidenceScore,
+                        sessionId: metadata.winner.sessionId
+                    };
+                })
             });
         }
         catch (error) {
@@ -398,6 +437,12 @@ export function createReportingRouter() {
             o.checkout_token,
             o.cart_token,
             o.source_name,
+            o.attribution_tier,
+            o.attribution_source,
+            o.attribution_matched_at,
+            o.attribution_reason,
+            o.attribution_snapshot,
+            o.attribution_snapshot_updated_at,
             o.ingested_at,
             o.raw_payload
           FROM shopify_orders o
@@ -452,6 +497,7 @@ export function createReportingRouter() {
           ORDER BY c.attribution_model ASC, c.touchpoint_position ASC
         `, [shopifyOrderId]);
             const order = orderResult.rows[0];
+            const metadata = extractOrderAttributionMetadata(order.attribution_snapshot);
             res.json({
                 order: {
                     shopifyOrderId: order.shopify_order_id,
@@ -471,6 +517,24 @@ export function createReportingRouter() {
                     checkoutToken: order.checkout_token,
                     cartToken: order.cart_token,
                     sourceName: order.source_name,
+                    orderOccurredAtUtc: order.processed_at?.toISOString() ??
+                        order.created_at_shopify?.toISOString() ??
+                        order.ingested_at.toISOString(),
+                    attributionTier: order.attribution_tier ?? 'unattributed',
+                    attributionSource: order.attribution_source,
+                    attributionMatchedAt: order.attribution_matched_at?.toISOString() ?? null,
+                    attributionReason: order.attribution_reason ?? 'unattributed',
+                    confidenceScore: metadata.confidenceScore,
+                    sessionId: metadata.winner.sessionId,
+                    attributedSource: metadata.winner.source,
+                    attributedMedium: metadata.winner.medium,
+                    attributedCampaign: metadata.winner.campaign,
+                    attributedContent: metadata.winner.content,
+                    attributedTerm: metadata.winner.term,
+                    attributedClickIdType: metadata.winner.clickIdType,
+                    attributedClickIdValue: metadata.winner.clickIdValue,
+                    attributionSnapshot: order.attribution_snapshot,
+                    attributionSnapshotUpdatedAt: order.attribution_snapshot_updated_at?.toISOString() ?? null,
                     ingestedAt: order.ingested_at.toISOString(),
                     rawPayload: order.raw_payload
                 },

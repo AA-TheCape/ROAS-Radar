@@ -258,20 +258,32 @@ test('reporting dashboard keeps overview, charts, and report tables internally c
         {
           shopifyOrderId: '1201',
           processedAt: '2026-04-03T18:00:00.000Z',
+          orderOccurredAtUtc: '2026-04-03T18:00:00.000Z',
           source: 'google',
           medium: 'cpc',
           campaign: 'Brand Search',
           totalPrice: 700,
-          attributionReason: 'last-touch'
+          attributionReason: 'last-touch',
+          attributionTier: 'deterministic_first_party',
+          attributionSource: 'landing_session_id',
+          attributionMatchedAt: '2026-04-03T18:00:15.000Z',
+          confidenceScore: 1,
+          sessionId: 'sess_1201'
         },
         {
           shopifyOrderId: '1200',
           processedAt: '2026-04-02T18:00:00.000Z',
+          orderOccurredAtUtc: '2026-04-02T18:00:00.000Z',
           source: 'meta',
           medium: 'paid_social',
           campaign: 'Prospecting Video',
           totalPrice: 500,
-          attributionReason: 'linear'
+          attributionReason: 'linear',
+          attributionTier: 'deterministic_shopify_hint',
+          attributionSource: 'shopify_marketing_hint',
+          attributionMatchedAt: '2026-04-02T18:00:20.000Z',
+          confidenceScore: 0.55,
+          sessionId: null
         }
       ],
       loading: false,

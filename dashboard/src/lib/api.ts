@@ -121,11 +121,17 @@ export type TimeseriesResponse = {
 export type OrderRow = {
   shopifyOrderId: string;
   processedAt: string | null;
+  orderOccurredAtUtc: string | null;
   totalPrice: number;
   source: string | null;
   medium: string | null;
   campaign: string | null;
   attributionReason: string;
+  attributionTier: 'deterministic_first_party' | 'deterministic_shopify_hint' | 'ga4_fallback' | 'unattributed';
+  attributionSource: string | null;
+  attributionMatchedAt: string | null;
+  confidenceScore: number | null;
+  sessionId: string | null;
 };
 
 export type OrdersResponse = {
@@ -189,6 +195,22 @@ export type OrderDetail = {
   checkoutToken: string | null;
   cartToken: string | null;
   sourceName: string | null;
+  orderOccurredAtUtc: string;
+  attributionTier: 'deterministic_first_party' | 'deterministic_shopify_hint' | 'ga4_fallback' | 'unattributed';
+  attributionSource: string | null;
+  attributionMatchedAt: string | null;
+  attributionReason: string;
+  confidenceScore: number | null;
+  sessionId: string | null;
+  attributedSource: string | null;
+  attributedMedium: string | null;
+  attributedCampaign: string | null;
+  attributedContent: string | null;
+  attributedTerm: string | null;
+  attributedClickIdType: string | null;
+  attributedClickIdValue: string | null;
+  attributionSnapshot: unknown;
+  attributionSnapshotUpdatedAt: string | null;
   ingestedAt: string;
   rawPayload: unknown;
 };

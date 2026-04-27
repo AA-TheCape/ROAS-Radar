@@ -469,6 +469,7 @@ It is not a measure of channel performance, campaign quality, or model superiori
 `GET /api/reporting/orders`
 
 - returns one row per order using the primary credit row for the selected model
+- also exposes the persisted order-level attribution audit fields, including `attributionTier`, `attributionSource`, `attributionMatchedAt`, `confidenceScore`, and canonical winner `sessionId`
 - useful for debugging why a particular order appears under a channel or campaign
 
 ## Dashboard Reading Guide
@@ -482,7 +483,7 @@ Use the dashboard in this order when sanity-checking performance:
 3. Timeseries chart
    Use this to spot timing shifts, worker lag, or reconciliation effects. A recent date can look incomplete while attribution jobs or writeback jobs are still catching up.
 4. Orders view
-   Use this as the debugging surface for a specific order. It shows the primary credit row for the selected model, so it is the fastest place to confirm whether the disagreement is attribution logic or aggregate math.
+   Use this as the debugging surface for a specific order. It shows the primary credit row for the selected model and the persisted order-level attribution tier metadata, so it is the fastest place to confirm whether the disagreement is attribution logic, tiering, or aggregate math.
 
 When a dashboard value looks wrong, ask these questions in order:
 

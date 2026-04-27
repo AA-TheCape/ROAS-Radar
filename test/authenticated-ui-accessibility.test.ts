@@ -197,11 +197,17 @@ test('authenticated dashboard, order details, and settings pass automated access
           {
             shopifyOrderId: '1105',
             processedAt: '2026-04-20T18:00:00.000Z',
+            orderOccurredAtUtc: '2026-04-20T18:00:00.000Z',
             source: 'google',
             medium: 'cpc',
             campaign: 'Spring Search',
             totalPrice: 195,
-            attributionReason: 'last-touch'
+            attributionReason: 'last-touch',
+            attributionTier: 'deterministic_first_party',
+            attributionSource: 'landing_session_id',
+            attributionMatchedAt: '2026-04-20T18:00:30.000Z',
+            confidenceScore: 1,
+            sessionId: 'sess_123'
           }
         ],
         loading: false,
@@ -256,6 +262,30 @@ test('authenticated dashboard, order details, and settings pass automated access
             checkoutToken: 'check_456',
             cartToken: 'cart_789',
             sourceName: 'web',
+            orderOccurredAtUtc: '2026-04-20T18:00:00.000Z',
+            attributionTier: 'deterministic_first_party',
+            attributionSource: 'landing_session_id',
+            attributionMatchedAt: '2026-04-20T18:00:30.000Z',
+            attributionReason: 'matched_by_landing_session',
+            confidenceScore: 1,
+            sessionId: 'sess_123',
+            attributedSource: 'google',
+            attributedMedium: 'cpc',
+            attributedCampaign: 'brand-search',
+            attributedContent: null,
+            attributedTerm: null,
+            attributedClickIdType: 'gclid',
+            attributedClickIdValue: 'abc-123',
+            attributionSnapshot: {
+              confidenceScore: 1,
+              winner: {
+                sessionId: 'sess_123',
+                source: 'google',
+                medium: 'cpc',
+                campaign: 'brand-search'
+              }
+            },
+            attributionSnapshotUpdatedAt: '2026-04-20T18:00:30.000Z',
             ingestedAt: '2026-04-20T18:31:00.000Z',
             rawPayload: { orderNumber: 'RR-1105' }
           },
