@@ -10,7 +10,7 @@ export type Ga4BigQueryIngestionConfig =
   | {
       enabled: false;
     }
-  | {
+    | {
       enabled: true;
       ga4: {
         projectId: string;
@@ -19,6 +19,7 @@ export type Ga4BigQueryIngestionConfig =
         eventsTablePattern: string;
         intradayTablePattern: string;
         lookbackHours: number;
+        backfillHours: number;
         eventsTableExpression: string;
         intradayTableExpression: string;
       };
@@ -131,6 +132,11 @@ export function resolveGa4BigQueryIngestionConfig(
     env.GA4_BIGQUERY_LOOKBACK_HOURS,
     'GA4_BIGQUERY_LOOKBACK_HOURS'
   );
+  const ga4BackfillHours = parsePositiveInteger(
+    source.GA4_BIGQUERY_BACKFILL_HOURS,
+    env.GA4_BIGQUERY_BACKFILL_HOURS,
+    'GA4_BIGQUERY_BACKFILL_HOURS'
+  );
 
   const adsProjectId = validatePattern(
     normalizeRequiredString(
@@ -170,6 +176,7 @@ export function resolveGa4BigQueryIngestionConfig(
       eventsTablePattern: ga4EventsTablePattern,
       intradayTablePattern: ga4IntradayTablePattern,
       lookbackHours: ga4LookbackHours,
+      backfillHours: ga4BackfillHours,
       eventsTableExpression: `\`${ga4ProjectId}.${ga4Dataset}.${ga4EventsTablePattern}\``,
       intradayTableExpression: `\`${ga4ProjectId}.${ga4Dataset}.${ga4IntradayTablePattern}\``
     },

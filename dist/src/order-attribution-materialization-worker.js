@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { pool } from './db/pool.js';
 import { backfillRecentOrdersWithRecoveredAttribution } from './modules/attribution/backfill.js';
+import { assertGa4BigQueryIngestionConfig } from './modules/attribution/ga4-bigquery-config.js';
 import { logError, logInfo } from './observability/index.js';
 function parseOptionalInteger(name) {
     const value = process.env[name]?.trim();
@@ -53,6 +54,7 @@ export function resolveOrderAttributionMaterializationExecution(now) {
     };
 }
 async function run() {
+    assertGa4BigQueryIngestionConfig();
     const execution = resolveOrderAttributionMaterializationExecution(new Date());
     logInfo('order_attribution_materialization_worker_started', {
         workerId: execution.workerId,

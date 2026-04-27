@@ -130,6 +130,7 @@ const envSchema = z.object({
   GA4_BIGQUERY_EVENTS_TABLE_PATTERN: z.string().optional().default(''),
   GA4_BIGQUERY_INTRADAY_TABLE_PATTERN: z.string().optional().default(''),
   GA4_BIGQUERY_LOOKBACK_HOURS: integerString.default(72),
+  GA4_BIGQUERY_BACKFILL_HOURS: integerString.default(24),
   GOOGLE_ADS_TRANSFER_BIGQUERY_PROJECT_ID: z.string().optional().default(''),
   GOOGLE_ADS_TRANSFER_BIGQUERY_LOCATION: z.string().optional().default(''),
   GOOGLE_ADS_TRANSFER_DATASET: z.string().optional().default(''),
