@@ -132,7 +132,8 @@ const envSchema = z.object({
     DATA_QUALITY_SAMPLE_LIMIT: integerString.default(10),
     DATA_QUALITY_CHECK_LOOP: booleanString.default(true),
     DATA_QUALITY_CHECK_INTERVAL_MS: integerString.default(24 * 60 * 60 * 1000),
-    SESSION_ATTRIBUTION_RETENTION_DAYS: integerString.default(30)
+    SESSION_ATTRIBUTION_RETENTION_DAYS: integerString.default(30),
+    GA4_FALLBACK_RETENTION_DAYS: integerString.default(35)
 });
 export const env = envSchema.parse(process.env);
 export function getConfiguredReportingApiToken() {

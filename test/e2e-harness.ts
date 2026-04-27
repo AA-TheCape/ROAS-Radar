@@ -26,6 +26,7 @@ export async function resetE2EDatabase(): Promise<void> {
       meta_ads_raw_spend_records,
       meta_ads_sync_jobs,
       meta_ads_connections,
+      ga4_fallback_candidates,
       ga4_session_attribution,
       ga4_bigquery_ingestion_state,
       attribution_jobs,

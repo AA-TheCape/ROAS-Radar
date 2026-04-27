@@ -13,9 +13,11 @@ const RETENTION_CUTOFF = '2026-03-26T12:00:00.000Z';
 async function resetIntegrationDatabase(): Promise<void> {
   await pool.query(`
     TRUNCATE TABLE
+      ga4_fallback_candidates,
       order_attribution_links,
       session_attribution_touch_events,
       session_attribution_identities,
+      customer_identities,
       shopify_orders,
       tracking_sessions
     RESTART IDENTITY CASCADE
@@ -100,7 +102,8 @@ async function insertSessionAttributionTouchEvent(input: {
         utm_source,
         utm_medium,
         utm_campaign,
-        raw_payload
+        raw_payload,
+        payload_size_bytes
       )
       VALUES (
         $1::uuid,
@@ -113,7 +116,8 @@ async function insertSessionAttributionTouchEvent(input: {
         'google',
         'cpc',
         'spring-sale',
-        '{}'::jsonb
+        '{}'::jsonb,
+        2
       )
     `,
     [input.sessionId, input.retainedUntil]
@@ -133,6 +137,7 @@ async function insertProtectedOrderLink(sessionId: string, shopifyOrderId: strin
         processed_at,
         landing_session_id,
         raw_payload,
+        payload_size_bytes,
         ingested_at
       )
       VALUES (
@@ -143,6 +148,7 @@ async function insertProtectedOrderLink(sessionId: string, shopifyOrderId: strin
         '2026-03-02T12:00:00.000Z',
         $2::uuid,
         $3::jsonb,
+        73,
         now()
       )
     `,
@@ -198,6 +204,66 @@ async function listTouchEventSessionIds(): Promise<string[]> {
   return result.rows.map((row) => row.roas_radar_session_id);
 }
 
+async function insertGa4FallbackCandidate(input: {
+  candidateKey: string;
+  occurredAt: string;
+  retainedUntil: string;
+}): Promise<void> {
+  await pool.query(
+    `
+      INSERT INTO ga4_fallback_candidates (
+        candidate_key,
+        occurred_at,
+        ga4_user_key,
+        ga4_client_id,
+        ga4_session_id,
+        transaction_id,
+        source,
+        medium,
+        campaign,
+        click_id_type,
+        click_id_value,
+        session_has_required_fields,
+        source_export_hour,
+        source_dataset,
+        source_table_type,
+        retained_until
+      )
+      VALUES (
+        $1,
+        $2::timestamptz,
+        'retention-user',
+        'retention-client',
+        'retention-session',
+        'retention-order',
+        'google',
+        'cpc',
+        'spring-sale',
+        'gclid',
+        'gclid-retention',
+        true,
+        $2::timestamptz,
+        'ga4_export',
+        'events',
+        $3::timestamptz
+      )
+    `,
+    [input.candidateKey, input.occurredAt, input.retainedUntil]
+  );
+}
+
+async function listGa4FallbackCandidateKeys(): Promise<string[]> {
+  const result = await pool.query<{ candidate_key: string }>(
+    `
+      SELECT candidate_key
+      FROM ga4_fallback_candidates
+      ORDER BY candidate_key ASC
+    `
+  );
+
+  return result.rows.map((row) => row.candidate_key);
+}
+
 test.beforeEach(async () => {
   if (!pool || !runSessionAttributionRetention) {
     const [poolModule, retentionModule] = await Promise.all([
@@ -219,7 +285,10 @@ test.after(async () => {
   }
 });
 
-test('runSessionAttributionRetention deletes expired unprotected session capture rows in batches and preserves protected rows', async () => {
+test(
+  'runSessionAttributionRetention deletes expired unprotected session capture rows in batches and preserves protected rows',
+  { concurrency: false },
+  async () => {
   const expiredSessionA = randomUUID();
   const expiredSessionB = randomUUID();
   const expiredSessionC = randomUUID();
@@ -274,27 +343,30 @@ test('runSessionAttributionRetention deletes expired unprotected session capture
 
   const result = await runSessionAttributionRetention({
     asOf: RETENTION_AS_OF,
-    batchSize: 1,
+    batchSize: 2,
     maxBatches: 2,
     emitLogs: false
   });
 
   assert.deepEqual(result, {
     cutoffAt: RETENTION_CUTOFF,
-    batchSize: 1,
+    ga4FallbackCutoffAt: '2026-03-21T12:00:00.000Z',
+    batchSize: 2,
     maxBatches: 2,
     batchesRun: 2,
-    deletedTouchEvents: 2,
-    deletedSessions: 2,
+    deletedGa4FallbackCandidates: 0,
+    deletedTouchEvents: 3,
+    deletedSessions: 3,
     protectedSessionsSkipped: 1,
     protectedTouchEventsSkipped: 1
   });
 
-  assert.deepEqual(await listSessionIds(), [expiredSessionC, freshSession, protectedSession].sort());
-  assert.deepEqual(await listTouchEventSessionIds(), [expiredSessionC, freshSession, protectedSession].sort());
-});
+  assert.deepEqual(await listSessionIds(), [freshSession, protectedSession].sort());
+  assert.deepEqual(await listTouchEventSessionIds(), [freshSession, protectedSession].sort());
+  }
+);
 
-test('runSessionAttributionRetention does not delete rows exactly on the retention cutoff', async () => {
+test('runSessionAttributionRetention does not delete rows exactly on the retention cutoff', { concurrency: false }, async () => {
   const expiredSession = randomUUID();
   const cutoffSession = randomUUID();
 
@@ -324,6 +396,8 @@ test('runSessionAttributionRetention does not delete rows exactly on the retenti
   });
 
   assert.equal(result.cutoffAt, RETENTION_CUTOFF);
+  assert.equal(result.ga4FallbackCutoffAt, '2026-03-21T12:00:00.000Z');
+  assert.equal(result.deletedGa4FallbackCandidates, 0);
   assert.equal(result.deletedTouchEvents, 1);
   assert.equal(result.deletedSessions, 1);
   assert.equal(result.protectedSessionsSkipped, 0);
@@ -332,3 +406,36 @@ test('runSessionAttributionRetention does not delete rows exactly on the retenti
   assert.deepEqual(await listSessionIds(), [cutoffSession]);
   assert.deepEqual(await listTouchEventSessionIds(), [cutoffSession]);
 });
+
+test(
+  'runSessionAttributionRetention deletes expired GA4 fallback candidates without touching active-window rows',
+  { concurrency: false },
+  async () => {
+  await insertGa4FallbackCandidate({
+    candidateKey: 'expired-ga4-candidate',
+    occurredAt: '2026-03-15T10:00:00.000Z',
+    retainedUntil: '2026-03-21T11:59:59.000Z'
+  });
+  await insertGa4FallbackCandidate({
+    candidateKey: 'cutoff-ga4-candidate',
+    occurredAt: '2026-03-15T10:00:00.000Z',
+    retainedUntil: '2026-03-21T12:00:00.000Z'
+  });
+  await insertGa4FallbackCandidate({
+    candidateKey: 'fresh-ga4-candidate',
+    occurredAt: '2026-04-24T10:00:00.000Z',
+    retainedUntil: '2026-05-29T10:00:00.000Z'
+  });
+
+  const result = await runSessionAttributionRetention({
+    asOf: RETENTION_AS_OF,
+    batchSize: 10,
+    maxBatches: 5,
+    emitLogs: false
+  });
+
+  assert.equal(result.ga4FallbackCutoffAt, '2026-03-21T12:00:00.000Z');
+  assert.equal(result.deletedGa4FallbackCandidates, 1);
+  assert.deepEqual(await listGa4FallbackCandidateKeys(), ['cutoff-ga4-candidate', 'fresh-ga4-candidate']);
+  }
+);

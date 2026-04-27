@@ -76,8 +76,21 @@ Operational pruning runs through the scheduled `session-attribution:retention` C
 
 The cleanup contract is:
 
-1. delete expired `session_attribution_touch_events` rows in batches
-2. delete expired `session_attribution_identities` rows in batches
-3. skip rows whose `roas_radar_session_id` is still referenced by `order_attribution_links`
+1. delete expired `ga4_fallback_candidates` rows in batches using `retained_until`
+2. delete expired `session_attribution_touch_events` rows in batches
+3. delete expired `session_attribution_identities` rows in batches
+4. skip rows whose `roas_radar_session_id` is still referenced by `order_attribution_links`
+
+`ga4_fallback_candidates` is range-partitioned by `occurred_at` month and lookup queries are expected to use the keyed partition indexes for:
+
+- `customer_identity_id + occurred_at`
+- `email_hash + occurred_at`
+- `transaction_id + occurred_at`
+
+Use the staging-safe plan check before approving lookup-path changes:
+
+```bash
+npm run db:verify-ga4-fallback-query-plans
+```
 
 `order_attribution_links` rows are not pruned by the 30-day session cleanup job.

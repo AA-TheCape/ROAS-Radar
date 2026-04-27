@@ -14,11 +14,10 @@ function resolveCutoffAt(asOf) {
     referenceTime.setUTCDate(referenceTime.getUTCDate() - env.SESSION_ATTRIBUTION_RETENTION_DAYS);
     return referenceTime;
 }
-async function execute(client, callback) {
-    if (client) {
-        return callback(client);
-    }
-    return withTransaction(callback);
+function resolveGa4FallbackCutoffAt(asOf) {
+    const referenceTime = asOf ? new Date(asOf) : new Date();
+    referenceTime.setUTCDate(referenceTime.getUTCDate() - env.GA4_FALLBACK_RETENTION_DAYS);
+    return referenceTime;
 }
 async function countProtectedRows(client, cutoffAt) {
     const result = await client.query(`
@@ -93,30 +92,55 @@ async function deleteExpiredSessions(client, cutoffAt, batchSize) {
     `, [cutoffAt, batchSize]);
     return result.rowCount ?? 0;
 }
+async function deleteExpiredGa4FallbackCandidates(client, cutoffAt, batchSize) {
+    const result = await client.query(`
+      WITH expired_candidates AS (
+        SELECT candidate_key, occurred_at
+        FROM ga4_fallback_candidates
+        WHERE retained_until < $1::timestamptz
+        ORDER BY retained_until ASC, occurred_at ASC, candidate_key ASC
+        LIMIT $2
+        FOR UPDATE SKIP LOCKED
+      )
+      DELETE FROM ga4_fallback_candidates candidates
+      USING expired_candidates
+      WHERE candidates.candidate_key = expired_candidates.candidate_key
+        AND candidates.occurred_at = expired_candidates.occurred_at
+    `, [cutoffAt, batchSize]);
+    return result.rowCount ?? 0;
+}
 export async function runSessionAttributionRetention(options = {}) {
     const batchSize = normalizePositiveInteger(options.batchSize, DEFAULT_RETENTION_BATCH_SIZE);
     const maxBatches = normalizePositiveInteger(options.maxBatches, DEFAULT_RETENTION_MAX_BATCHES);
     const cutoffAt = resolveCutoffAt(options.asOf);
+    const ga4FallbackCutoffAt = resolveGa4FallbackCutoffAt(options.asOf);
     const emitLogs = options.emitLogs ?? true;
-    return execute(options.client, async (client) => {
+    const runWithClient = async (client) => {
         const protectedCounts = await countProtectedRows(client, cutoffAt);
         let batchesRun = 0;
+        let deletedGa4FallbackCandidates = 0;
         let deletedTouchEvents = 0;
         let deletedSessions = 0;
         for (let batchNumber = 1; batchNumber <= maxBatches; batchNumber += 1) {
+            const deletedGa4FallbackCandidatesInBatch = await deleteExpiredGa4FallbackCandidates(client, ga4FallbackCutoffAt, batchSize);
             const deletedTouchEventsInBatch = await deleteExpiredTouchEvents(client, cutoffAt, batchSize);
             const deletedSessionsInBatch = await deleteExpiredSessions(client, cutoffAt, batchSize);
-            if (deletedTouchEventsInBatch === 0 && deletedSessionsInBatch === 0) {
+            if (deletedGa4FallbackCandidatesInBatch === 0 &&
+                deletedTouchEventsInBatch === 0 &&
+                deletedSessionsInBatch === 0) {
                 break;
             }
             batchesRun += 1;
+            deletedGa4FallbackCandidates += deletedGa4FallbackCandidatesInBatch;
             deletedTouchEvents += deletedTouchEventsInBatch;
             deletedSessions += deletedSessionsInBatch;
             if (emitLogs) {
                 logInfo('session_attribution_retention_batch_completed', {
                     batchNumber,
                     cutoffAt: cutoffAt.toISOString(),
+                    ga4FallbackCutoffAt: ga4FallbackCutoffAt.toISOString(),
                     batchSize,
+                    deletedGa4FallbackCandidatesInBatch,
                     deletedTouchEventsInBatch,
                     deletedSessionsInBatch
                 });
@@ -124,9 +148,11 @@ export async function runSessionAttributionRetention(options = {}) {
         }
         const result = {
             cutoffAt: cutoffAt.toISOString(),
+            ga4FallbackCutoffAt: ga4FallbackCutoffAt.toISOString(),
             batchSize,
             maxBatches,
             batchesRun,
+            deletedGa4FallbackCandidates,
             deletedTouchEvents,
             deletedSessions,
             protectedSessionsSkipped: Number(protectedCounts.protected_sessions ?? '0'),
@@ -136,7 +162,63 @@ export async function runSessionAttributionRetention(options = {}) {
             logInfo('session_attribution_retention_completed', result);
         }
         return result;
-    });
+    };
+    if (options.client) {
+        return runWithClient(options.client);
+    }
+    const protectedCounts = await withTransaction(async (client) => countProtectedRows(client, cutoffAt));
+    let batchesRun = 0;
+    let deletedGa4FallbackCandidates = 0;
+    let deletedTouchEvents = 0;
+    let deletedSessions = 0;
+    for (let batchNumber = 1; batchNumber <= maxBatches; batchNumber += 1) {
+        const batchResult = await withTransaction(async (client) => {
+            const deletedGa4FallbackCandidatesInBatch = await deleteExpiredGa4FallbackCandidates(client, ga4FallbackCutoffAt, batchSize);
+            const deletedTouchEventsInBatch = await deleteExpiredTouchEvents(client, cutoffAt, batchSize);
+            const deletedSessionsInBatch = await deleteExpiredSessions(client, cutoffAt, batchSize);
+            return {
+                deletedGa4FallbackCandidatesInBatch,
+                deletedTouchEventsInBatch,
+                deletedSessionsInBatch
+            };
+        });
+        if (batchResult.deletedGa4FallbackCandidatesInBatch === 0 &&
+            batchResult.deletedTouchEventsInBatch === 0 &&
+            batchResult.deletedSessionsInBatch === 0) {
+            break;
+        }
+        batchesRun += 1;
+        deletedGa4FallbackCandidates += batchResult.deletedGa4FallbackCandidatesInBatch;
+        deletedTouchEvents += batchResult.deletedTouchEventsInBatch;
+        deletedSessions += batchResult.deletedSessionsInBatch;
+        if (emitLogs) {
+            logInfo('session_attribution_retention_batch_completed', {
+                batchNumber,
+                cutoffAt: cutoffAt.toISOString(),
+                ga4FallbackCutoffAt: ga4FallbackCutoffAt.toISOString(),
+                batchSize,
+                deletedGa4FallbackCandidatesInBatch: batchResult.deletedGa4FallbackCandidatesInBatch,
+                deletedTouchEventsInBatch: batchResult.deletedTouchEventsInBatch,
+                deletedSessionsInBatch: batchResult.deletedSessionsInBatch
+            });
+        }
+    }
+    const result = {
+        cutoffAt: cutoffAt.toISOString(),
+        ga4FallbackCutoffAt: ga4FallbackCutoffAt.toISOString(),
+        batchSize,
+        maxBatches,
+        batchesRun,
+        deletedGa4FallbackCandidates,
+        deletedTouchEvents,
+        deletedSessions,
+        protectedSessionsSkipped: Number(protectedCounts.protected_sessions ?? '0'),
+        protectedTouchEventsSkipped: Number(protectedCounts.protected_touch_events ?? '0')
+    };
+    if (emitLogs) {
+        logInfo('session_attribution_retention_completed', result);
+    }
+    return result;
 }
 export async function runSessionAttributionRetentionJob(options = {}) {
     try {
