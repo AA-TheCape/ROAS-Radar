@@ -4,6 +4,7 @@ import { env, getApiAllowedOrigins } from './config/env.js';
 import { checkDatabaseHealth } from './db/pool.js';
 import { createAuthRouter, createUserAdminRouter } from './modules/auth/index.js';
 import { createAttributionAdminRouter } from './modules/attribution/admin.js';
+import { assertGa4BigQueryIngestionConfig } from './modules/attribution/ga4-bigquery-config.js';
 import { createGoogleAdsAdminRouter, createGoogleAdsPublicRouter } from './modules/google-ads/index.js';
 import { createMetaAdsAdminRouter, createMetaAdsPublicRouter } from './modules/meta-ads/index.js';
 import { createReportingRouter } from './modules/reporting/index.js';
@@ -15,6 +16,7 @@ import { createInternalIdentityRouter } from './modules/identity/read-api.js';
 import { createRequestLoggingMiddleware, logHttpError } from './observability/index.js';
 
 export function createApp() {
+  assertGa4BigQueryIngestionConfig();
   const app = express();
   const serviceName = process.env.K_SERVICE ?? 'roas-radar-api';
 

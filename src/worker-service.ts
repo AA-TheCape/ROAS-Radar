@@ -8,6 +8,7 @@ import { env } from './config/env.js';
 import { checkDatabaseHealth, pool } from './db/pool.js';
 import { processAttributionQueue } from './modules/attribution/index.js';
 import { processOrderAttributionBackfillRuns } from './modules/attribution/backfill-jobs.js';
+import { assertGa4BigQueryIngestionConfig } from './modules/attribution/ga4-bigquery-config.js';
 import { buildAttributionBacklogLog, logError, logInfo } from './observability/index.js';
 
 type AttributionBacklogRow = {
@@ -53,6 +54,7 @@ async function emitAttributionBacklogSnapshot(workerId: string): Promise<void> {
 }
 
 async function run(): Promise<void> {
+  assertGa4BigQueryIngestionConfig();
   const workerId = `attribution-worker-${randomUUID()}`;
   let shuttingDown = false;
   let running = false;

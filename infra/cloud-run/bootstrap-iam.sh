@@ -42,6 +42,16 @@ require_var IDENTITY_GRAPH_BACKFILL_JOB_SERVICE_ACCOUNT_NAME
 require_var ORDER_ATTRIBUTION_MATERIALIZATION_JOB_SERVICE_ACCOUNT_NAME
 require_var SCHEDULER_INVOKER_SERVICE_ACCOUNT_NAME
 require_var DEPLOYER_SERVICE_ACCOUNT_NAME
+require_var GA4_BIGQUERY_ENABLED
+
+if [ "${GA4_BIGQUERY_ENABLED}" = "true" ]; then
+  require_var GA4_BIGQUERY_PROJECT_ID
+  require_var GA4_BIGQUERY_LOCATION
+  require_var GA4_BIGQUERY_DATASET
+  require_var GOOGLE_ADS_TRANSFER_BIGQUERY_PROJECT_ID
+  require_var GOOGLE_ADS_TRANSFER_BIGQUERY_LOCATION
+  require_var GOOGLE_ADS_TRANSFER_DATASET
+fi
 
 PROJECT_NUMBER=$(gcloud projects describe "$GCP_PROJECT_ID" --format='value(projectNumber)')
 
@@ -78,6 +88,16 @@ grant_secret_accessor() {
     --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
     --role="roles/secretmanager.secretAccessor" \
     --quiet >/dev/null
+}
+
+grant_bigquery_dataset_viewer() {
+  SERVICE_ACCOUNT_EMAIL="$1"
+  DATASET_PROJECT_ID="$2"
+  DATASET_LOCATION="$3"
+  DATASET_ID="$4"
+
+  bq --project_id="$DATASET_PROJECT_ID" --location="$DATASET_LOCATION" query --nouse_legacy_sql \
+    "GRANT \`roles/bigquery.dataViewer\` ON SCHEMA \`$DATASET_PROJECT_ID\`.$DATASET_ID TO \"serviceAccount:$SERVICE_ACCOUNT_EMAIL\"" >/dev/null
 }
 
 ensure_repo() {
@@ -123,6 +143,14 @@ do
   grant_project_role "serviceAccount:$SA" "roles/monitoring.metricWriter"
 done
 
+for SA in \
+  "$API_SA" \
+  "$WORKER_SA" \
+  "$ORDER_ATTRIBUTION_MATERIALIZATION_SA"
+do
+  grant_project_role "serviceAccount:$SA" "roles/bigquery.jobUser"
+done
+
 grant_project_role "serviceAccount:$DASHBOARD_SA" "roles/logging.logWriter"
 grant_project_role "serviceAccount:$SCHEDULER_INVOKER_SA" "roles/logging.logWriter"
 grant_project_role "serviceAccount:$SCHEDULER_INVOKER_SA" "roles/run.invoker"
@@ -155,6 +183,8 @@ do
   grant_secret_accessor "$API_SA" "$SECRET"
 done
 
+grant_secret_accessor "$API_SA" "GA4_LINKED_GOOGLE_ADS_CUSTOMER_IDS"
+
 for SECRET in \
   DATABASE_URL \
   REPORTING_API_TOKEN \
@@ -169,6 +199,8 @@ do
   grant_secret_accessor "$WORKER_SA" "$SECRET"
 done
 
+grant_secret_accessor "$WORKER_SA" "GA4_LINKED_GOOGLE_ADS_CUSTOMER_IDS"
+
 grant_secret_accessor "$DASHBOARD_SA" "REPORTING_API_TOKEN"
 grant_secret_accessor "$MIGRATOR_SA" "MIGRATOR_DATABASE_URL"
 grant_secret_accessor "$META_ADS_SA" "DATABASE_URL"
@@ -181,6 +213,22 @@ grant_secret_accessor "$DATA_QUALITY_SA" "DATABASE_URL"
 grant_secret_accessor "$IDENTITY_GRAPH_BACKFILL_SA" "DATABASE_URL"
 grant_secret_accessor "$ORDER_ATTRIBUTION_MATERIALIZATION_SA" "DATABASE_URL"
 grant_secret_accessor "$ORDER_ATTRIBUTION_MATERIALIZATION_SA" "SHOPIFY_APP_ENCRYPTION_KEY"
+grant_secret_accessor "$ORDER_ATTRIBUTION_MATERIALIZATION_SA" "GA4_LINKED_GOOGLE_ADS_CUSTOMER_IDS"
+
+if [ "${GA4_BIGQUERY_ENABLED}" = "true" ]; then
+  for SA in \
+    "$API_SA" \
+    "$WORKER_SA" \
+    "$ORDER_ATTRIBUTION_MATERIALIZATION_SA"
+  do
+    grant_bigquery_dataset_viewer "$SA" "$GA4_BIGQUERY_PROJECT_ID" "$GA4_BIGQUERY_LOCATION" "$GA4_BIGQUERY_DATASET"
+    grant_bigquery_dataset_viewer \
+      "$SA" \
+      "$GOOGLE_ADS_TRANSFER_BIGQUERY_PROJECT_ID" \
+      "$GOOGLE_ADS_TRANSFER_BIGQUERY_LOCATION" \
+      "$GOOGLE_ADS_TRANSFER_DATASET"
+  done
+fi
 
 echo "Bootstrap complete for $ENVIRONMENT"
 echo "API service account: $API_SA"

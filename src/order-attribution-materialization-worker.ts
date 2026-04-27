@@ -3,6 +3,7 @@ import { pathToFileURL } from 'node:url';
 
 import { pool } from './db/pool.js';
 import { backfillRecentOrdersWithRecoveredAttribution } from './modules/attribution/backfill.js';
+import { assertGa4BigQueryIngestionConfig } from './modules/attribution/ga4-bigquery-config.js';
 import { logError, logInfo } from './observability/index.js';
 
 function parseOptionalInteger(name: string): number | undefined {
@@ -83,6 +84,7 @@ export function resolveOrderAttributionMaterializationExecution(now: Date): {
 }
 
 async function run(): Promise<void> {
+  assertGa4BigQueryIngestionConfig();
   const execution = resolveOrderAttributionMaterializationExecution(new Date());
 
   logInfo('order_attribution_materialization_worker_started', {
