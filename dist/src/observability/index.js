@@ -1,293 +1,261 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { randomUUID } from 'node:crypto';
-const requestContextStorage = new AsyncLocalStorage();
-function isRecord(value) {
-    return typeof value === 'object' && value !== null;
-}
+export const requestContextStorage = new AsyncLocalStorage();
 function normalizeString(value) {
-    if (typeof value !== 'string') {
+    return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+function hasMeaningfulValue(value) {
+    return normalizeString(typeof value === 'string' ? value : null) !== null;
+}
+function serializeValue(value) {
+    if (value === undefined) {
         return undefined;
     }
-    const normalized = value.trim();
-    return normalized ? normalized : undefined;
+    if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+        return value;
+    }
+    if (value instanceof Date) {
+        return value.toISOString();
+    }
+    if (Array.isArray(value)) {
+        return value
+            .map((entry) => serializeValue(entry))
+            .filter((entry) => entry !== undefined);
+    }
+    if (typeof value === 'object') {
+        const serialized = {};
+        for (const [key, entry] of Object.entries(value)) {
+            const normalized = serializeValue(entry);
+            if (normalized !== undefined) {
+                serialized[key] = normalized;
+            }
+        }
+        return serialized;
+    }
+    return String(value);
 }
-function getGoogleCloudProjectId() {
-    return normalizeString(process.env.GOOGLE_CLOUD_PROJECT) ?? normalizeString(process.env.GCLOUD_PROJECT);
+function toSerializableFields(fields) {
+    const serialized = {};
+    for (const [key, value] of Object.entries(fields)) {
+        serialized[key] = serializeValue(value);
+    }
+    return serialized;
 }
-function parseCloudTraceContext(headerValue) {
-    const projectId = getGoogleCloudProjectId();
-    const normalizedHeader = normalizeString(headerValue);
-    if (!projectId || !normalizedHeader) {
+export function parseCloudTraceContext(header) {
+    const normalized = normalizeString(header);
+    if (!normalized) {
         return {};
     }
-    const [traceIdPart, optionsPart] = normalizedHeader.split(';', 2);
-    const [traceId, spanId] = traceIdPart.split('/', 2);
-    const normalizedTraceId = normalizeString(traceId);
-    if (!normalizedTraceId) {
-        return {};
-    }
+    const [traceAndSpan, options] = normalized.split(';');
+    const [traceId, spanId] = traceAndSpan.split('/');
     return {
-        trace: `projects/${projectId}/traces/${normalizedTraceId}`,
-        spanId: normalizeString(spanId) ?? normalizeString(optionsPart)
+        traceId: normalizeString(traceId),
+        spanId: normalizeString(spanId),
+        traceSampled: options === 'o=1'
     };
 }
-function serializeError(error) {
-    if (error instanceof Error) {
-        return {
-            name: error.name,
-            message: error.message,
-            stack: error.stack
-        };
-    }
-    return {
-        message: String(error)
+function writeLog(severity, event, fields, stream) {
+    const context = requestContextStorage.getStore();
+    const correlationId = normalizeString(fields.correlationId) ??
+        normalizeString(fields.requestId) ??
+        normalizeString(context?.requestId);
+    const payload = {
+        severity,
+        event,
+        message: event,
+        timestamp: new Date().toISOString(),
+        ...(correlationId ? { correlationId } : {}),
+        ...(context ? { requestContext: serializeValue(context) } : {}),
+        ...fields
     };
+    stream.write(`${JSON.stringify(payload)}\n`);
 }
-function summarizeBackfillFailures(failures) {
-    return {
-        failureCount: failures.length,
-        sampleFailures: failures.slice(0, 5)
-    };
+export function logInfo(event, fields) {
+    writeLog('INFO', event, toSerializableFields(fields), process.stdout);
 }
-export function summarizeOrderAttributionBackfillReport(report) {
-    return {
-        scanned: report.scanned,
-        recovered: report.recovered,
-        unrecoverable: report.unrecoverable,
-        writebackCompleted: report.writebackCompleted,
-        ...summarizeBackfillFailures(report.failures)
-    };
+export function logWarning(event, fields) {
+    writeLog('WARNING', event, toSerializableFields(fields), process.stdout);
 }
-function normalizeBackfillErrorCode(error) {
-    if (typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string' && error.code.trim()) {
-        return error.code.trim();
-    }
-    if (error instanceof Error && error.name.trim()) {
-        return error.name.trim();
-    }
-    return null;
-}
-function normalizeBackfillErrorMessage(error) {
-    if (error instanceof Error && error.message.trim()) {
-        return error.message.trim();
-    }
-    if (typeof error === 'string' && error.trim()) {
-        return error.trim();
-    }
-    return null;
+export function logError(event, error, fields) {
+    writeLog('ERROR', event, toSerializableFields({
+        ...fields,
+        errorName: error instanceof Error ? error.name : 'Error',
+        errorMessage: error instanceof Error ? error.message : String(error),
+        errorStack: error instanceof Error ? error.stack ?? null : null
+    }), process.stderr);
 }
 function toBackfillLifecycleStatus(stage) {
     switch (stage) {
         case 'enqueued':
             return 'queued';
         case 'started':
-            return 'processing';
+            return 'running';
         case 'completed':
             return 'completed';
         case 'failed':
             return 'failed';
     }
 }
+export function summarizeOrderAttributionBackfillReport(report) {
+    if (!report) {
+        return {};
+    }
+    const rawRecoveredOrders = report.recoveredOrders;
+    const recoveredOrders = typeof rawRecoveredOrders === 'number' ? rawRecoveredOrders : 0;
+    const rawFailedOrders = report.failedOrders;
+    const failedOrders = typeof rawFailedOrders === 'number' ? rawFailedOrders : 0;
+    return {
+        recoveredOrders,
+        failedOrders,
+        recoverableOrders: typeof report.recoverableOrders === 'number' ? report.recoverableOrders : null,
+        scannedOrders: typeof report.scannedOrders === 'number' ? report.scannedOrders : null,
+        dryRun: typeof report.dryRun === 'boolean' ? report.dryRun : null
+    };
+}
 export function emitOrderAttributionBackfillJobLifecycleLog(input) {
-    const fields = {
+    logInfo('order_attribution_backfill_job_lifecycle', {
         service: process.env.K_SERVICE ?? 'roas-radar',
+        correlationId: input.jobId,
         stage: input.stage,
         status: toBackfillLifecycleStatus(input.stage),
         jobId: input.jobId,
-        workerId: input.workerId,
-        submittedAt: input.submittedAt,
-        startedAt: input.startedAt,
-        completedAt: input.completedAt,
-        startDate: input.options.startDate,
-        endDate: input.options.endDate,
-        dryRun: input.options.dryRun,
-        limit: input.options.limit,
-        webOrdersOnly: input.options.webOrdersOnly,
-        skipShopifyWriteback: input.options.skipShopifyWriteback
-    };
-    if (input.report) {
-        fields.report = summarizeOrderAttributionBackfillReport(input.report);
-    }
-    if (input.stage === 'failed') {
-        const errorCode = normalizeBackfillErrorCode(input.error);
-        const errorMessage = normalizeBackfillErrorMessage(input.error);
-        if (errorCode) {
-            fields.code = errorCode;
-        }
-        if (errorMessage) {
-            fields.failureMessage = errorMessage;
-        }
-        fields.alertable = true;
-        logError('order_attribution_backfill_job_lifecycle', input.error ?? new Error('Order attribution backfill job failed'), fields);
-        return;
-    }
-    logInfo('order_attribution_backfill_job_lifecycle', fields);
+        workerId: input.workerId ?? null,
+        submittedAt: input.submittedAt ?? null,
+        startedAt: input.startedAt ?? null,
+        completedAt: input.completedAt ?? null,
+        options: input.options ?? null,
+        ...summarizeOrderAttributionBackfillReport(input.report),
+        errorMessage: input.error instanceof Error ? input.error.message : input.error ? String(input.error) : null
+    });
 }
-function writeLog(severity, event, fields, stream) {
-    const context = requestContextStorage.getStore();
-    const payload = {
-        severity,
-        event,
-        message: event,
+export function buildAttributionBacklogLog(input) {
+    return JSON.stringify({
+        severity: 'INFO',
+        event: 'attribution_worker_backlog',
+        message: 'attribution_worker_backlog',
         timestamp: new Date().toISOString(),
-        ...(context ? { requestContext: context } : {}),
-        ...fields
-    };
-    if (context?.trace) {
-        payload['logging.googleapis.com/trace'] = context.trace;
-    }
-    if (context?.spanId) {
-        payload['logging.googleapis.com/spanId'] = context.spanId;
-    }
-    stream.write(`${JSON.stringify(payload)}\n`);
-}
-function hasMeaningfulValue(value) {
-    if (typeof value !== 'string') {
-        return value !== null && value !== undefined;
-    }
-    return value.trim().length > 0;
-}
-function buildCaptureStatus(payload) {
-    if (!hasMeaningfulValue(payload.roas_radar_session_id)) {
-        return 'missing_session_id';
-    }
-    const hasMarketingDimensions = [
-        payload.utm_source,
-        payload.utm_medium,
-        payload.utm_campaign,
-        payload.utm_content,
-        payload.utm_term,
-        payload.gclid,
-        payload.gbraid,
-        payload.wbraid,
-        payload.fbclid,
-        payload.ttclid,
-        payload.msclkid
-    ].some(hasMeaningfulValue);
-    const hasUrls = [payload.landing_url, payload.referrer_url, payload.page_url].some(hasMeaningfulValue);
-    return hasMarketingDimensions && hasUrls ? 'complete' : 'partial';
+        service: process.env.K_SERVICE ?? 'roas-radar-attribution-worker',
+        ...input
+    });
 }
 export function summarizeAttributionObservation(payload) {
-    const observation = isRecord(payload) ? payload : {};
+    const input = (payload ?? {});
+    const source = normalizeString(input.utm_source ?? input.utmSource);
+    const medium = normalizeString(input.utm_medium ?? input.utmMedium);
+    const campaign = normalizeString(input.utm_campaign ?? input.utmCampaign);
+    const content = normalizeString(input.utm_content ?? input.utmContent);
+    const term = normalizeString(input.utm_term ?? input.utmTerm);
+    const clickId = normalizeString(input.gclid) ??
+        normalizeString(input.gbraid) ??
+        normalizeString(input.wbraid) ??
+        normalizeString(input.fbclid) ??
+        normalizeString(input.ttclid) ??
+        normalizeString(input.msclkid);
     return {
-        captureStatus: buildCaptureStatus(observation),
-        hasLandingUrl: hasMeaningfulValue(observation.landing_url),
-        hasReferrerUrl: hasMeaningfulValue(observation.referrer_url),
-        hasPageUrl: hasMeaningfulValue(observation.page_url),
-        hasUtmSource: hasMeaningfulValue(observation.utm_source),
-        hasClickId: [
-            observation.gclid,
-            observation.gbraid,
-            observation.wbraid,
-            observation.fbclid,
-            observation.ttclid,
-            observation.msclkid
-        ].some(hasMeaningfulValue)
+        hasLandingUrl: hasMeaningfulValue(input.landing_url ?? input.landingUrl),
+        hasReferrerUrl: hasMeaningfulValue(input.referrer_url ?? input.referrerUrl),
+        hasPageUrl: hasMeaningfulValue(input.page_url ?? input.pageUrl),
+        hasSource: Boolean(source),
+        hasMedium: Boolean(medium),
+        hasCampaign: Boolean(campaign),
+        hasContent: Boolean(content),
+        hasTerm: Boolean(term),
+        hasClickId: Boolean(clickId)
     };
 }
 export function summarizeDualWriteConsistency(input) {
-    const consistencyStatus = input.browserOutcome === input.serverOutcome &&
-        (input.browserOutcome === 'accepted' || input.browserOutcome === 'deduplicated')
-        ? 'matched'
-        : 'mismatched';
     return {
-        consistencyStatus,
         browserOutcome: input.browserOutcome,
-        serverOutcome: input.serverOutcome
+        serverOutcome: input.serverOutcome,
+        dualWriteConsistent: input.browserOutcome === input.serverOutcome || input.serverOutcome === 'accepted'
     };
 }
 export function summarizeResolverOutcome(input) {
     if (!input.winner) {
         return {
             resolverOutcome: 'unattributed',
-            touchpointCount: input.touchpoints.length
+            touchpointCount: input.touchpoints.length,
+            winnerMatchSource: 'unattributed',
+            fallbackUsed: false,
+            ga4SkippedDueToPrecedence: Boolean(input.deterministicWinnerExists || input.shopifyHintMatchExists),
+            ga4SkippedReason: input.deterministicWinnerExists
+                ? 'deterministic_winner'
+                : input.shopifyHintMatchExists
+                    ? 'shopify_hint_fallback'
+                    : 'none',
+            hasSource: false,
+            hasMedium: false,
+            hasCampaign: false,
+            hasClickId: false
         };
     }
+    const winnerMatchSource = input.winner.matchSource ?? input.winner.ingestionSource ?? null;
+    const fallbackUsed = winnerMatchSource === 'shopify_hint_fallback' || winnerMatchSource === 'ga4_fallback';
     return {
         resolverOutcome: input.winner.isDirect ? 'direct_winner' : 'non_direct_winner',
         touchpointCount: input.touchpoints.length,
         winningIngestionSource: input.winner.ingestionSource ?? null,
-        winningSessionId: input.winner.sessionId ?? null
+        winningSessionId: input.winner.sessionId ?? null,
+        winnerMatchSource,
+        fallbackUsed,
+        ga4SkippedDueToPrecedence: Boolean(input.deterministicWinnerExists || input.shopifyHintMatchExists),
+        ga4SkippedReason: input.deterministicWinnerExists
+            ? 'deterministic_winner'
+            : input.shopifyHintMatchExists
+                ? 'shopify_hint_fallback'
+                : 'none',
+        hasSource: hasMeaningfulValue(input.winner.source),
+        hasMedium: hasMeaningfulValue(input.winner.medium),
+        hasCampaign: hasMeaningfulValue(input.winner.campaign),
+        hasClickId: hasMeaningfulValue(input.winner.clickIdValue)
     };
 }
-export function runWithRequestContext(context, callback) {
-    return requestContextStorage.run(context, callback);
+function computeLagHours(now, watermarkAfter) {
+    if (!watermarkAfter) {
+        return null;
+    }
+    const latestCompleteHour = new Date(Math.floor(now.getTime() / (60 * 60 * 1000)) * (60 * 60 * 1000) - 60 * 60 * 1000);
+    const watermarkDate = new Date(watermarkAfter);
+    if (Number.isNaN(latestCompleteHour.getTime()) || Number.isNaN(watermarkDate.getTime())) {
+        return null;
+    }
+    return Math.max(0, Math.round((latestCompleteHour.getTime() - watermarkDate.getTime()) / (60 * 60 * 1000)));
 }
-export function getRequestContext() {
-    return requestContextStorage.getStore();
-}
-export function logInfo(event, fields = {}) {
-    writeLog('INFO', event, fields, process.stdout);
-}
-export function logWarning(event, fields = {}) {
-    writeLog('WARNING', event, fields, process.stdout);
-}
-export function logError(event, error, fields = {}) {
-    writeLog('ERROR', event, { ...fields, error: serializeError(error) }, process.stderr);
-}
-export function createRequestLoggingMiddleware(service) {
-    return (req, res, next) => {
-        const startedAt = process.hrtime.bigint();
-        const requestId = normalizeString(req.header('x-request-id')) ?? randomUUID();
-        const traceContext = parseCloudTraceContext(req.header('x-cloud-trace-context') ?? undefined);
-        res.setHeader('x-request-id', requestId);
-        runWithRequestContext({
-            requestId,
-            method: req.method,
-            path: req.originalUrl || req.url,
-            ...traceContext
-        }, () => {
-            res.on('finish', () => {
-                const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
-                logInfo('http_request_completed', {
-                    service,
-                    method: req.method,
-                    path: req.baseUrl ? `${req.baseUrl}${req.path}` : req.path,
-                    statusCode: res.statusCode,
-                    statusClass: `${Math.floor(res.statusCode / 100)}xx`,
-                    durationMs: Number(durationMs.toFixed(2)),
-                    httpRequest: {
-                        requestMethod: req.method,
-                        requestUrl: req.originalUrl,
-                        status: res.statusCode,
-                        userAgent: req.header('user-agent') ?? undefined,
-                        referer: req.header('referer') ?? undefined,
-                        latency: `${Math.max(durationMs, 0).toFixed(3)}ms`
-                    }
-                });
-            });
-            next();
-        });
+export function summarizeGa4IngestionResult(input) {
+    const rows = input.rows ?? [];
+    const rowCount = rows.length;
+    const countPresent = (selector) => rows.reduce((total, row) => total + Number(hasMeaningfulValue(selector(row))), 0);
+    const sourcePresentRows = countPresent((row) => row.source);
+    const mediumPresentRows = countPresent((row) => row.medium);
+    const campaignPresentRows = countPresent((row) => row.campaign);
+    const clickIdPresentRows = countPresent((row) => row.clickIdValue);
+    const now = input.now ?? new Date();
+    const lagHours = computeLagHours(now, input.watermarkAfter);
+    const lagAlertThresholdHours = input.lagAlertThresholdHours ?? 2;
+    return {
+        watermarkBefore: input.watermarkBefore,
+        watermarkAfter: input.watermarkAfter,
+        processedHourCount: input.processedHours.length,
+        processedHours: input.processedHours,
+        extractedRows: input.extractedRows,
+        upsertedRows: input.upsertedRows,
+        lagHours,
+        lagAlertThresholdHours,
+        lagStatus: lagHours !== null && lagHours >= lagAlertThresholdHours ? 'lagging' : 'healthy',
+        sourcePresentRows,
+        mediumPresentRows,
+        campaignPresentRows,
+        clickIdPresentRows,
+        sourceFillRate: rowCount > 0 ? sourcePresentRows / rowCount : 0,
+        mediumFillRate: rowCount > 0 ? mediumPresentRows / rowCount : 0,
+        campaignFillRate: rowCount > 0 ? campaignPresentRows / rowCount : 0,
+        clickIdFillRate: rowCount > 0 ? clickIdPresentRows / rowCount : 0
     };
-}
-export function logHttpError(event, error, req, extra = {}) {
-    const details = isRecord(error) && 'details' in error ? { details: error.details } : {};
-    const code = isRecord(error) && typeof error.code === 'string' ? { code: error.code } : {};
-    const statusCode = isRecord(error) && typeof error.statusCode === 'number' ? { statusCode: error.statusCode } : {};
-    logError(event, error, {
-        service: process.env.K_SERVICE ?? 'roas-radar',
-        method: req.method,
-        path: req.baseUrl ? `${req.baseUrl}${req.path}` : req.path,
-        ...statusCode,
-        ...code,
-        ...details,
-        ...extra
-    });
-}
-export function buildAttributionBacklogLog(snapshot) {
-    return JSON.stringify({
-        severity: 'INFO',
-        event: 'attribution_backlog_snapshot',
-        message: 'attribution_backlog_snapshot',
-        timestamp: new Date().toISOString(),
-        service: process.env.K_SERVICE ?? 'roas-radar-attribution-worker',
-        ...snapshot
-    });
 }
 export const __observabilityTestUtils = {
     buildAttributionBacklogLog,
     emitOrderAttributionBackfillJobLifecycleLog,
     parseCloudTraceContext,
+    summarizeGa4IngestionResult,
     summarizeOrderAttributionBackfillReport,
     summarizeAttributionObservation,
     summarizeDualWriteConsistency,

@@ -151,13 +151,6 @@ function hasAttributionSignal(candidate) {
 function populatedDimensionCount(candidate) {
     return [candidate.source, candidate.medium, candidate.campaign, candidate.content, candidate.term].filter(Boolean).length;
 }
-function compareSourceTableType(left, right) {
-    const precedence = {
-        events: 0,
-        intraday: 1
-    };
-    return precedence[left] - precedence[right];
-}
 function compareGa4FallbackCandidates(left, right) {
     const occurredAtComparison = compareDatesDescending(new Date(left.occurredAt), new Date(right.occurredAt));
     if (occurredAtComparison !== 0) {
@@ -166,14 +159,6 @@ function compareGa4FallbackCandidates(left, right) {
     const clickIdComparison = Number(Boolean(right.clickIdValue)) - Number(Boolean(left.clickIdValue));
     if (clickIdComparison !== 0) {
         return clickIdComparison;
-    }
-    const exportFreshnessComparison = new Date(right.sourceExportHour).getTime() - new Date(left.sourceExportHour).getTime();
-    if (exportFreshnessComparison !== 0) {
-        return exportFreshnessComparison;
-    }
-    const sourceTableTypeComparison = compareSourceTableType(left.sourceTableType, right.sourceTableType);
-    if (sourceTableTypeComparison !== 0) {
-        return sourceTableTypeComparison;
     }
     const dimensionComparison = populatedDimensionCount(right) - populatedDimensionCount(left);
     if (dimensionComparison !== 0) {
@@ -191,7 +176,7 @@ function compareGa4FallbackCandidates(left, right) {
     if (transactionIdComparison !== 0) {
         return transactionIdComparison;
     }
-    return compareLexical(left.candidateKey, right.candidateKey);
+    return 0;
 }
 export function isEligibleGa4FallbackCandidate(candidate, orderOccurredAt) {
     const candidateOccurredAt = new Date(candidate.occurredAt);

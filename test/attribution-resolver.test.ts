@@ -329,45 +329,71 @@ test('GA4 fallback same-timestamp ties prefer click ids, then richer dimensions,
   assert.equal(lexicalWinner?.candidateKey, 'session-a');
 });
 
-test('GA4 fallback same-timestamp ties prefer fresher exports, then finalized events tables', async () => {
+test('GA4 fallback same-timestamp ties fall through to client id, transaction id, then stable input order', async () => {
   const testUtils = await getTestUtils();
-  const fresherExportWinner = testUtils.selectGa4FallbackWinner(
+  const clientIdWinner = testUtils.selectGa4FallbackWinner(
     [
       buildGa4Candidate('2026-04-02T10:00:00.000Z', {
-        candidateKey: 'older-export',
-        ga4SessionId: 'session-a',
-        sourceExportHour: '2026-04-02T10:00:00.000Z'
+        candidateKey: 'client-b',
+        ga4SessionId: null,
+        ga4ClientId: 'client-b',
+        campaign: null
       }),
       buildGa4Candidate('2026-04-02T10:00:00.000Z', {
-        candidateKey: 'newer-export',
-        ga4SessionId: 'session-b',
-        sourceExportHour: '2026-04-02T11:00:00.000Z'
+        candidateKey: 'client-a',
+        ga4SessionId: null,
+        ga4ClientId: 'client-a',
+        campaign: null
+      })
+    ],
+    new Date('2026-04-03T00:00:00.000Z')
+  );
+  assert.equal(clientIdWinner?.candidateKey, 'client-a');
+
+  const transactionIdWinner = testUtils.selectGa4FallbackWinner(
+    [
+      buildGa4Candidate('2026-04-02T10:00:00.000Z', {
+        candidateKey: 'transaction-b',
+        ga4SessionId: null,
+        ga4ClientId: null,
+        transactionId: 'transaction-b',
+        campaign: null
+      }),
+      buildGa4Candidate('2026-04-02T10:00:00.000Z', {
+        candidateKey: 'transaction-a',
+        ga4SessionId: null,
+        ga4ClientId: null,
+        transactionId: 'transaction-a',
+        campaign: null
+      })
+    ],
+    new Date('2026-04-03T00:00:00.000Z')
+  );
+  assert.equal(transactionIdWinner?.candidateKey, 'transaction-a');
+
+  const stableOrderWinner = testUtils.selectGa4FallbackWinner(
+    [
+      buildGa4Candidate('2026-04-02T10:00:00.000Z', {
+        candidateKey: 'first-input',
+        ga4SessionId: null,
+        ga4ClientId: null,
+        transactionId: 'same-transaction',
+        campaign: null,
+        source: 'google'
+      }),
+      buildGa4Candidate('2026-04-02T10:00:00.000Z', {
+        candidateKey: 'second-input',
+        ga4SessionId: null,
+        ga4ClientId: null,
+        transactionId: 'same-transaction',
+        campaign: null,
+        source: 'google'
       })
     ],
     new Date('2026-04-03T00:00:00.000Z')
   );
 
-  assert.equal(fresherExportWinner?.candidateKey, 'newer-export');
-
-  const finalizedEventsWinner = testUtils.selectGa4FallbackWinner(
-    [
-      buildGa4Candidate('2026-04-02T10:00:00.000Z', {
-        candidateKey: 'intraday-export',
-        ga4SessionId: 'session-a',
-        sourceExportHour: '2026-04-02T11:00:00.000Z',
-        sourceTableType: 'intraday'
-      }),
-      buildGa4Candidate('2026-04-02T10:00:00.000Z', {
-        candidateKey: 'events-export',
-        ga4SessionId: 'session-b',
-        sourceExportHour: '2026-04-02T11:00:00.000Z',
-        sourceTableType: 'events'
-      })
-    ],
-    new Date('2026-04-03T00:00:00.000Z')
-  );
-
-  assert.equal(finalizedEventsWinner?.candidateKey, 'events-export');
+  assert.equal(stableOrderWinner?.candidateKey, 'first-input');
 });
 
 test('GA4 fallback rejects future-dated and empty candidates', async () => {
@@ -392,4 +418,24 @@ test('GA4 fallback rejects future-dated and empty candidates', async () => {
   );
 
   assert.equal(winner, null);
+});
+
+test('GA4 fallback can use a transaction-only candidate when attribution dimensions are present', async () => {
+  const testUtils = await getTestUtils();
+  const winner = testUtils.selectGa4FallbackWinner(
+    [
+      buildGa4Candidate('2026-04-02T10:00:00.000Z', {
+        candidateKey: 'transaction-only',
+        ga4SessionId: null,
+        ga4ClientId: null,
+        transactionId: 'transaction-only-1',
+        source: 'google',
+        medium: 'cpc',
+        campaign: 'transaction-only'
+      })
+    ],
+    new Date('2026-04-03T00:00:00.000Z')
+  );
+
+  assert.equal(winner?.candidateKey, 'transaction-only');
 });
