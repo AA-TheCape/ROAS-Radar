@@ -297,3 +297,79 @@ test('extractGa4SessionAttributionForHour falls back to nested event_params clic
     }
   ]);
 });
+
+test('extractGa4SessionAttributionForHour preserves ads enrichment when click ids are parsed from event params', async () => {
+  const result = await extractGa4SessionAttributionForHour({
+    config: enabledConfig,
+    hourStart: '2026-04-27T11:00:00.000Z',
+    executor: {
+      async runQuery() {
+        return [
+          {
+            ga4_session_key: 'pseudo-9:54321',
+            ga4_user_key: 'customer-99',
+            ga4_client_id: 'pseudo-9',
+            ga4_session_id: '54321',
+            session_started_at: '2026-04-27T11:11:00.000Z',
+            last_event_at: '2026-04-27T11:29:00.000Z',
+            source: ' Google ',
+            medium: ' CPC ',
+            campaign_id: '9009',
+            campaign: ' PMax Prospecting ',
+            content: ' Carousel ',
+            term: ' boots ',
+            click_id_type: null,
+            click_id_value: null,
+            account_id: '9988776655',
+            account_name: ' Growth Account ',
+            channel_type: ' PERFORMANCE_MAX ',
+            channel_subtype: ' SHOPPING ',
+            campaign_metadata_source: 'google_ads_transfer',
+            account_metadata_source: 'google_ads_transfer',
+            channel_metadata_source: 'google_ads_transfer',
+            event_params: [
+              {
+                key: ' GCLID ',
+                value: {
+                  string_value: ' GCLID-FROM-PARAMS '
+                }
+              }
+            ],
+            source_export_hour: '2026-04-27T11:00:00.000Z',
+            source_dataset: 'ga4_export',
+            source_table_type: 'events'
+          }
+        ];
+      }
+    }
+  });
+
+  assert.deepEqual(result.rows, [
+    {
+      ga4SessionKey: 'pseudo-9:54321',
+      ga4UserKey: 'customer-99',
+      ga4ClientId: 'pseudo-9',
+      ga4SessionId: '54321',
+      sessionStartedAt: '2026-04-27T11:11:00.000Z',
+      lastEventAt: '2026-04-27T11:29:00.000Z',
+      source: 'google',
+      medium: 'cpc',
+      campaignId: '9009',
+      campaign: 'PMax Prospecting',
+      content: 'Carousel',
+      term: 'boots',
+      clickIdType: 'gclid',
+      clickIdValue: 'GCLID-FROM-PARAMS',
+      accountId: '9988776655',
+      accountName: 'Growth Account',
+      channelType: 'PERFORMANCE_MAX',
+      channelSubtype: 'SHOPPING',
+      campaignMetadataSource: 'google_ads_transfer',
+      accountMetadataSource: 'google_ads_transfer',
+      channelMetadataSource: 'google_ads_transfer',
+      sourceExportHour: '2026-04-27T11:00:00.000Z',
+      sourceDataset: 'ga4_export',
+      sourceTableType: 'events'
+    }
+  ]);
+});

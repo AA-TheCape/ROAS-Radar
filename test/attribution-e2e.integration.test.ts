@@ -14,6 +14,7 @@ let cachedModules:
       closeServer: typeof import('../src/server.js').closeServer;
       enqueueAttributionForOrder: typeof import('../src/modules/attribution/index.js').enqueueAttributionForOrder;
       processAttributionQueue: typeof import('../src/modules/attribution/index.js').processAttributionQueue;
+      upsertGa4FallbackCandidates: typeof import('../src/modules/attribution/ga4-fallback-candidates.js').upsertGa4FallbackCandidates;
       enqueueShopifyOrderWriteback: typeof import('../src/modules/shopify/writeback.js').enqueueShopifyOrderWriteback;
       processShopifyOrderWritebackQueue: typeof import('../src/modules/shopify/writeback.js').processShopifyOrderWritebackQueue;
       testUtils: typeof import('../src/modules/shopify/writeback.js').__shopifyWritebackTestUtils;
@@ -26,10 +27,11 @@ async function getModules() {
     return cachedModules;
   }
 
-  const [poolModule, serverModule, attributionModule, writebackModule, harnessModule] = await Promise.all([
+  const [poolModule, serverModule, attributionModule, ga4FallbackModule, writebackModule, harnessModule] = await Promise.all([
     import('../src/db/pool.js'),
     import('../src/server.js'),
     import('../src/modules/attribution/index.js'),
+    import('../src/modules/attribution/ga4-fallback-candidates.js'),
     import('../src/modules/shopify/writeback.js'),
     import('./e2e-harness.js')
   ]);
@@ -40,6 +42,7 @@ async function getModules() {
     closeServer: serverModule.closeServer,
     enqueueAttributionForOrder: attributionModule.enqueueAttributionForOrder,
     processAttributionQueue: attributionModule.processAttributionQueue,
+    upsertGa4FallbackCandidates: ga4FallbackModule.upsertGa4FallbackCandidates,
     enqueueShopifyOrderWriteback: writebackModule.enqueueShopifyOrderWriteback,
     processShopifyOrderWritebackQueue: writebackModule.processShopifyOrderWritebackQueue,
     testUtils: writebackModule.__shopifyWritebackTestUtils,
@@ -243,6 +246,133 @@ test('paid capture survives attribution, Shopify writeback, and reporting end to
         conversionRate: 0,
         roas: null
       }
+    });
+  } finally {
+    await closeServer(server);
+  }
+});
+
+test('GA4-only fallback flows through attribution and reporting with the fallback label and campaign intact', async () => {
+  const { pool, createServer, closeServer, enqueueAttributionForOrder, processAttributionQueue, upsertGa4FallbackCandidates } =
+    await getModules();
+
+  const server = createServer();
+
+  try {
+    await upsertGa4FallbackCandidates([
+      {
+        occurredAt: '2026-04-24T12:00:00.000Z',
+        ga4UserKey: 'ga4-user-e2e',
+        ga4ClientId: 'ga4-client-e2e',
+        ga4SessionId: 'ga4-session-e2e',
+        transactionId: 'e2e-order-ga4-1',
+        emailHash: null,
+        customerIdentityId: null,
+        source: 'google',
+        medium: 'cpc',
+        campaign: 'ga4-e2e-campaign',
+        content: 'hero',
+        term: 'boots',
+        clickIdType: null,
+        clickIdValue: null,
+        sessionHasRequiredFields: true,
+        sourceExportHour: '2026-04-24T12:00:00.000Z',
+        sourceDataset: 'ga4_export',
+        sourceTableType: 'events'
+      }
+    ]);
+
+    await pool.query(
+      `
+        INSERT INTO shopify_orders (
+          shopify_order_id,
+          currency_code,
+          subtotal_price,
+          total_price,
+          processed_at,
+          source_name,
+          raw_payload,
+          ingested_at
+        )
+        VALUES (
+          'e2e-order-ga4-1',
+          'USD',
+          '95.00',
+          '95.00',
+          '2026-04-24T12:15:00.000Z',
+          'web',
+          $1::jsonb,
+          now()
+        )
+      `,
+      [
+        JSON.stringify({
+          id: 'e2e-order-ga4-1',
+          source_name: 'web',
+          landing_site: 'https://store.example/products/widget'
+        })
+      ]
+    );
+
+    await enqueueAttributionForOrder('e2e-order-ga4-1', 'test_e2e_ga4_only');
+    const attributionReport = await processAttributionQueue({
+      workerId: 'test-e2e-ga4-only',
+      limit: 10,
+      staleScanLimit: 0,
+      emitMetrics: false
+    });
+
+    assert.equal(attributionReport.succeededJobs, 1);
+    assert.equal(attributionReport.failedJobs, 0);
+
+    const attributionResult = await pool.query<{
+      match_source: string;
+      confidence_label: string;
+      attributed_source: string | null;
+      attributed_medium: string | null;
+      attributed_campaign: string | null;
+      attribution_reason: string;
+    }>(
+      `
+        SELECT
+          match_source,
+          confidence_label,
+          attributed_source,
+          attributed_medium,
+          attributed_campaign,
+          attribution_reason
+        FROM attribution_results
+        WHERE shopify_order_id = 'e2e-order-ga4-1'
+      `
+    );
+
+    assert.deepEqual(attributionResult.rows[0], {
+      match_source: 'ga4_fallback',
+      confidence_label: 'low',
+      attributed_source: 'google',
+      attributed_medium: 'cpc',
+      attributed_campaign: 'ga4-e2e-campaign',
+      attribution_reason: 'ga4_fallback_derived'
+    });
+
+    const reportingOrders = await requestJson(
+      server,
+      '/api/reporting/orders?startDate=2026-04-24&endDate=2026-04-24&source=google&campaign=ga4-e2e-campaign&limit=5'
+    );
+
+    assert.equal(reportingOrders.response.status, 200);
+    assert.deepEqual(reportingOrders.body, {
+      rows: [
+        {
+          shopifyOrderId: 'e2e-order-ga4-1',
+          processedAt: '2026-04-24T12:15:00.000Z',
+          totalPrice: 95,
+          source: 'google',
+          medium: 'cpc',
+          campaign: 'ga4-e2e-campaign',
+          attributionReason: 'ga4_fallback_derived'
+        }
+      ]
     });
   } finally {
     await closeServer(server);

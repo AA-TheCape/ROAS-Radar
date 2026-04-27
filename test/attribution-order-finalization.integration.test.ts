@@ -1072,6 +1072,99 @@ test('Shopify hint fallback wins before GA4 fallback when deterministic matching
   }
 });
 
+test('deterministic winners suppress GA4 fallback even when a GA4 candidate is available', async () => {
+  await resetIntegrationDatabase();
+  const { pool } = await getModules();
+
+  try {
+    const checkoutSessionId = await insertTrackingSession(pool, {
+      firstSeenAt: '2026-04-07T08:40:00.000Z',
+      landingPage: 'https://store.example/checkout?utm_source=google&utm_medium=cpc&utm_campaign=checkout-win',
+      utmSource: 'google',
+      utmMedium: 'cpc',
+      utmCampaign: 'checkout-win',
+      gclid: 'gclid-deterministic-win'
+    });
+    await insertTrackingEvent(pool, {
+      sessionId: checkoutSessionId,
+      eventType: 'checkout_started',
+      occurredAt: '2026-04-07T08:40:00.000Z',
+      pageUrl: 'https://store.example/checkout?utm_source=google&utm_medium=cpc&utm_campaign=checkout-win',
+      utmSource: 'google',
+      utmMedium: 'cpc',
+      utmCampaign: 'checkout-win',
+      gclid: 'gclid-deterministic-win',
+      shopifyCheckoutToken: 'checkout-ga4-suppressed-1'
+    });
+
+    await insertGa4FallbackCandidate({
+      occurredAt: '2026-04-07T08:55:00.000Z',
+      transactionId: 'order-ga4-suppressed-1',
+      source: 'meta',
+      medium: 'paid_social',
+      campaign: 'ga4-should-lose',
+      clickIdType: 'fbclid',
+      clickIdValue: 'fbclid-should-lose',
+      ga4ClientId: 'ga4-client-suppressed',
+      ga4SessionId: 'ga4-session-suppressed'
+    });
+
+    await insertShopifyOrder(pool, {
+      shopifyOrderId: 'order-ga4-suppressed-1',
+      processedAt: '2026-04-07T09:05:00.000Z',
+      checkoutToken: 'checkout-ga4-suppressed-1',
+      rawPayload: JSON.stringify({
+        id: 'order-ga4-suppressed-1',
+        source_name: 'web',
+        landing_site: 'https://store.example/products/widget'
+      })
+    });
+
+    await processOrder('order-ga4-suppressed-1');
+
+    const attributionResult = await fetchAttributionResult('order-ga4-suppressed-1');
+    assert.deepEqual(attributionResult, {
+      session_id: checkoutSessionId,
+      attributed_source: 'google',
+      attributed_medium: 'cpc',
+      attributed_campaign: 'checkout-win',
+      attributed_click_id_type: 'gclid',
+      attributed_click_id_value: 'gclid-deterministic-win',
+      match_source: 'checkout_token',
+      confidence_score: '1.00',
+      confidence_label: 'high',
+      attribution_reason: 'matched_by_checkout_token'
+    });
+
+    const snapshot = await fetchOrderSnapshot('order-ga4-suppressed-1');
+    assert.equal(snapshot?.confidenceLabel, 'high');
+    assert.deepEqual(snapshot?.winner, {
+      sessionId: checkoutSessionId,
+      sourceTouchEventId:
+        snapshot?.winner && typeof snapshot.winner === 'object'
+          ? (snapshot.winner as Record<string, unknown>).sourceTouchEventId
+          : null,
+      occurredAt: '2026-04-07T08:40:00.000Z',
+      source: 'google',
+      medium: 'cpc',
+      campaign: 'checkout-win',
+      content: null,
+      term: null,
+      clickIdType: 'gclid',
+      clickIdValue: 'gclid-deterministic-win',
+      attributionReason: 'matched_by_checkout_token',
+      matchSource: 'checkout_token',
+      confidenceLabel: 'high',
+      ingestionSource: 'checkout_token',
+      ga4ClientId: null,
+      ga4SessionId: null,
+      isDirect: false
+    });
+  } finally {
+    await resetIntegrationDatabase();
+  }
+});
+
 test('GA4 fallback resolves only after deterministic and Shopify hint paths fail', async () => {
   await resetIntegrationDatabase();
   const { pool } = await getModules();
@@ -1137,6 +1230,76 @@ test('GA4 fallback resolves only after deterministic and Shopify hint paths fail
       ingestionSource: null,
       ga4ClientId: 'ga4-client-77',
       ga4SessionId: 'ga4-session-77',
+      isDirect: false
+    });
+  } finally {
+    await resetIntegrationDatabase();
+  }
+});
+
+test('GA4 fallback without click ids stays low-confidence and preserves campaign dimensions', async () => {
+  await resetIntegrationDatabase();
+  const { pool } = await getModules();
+
+  try {
+    await insertGa4FallbackCandidate({
+      occurredAt: '2026-04-07T08:50:00.000Z',
+      transactionId: 'order-ga4-utm-only-1',
+      source: 'google',
+      medium: 'cpc',
+      campaign: 'ga4-utm-only',
+      clickIdType: null,
+      clickIdValue: null,
+      ga4ClientId: 'ga4-client-utm-only',
+      ga4SessionId: 'ga4-session-utm-only'
+    });
+
+    await insertShopifyOrder(pool, {
+      shopifyOrderId: 'order-ga4-utm-only-1',
+      processedAt: '2026-04-07T09:05:00.000Z',
+      rawPayload: JSON.stringify({
+        id: 'order-ga4-utm-only-1',
+        source_name: 'web',
+        landing_site: 'https://store.example/products/widget'
+      })
+    });
+
+    await processOrder('order-ga4-utm-only-1');
+
+    const attributionResult = await fetchAttributionResult('order-ga4-utm-only-1');
+    assert.deepEqual(attributionResult, {
+      session_id: null,
+      attributed_source: 'google',
+      attributed_medium: 'cpc',
+      attributed_campaign: 'ga4-utm-only',
+      attributed_click_id_type: null,
+      attributed_click_id_value: null,
+      match_source: 'ga4_fallback',
+      confidence_score: '0.25',
+      confidence_label: 'low',
+      attribution_reason: 'ga4_fallback_derived'
+    });
+
+    const snapshot = await fetchOrderSnapshot('order-ga4-utm-only-1');
+    assert.equal(snapshot?.confidenceScore, 0.25);
+    assert.equal(snapshot?.confidenceLabel, 'low');
+    assert.deepEqual(snapshot?.winner, {
+      sessionId: null,
+      sourceTouchEventId: null,
+      occurredAt: '2026-04-07T08:50:00.000Z',
+      source: 'google',
+      medium: 'cpc',
+      campaign: 'ga4-utm-only',
+      content: null,
+      term: null,
+      clickIdType: null,
+      clickIdValue: null,
+      attributionReason: 'ga4_fallback_derived',
+      matchSource: 'ga4_fallback',
+      confidenceLabel: 'low',
+      ingestionSource: null,
+      ga4ClientId: 'ga4-client-utm-only',
+      ga4SessionId: 'ga4-session-utm-only',
       isDirect: false
     });
   } finally {
