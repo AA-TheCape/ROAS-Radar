@@ -105,6 +105,8 @@ type OrderAttributionRow = {
   attributed_source: string | null;
   attributed_medium: string | null;
   attributed_campaign: string | null;
+  match_source: string | null;
+  confidence_label: string | null;
   attribution_reason: string | null;
 };
 
@@ -127,6 +129,7 @@ type OrderDetailsRow = {
   cart_token: string | null;
   source_name: string | null;
   ingested_at: Date;
+  attribution_snapshot: unknown;
   raw_payload: unknown;
 };
 
@@ -164,6 +167,8 @@ type AttributionCreditRow = {
   revenue_credit: string | number;
   is_primary: boolean;
   attribution_reason: string;
+  match_source: string;
+  confidence_label: string;
   created_at: Date;
   model_version: number;
 };
@@ -521,6 +526,8 @@ export function createReportingRouter(): Router {
             c.attributed_source,
             c.attributed_medium,
             c.attributed_campaign,
+            c.match_source,
+            c.confidence_label,
             c.attribution_reason
           FROM shopify_orders o
           LEFT JOIN LATERAL (
@@ -528,6 +535,8 @@ export function createReportingRouter(): Router {
               attributed_source,
               attributed_medium,
               attributed_campaign,
+              match_source,
+              confidence_label,
               attribution_reason
             FROM attribution_order_credits
             WHERE shopify_order_id = o.shopify_order_id
@@ -553,6 +562,8 @@ export function createReportingRouter(): Router {
           source: row.attributed_source,
           medium: row.attributed_medium,
           campaign: row.attributed_campaign,
+          matchSource: row.match_source ?? 'unattributed',
+          confidenceLabel: row.confidence_label ?? 'none',
           attributionReason: row.attribution_reason ?? 'unattributed'
         }))
       });
@@ -586,6 +597,7 @@ export function createReportingRouter(): Router {
             o.cart_token,
             o.source_name,
             o.ingested_at,
+            o.attribution_snapshot,
             o.raw_payload
           FROM shopify_orders o
           WHERE o.shopify_order_id = $1
@@ -641,6 +653,8 @@ export function createReportingRouter(): Router {
             c.revenue_credit,
             c.is_primary,
             c.attribution_reason,
+            c.match_source,
+            c.confidence_label,
             c.created_at,
             c.model_version
           FROM attribution_order_credits c
@@ -672,6 +686,7 @@ export function createReportingRouter(): Router {
           cartToken: order.cart_token,
           sourceName: order.source_name,
           ingestedAt: order.ingested_at.toISOString(),
+          attributionSnapshot: order.attribution_snapshot,
           rawPayload: order.raw_payload
         },
         lineItems: lineItemsResult.rows.map((row) => ({
@@ -707,6 +722,8 @@ export function createReportingRouter(): Router {
           revenueCredit: Number(row.revenue_credit),
           isPrimary: row.is_primary,
           attributionReason: row.attribution_reason,
+          matchSource: row.match_source,
+          confidenceLabel: row.confidence_label,
           createdAt: row.created_at.toISOString(),
           modelVersion: row.model_version
         }))

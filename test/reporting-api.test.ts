@@ -383,6 +383,8 @@ test('reporting orders returns order-level attribution details for debugging', a
           attributed_source: 'facebook',
           attributed_medium: 'paid_social',
           attributed_campaign: 'prospecting-us',
+          match_source: 'ga4_fallback',
+          confidence_label: 'low',
           attribution_reason: 'matched_by_checkout_token'
         }
       ]
@@ -407,10 +409,109 @@ test('reporting orders returns order-level attribution details for debugging', a
           source: 'facebook',
           medium: 'paid_social',
           campaign: 'prospecting-us',
+          matchSource: 'ga4_fallback',
+          confidenceLabel: 'low',
           attributionReason: 'matched_by_checkout_token'
         }
       ]
     });
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
+test('reporting order details include stored snapshot provenance and credit confidence labels', async () => {
+  let queryIndex = 0;
+  pool.query = (async (text: string, params?: unknown[]) => {
+    queryIndex += 1;
+
+    if (queryIndex === 1) {
+      assert.match(text, /FROM shopify_orders o/);
+      assert.deepEqual(params, ['1234567890']);
+      return {
+        rowCount: 1,
+        rows: [
+          {
+            shopify_order_id: '1234567890',
+            shopify_order_number: 'RR-123',
+            shopify_customer_id: 'gid://shopify/Customer/1',
+            customer_identity_id: 'identity-123',
+            email_hash: 'hash-123',
+            currency_code: 'USD',
+            subtotal_price: '100.00',
+            total_price: '120.00',
+            financial_status: 'paid',
+            fulfillment_status: 'fulfilled',
+            processed_at: new Date('2026-04-10T13:00:00.000Z'),
+            created_at_shopify: new Date('2026-04-10T12:30:00.000Z'),
+            updated_at_shopify: new Date('2026-04-10T13:15:00.000Z'),
+            landing_session_id: null,
+            checkout_token: 'checkout-123',
+            cart_token: 'cart-123',
+            source_name: 'web',
+            ingested_at: new Date('2026-04-10T13:16:00.000Z'),
+            attribution_snapshot: {
+              confidenceScore: 0.35,
+              confidenceLabel: 'low',
+              winner: {
+                matchSource: 'ga4_fallback',
+                confidenceLabel: 'low',
+                attributionReason: 'ga4_fallback_derived'
+              },
+              timeline: []
+            },
+            raw_payload: { id: 'raw-order' }
+          }
+        ]
+      };
+    }
+
+    if (queryIndex === 2) {
+      assert.match(text, /FROM shopify_order_line_items li/);
+      assert.deepEqual(params, ['1234567890']);
+      return { rows: [] };
+    }
+
+    assert.match(text, /FROM attribution_order_credits c/);
+    assert.deepEqual(params, ['1234567890']);
+    return {
+      rows: [
+        {
+          attribution_model: 'last_touch',
+          touchpoint_position: 0,
+          session_id: null,
+          touchpoint_occurred_at: new Date('2026-04-10T12:45:00.000Z'),
+          attributed_source: 'google',
+          attributed_medium: 'cpc',
+          attributed_campaign: 'prospecting-us',
+          attributed_content: null,
+          attributed_term: null,
+          attributed_click_id_type: 'gclid',
+          attributed_click_id_value: 'GCLID-123',
+          credit_weight: '1',
+          revenue_credit: '120.00',
+          is_primary: true,
+          attribution_reason: 'ga4_fallback_derived',
+          match_source: 'ga4_fallback',
+          confidence_label: 'low',
+          created_at: new Date('2026-04-10T13:16:00.000Z'),
+          model_version: 2
+        }
+      ]
+    };
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(server, '/api/reporting/orders/1234567890');
+
+    assert.equal(response.status, 200);
+    assert.equal(body.order.attributionSnapshot.winner.matchSource, 'ga4_fallback');
+    assert.equal(body.order.attributionSnapshot.winner.confidenceLabel, 'low');
+    assert.equal(body.attributionCredits[0].matchSource, 'ga4_fallback');
+    assert.equal(body.attributionCredits[0].confidenceLabel, 'low');
   } finally {
     pool.query = originalPoolQuery as typeof pool.query;
     await closeServer(server);

@@ -161,6 +161,14 @@ function normalizeDateRange(filters: ReportingFilters): ReportingFilters {
   return filters;
 }
 
+function formatContractValue(value: string | null | undefined): string {
+  if (!value) {
+    return 'Not available';
+  }
+
+  return value.replace(/_/g, ' ');
+}
+
 export function applyDateRangeChange(filters: ReportingFilters, field: DateField, value: string) {
   const nextFilters = normalizeDateRange({
     ...filters,
@@ -850,7 +858,16 @@ const ReportingDashboard = memo(function ReportingDashboard({
     () =>
       orders.filter((row) =>
         matchesQuery(
-          [row.shopifyOrderId, row.source, row.medium, row.campaign, row.attributionReason, row.totalPrice],
+          [
+            row.shopifyOrderId,
+            row.source,
+            row.medium,
+            row.campaign,
+            row.matchSource,
+            row.confidenceLabel,
+            row.attributionReason,
+            row.totalPrice
+          ],
           orderSearch
         )
       ),
@@ -1186,7 +1203,7 @@ const ReportingDashboard = memo(function ReportingDashboard({
                     setOrderSearch(value);
                     setOrderPage(1);
                   }}
-                  placeholder="Order ID, source, campaign, reason"
+                  placeholder="Order ID, source, campaign, match source, reason"
                 />
                 <Field label="Sort by" htmlFor="orders-table-sort">
                   <Select
@@ -1250,7 +1267,7 @@ const ReportingDashboard = memo(function ReportingDashboard({
                     >
                       Total
                     </SortableTableHeaderCell>
-                    <TableHeaderCell>Reason</TableHeaderCell>
+                    <TableHeaderCell>Decision</TableHeaderCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -1281,7 +1298,11 @@ const ReportingDashboard = memo(function ReportingDashboard({
                       <TableCell>{row.campaign ?? 'No campaign'}</TableCell>
                       <TableCell>{formatCurrency(row.totalPrice)}</TableCell>
                       <TableCell>
-                        <Badge tone="teal">{row.attributionReason}</Badge>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge tone="teal">{formatContractValue(row.matchSource)}</Badge>
+                          <Badge tone="brand">{formatContractValue(row.confidenceLabel)}</Badge>
+                          <Badge tone="teal">{row.attributionReason}</Badge>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}

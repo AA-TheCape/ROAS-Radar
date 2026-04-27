@@ -125,6 +125,8 @@ export type OrderRow = {
   source: string | null;
   medium: string | null;
   campaign: string | null;
+  matchSource: string;
+  confidenceLabel: string;
   attributionReason: string;
 };
 
@@ -166,6 +168,8 @@ export type OrderDetailAttributionCredit = {
   revenueCredit: number;
   isPrimary: boolean;
   attributionReason: string;
+  matchSource: string;
+  confidenceLabel: string;
   createdAt: string;
   modelVersion: number;
 };
@@ -190,6 +194,7 @@ export type OrderDetail = {
   cartToken: string | null;
   sourceName: string | null;
   ingestedAt: string;
+  attributionSnapshot: unknown;
   rawPayload: unknown;
 };
 

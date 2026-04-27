@@ -367,6 +367,8 @@ export function createReportingDashboardProps(
           medium: 'cpc',
           campaign: 'Spring Search',
           totalPrice: 195,
+          matchSource: 'checkout_token',
+          confidenceLabel: 'high',
           attributionReason: 'last-touch'
         },
         {
@@ -376,6 +378,8 @@ export function createReportingDashboardProps(
           medium: 'paid_social',
           campaign: 'Prospecting Carousel',
           totalPrice: 150,
+          matchSource: 'ga4_fallback',
+          confidenceLabel: 'low',
           attributionReason: 'linear'
         }
       ],
@@ -447,6 +451,16 @@ export function createOrderDetailsProps(
           cartToken: 'cart_789',
           sourceName: 'web',
           ingestedAt: '2026-04-20T18:31:00.000Z',
+          attributionSnapshot: {
+            confidenceScore: 1,
+            confidenceLabel: 'high',
+            winner: {
+              sessionId: 'sess_123',
+              matchSource: 'checkout_token',
+              confidenceLabel: 'high'
+            },
+            timeline: []
+          },
           rawPayload: { orderNumber: 'RR-1105', note: 'vip customer' }
         },
         lineItems: [
@@ -502,6 +516,8 @@ export function createOrderDetailsProps(
             revenueCredit: 195,
             isPrimary: true,
             attributionReason: 'matched checkout token',
+            matchSource: 'checkout_token',
+            confidenceLabel: 'high',
             createdAt: '2026-04-20T18:31:00.000Z',
             modelVersion: 2
           },
@@ -521,6 +537,8 @@ export function createOrderDetailsProps(
             revenueCredit: 97.5,
             isPrimary: false,
             attributionReason: 'modeled credit',
+            matchSource: 'ga4_fallback',
+            confidenceLabel: 'low',
             createdAt: '2026-04-20T18:31:00.000Z',
             modelVersion: 2
           }

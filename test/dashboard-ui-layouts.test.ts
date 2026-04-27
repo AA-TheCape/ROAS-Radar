@@ -262,6 +262,8 @@ test('reporting dashboard keeps overview, charts, and report tables internally c
           medium: 'cpc',
           campaign: 'Brand Search',
           totalPrice: 700,
+          matchSource: 'checkout_token',
+          confidenceLabel: 'high',
           attributionReason: 'last-touch'
         },
         {
@@ -271,6 +273,8 @@ test('reporting dashboard keeps overview, charts, and report tables internally c
           medium: 'paid_social',
           campaign: 'Prospecting Video',
           totalPrice: 500,
+          matchSource: 'ga4_fallback',
+          confidenceLabel: 'low',
           attributionReason: 'linear'
         }
       ],

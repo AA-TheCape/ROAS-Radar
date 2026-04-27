@@ -218,6 +218,16 @@ async function renderSnapshots() {
             cartToken: 'cart_789',
             sourceName: 'web',
             ingestedAt: '2026-04-20T18:31:00.000Z',
+            attributionSnapshot: {
+              confidenceScore: 1,
+              confidenceLabel: 'high',
+              winner: {
+                sessionId: 'sess_123',
+                matchSource: 'checkout_token',
+                confidenceLabel: 'high'
+              },
+              timeline: []
+            },
             rawPayload: { orderNumber: 'RR-1105', note: 'vip customer' }
           },
           lineItems: [
@@ -256,6 +266,8 @@ async function renderSnapshots() {
               revenueCredit: 195,
               isPrimary: true,
               attributionReason: 'matched checkout token',
+              matchSource: 'checkout_token',
+              confidenceLabel: 'high',
               createdAt: '2026-04-20T18:31:00.000Z',
               modelVersion: 2
             }

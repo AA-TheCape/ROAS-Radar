@@ -70,6 +70,27 @@ function formatJsonValue(value: unknown): string {
   }
 }
 
+function formatContractValue(value: string | null | undefined): string {
+  if (!value) {
+    return 'Not available';
+  }
+
+  return value.replace(/_/g, ' ');
+}
+
+function readSnapshotWinner(snapshot: unknown): { matchSource?: string; confidenceLabel?: string } | null {
+  if (!snapshot || typeof snapshot !== 'object') {
+    return null;
+  }
+
+  const winner = (snapshot as { winner?: unknown }).winner;
+  if (!winner || typeof winner !== 'object') {
+    return null;
+  }
+
+  return winner as { matchSource?: string; confidenceLabel?: string };
+}
+
 function MetricCard({ label, value, detail }: { label: string; value: string; detail: string }) {
   return (
     <Card padding="compact" className="border-line/70">
@@ -120,6 +141,7 @@ export default function OrderDetailsView({
   const order = data?.order;
   const lineItems = data?.lineItems ?? [];
   const attributionCredits = data?.attributionCredits ?? [];
+  const snapshotWinner = readSnapshotWinner(order?.attributionSnapshot);
   const [lineItemSearch, setLineItemSearch] = useState('');
   const [lineItemSort, setLineItemSort] = useState<
     SortState<'title' | 'sku' | 'quantity' | 'price' | 'vendor'>
@@ -169,6 +191,8 @@ export default function OrderDetailsView({
             credit.medium,
             credit.campaign,
             credit.attributionReason,
+            credit.matchSource,
+            credit.confidenceLabel,
             credit.clickIdType,
             credit.clickIdValue
           ],
@@ -304,6 +328,14 @@ export default function OrderDetailsView({
               <div className="md:col-[1/-1]">
                 <dt>Cart token</dt>
                 <dd className="break-all">{formatOptionalValue(order?.cartToken)}</dd>
+              </div>
+              <div>
+                <dt>Winner match source</dt>
+                <dd>{formatContractValue(snapshotWinner?.matchSource)}</dd>
+              </div>
+              <div>
+                <dt>Winner confidence</dt>
+                <dd>{formatContractValue(snapshotWinner?.confidenceLabel)}</dd>
               </div>
             </DetailList>
           </DetailCard>
@@ -547,9 +579,13 @@ export default function OrderDetailsView({
                     <TableCell>{formatCurrency(credit.revenueCredit)}</TableCell>
                     <TableCell>{formatNumber(credit.creditWeight)}</TableCell>
                     <TableCell>
-                      <Badge tone="brand" className="max-w-full whitespace-normal text-center">
-                        {credit.attributionReason}
-                      </Badge>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge tone="teal">{formatContractValue(credit.matchSource)}</Badge>
+                        <Badge tone="brand">{formatContractValue(credit.confidenceLabel)}</Badge>
+                        <Badge tone="brand" className="max-w-full whitespace-normal text-center">
+                          {credit.attributionReason}
+                        </Badge>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -559,6 +595,10 @@ export default function OrderDetailsView({
         </DetailCard>
 
         <div className="grid gap-4 xl:grid-cols-2">
+          <DetailCard title="Attribution snapshot" description="Persisted winner and timeline snapshot written onto the Shopify order record.">
+            <JsonViewer value={order?.attributionSnapshot ?? {}} />
+          </DetailCard>
+
           <DetailCard title="Raw order payload" description="Stored Shopify payload for the order record.">
             <JsonViewer value={order?.rawPayload ?? {}} />
           </DetailCard>
