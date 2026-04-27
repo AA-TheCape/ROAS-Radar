@@ -4,8 +4,9 @@ import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
 import { formatDateInTimezone, getReportingTimezone } from '../settings/index.js';
 import { applyShopifyOrderWriteback } from '../shopify/writeback.js';
 import { ATTRIBUTION_MODELS, computeAttributionOutputs, computeSingleWinnerCredits } from './engine.js';
-import { confidenceScoreForWinner, dedupeDeterministicCandidates, isDirectTouchpoint, selectLastNonDirectWinner } from './resolver.js';
+import { isDirectTouchpoint, resolveAttributionTier } from './resolver.js';
 import { buildOrderAttributionAuditRecord } from './order-attribution-audit.js';
+import { extractAttributionCandidatesForOrder } from './candidate-extraction.js';
 const ATTRIBUTION_MODEL_VERSION = 1;
 const ATTRIBUTION_WINDOW_DAYS = 7;
 const MAX_PREVIEW_ORDERS = 25;
@@ -128,7 +129,9 @@ async function fetchOrder(client, shopifyOrderId) {
         checkout_token,
         cart_token,
         email_hash,
-        customer_identity_id::text AS customer_identity_id
+        customer_identity_id::text AS customer_identity_id,
+        source_name,
+        raw_payload
       FROM shopify_orders
       WHERE shopify_order_id = $1
       LIMIT 1
@@ -317,14 +320,20 @@ async function collectDeterministicCandidates(client, order) {
     return candidates;
 }
 async function resolveAttributionJourney(client, order) {
-    const candidates = await collectDeterministicCandidates(client, order);
-    const touchpoints = dedupeDeterministicCandidates(candidates);
-    const winner = selectLastNonDirectWinner(touchpoints);
-    return {
-        touchpoints,
-        winner,
-        confidenceScore: confidenceScoreForWinner(winner)
-    };
+    const candidates = await extractAttributionCandidatesForOrder(client, {
+        shopifyOrderId: order.shopify_order_id,
+        processedAt: order.processed_at,
+        createdAtShopify: order.created_at_shopify,
+        ingestedAt: order.ingested_at,
+        landingSessionId: order.landing_session_id,
+        checkoutToken: order.checkout_token,
+        cartToken: order.cart_token,
+        emailHash: order.email_hash,
+        customerIdentityId: order.customer_identity_id,
+        sourceName: order.source_name,
+        rawPayload: order.raw_payload
+    });
+    return resolveAttributionTier(candidates);
 }
 function selectPrimaryCredit(credits) {
     return credits.find((credit) => credit.isPrimary) ?? credits[credits.length - 1];

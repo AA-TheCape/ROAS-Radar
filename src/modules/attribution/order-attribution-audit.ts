@@ -1,4 +1,4 @@
-import type { DeterministicIngestionSource, ResolvedAttributionTouchpoint } from './resolver.js';
+import type { DeterministicIngestionSource, ResolvedIngestionSource, ResolvedAttributionTouchpoint } from './resolver.js';
 
 export const ORDER_ATTRIBUTION_TIERS = [
   'deterministic_first_party',
@@ -29,6 +29,17 @@ function mapDeterministicSource(source: DeterministicIngestionSource): string {
   }
 }
 
+function mapAttributionSource(source: ResolvedIngestionSource): string {
+  switch (source) {
+    case 'shopify_marketing_hint':
+      return 'shopify_marketing_hint';
+    case 'ga4_fallback':
+      return 'ga4_fallback';
+    default:
+      return mapDeterministicSource(source);
+  }
+}
+
 export function buildOrderAttributionAuditRecord(
   winner: Pick<ResolvedAttributionTouchpoint, 'attributionReason' | 'ingestionSource'> | null,
   matchedAt: Date
@@ -42,10 +53,19 @@ export function buildOrderAttributionAuditRecord(
     };
   }
 
-  if (winner.attributionReason === 'shopify_hint_derived') {
+  if (winner.ingestionSource === 'shopify_marketing_hint' || winner.attributionReason === 'shopify_hint_derived') {
     return {
       tier: 'deterministic_shopify_hint',
       source: 'shopify_marketing_hint',
+      matchedAt,
+      reason: winner.attributionReason
+    };
+  }
+
+  if (winner.ingestionSource === 'ga4_fallback') {
+    return {
+      tier: 'ga4_fallback',
+      source: 'ga4_fallback',
       matchedAt,
       reason: winner.attributionReason
     };
@@ -57,7 +77,7 @@ export function buildOrderAttributionAuditRecord(
 
   return {
     tier: 'deterministic_first_party',
-    source: mapDeterministicSource(winner.ingestionSource),
+    source: mapAttributionSource(winner.ingestionSource),
     matchedAt,
     reason: winner.attributionReason
   };

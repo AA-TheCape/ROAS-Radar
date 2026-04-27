@@ -15,6 +15,7 @@ import {
   confidenceScoreForWinner,
   dedupeDeterministicCandidates,
   isDirectTouchpoint,
+  resolveAttributionTier,
   selectLastNonDirectWinner,
   type DeterministicIngestionSource,
   type ResolvedAttributionTouchpoint,
@@ -350,15 +351,21 @@ async function collectDeterministicCandidates(client: PoolClient, order: OrderRo
 }
 
 async function resolveAttributionJourney(client: PoolClient, order: OrderRow): Promise<ResolvedJourney> {
-  const candidates = await collectDeterministicCandidates(client, order);
-  const touchpoints = dedupeDeterministicCandidates(candidates);
-  const winner = selectLastNonDirectWinner(touchpoints);
+  const candidates = await extractAttributionCandidatesForOrder(client, {
+    shopifyOrderId: order.shopify_order_id,
+    processedAt: order.processed_at,
+    createdAtShopify: order.created_at_shopify,
+    ingestedAt: order.ingested_at,
+    landingSessionId: order.landing_session_id,
+    checkoutToken: order.checkout_token,
+    cartToken: order.cart_token,
+    emailHash: order.email_hash,
+    customerIdentityId: order.customer_identity_id,
+    sourceName: order.source_name,
+    rawPayload: order.raw_payload
+  });
 
-  return {
-    touchpoints,
-    winner,
-    confidenceScore: confidenceScoreForWinner(winner)
-  };
+  return resolveAttributionTier(candidates);
 }
 
 function selectPrimaryCredit(credits: AttributionCredit[]): AttributionCredit | undefined {
@@ -664,6 +671,7 @@ export async function applySyntheticAttributionForOrder(
     };
 
     await persistAttribution(db, order, {
+      tier: 'deterministic_first_party',
       touchpoints: [touchpoint],
       winner: touchpoint,
       confidenceScore: input.confidenceScore ?? 0.35
@@ -759,6 +767,7 @@ export const __attributionTestUtils = {
   dedupeDeterministicCandidates,
   selectLastNonDirectWinner,
   confidenceScoreForWinner,
+  resolveAttributionTier,
   collectDeterministicFirstPartyCandidates,
   extractAttributionCandidatesForOrder
 };

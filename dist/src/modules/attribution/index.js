@@ -3,7 +3,7 @@ import { logError } from '../../observability/index.js';
 import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
 import { getReportingTimezone, formatDateInTimezone } from '../settings/index.js';
 import { ATTRIBUTION_MODELS, computeAttributionOutputs, computeSingleWinnerCredits } from './engine.js';
-import { confidenceScoreForWinner, dedupeDeterministicCandidates, isDirectTouchpoint, selectLastNonDirectWinner } from './resolver.js';
+import { confidenceScoreForWinner, dedupeDeterministicCandidates, isDirectTouchpoint, resolveAttributionTier, selectLastNonDirectWinner } from './resolver.js';
 import { buildOrderAttributionAuditRecord } from './order-attribution-audit.js';
 import { collectDeterministicFirstPartyCandidates, extractAttributionCandidatesForOrder } from './candidate-extraction.js';
 const ATTRIBUTION_MODEL_VERSION = 1;
@@ -227,14 +227,20 @@ async function collectDeterministicCandidates(client, order) {
     }));
 }
 async function resolveAttributionJourney(client, order) {
-    const candidates = await collectDeterministicCandidates(client, order);
-    const touchpoints = dedupeDeterministicCandidates(candidates);
-    const winner = selectLastNonDirectWinner(touchpoints);
-    return {
-        touchpoints,
-        winner,
-        confidenceScore: confidenceScoreForWinner(winner)
-    };
+    const candidates = await extractAttributionCandidatesForOrder(client, {
+        shopifyOrderId: order.shopify_order_id,
+        processedAt: order.processed_at,
+        createdAtShopify: order.created_at_shopify,
+        ingestedAt: order.ingested_at,
+        landingSessionId: order.landing_session_id,
+        checkoutToken: order.checkout_token,
+        cartToken: order.cart_token,
+        emailHash: order.email_hash,
+        customerIdentityId: order.customer_identity_id,
+        sourceName: order.source_name,
+        rawPayload: order.raw_payload
+    });
+    return resolveAttributionTier(candidates);
 }
 function selectPrimaryCredit(credits) {
     return credits.find((credit) => credit.isPrimary) ?? credits[credits.length - 1];
@@ -496,6 +502,7 @@ export async function applySyntheticAttributionForOrder(shopifyOrderId, input, c
             isForced: true
         };
         await persistAttribution(db, order, {
+            tier: 'deterministic_first_party',
             touchpoints: [touchpoint],
             winner: touchpoint,
             confidenceScore: input.confidenceScore ?? 0.35
@@ -578,6 +585,7 @@ export const __attributionTestUtils = {
     dedupeDeterministicCandidates,
     selectLastNonDirectWinner,
     confidenceScoreForWinner,
+    resolveAttributionTier,
     collectDeterministicFirstPartyCandidates,
     extractAttributionCandidatesForOrder
 };

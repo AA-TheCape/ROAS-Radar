@@ -16,6 +16,16 @@ function mapDeterministicSource(source) {
             return 'stitched_identity_journey';
     }
 }
+function mapAttributionSource(source) {
+    switch (source) {
+        case 'shopify_marketing_hint':
+            return 'shopify_marketing_hint';
+        case 'ga4_fallback':
+            return 'ga4_fallback';
+        default:
+            return mapDeterministicSource(source);
+    }
+}
 export function buildOrderAttributionAuditRecord(winner, matchedAt) {
     if (!winner || winner.attributionReason === 'unattributed') {
         return {
@@ -25,10 +35,18 @@ export function buildOrderAttributionAuditRecord(winner, matchedAt) {
             reason: 'unattributed'
         };
     }
-    if (winner.attributionReason === 'shopify_hint_derived') {
+    if (winner.ingestionSource === 'shopify_marketing_hint' || winner.attributionReason === 'shopify_hint_derived') {
         return {
             tier: 'deterministic_shopify_hint',
             source: 'shopify_marketing_hint',
+            matchedAt,
+            reason: winner.attributionReason
+        };
+    }
+    if (winner.ingestionSource === 'ga4_fallback') {
+        return {
+            tier: 'ga4_fallback',
+            source: 'ga4_fallback',
             matchedAt,
             reason: winner.attributionReason
         };
@@ -38,7 +56,7 @@ export function buildOrderAttributionAuditRecord(winner, matchedAt) {
     }
     return {
         tier: 'deterministic_first_party',
-        source: mapDeterministicSource(winner.ingestionSource),
+        source: mapAttributionSource(winner.ingestionSource),
         matchedAt,
         reason: winner.attributionReason
     };

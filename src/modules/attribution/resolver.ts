@@ -8,16 +8,54 @@ export const DETERMINISTIC_INGESTION_SOURCES = [
 ] as const;
 
 export type DeterministicIngestionSource = (typeof DETERMINISTIC_INGESTION_SOURCES)[number];
+export type ResolvedIngestionSource =
+  | DeterministicIngestionSource
+  | 'shopify_marketing_hint'
+  | 'ga4_fallback';
+export type ResolvedAttributionTier =
+  | 'deterministic_first_party'
+  | 'deterministic_shopify_hint'
+  | 'ga4_fallback'
+  | 'unattributed';
+
+export const ATTRIBUTION_TIER_LOOKBACK_WINDOW_DAYS = 7;
 
 export type ResolvedAttributionTouchpoint = AttributionTouchpoint & {
   sourceTouchEventId: string | null;
-  ingestionSource: DeterministicIngestionSource;
+  ingestionSource: ResolvedIngestionSource;
 };
 
 export type ResolvedJourney = {
+  tier: ResolvedAttributionTier;
   touchpoints: ResolvedAttributionTouchpoint[];
   winner: ResolvedAttributionTouchpoint | null;
   confidenceScore: number;
+};
+
+export type TieredAttributionCandidate = {
+  sourceKey: string;
+  sessionId: string | null;
+  sourceTouchEventId: string | null;
+  ingestionSource: ResolvedIngestionSource;
+  occurredAtUtc: Date;
+  source: string | null;
+  medium: string | null;
+  campaign: string | null;
+  content: string | null;
+  term: string | null;
+  clickIdType: string | null;
+  clickIdValue: string | null;
+  attributionReason: string;
+  confidenceScore: number;
+  isDirect: boolean;
+  isSynthetic: boolean;
+};
+
+export type TieredAttributionResolverInput = {
+  orderOccurredAtUtc: Date | null;
+  deterministicFirstParty: TieredAttributionCandidate[];
+  shopifyHint: TieredAttributionCandidate[];
+  ga4Fallback: TieredAttributionCandidate[];
 };
 
 const INGESTION_SOURCE_PRECEDENCE: Record<DeterministicIngestionSource, number> = {
@@ -26,6 +64,18 @@ const INGESTION_SOURCE_PRECEDENCE: Record<DeterministicIngestionSource, number> 
   cart_token: 2,
   customer_identity: 3
 };
+
+function ingestionSourcePrecedence(source: ResolvedIngestionSource): number {
+  if (source === 'shopify_marketing_hint') {
+    return Number.MAX_SAFE_INTEGER - 1;
+  }
+
+  if (source === 'ga4_fallback') {
+    return Number.MAX_SAFE_INTEGER;
+  }
+
+  return INGESTION_SOURCE_PRECEDENCE[source];
+}
 
 function hasClickId(touchpoint: Pick<ResolvedAttributionTouchpoint, 'clickIdValue'>): boolean {
   return Boolean(touchpoint.clickIdValue);
@@ -39,8 +89,8 @@ function compareDatesAscending(left: Date, right: Date): number {
   return left.getTime() - right.getTime();
 }
 
-function compareIngestionSource(left: DeterministicIngestionSource, right: DeterministicIngestionSource): number {
-  return INGESTION_SOURCE_PRECEDENCE[left] - INGESTION_SOURCE_PRECEDENCE[right];
+function compareIngestionSource(left: ResolvedIngestionSource, right: ResolvedIngestionSource): number {
+  return ingestionSourcePrecedence(left) - ingestionSourcePrecedence(right);
 }
 
 function compareLexical(left: string | null, right: string | null): number {
@@ -166,5 +216,138 @@ export function confidenceScoreForWinner(
       return 0.9;
     case 'customer_identity':
       return 0.6;
+    case 'shopify_marketing_hint':
+      return 0.55;
+    case 'ga4_fallback':
+      return 0.35;
   }
+}
+
+function mapCandidateToResolvedTouchpoint(candidate: TieredAttributionCandidate): ResolvedAttributionTouchpoint {
+  return {
+    sessionId: candidate.sessionId,
+    sourceTouchEventId: candidate.sourceTouchEventId,
+    occurredAt: candidate.occurredAtUtc,
+    source: candidate.source,
+    medium: candidate.medium,
+    campaign: candidate.campaign,
+    content: candidate.content,
+    term: candidate.term,
+    clickIdType: candidate.clickIdType,
+    clickIdValue: candidate.clickIdValue,
+    attributionReason: candidate.attributionReason,
+    ingestionSource: candidate.ingestionSource,
+    isDirect: candidate.isDirect,
+    isForced: candidate.isSynthetic
+  };
+}
+
+function isOnOrBeforeOrder(
+  orderOccurredAtUtc: Date,
+  candidateOccurredAtUtc: Date
+): boolean {
+  return candidateOccurredAtUtc.getTime() <= orderOccurredAtUtc.getTime();
+}
+
+function isWithinLookbackWindow(
+  orderOccurredAtUtc: Date,
+  candidateOccurredAtUtc: Date,
+  lookbackWindowDays = ATTRIBUTION_TIER_LOOKBACK_WINDOW_DAYS
+): boolean {
+  const lookbackWindowMs = lookbackWindowDays * 24 * 60 * 60 * 1000;
+  const deltaMs = orderOccurredAtUtc.getTime() - candidateOccurredAtUtc.getTime();
+
+  return deltaMs >= 0 && deltaMs <= lookbackWindowMs;
+}
+
+function compareShopifyHintCandidates(left: TieredAttributionCandidate, right: TieredAttributionCandidate): number {
+  if (Boolean(right.clickIdValue) !== Boolean(left.clickIdValue)) {
+    return Number(Boolean(right.clickIdValue)) - Number(Boolean(left.clickIdValue));
+  }
+
+  if (right.occurredAtUtc.getTime() !== left.occurredAtUtc.getTime()) {
+    return right.occurredAtUtc.getTime() - left.occurredAtUtc.getTime();
+  }
+
+  return left.sourceKey.localeCompare(right.sourceKey);
+}
+
+function compareGa4FallbackCandidates(left: TieredAttributionCandidate, right: TieredAttributionCandidate): number {
+  if (right.occurredAtUtc.getTime() !== left.occurredAtUtc.getTime()) {
+    return right.occurredAtUtc.getTime() - left.occurredAtUtc.getTime();
+  }
+
+  if (Boolean(right.clickIdValue) !== Boolean(left.clickIdValue)) {
+    return Number(Boolean(right.clickIdValue)) - Number(Boolean(left.clickIdValue));
+  }
+
+  return left.sourceKey.localeCompare(right.sourceKey);
+}
+
+export function resolveAttributionTier(input: TieredAttributionResolverInput): ResolvedJourney {
+  const orderOccurredAtUtc = input.orderOccurredAtUtc;
+
+  if (!orderOccurredAtUtc) {
+    return {
+      tier: 'unattributed',
+      touchpoints: [],
+      winner: null,
+      confidenceScore: 0
+    };
+  }
+
+  const deterministicTouchpoints = dedupeDeterministicCandidates(
+    input.deterministicFirstParty
+      .map(mapCandidateToResolvedTouchpoint)
+      .filter((candidate) => isOnOrBeforeOrder(orderOccurredAtUtc, candidate.occurredAt))
+  );
+  const deterministicWinner = selectLastNonDirectWinner(deterministicTouchpoints);
+
+  if (deterministicWinner) {
+    return {
+      tier: 'deterministic_first_party',
+      touchpoints: deterministicTouchpoints,
+      winner: deterministicWinner,
+      confidenceScore: confidenceScoreForWinner(deterministicWinner)
+    };
+  }
+
+  const shopifyHintTouchpoints = input.shopifyHint
+    .filter((candidate) => isWithinLookbackWindow(orderOccurredAtUtc, candidate.occurredAtUtc))
+    .slice()
+    .sort(compareShopifyHintCandidates);
+  const shopifyHintWinnerCandidate = shopifyHintTouchpoints[0] ?? null;
+  const shopifyHintWinner = shopifyHintWinnerCandidate ? mapCandidateToResolvedTouchpoint(shopifyHintWinnerCandidate) : null;
+
+  if (shopifyHintWinner) {
+    return {
+      tier: 'deterministic_shopify_hint',
+      touchpoints: shopifyHintTouchpoints.map(mapCandidateToResolvedTouchpoint),
+      winner: shopifyHintWinner,
+      confidenceScore: shopifyHintWinnerCandidate?.confidenceScore ?? confidenceScoreForWinner(shopifyHintWinner)
+    };
+  }
+
+  const ga4FallbackTouchpoints = input.ga4Fallback
+    .filter((candidate) => isWithinLookbackWindow(orderOccurredAtUtc, candidate.occurredAtUtc))
+    .slice()
+    .sort(compareGa4FallbackCandidates);
+  const ga4FallbackWinnerCandidate = ga4FallbackTouchpoints[0] ?? null;
+  const ga4FallbackWinner = ga4FallbackWinnerCandidate ? mapCandidateToResolvedTouchpoint(ga4FallbackWinnerCandidate) : null;
+
+  if (ga4FallbackWinner) {
+    return {
+      tier: 'ga4_fallback',
+      touchpoints: ga4FallbackTouchpoints.map(mapCandidateToResolvedTouchpoint),
+      winner: ga4FallbackWinner,
+      confidenceScore: ga4FallbackWinnerCandidate?.confidenceScore ?? confidenceScoreForWinner(ga4FallbackWinner)
+    };
+  }
+
+  return {
+    tier: 'unattributed',
+    touchpoints: [],
+    winner: null,
+    confidenceScore: 0
+  };
 }
