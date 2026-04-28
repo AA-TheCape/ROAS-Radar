@@ -490,8 +490,9 @@ function listDateRangeInclusive(startDate: string, endDate: string): string[] {
 
 function buildPlanningDates(now = new Date(), lastSyncCompletedAt: Date | null = null): string[] {
   const currentBusinessDate = parseDateOnly(formatDateInTimeZone(now, META_ADS_SYNC_TIME_ZONE));
-  const lookbackDays = lastSyncCompletedAt ? env.META_ADS_SYNC_LOOKBACK_DAYS : env.META_ADS_SYNC_INITIAL_LOOKBACK_DAYS;
-  const firstDate = new Date(currentBusinessDate.getTime() - (lookbackDays - 1) * 24 * 60 * 60 * 1000);
+  const firstDate = lastSyncCompletedAt
+    ? parseDateOnly(formatDateInTimeZone(lastSyncCompletedAt, META_ADS_SYNC_TIME_ZONE))
+    : new Date(currentBusinessDate.getTime() - (env.META_ADS_SYNC_INITIAL_LOOKBACK_DAYS - 1) * 24 * 60 * 60 * 1000);
 
   if (currentBusinessDate.getTime() < firstDate.getTime()) {
     return [];
@@ -1024,16 +1025,19 @@ async function enqueueSyncDates(connectionId: number, dates: string[]): Promise<
         ON CONFLICT (connection_id, sync_date)
         DO UPDATE SET
           status = CASE
-            WHEN meta_ads_sync_jobs.status = 'processing' THEN meta_ads_sync_jobs.status
+            WHEN meta_ads_sync_jobs.status IN ('pending', 'retry', 'processing') THEN meta_ads_sync_jobs.status
             ELSE 'pending'
           END,
           available_at = CASE
-            WHEN meta_ads_sync_jobs.status = 'processing' THEN meta_ads_sync_jobs.available_at
+            WHEN meta_ads_sync_jobs.status IN ('pending', 'retry', 'processing') THEN meta_ads_sync_jobs.available_at
             ELSE now()
           END,
-          last_error = NULL,
+          last_error = CASE
+            WHEN meta_ads_sync_jobs.status IN ('pending', 'retry', 'processing') THEN meta_ads_sync_jobs.last_error
+            ELSE NULL
+          END,
           completed_at = CASE
-            WHEN meta_ads_sync_jobs.status = 'processing' THEN meta_ads_sync_jobs.completed_at
+            WHEN meta_ads_sync_jobs.status IN ('pending', 'retry', 'processing') THEN meta_ads_sync_jobs.completed_at
             ELSE NULL
           END,
           updated_at = now()
