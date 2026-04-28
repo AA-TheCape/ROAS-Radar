@@ -1,10 +1,7 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.refreshCustomerJourneyForJourneys = refreshCustomerJourneyForJourneys;
 function normalizeJourneyIds(journeyIds) {
     return [...new Set(journeyIds.map((journeyId) => journeyId.trim()).filter(Boolean))].sort();
 }
-async function refreshCustomerJourneyForJourneys(client, journeyIds) {
+export async function refreshCustomerJourneyForJourneys(client, journeyIds) {
     const normalizedJourneyIds = normalizeJourneyIds(journeyIds);
     if (normalizedJourneyIds.length === 0) {
         return;

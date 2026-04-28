@@ -1,14 +1,11 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.createAttributionAdminRouter = createAttributionAdminRouter;
-const express_1 = require("express");
-const zod_1 = require("zod");
-const index_js_1 = require("../../../packages/attribution-schema/index.js");
-const pool_js_1 = require("../../db/pool.js");
-const index_js_2 = require("../../observability/index.js");
-const index_js_3 = require("../auth/index.js");
-const ga4_rollout_js_1 = require("./ga4-rollout.js");
-const backfill_run_store_js_1 = require("./backfill-run-store.js");
+import { Router as createRouter } from 'express';
+import { z } from 'zod';
+import { normalizeOrderAttributionBackfillRequest } from '../../../packages/attribution-schema/index.js';
+import { query } from '../../db/pool.js';
+import { emitOrderAttributionBackfillJobLifecycleLog } from '../../observability/index.js';
+import { attachAuthContext, requireAdmin } from '../auth/index.js';
+import { fetchGa4FallbackShadowReport, getGa4FallbackRolloutMode } from './ga4-rollout.js';
+import { enqueueOrderAttributionBackfillRun, getOrderAttributionBackfillRun } from './backfill-run-store.js';
 class AttributionAdminHttpError extends Error {
     statusCode;
     code;
@@ -23,17 +20,17 @@ class AttributionAdminHttpError extends Error {
 }
 function parseBackfillRequest(input) {
     try {
-        return (0, index_js_1.normalizeOrderAttributionBackfillRequest)(input);
+        return normalizeOrderAttributionBackfillRequest(input);
     }
     catch (error) {
-        if (error instanceof zod_1.z.ZodError) {
+        if (error instanceof z.ZodError) {
             throw new AttributionAdminHttpError(400, 'invalid_request', 'Invalid order attribution backfill request', error.flatten());
         }
         throw error;
     }
 }
-const dateStringSchema = zod_1.z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
-const ga4ShadowReportQuerySchema = zod_1.z
+const dateStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const ga4ShadowReportQuerySchema = z
     .object({
     startDate: dateStringSchema,
     endDate: dateStringSchema
@@ -41,7 +38,7 @@ const ga4ShadowReportQuerySchema = zod_1.z
     .superRefine((value, ctx) => {
     if (value.startDate > value.endDate) {
         ctx.addIssue({
-            code: zod_1.z.ZodIssueCode.custom,
+            code: z.ZodIssueCode.custom,
             message: 'startDate must be on or before endDate',
             path: ['startDate']
         });
@@ -52,7 +49,7 @@ function parseShadowReportQuery(input) {
         return ga4ShadowReportQuerySchema.parse(input);
     }
     catch (error) {
-        if (error instanceof zod_1.z.ZodError) {
+        if (error instanceof z.ZodError) {
             throw new AttributionAdminHttpError(400, 'invalid_request', 'Invalid GA4 fallback shadow report request', error.flatten());
         }
         throw error;
@@ -68,23 +65,23 @@ function getSubmittedBy(auth) {
     return auth.user.email;
 }
 async function loadOrderAttributionBackfillRun(jobId) {
-    const row = await (0, backfill_run_store_js_1.getOrderAttributionBackfillRun)(jobId);
+    const row = await getOrderAttributionBackfillRun(jobId);
     if (!row) {
         throw new AttributionAdminHttpError(404, 'backfill_job_not_found', 'Order attribution backfill job was not found');
     }
     return row;
 }
-function createAttributionAdminRouter() {
-    const router = (0, express_1.Router)();
-    const queryExecutor = { query: pool_js_1.query };
-    router.use(index_js_3.attachAuthContext);
-    router.use(index_js_3.requireAdmin);
+export function createAttributionAdminRouter() {
+    const router = createRouter();
+    const queryExecutor = { query };
+    router.use(attachAuthContext);
+    router.use(requireAdmin);
     router.post('/orders/backfill', async (req, res, next) => {
         try {
             const auth = res.locals.auth;
             const options = parseBackfillRequest(req.body ?? {});
-            const response = await (0, backfill_run_store_js_1.enqueueOrderAttributionBackfillRun)(options, getSubmittedBy(auth));
-            (0, index_js_2.emitOrderAttributionBackfillJobLifecycleLog)({
+            const response = await enqueueOrderAttributionBackfillRun(options, getSubmittedBy(auth));
+            emitOrderAttributionBackfillJobLifecycleLog({
                 stage: 'enqueued',
                 jobId: response.jobId,
                 submittedAt: response.submittedAt,
@@ -108,10 +105,10 @@ function createAttributionAdminRouter() {
     router.get('/ga4-fallback/shadow-report', async (req, res, next) => {
         try {
             const input = parseShadowReportQuery(req.query);
-            const report = await (0, ga4_rollout_js_1.fetchGa4FallbackShadowReport)(queryExecutor, input);
+            const report = await fetchGa4FallbackShadowReport(queryExecutor, input);
             res.status(200).json({
                 ...report,
-                rolloutMode: (0, ga4_rollout_js_1.getGa4FallbackRolloutMode)()
+                rolloutMode: getGa4FallbackRolloutMode()
             });
         }
         catch (error) {

@@ -1,12 +1,9 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.resolveOrderAttributionMaterializationExecution = resolveOrderAttributionMaterializationExecution;
-const node_crypto_1 = require("node:crypto");
-const node_url_1 = require("node:url");
-const pool_js_1 = require("./db/pool.js");
-const backfill_js_1 = require("./modules/attribution/backfill.js");
-const ga4_bigquery_config_js_1 = require("./modules/attribution/ga4-bigquery-config.js");
-const index_js_1 = require("./observability/index.js");
+import { randomUUID } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
+import { pool } from './db/pool.js';
+import { backfillRecentOrdersWithRecoveredAttribution } from './modules/attribution/backfill.js';
+import { assertGa4BigQueryIngestionConfig } from './modules/attribution/ga4-bigquery-config.js';
+import { logError, logInfo } from './observability/index.js';
 function parseOptionalInteger(name) {
     const value = process.env[name]?.trim();
     if (!value) {
@@ -31,12 +28,12 @@ function startOfUtcDay(date) {
 function endOfUtcDay(date) {
     return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 23, 59, 59, 999));
 }
-function resolveOrderAttributionMaterializationExecution(now) {
+export function resolveOrderAttributionMaterializationExecution(now) {
     const requestedBy = process.env.ORDER_ATTRIBUTION_MATERIALIZATION_REQUESTED_BY?.trim() ||
         'cloud-run-scheduler';
     const workerId = process.env.ORDER_ATTRIBUTION_MATERIALIZATION_WORKER_ID?.trim() ||
         process.env.K_JOB_EXECUTION?.trim() ||
-        `order-attribution-materialization-${(0, node_crypto_1.randomUUID)()}`;
+        `order-attribution-materialization-${randomUUID()}`;
     const lookbackDays = parseOptionalInteger('ORDER_ATTRIBUTION_MATERIALIZATION_LOOKBACK_DAYS') ?? 2;
     const lagDays = parseOptionalInteger('ORDER_ATTRIBUTION_MATERIALIZATION_LAG_DAYS') ?? 1;
     const anchorDate = new Date(now.getTime() - lagDays * 24 * 60 * 60 * 1000);
@@ -57,9 +54,9 @@ function resolveOrderAttributionMaterializationExecution(now) {
     };
 }
 async function run() {
-    (0, ga4_bigquery_config_js_1.assertGa4BigQueryIngestionConfig)();
+    assertGa4BigQueryIngestionConfig();
     const execution = resolveOrderAttributionMaterializationExecution(new Date());
-    (0, index_js_1.logInfo)('order_attribution_materialization_worker_started', {
+    logInfo('order_attribution_materialization_worker_started', {
         workerId: execution.workerId,
         requestedBy: execution.requestedBy,
         windowStart: execution.windowStart.toISOString(),
@@ -69,16 +66,16 @@ async function run() {
         writeToShopifyWhenAvailable: execution.writeToShopifyWhenAvailable,
         service: process.env.K_SERVICE ?? process.env.K_JOB ?? 'roas-radar-order-attribution-materialization'
     });
-    const report = await (0, backfill_js_1.backfillRecentOrdersWithRecoveredAttribution)(execution);
+    const report = await backfillRecentOrdersWithRecoveredAttribution(execution);
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-    await pool_js_1.pool.end();
+    await pool.end();
 }
-if (process.argv[1] && import.meta.url === (0, node_url_1.pathToFileURL)(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
     run().catch(async (error) => {
-        (0, index_js_1.logError)('order_attribution_materialization_worker_failed', error, {
+        logError('order_attribution_materialization_worker_failed', error, {
             service: process.env.K_SERVICE ?? process.env.K_JOB ?? 'roas-radar-order-attribution-materialization'
         });
-        await pool_js_1.pool.end().catch(() => undefined);
+        await pool.end().catch(() => undefined);
         process.exit(1);
     });
 }

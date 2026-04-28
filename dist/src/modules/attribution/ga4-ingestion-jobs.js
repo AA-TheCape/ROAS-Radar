@@ -1,14 +1,8 @@
-"use strict";
 // @ts-nocheck
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.listHourlyRange = listHourlyRange;
-exports.enqueueHours = enqueueHours;
-exports.claimHourlyJobs = claimHourlyJobs;
-exports.processGa4SessionAttributionHourlyJobs = processGa4SessionAttributionHourlyJobs;
-const pool_js_1 = require("../../db/pool.js");
-const index_js_1 = require("../../observability/index.js");
-const index_js_2 = require("../dead-letters/index.js");
-const ga4_session_attribution_js_1 = require("./ga4-session-attribution.js");
+import { query, withTransaction } from '../../db/pool.js';
+import { logError, logInfo } from '../../observability/index.js';
+import { recordDeadLetter } from '../dead-letters/index.js';
+import { GA4_SESSION_ATTRIBUTION_PIPELINE, getGa4SessionAttributionWatermark, ingestGa4SessionAttributionHours, planGa4SessionAttributionHourlyWindows } from './ga4-session-attribution.js';
 const DEFAULT_BATCH_SIZE = 24;
 const DEFAULT_MAX_RETRIES = 5;
 const DEFAULT_INITIAL_BACKOFF_SECONDS = 30;
@@ -42,7 +36,7 @@ function computeBackoffSeconds(attempts, initialBackoffSeconds, maxBackoffSecond
     const normalizedAttempts = Math.max(1, Math.trunc(attempts));
     return Math.min(initialBackoffSeconds * 2 ** (normalizedAttempts - 1), maxBackoffSeconds);
 }
-function listHourlyRange(startHour, endHour) {
+export function listHourlyRange(startHour, endHour) {
     const normalizedStart = normalizeHourStart(startHour, 'startHour');
     const normalizedEnd = normalizeHourStart(endHour, 'endHour');
     if (normalizedStart > normalizedEnd) {
@@ -100,15 +94,15 @@ async function upsertHourlyJob(client, input) {
         updated_at = now()
     `, [input.pipelineName, input.hourStart, input.requestedBy ?? null, reviveDeadLettered]);
 }
-async function enqueueHours(input) {
+export async function enqueueHours(input) {
     const hourStarts = Array.from(new Set((input.hourStarts ?? []).map((hour) => normalizeHourStart(hour)))).sort();
     if (hourStarts.length === 0) {
         return { hourStarts: [], enqueuedCount: 0 };
     }
-    await (0, pool_js_1.withTransaction)(async (client) => {
+    await withTransaction(async (client) => {
         for (const hourStart of hourStarts) {
             await upsertHourlyJob(client, {
-                pipelineName: input.pipelineName ?? ga4_session_attribution_js_1.GA4_SESSION_ATTRIBUTION_PIPELINE,
+                pipelineName: input.pipelineName ?? GA4_SESSION_ATTRIBUTION_PIPELINE,
                 hourStart,
                 requestedBy: input.requestedBy ?? null,
                 reviveDeadLettered: input.reviveDeadLettered ?? false
@@ -146,9 +140,9 @@ async function requeueStaleLocks(client, pipelineName, staleLockMinutes) {
     `, [pipelineName, staleLockMinutes]);
     return result.rowCount ?? result.rows.length;
 }
-async function claimHourlyJobs(input) {
-    return (0, pool_js_1.withTransaction)(async (client) => {
-        await requeueStaleLocks(client, input.pipelineName ?? ga4_session_attribution_js_1.GA4_SESSION_ATTRIBUTION_PIPELINE, normalizePositiveInteger(input.staleLockMinutes, DEFAULT_STALE_LOCK_MINUTES));
+export async function claimHourlyJobs(input) {
+    return withTransaction(async (client) => {
+        await requeueStaleLocks(client, input.pipelineName ?? GA4_SESSION_ATTRIBUTION_PIPELINE, normalizePositiveInteger(input.staleLockMinutes, DEFAULT_STALE_LOCK_MINUTES));
         const explicitHours = Array.isArray(input.explicitHourStarts) && input.explicitHourStarts.length > 0
             ? Array.from(new Set(input.explicitHourStarts.map((hour) => normalizeHourStart(hour)))).sort()
             : null;
@@ -188,7 +182,7 @@ async function claimHourlyJobs(input) {
           jobs.locked_at,
           jobs.locked_by
       `, [
-            input.pipelineName ?? ga4_session_attribution_js_1.GA4_SESSION_ATTRIBUTION_PIPELINE,
+            input.pipelineName ?? GA4_SESSION_ATTRIBUTION_PIPELINE,
             Math.max(1, Math.trunc(input.limit ?? DEFAULT_BATCH_SIZE)),
             explicitHours,
             input.workerId
@@ -235,7 +229,7 @@ async function markHourlyJobForRetry(client, input) {
 async function markHourlyJobDeadLettered(client, input) {
     const sourceRecordId = input.job.hourStart;
     const sourceQueueKey = input.job.pipelineName;
-    await (0, index_js_2.recordDeadLetter)(client, {
+    await recordDeadLetter(client, {
         eventType: 'ga4_session_attribution_hour_failed',
         sourceTable: 'ga4_bigquery_hourly_jobs',
         sourceRecordId,
@@ -272,8 +266,8 @@ async function seedHoursForProcessing(input) {
             reviveDeadLettered: true
         });
     }
-    const watermarkHour = await (0, ga4_session_attribution_js_1.getGa4SessionAttributionWatermark)({ query: pool_js_1.query });
-    const windows = (0, ga4_session_attribution_js_1.planGa4SessionAttributionHourlyWindows)({
+    const watermarkHour = await getGa4SessionAttributionWatermark({ query });
+    const windows = planGa4SessionAttributionHourlyWindows({
         now: input.now ?? new Date(),
         watermarkHour: watermarkHour ? new Date(watermarkHour) : null,
         config: input.config
@@ -285,8 +279,8 @@ async function seedHoursForProcessing(input) {
         reviveDeadLettered: false
     });
 }
-async function processGa4SessionAttributionHourlyJobs(input) {
-    const pipelineName = input.pipelineName ?? ga4_session_attribution_js_1.GA4_SESSION_ATTRIBUTION_PIPELINE;
+export async function processGa4SessionAttributionHourlyJobs(input) {
+    const pipelineName = input.pipelineName ?? GA4_SESSION_ATTRIBUTION_PIPELINE;
     const batchSize = normalizePositiveInteger(input.batchSize, DEFAULT_BATCH_SIZE);
     const maxRetries = normalizePositiveInteger(input.maxRetries, DEFAULT_MAX_RETRIES);
     const initialBackoffSeconds = normalizePositiveInteger(input.initialBackoffSeconds, DEFAULT_INITIAL_BACKOFF_SECONDS);
@@ -314,13 +308,13 @@ async function processGa4SessionAttributionHourlyJobs(input) {
     let deadLetteredJobs = 0;
     for (const job of claimedJobs) {
         try {
-            await (0, ga4_session_attribution_js_1.ingestGa4SessionAttributionHours)({
+            await ingestGa4SessionAttributionHours({
                 config: input.config,
                 executor: input.executor,
                 now: input.now ?? new Date(),
                 hourStarts: [job.hourStart]
             });
-            await (0, pool_js_1.withTransaction)(async (client) => {
+            await withTransaction(async (client) => {
                 await markHourlyJobCompleted(client, job, input.workerId);
             });
             succeededJobs += 1;
@@ -328,14 +322,14 @@ async function processGa4SessionAttributionHourlyJobs(input) {
         catch (error) {
             const errorMessage = error instanceof Error ? error.message.slice(0, 1000) : String(error).slice(0, 1000);
             const shouldDeadLetter = job.attempts >= maxRetries;
-            (0, index_js_1.logError)('ga4_session_attribution_hour_failed', error, {
+            logError('ga4_session_attribution_hour_failed', error, {
                 pipelineName,
                 workerId: input.workerId,
                 hourStart: job.hourStart,
                 attempts: job.attempts,
                 shouldDeadLetter
             });
-            await (0, pool_js_1.withTransaction)(async (client) => {
+            await withTransaction(async (client) => {
                 if (shouldDeadLetter) {
                     await markHourlyJobDeadLettered(client, {
                         job,
@@ -373,6 +367,6 @@ async function processGa4SessionAttributionHourlyJobs(input) {
         retriedJobs,
         deadLetteredJobs
     };
-    (0, index_js_1.logInfo)('ga4_session_attribution_hourly_jobs_completed', result);
+    logInfo('ga4_session_attribution_hourly_jobs_completed', result);
     return result;
 }

@@ -1,8 +1,3 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.env = void 0;
-exports.getConfiguredReportingApiToken = getConfiguredReportingApiToken;
-exports.getApiAllowedOrigins = getApiAllowedOrigins;
 function readString(name, fallback = '') {
     const value = process.env[name];
     return typeof value === 'string' ? value : fallback;
@@ -48,14 +43,14 @@ function readList(name) {
         .map((entry) => entry.trim())
         .filter(Boolean);
 }
-function getConfiguredReportingApiToken() {
+export function getConfiguredReportingApiToken() {
     const value = readTrimmedString('REPORTING_API_TOKEN');
     return value.length > 0 ? value : null;
 }
-function getApiAllowedOrigins() {
+export function getApiAllowedOrigins() {
     return readList('API_ALLOWED_ORIGINS');
 }
-exports.env = {
+export const env = {
     PORT: readPositiveInteger('PORT', 3000),
     DATABASE_URL: readTrimmedString('DATABASE_URL', 'postgres://postgres:postgres@127.0.0.1:5432/roas_radar'),
     DATABASE_SSL: readBoolean('DATABASE_SSL', false),

@@ -1,13 +1,5 @@
-"use strict";
 // @ts-nocheck
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.GA4_FALLBACK_ROLLOUT_MODES = void 0;
-exports.getGa4FallbackRolloutMode = getGa4FallbackRolloutMode;
-exports.getGa4FallbackShadowThresholds = getGa4FallbackShadowThresholds;
-exports.persistGa4FallbackShadowComparison = persistGa4FallbackShadowComparison;
-exports.fetchGa4FallbackShadowReport = fetchGa4FallbackShadowReport;
-exports.buildJourney = buildJourney;
-exports.GA4_FALLBACK_ROLLOUT_MODES = ['off', 'shadow', 'on'];
+export const GA4_FALLBACK_ROLLOUT_MODES = ['off', 'shadow', 'on'];
 function normalizeMode(value) {
     const normalized = value?.trim().toLowerCase();
     if (normalized === 'shadow' || normalized === 'on') {
@@ -54,10 +46,10 @@ function summarizeTouchpoint(touchpoint) {
         ga4SessionId: touchpoint?.ga4SessionId ?? null
     };
 }
-function getGa4FallbackRolloutMode() {
+export function getGa4FallbackRolloutMode() {
     return normalizeMode(process.env.GA4_FALLBACK_ROLLOUT_MODE);
 }
-function getGa4FallbackShadowThresholds() {
+export function getGa4FallbackShadowThresholds() {
     const minEvaluatedOrders = Math.max(1, Math.trunc(Number(process.env.GA4_FALLBACK_SHADOW_MIN_EVALUATED_ORDERS ?? '100'))) || 100;
     const maxAttributedOrderDeltaRate = Number(process.env.GA4_FALLBACK_SHADOW_MAX_ATTRIBUTED_ORDER_DELTA_RATE ?? '0.02') || 0.02;
     const maxAttributedRevenueDeltaRate = Number(process.env.GA4_FALLBACK_SHADOW_MAX_ATTRIBUTED_REVENUE_DELTA_RATE ?? '0.02') || 0.02;
@@ -67,7 +59,7 @@ function getGa4FallbackShadowThresholds() {
         maxAttributedRevenueDeltaRate
     };
 }
-async function persistGa4FallbackShadowComparison(client, input) {
+export async function persistGa4FallbackShadowComparison(client, input) {
     if (input.rolloutMode !== 'shadow') {
         return;
     }
@@ -150,7 +142,7 @@ async function persistGa4FallbackShadowComparison(client, input) {
         shadowWouldChangeWinner
     ]);
 }
-async function fetchGa4FallbackShadowReport(client, filters) {
+export async function fetchGa4FallbackShadowReport(client, filters) {
     const result = await client.query(`
       SELECT
         COUNT(*)::text AS evaluated_orders,
@@ -200,7 +192,7 @@ async function fetchGa4FallbackShadowReport(client, filters) {
         }
     };
 }
-function buildJourney(touchpoints, winner, confidenceScore, confidenceLabel) {
+export function buildJourney(touchpoints, winner, confidenceScore, confidenceLabel) {
     return {
         touchpoints,
         winner,

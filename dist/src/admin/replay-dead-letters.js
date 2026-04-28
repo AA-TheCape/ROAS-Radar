@@ -1,6 +1,4 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-const index_js_1 = require("../modules/dead-letters/index.js");
+import { replayDeadLetters } from '../modules/dead-letters/index.js';
 function readFlag(name) {
     const prefixed = `--${name}`;
     const index = process.argv.indexOf(prefixed);
@@ -46,7 +44,7 @@ function parseStatus(value) {
     throw new Error(`Invalid status value: ${value}`);
 }
 async function run() {
-    const result = await (0, index_js_1.replayDeadLetters)({
+    const result = await replayDeadLetters({
         requestedBy: requireFlag('requested-by'),
         eventType: readFlag('event-type') ?? undefined,
         sourceTable: readFlag('source-table') ?? undefined,

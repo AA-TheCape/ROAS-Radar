@@ -1,27 +1,22 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-const node_fs_1 = require("node:fs");
-const promises_1 = require("node:fs/promises");
-const node_path_1 = __importDefault(require("node:path"));
-const node_url_1 = require("node:url");
-const pool_js_1 = require("./pool.js");
-const __filename = (0, node_url_1.fileURLToPath)(import.meta.url);
-const __dirname = node_path_1.default.dirname(__filename);
+import { existsSync } from 'node:fs';
+import { readdir, readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { pool } from './pool.js';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 const migrationDirCandidates = [
-    node_path_1.default.resolve(__dirname, '../../db/migrations'),
-    node_path_1.default.resolve(__dirname, '../../../db/migrations'),
-    node_path_1.default.resolve(process.cwd(), 'db/migrations')
+    path.resolve(__dirname, '../../db/migrations'),
+    path.resolve(__dirname, '../../../db/migrations'),
+    path.resolve(process.cwd(), 'db/migrations')
 ];
-const resolvedMigrationsDir = migrationDirCandidates.find((candidate) => (0, node_fs_1.existsSync)(candidate));
+const resolvedMigrationsDir = migrationDirCandidates.find((candidate) => existsSync(candidate));
 if (!resolvedMigrationsDir) {
     throw new Error(`Could not locate db/migrations. Tried: ${migrationDirCandidates.join(', ')}`);
 }
 const migrationsDir = resolvedMigrationsDir;
 async function migrate() {
-    const client = await pool_js_1.pool.connect();
+    const client = await pool.connect();
     try {
         await client.query('BEGIN');
         await client.query('SELECT pg_advisory_xact_lock($1)', [7_204_202_6]);
@@ -31,7 +26,7 @@ async function migrate() {
         applied_at timestamptz NOT NULL DEFAULT now()
       )
     `);
-        const files = (await (0, promises_1.readdir)(migrationsDir))
+        const files = (await readdir(migrationsDir))
             .filter((file) => file.endsWith('.sql'))
             .sort();
         for (const file of files) {
@@ -39,7 +34,7 @@ async function migrate() {
             if (existing.rowCount) {
                 continue;
             }
-            const sql = await (0, promises_1.readFile)(node_path_1.default.join(migrationsDir, file), 'utf8');
+            const sql = await readFile(path.join(migrationsDir, file), 'utf8');
             await client.query(sql);
             await client.query('INSERT INTO schema_migrations (filename) VALUES ($1)', [file]);
             process.stdout.write(`Applied migration ${file}\n`);
@@ -52,7 +47,7 @@ async function migrate() {
     }
     finally {
         client.release();
-        await pool_js_1.pool.end();
+        await pool.end();
     }
 }
 migrate().catch((error) => {

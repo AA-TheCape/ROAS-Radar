@@ -1,8 +1,4 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.resolveGa4BigQueryIngestionConfig = resolveGa4BigQueryIngestionConfig;
-exports.assertGa4BigQueryIngestionConfig = assertGa4BigQueryIngestionConfig;
-const env_js_1 = require("../../config/env.js");
+import { env } from '../../config/env.js';
 const PROJECT_ID_PATTERN = /^[a-z][a-z0-9-]{4,61}[a-z0-9]$/;
 const DATASET_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,1023}$/;
 const LOCATION_PATTERN = /^[A-Za-z0-9-]{2,64}$/;
@@ -51,8 +47,8 @@ function parsePositiveInteger(value, fallback, name) {
     const parsed = Number.parseInt(normalized, 10);
     return validatePositiveInteger(parsed, name);
 }
-function resolveGa4BigQueryIngestionConfig(source = process.env) {
-    const enabled = parseBoolean(source.GA4_BIGQUERY_ENABLED) || env_js_1.env.GA4_BIGQUERY_ENABLED;
+export function resolveGa4BigQueryIngestionConfig(source = process.env) {
+    const enabled = parseBoolean(source.GA4_BIGQUERY_ENABLED) || env.GA4_BIGQUERY_ENABLED;
     if (!enabled) {
         return { enabled: false };
     }
@@ -61,13 +57,13 @@ function resolveGa4BigQueryIngestionConfig(source = process.env) {
     const ga4Dataset = validatePattern(normalizeRequiredString(source.GA4_BIGQUERY_DATASET, 'GA4_BIGQUERY_DATASET'), DATASET_PATTERN, 'GA4_BIGQUERY_DATASET');
     const ga4EventsTablePattern = validatePattern(normalizeRequiredString(source.GA4_BIGQUERY_EVENTS_TABLE_PATTERN, 'GA4_BIGQUERY_EVENTS_TABLE_PATTERN'), TABLE_PATTERN, 'GA4_BIGQUERY_EVENTS_TABLE_PATTERN');
     const ga4IntradayTablePattern = validatePattern(normalizeRequiredString(source.GA4_BIGQUERY_INTRADAY_TABLE_PATTERN, 'GA4_BIGQUERY_INTRADAY_TABLE_PATTERN'), TABLE_PATTERN, 'GA4_BIGQUERY_INTRADAY_TABLE_PATTERN');
-    const ga4LookbackHours = parsePositiveInteger(source.GA4_BIGQUERY_LOOKBACK_HOURS, env_js_1.env.GA4_BIGQUERY_LOOKBACK_HOURS, 'GA4_BIGQUERY_LOOKBACK_HOURS');
-    const ga4BackfillHours = parsePositiveInteger(source.GA4_BIGQUERY_BACKFILL_HOURS, env_js_1.env.GA4_BIGQUERY_BACKFILL_HOURS, 'GA4_BIGQUERY_BACKFILL_HOURS');
+    const ga4LookbackHours = parsePositiveInteger(source.GA4_BIGQUERY_LOOKBACK_HOURS, env.GA4_BIGQUERY_LOOKBACK_HOURS, 'GA4_BIGQUERY_LOOKBACK_HOURS');
+    const ga4BackfillHours = parsePositiveInteger(source.GA4_BIGQUERY_BACKFILL_HOURS, env.GA4_BIGQUERY_BACKFILL_HOURS, 'GA4_BIGQUERY_BACKFILL_HOURS');
     const adsProjectId = validatePattern(normalizeRequiredString(source.GOOGLE_ADS_TRANSFER_BIGQUERY_PROJECT_ID, 'GOOGLE_ADS_TRANSFER_BIGQUERY_PROJECT_ID'), PROJECT_ID_PATTERN, 'GOOGLE_ADS_TRANSFER_BIGQUERY_PROJECT_ID');
     const adsLocation = validatePattern(normalizeRequiredString(source.GOOGLE_ADS_TRANSFER_BIGQUERY_LOCATION, 'GOOGLE_ADS_TRANSFER_BIGQUERY_LOCATION'), LOCATION_PATTERN, 'GOOGLE_ADS_TRANSFER_BIGQUERY_LOCATION');
     const adsDataset = validatePattern(normalizeRequiredString(source.GOOGLE_ADS_TRANSFER_DATASET, 'GOOGLE_ADS_TRANSFER_DATASET'), DATASET_PATTERN, 'GOOGLE_ADS_TRANSFER_DATASET');
     const adsTablePattern = validatePattern(normalizeRequiredString(source.GOOGLE_ADS_TRANSFER_TABLE_PATTERN, 'GOOGLE_ADS_TRANSFER_TABLE_PATTERN'), TABLE_PATTERN, 'GOOGLE_ADS_TRANSFER_TABLE_PATTERN');
-    const adsLookbackDays = parsePositiveInteger(source.GOOGLE_ADS_TRANSFER_LOOKBACK_DAYS, env_js_1.env.GOOGLE_ADS_TRANSFER_LOOKBACK_DAYS, 'GOOGLE_ADS_TRANSFER_LOOKBACK_DAYS');
+    const adsLookbackDays = parsePositiveInteger(source.GOOGLE_ADS_TRANSFER_LOOKBACK_DAYS, env.GOOGLE_ADS_TRANSFER_LOOKBACK_DAYS, 'GOOGLE_ADS_TRANSFER_LOOKBACK_DAYS');
     return {
         enabled: true,
         ga4: {
@@ -92,6 +88,6 @@ function resolveGa4BigQueryIngestionConfig(source = process.env) {
         }
     };
 }
-function assertGa4BigQueryIngestionConfig() {
+export function assertGa4BigQueryIngestionConfig() {
     return resolveGa4BigQueryIngestionConfig();
 }

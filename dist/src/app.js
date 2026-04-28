@@ -1,33 +1,27 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.createApp = createApp;
-const express_1 = __importDefault(require("express"));
-const env_js_1 = require("./config/env.js");
-const pool_js_1 = require("./db/pool.js");
-const index_js_1 = require("./modules/auth/index.js");
-const admin_js_1 = require("./modules/attribution/admin.js");
-const ga4_bigquery_config_js_1 = require("./modules/attribution/ga4-bigquery-config.js");
-const index_js_2 = require("./modules/google-ads/index.js");
-const index_js_3 = require("./modules/meta-ads/index.js");
-const index_js_4 = require("./modules/reporting/index.js");
-const index_js_5 = require("./modules/settings/index.js");
-const index_js_6 = require("./modules/shopify/index.js");
-const index_js_7 = require("./modules/tracking/index.js");
-const admin_js_2 = require("./modules/identity/admin.js");
-const read_api_js_1 = require("./modules/identity/read-api.js");
-const index_js_8 = require("./observability/index.js");
-function createApp() {
-    (0, ga4_bigquery_config_js_1.assertGa4BigQueryIngestionConfig)();
-    const app = (0, express_1.default)();
+import express from 'express';
+import { env, getApiAllowedOrigins } from './config/env.js';
+import { checkDatabaseHealth } from './db/pool.js';
+import { createAuthRouter, createUserAdminRouter } from './modules/auth/index.js';
+import { createAttributionAdminRouter } from './modules/attribution/admin.js';
+import { assertGa4BigQueryIngestionConfig } from './modules/attribution/ga4-bigquery-config.js';
+import { createGoogleAdsAdminRouter, createGoogleAdsPublicRouter } from './modules/google-ads/index.js';
+import { createMetaAdsAdminRouter, createMetaAdsPublicRouter } from './modules/meta-ads/index.js';
+import { createReportingRouter } from './modules/reporting/index.js';
+import { createSettingsRouter } from './modules/settings/index.js';
+import { createShopifyAdminRouter, createShopifyPublicRouter, createShopifyWebhookRouter } from './modules/shopify/index.js';
+import { createTrackingRouter } from './modules/tracking/index.js';
+import { createIdentityAdminRouter } from './modules/identity/admin.js';
+import { createInternalIdentityRouter } from './modules/identity/read-api.js';
+import { createRequestLoggingMiddleware, logHttpError } from './observability/index.js';
+export function createApp() {
+    assertGa4BigQueryIngestionConfig();
+    const app = express();
     const serviceName = process.env.K_SERVICE ?? 'roas-radar-api';
     app.disable('x-powered-by');
-    app.use((0, index_js_8.createRequestLoggingMiddleware)(serviceName));
+    app.use(createRequestLoggingMiddleware(serviceName));
     app.use((req, res, next) => {
         const origin = req.header('origin');
-        const allowedOrigins = (0, env_js_1.getApiAllowedOrigins)();
+        const allowedOrigins = getApiAllowedOrigins();
         const isAllowedOrigin = origin ? allowedOrigins.includes(origin) : false;
         if (origin) {
             res.append('Vary', 'Origin');
@@ -59,7 +53,7 @@ function createApp() {
     });
     app.get('/readyz', async (_req, res) => {
         try {
-            const status = await (0, pool_js_1.checkDatabaseHealth)();
+            const status = await checkDatabaseHealth();
             res.status(200).json(status);
         }
         catch (error) {
@@ -69,22 +63,22 @@ function createApp() {
             });
         }
     });
-    app.use('/webhooks/shopify', express_1.default.raw({ type: '*/*', limit: env_js_1.env.SHOPIFY_WEBHOOK_BODY_LIMIT }), (0, index_js_6.createShopifyWebhookRouter)());
-    app.use('/track', express_1.default.text({ type: 'text/plain', limit: env_js_1.env.TRACKING_BODY_LIMIT }), express_1.default.json({ type: 'application/json', limit: env_js_1.env.TRACKING_BODY_LIMIT }), (0, index_js_7.createTrackingRouter)());
-    app.use(express_1.default.json({ limit: env_js_1.env.API_JSON_BODY_LIMIT }));
-    app.use('/api/auth', (0, index_js_1.createAuthRouter)());
-    app.use('/api/settings', (0, index_js_5.createSettingsRouter)());
-    app.use('/api/reporting', (0, index_js_4.createReportingRouter)());
-    app.use('/api/internal/identity', (0, read_api_js_1.createInternalIdentityRouter)());
-    app.use('/api/admin/identity', (0, admin_js_2.createIdentityAdminRouter)());
-    app.use('/api/admin/users', (0, index_js_1.createUserAdminRouter)());
-    app.use('/api/admin/attribution', (0, admin_js_1.createAttributionAdminRouter)());
-    app.use('/shopify', (0, index_js_6.createShopifyPublicRouter)());
-    app.use('/api/admin/shopify', (0, index_js_6.createShopifyAdminRouter)());
-    app.use('/meta-ads', (0, index_js_3.createMetaAdsPublicRouter)());
-    app.use('/api/admin/meta-ads', (0, index_js_3.createMetaAdsAdminRouter)());
-    app.use('/google-ads', (0, index_js_2.createGoogleAdsPublicRouter)());
-    app.use('/api/admin/google-ads', (0, index_js_2.createGoogleAdsAdminRouter)());
+    app.use('/webhooks/shopify', express.raw({ type: '*/*', limit: env.SHOPIFY_WEBHOOK_BODY_LIMIT }), createShopifyWebhookRouter());
+    app.use('/track', express.text({ type: 'text/plain', limit: env.TRACKING_BODY_LIMIT }), express.json({ type: 'application/json', limit: env.TRACKING_BODY_LIMIT }), createTrackingRouter());
+    app.use(express.json({ limit: env.API_JSON_BODY_LIMIT }));
+    app.use('/api/auth', createAuthRouter());
+    app.use('/api/settings', createSettingsRouter());
+    app.use('/api/reporting', createReportingRouter());
+    app.use('/api/internal/identity', createInternalIdentityRouter());
+    app.use('/api/admin/identity', createIdentityAdminRouter());
+    app.use('/api/admin/users', createUserAdminRouter());
+    app.use('/api/admin/attribution', createAttributionAdminRouter());
+    app.use('/shopify', createShopifyPublicRouter());
+    app.use('/api/admin/shopify', createShopifyAdminRouter());
+    app.use('/meta-ads', createMetaAdsPublicRouter());
+    app.use('/api/admin/meta-ads', createMetaAdsAdminRouter());
+    app.use('/google-ads', createGoogleAdsPublicRouter());
+    app.use('/api/admin/google-ads', createGoogleAdsAdminRouter());
     app.use((error, _req, res, _next) => {
         const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error && typeof error.statusCode === 'number'
             ? error.statusCode
@@ -105,7 +99,7 @@ function createApp() {
         const message = error instanceof Error ? error.message : 'Unexpected error';
         const details = typeof error === 'object' && error !== null && 'details' in error ? error.details : undefined;
         if (statusCode >= 500) {
-            (0, index_js_8.logHttpError)('http_request_failed', error, _req, {
+            logHttpError('http_request_failed', error, _req, {
                 responseStatusCode: statusCode
             });
         }

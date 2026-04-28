@@ -1,23 +1,13 @@
-"use strict";
 // @ts-nocheck
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.__attributionTestUtils = void 0;
-exports.buildQueueKey = buildQueueKey;
-exports.computeRetryDelaySeconds = computeRetryDelaySeconds;
-exports.buildProcessingMetricsLog = buildProcessingMetricsLog;
-exports.enqueueAttributionForOrder = enqueueAttributionForOrder;
-exports.enqueueAttributionForTrackingTouchpoint = enqueueAttributionForTrackingTouchpoint;
-exports.applySyntheticAttributionForOrder = applySyntheticAttributionForOrder;
-exports.processAttributionQueue = processAttributionQueue;
-const pool_js_1 = require("../../db/pool.js");
-const index_js_1 = require("../../observability/index.js");
-const aggregates_js_1 = require("../reporting/aggregates.js");
-const index_js_2 = require("../settings/index.js");
-const engine_js_1 = require("./engine.js");
-const ga4_fallback_candidates_js_1 = require("./ga4-fallback-candidates.js");
-const ga4_rollout_js_1 = require("./ga4-rollout.js");
-const resolver_js_1 = require("./resolver.js");
-const shopify_hints_js_1 = require("./shopify-hints.js");
+import { withTransaction } from '../../db/pool.js';
+import { logError, logInfo, summarizeResolverOutcome } from '../../observability/index.js';
+import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
+import { formatDateInTimezone, getReportingTimezone } from '../settings/index.js';
+import { ATTRIBUTION_MODELS, computeAttributionOutputs, computeSingleWinnerCredits } from './engine.js';
+import { lookupGa4FallbackCandidates } from './ga4-fallback-candidates.js';
+import { buildJourney, getGa4FallbackRolloutMode, persistGa4FallbackShadowComparison } from './ga4-rollout.js';
+import { confidenceLabelForScore, confidenceScoreForWinner, dedupeDeterministicCandidates, isDirectTouchpoint, selectGa4FallbackWinner, selectLastNonDirectWinner } from './resolver.js';
+import { extractShopifyHintAttribution } from './shopify-hints.js';
 const ATTRIBUTION_MODEL_VERSION = 1;
 const ATTRIBUTION_WINDOW_DAYS = 7;
 const JOB_STALE_AFTER_MINUTES = 15;
@@ -26,14 +16,14 @@ function normalizeNullableString(value) {
     const normalized = value?.trim();
     return normalized ? normalized : null;
 }
-function buildQueueKey(shopifyOrderId) {
+export function buildQueueKey(shopifyOrderId) {
     return `order:${shopifyOrderId}`;
 }
-function computeRetryDelaySeconds(attempts) {
+export function computeRetryDelaySeconds(attempts) {
     const normalizedAttempts = Number.isFinite(attempts) ? Math.max(Math.trunc(attempts), 1) : 1;
     return Math.min(30 * 2 ** (normalizedAttempts - 1), MAX_RETRY_DELAY_SECONDS);
 }
-function buildProcessingMetricsLog(result) {
+export function buildProcessingMetricsLog(result) {
     return JSON.stringify({
         severity: 'INFO',
         event: 'attribution_queue_run',
@@ -62,9 +52,9 @@ async function execute(client, callback) {
     if (client) {
         return callback(client);
     }
-    return (0, pool_js_1.withTransaction)(callback);
+    return withTransaction(callback);
 }
-async function enqueueAttributionForOrder(shopifyOrderId, requestedReason, client) {
+export async function enqueueAttributionForOrder(shopifyOrderId, requestedReason, client) {
     await execute(client, async (db) => {
         await db.query(`
         INSERT INTO attribution_jobs (
@@ -97,7 +87,7 @@ async function enqueueAttributionForOrder(shopifyOrderId, requestedReason, clien
       `, [buildQueueKey(shopifyOrderId), shopifyOrderId, requestedReason, ATTRIBUTION_MODEL_VERSION]);
     });
 }
-async function enqueueAttributionForTrackingTouchpoint(client, input) {
+export async function enqueueAttributionForTrackingTouchpoint(client, input) {
     const result = await client.query(`
       SELECT DISTINCT o.shopify_order_id
       FROM shopify_orders o
@@ -194,7 +184,7 @@ function resolveOrderOccurredAt(order) {
     return order.processed_at ?? order.created_at_shopify ?? order.ingested_at;
 }
 function buildResolvedTouchpointFromValues(input) {
-    const confidenceScore = (0, resolver_js_1.confidenceScoreForWinner)({
+    const confidenceScore = confidenceScoreForWinner({
         matchSource: input.matchSource,
         clickIdValue: input.clickIdValue
     });
@@ -212,10 +202,10 @@ function buildResolvedTouchpointFromValues(input) {
         attributionReason: input.attributionReason,
         matchSource: input.matchSource,
         ingestionSource: input.ingestionSource,
-        confidenceLabel: (0, resolver_js_1.confidenceLabelForScore)(confidenceScore),
+        confidenceLabel: confidenceLabelForScore(confidenceScore),
         ga4ClientId: input.ga4ClientId ?? null,
         ga4SessionId: input.ga4SessionId ?? null,
-        isDirect: (0, resolver_js_1.isDirectTouchpoint)({
+        isDirect: isDirectTouchpoint({
             source: input.source,
             medium: input.medium,
             campaign: input.campaign,
@@ -449,7 +439,7 @@ function resolveShopifyHintFallback(order) {
     if (normalizeNullableString(order.source_name) !== 'web') {
         return null;
     }
-    const hint = (0, shopify_hints_js_1.extractShopifyHintAttribution)(order.raw_payload);
+    const hint = extractShopifyHintAttribution(order.raw_payload);
     if (!hint) {
         return null;
     }
@@ -473,7 +463,7 @@ async function resolveGa4Fallback(client, order, orderOccurredAt) {
     if (normalizeNullableString(order.source_name) !== 'web') {
         return null;
     }
-    const winner = (0, resolver_js_1.selectGa4FallbackWinner)(await (0, ga4_fallback_candidates_js_1.lookupGa4FallbackCandidates)({
+    const winner = selectGa4FallbackWinner(await lookupGa4FallbackCandidates({
         orderOccurredAt: orderOccurredAt.toISOString(),
         customerIdentityId: order.customer_identity_id,
         emailHash: order.email_hash,
@@ -502,19 +492,19 @@ async function resolveGa4Fallback(client, order, orderOccurredAt) {
 }
 async function resolveAttributionJourneys(client, order) {
     const orderOccurredAt = resolveOrderOccurredAt(order);
-    const touchpoints = (0, resolver_js_1.dedupeDeterministicCandidates)(await collectDeterministicCandidates(client, order));
-    const deterministicWinner = (0, resolver_js_1.selectLastNonDirectWinner)(touchpoints);
+    const touchpoints = dedupeDeterministicCandidates(await collectDeterministicCandidates(client, order));
+    const deterministicWinner = selectLastNonDirectWinner(touchpoints);
     const shopifyHintWinner = deterministicWinner ? null : resolveShopifyHintFallback(order);
     const preGa4Winner = deterministicWinner ?? shopifyHintWinner;
     const ga4Winner = preGa4Winner ? null : await resolveGa4Fallback(client, order, orderOccurredAt);
-    const rolloutMode = (0, ga4_rollout_js_1.getGa4FallbackRolloutMode)();
+    const rolloutMode = getGa4FallbackRolloutMode();
     const shadowWinner = preGa4Winner ?? ga4Winner;
     const appliedWinner = rolloutMode === 'on' ? shadowWinner : preGa4Winner;
-    const appliedConfidenceScore = (0, resolver_js_1.confidenceScoreForWinner)(appliedWinner);
-    const shadowConfidenceScore = (0, resolver_js_1.confidenceScoreForWinner)(shadowWinner);
+    const appliedConfidenceScore = confidenceScoreForWinner(appliedWinner);
+    const shadowConfidenceScore = confidenceScoreForWinner(shadowWinner);
     return {
-        appliedJourney: (0, ga4_rollout_js_1.buildJourney)(appliedWinner && touchpoints.length === 0 ? [appliedWinner] : touchpoints, appliedWinner, appliedConfidenceScore, (0, resolver_js_1.confidenceLabelForScore)(appliedConfidenceScore)),
-        shadowJourney: (0, ga4_rollout_js_1.buildJourney)(shadowWinner && touchpoints.length === 0 ? [shadowWinner] : touchpoints, shadowWinner, shadowConfidenceScore, (0, resolver_js_1.confidenceLabelForScore)(shadowConfidenceScore)),
+        appliedJourney: buildJourney(appliedWinner && touchpoints.length === 0 ? [appliedWinner] : touchpoints, appliedWinner, appliedConfidenceScore, confidenceLabelForScore(appliedConfidenceScore)),
+        shadowJourney: buildJourney(shadowWinner && touchpoints.length === 0 ? [shadowWinner] : touchpoints, shadowWinner, shadowConfidenceScore, confidenceLabelForScore(shadowConfidenceScore)),
         rolloutMode
     };
 }
@@ -551,14 +541,14 @@ async function shouldPersistSyntheticAttribution(client, shopifyOrderId, matchSo
 }
 async function persistAttribution(client, order, journey, options = {}) {
     const orderOccurredAt = resolveOrderOccurredAt(order);
-    const outputs = (0, engine_js_1.computeAttributionOutputs)(journey.touchpoints, {
+    const outputs = computeAttributionOutputs(journey.touchpoints, {
         orderOccurredAt,
         orderRevenue: order.total_price
     });
     if (journey.winner) {
         const winnerIndex = journey.touchpoints.findIndex((touchpoint) => touchpoint.sessionId === journey.winner?.sessionId);
         if (winnerIndex >= 0) {
-            outputs.last_touch = (0, engine_js_1.computeSingleWinnerCredits)('last_touch', journey.touchpoints, winnerIndex, order.total_price);
+            outputs.last_touch = computeSingleWinnerCredits('last_touch', journey.touchpoints, winnerIndex, order.total_price);
         }
     }
     const primaryCredit = selectPrimaryCredit(outputs.last_touch);
@@ -570,7 +560,7 @@ async function persistAttribution(client, order, journey, options = {}) {
         return;
     }
     await client.query('DELETE FROM attribution_order_credits WHERE shopify_order_id = $1', [order.shopify_order_id]);
-    for (const model of engine_js_1.ATTRIBUTION_MODELS) {
+    for (const model of ATTRIBUTION_MODELS) {
         for (const credit of outputs[model]) {
             const touchpoint = touchpointForCredit(journey, credit);
             await client.query(`
@@ -739,7 +729,7 @@ function primaryCreditReason(journey) {
     return journey.winner?.attributionReason ?? 'unattributed';
 }
 function emitAttributionResolverOutcomeLog(order, journey) {
-    (0, index_js_1.logInfo)('attribution_resolver_outcome', {
+    logInfo('attribution_resolver_outcome', {
         service: process.env.K_SERVICE ?? 'roas-radar-attribution-worker',
         correlationId: buildAttributionCorrelationId(order.shopify_order_id),
         shopifyOrderId: order.shopify_order_id,
@@ -747,7 +737,7 @@ function emitAttributionResolverOutcomeLog(order, journey) {
         confidenceScore: journey.confidenceScore,
         confidenceLabel: journey.confidenceLabel,
         attributionReason: primaryCreditReason(journey),
-        ...(0, index_js_1.summarizeResolverOutcome)({
+        ...summarizeResolverOutcome({
             touchpoints: journey.touchpoints,
             winner: journey.winner,
             deterministicWinnerExists: Boolean(journey.winner?.ingestionSource),
@@ -783,7 +773,7 @@ async function processClaimedJob(client, job, workerId) {
     }
     const { appliedJourney, shadowJourney, rolloutMode } = await resolveAttributionJourneys(client, order);
     await persistAttribution(client, order, appliedJourney);
-    await (0, ga4_rollout_js_1.persistGa4FallbackShadowComparison)(client, {
+    await persistGa4FallbackShadowComparison(client, {
         shopifyOrderId: order.shopify_order_id,
         orderOccurredAt: resolveOrderOccurredAt(order),
         orderRevenue: order.total_price,
@@ -792,8 +782,8 @@ async function processClaimedJob(client, job, workerId) {
         shadowJourney
     });
     emitAttributionResolverOutcomeLog(order, appliedJourney);
-    const metricDate = (0, index_js_2.formatDateInTimezone)(resolveOrderOccurredAt(order), await (0, index_js_2.getReportingTimezone)(client));
-    await (0, aggregates_js_1.refreshDailyReportingMetrics)(client, [metricDate]);
+    const metricDate = formatDateInTimezone(resolveOrderOccurredAt(order), await getReportingTimezone(client));
+    await refreshDailyReportingMetrics(client, [metricDate]);
     await client.query(`
       UPDATE attribution_jobs
       SET
@@ -821,7 +811,7 @@ async function processClaimedJob(client, job, workerId) {
         shadowMatchSource: shadowJourney.winner?.matchSource ?? 'unattributed'
     })}\n`);
 }
-async function applySyntheticAttributionForOrder(shopifyOrderId, input, client) {
+export async function applySyntheticAttributionForOrder(shopifyOrderId, input, client) {
     await execute(client, async (db) => {
         const order = await fetchOrder(db, shopifyOrderId);
         if (!order) {
@@ -850,12 +840,12 @@ async function applySyntheticAttributionForOrder(shopifyOrderId, input, client) 
             touchpoints: [touchpoint],
             winner: touchpoint,
             confidenceScore,
-            confidenceLabel: (0, resolver_js_1.confidenceLabelForScore)(confidenceScore)
+            confidenceLabel: confidenceLabelForScore(confidenceScore)
         }, {
             preventDowngrade: true
         });
-        const metricDate = (0, index_js_2.formatDateInTimezone)(orderOccurredAt, await (0, index_js_2.getReportingTimezone)(db));
-        await (0, aggregates_js_1.refreshDailyReportingMetrics)(db, [metricDate]);
+        const metricDate = formatDateInTimezone(orderOccurredAt, await getReportingTimezone(db));
+        await refreshDailyReportingMetrics(db, [metricDate]);
     });
 }
 async function markJobForRetry(client, job, workerId, error) {
@@ -877,9 +867,9 @@ async function markJobForRetry(client, job, workerId, error) {
         error instanceof Error ? error.message.slice(0, 1000) : String(error).slice(0, 1000)
     ]);
 }
-async function processAttributionQueue(options) {
+export async function processAttributionQueue(options) {
     const startedAt = Date.now();
-    const result = await (0, pool_js_1.withTransaction)(async (client) => {
+    const result = await withTransaction(async (client) => {
         const staleJobsEnqueued = await requeueStaleJobs(client, options.staleScanLimit ?? 0);
         const claimedJobs = await claimJobs(client, options.workerId, options.limit);
         return {
@@ -891,19 +881,19 @@ async function processAttributionQueue(options) {
     let failedJobs = 0;
     for (const job of result.claimedJobs) {
         try {
-            await (0, pool_js_1.withTransaction)(async (client) => {
+            await withTransaction(async (client) => {
                 await processClaimedJob(client, job, options.workerId);
             });
             succeededJobs += 1;
         }
         catch (error) {
             failedJobs += 1;
-            (0, index_js_1.logError)('attribution_job_failed', error, {
+            logError('attribution_job_failed', error, {
                 workerId: options.workerId,
                 shopifyOrderId: job.shopify_order_id,
                 attempts: job.attempts
             });
-            await (0, pool_js_1.withTransaction)(async (client) => {
+            await withTransaction(async (client) => {
                 await markJobForRetry(client, job, options.workerId, error);
             });
         }
@@ -925,13 +915,13 @@ async function processAttributionQueue(options) {
     }
     return summary;
 }
-exports.__attributionTestUtils = {
+export const __attributionTestUtils = {
     buildQueueKey,
     computeRetryDelaySeconds,
     buildProcessingMetricsLog,
-    dedupeDeterministicCandidates: resolver_js_1.dedupeDeterministicCandidates,
-    selectLastNonDirectWinner: resolver_js_1.selectLastNonDirectWinner,
-    confidenceScoreForWinner: resolver_js_1.confidenceScoreForWinner,
-    confidenceLabelForScore: resolver_js_1.confidenceLabelForScore,
-    selectGa4FallbackWinner: resolver_js_1.selectGa4FallbackWinner
+    dedupeDeterministicCandidates,
+    selectLastNonDirectWinner,
+    confidenceScoreForWinner,
+    confidenceLabelForScore,
+    selectGa4FallbackWinner
 };

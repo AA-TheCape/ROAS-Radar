@@ -1,15 +1,12 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.createGa4BigQueryExecutor = createGa4BigQueryExecutor;
-const bigquery_1 = require("@google-cloud/bigquery");
+import { BigQuery } from '@google-cloud/bigquery';
 let bigQueryClient = null;
 function getBigQueryClient() {
     if (!bigQueryClient) {
-        bigQueryClient = new bigquery_1.BigQuery();
+        bigQueryClient = new BigQuery();
     }
     return bigQueryClient;
 }
-function createGa4BigQueryExecutor(location) {
+export function createGa4BigQueryExecutor(location) {
     return {
         async runQuery(input) {
             const [rows] = await getBigQueryClient().query({

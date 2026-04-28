@@ -1,14 +1,11 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.createReportingRouter = createReportingRouter;
-const express_1 = require("express");
-const zod_1 = require("zod");
-const pool_js_1 = require("../../db/pool.js");
-const metrics_js_1 = require("../../shared/metrics.js");
-const engine_js_1 = require("../attribution/engine.js");
-const index_js_1 = require("../auth/index.js");
-const index_js_2 = require("../data-quality/index.js");
-const index_js_3 = require("../settings/index.js");
+import { Router } from 'express';
+import { z } from 'zod';
+import { query } from '../../db/pool.js';
+import { calculatePerformanceMetrics } from '../../shared/metrics.js';
+import { ATTRIBUTION_MODELS } from '../attribution/engine.js';
+import { attachAuthContext, requireAuthenticated } from '../auth/index.js';
+import { fetchDataQualityReport, resolveRunDate } from '../data-quality/index.js';
+import { getReportingTimezone } from '../settings/index.js';
 class ReportingHttpError extends Error {
     statusCode;
     code;
@@ -21,19 +18,19 @@ class ReportingHttpError extends Error {
         this.details = details;
     }
 }
-const dateStringSchema = zod_1.z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
-const baseFiltersObjectSchema = zod_1.z.object({
+const dateStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const baseFiltersObjectSchema = z.object({
     startDate: dateStringSchema,
     endDate: dateStringSchema,
-    attributionModel: zod_1.z.enum(engine_js_1.ATTRIBUTION_MODELS).optional().default('last_touch'),
-    source: zod_1.z.string().trim().min(1).optional(),
-    campaign: zod_1.z.string().trim().min(1).optional()
+    attributionModel: z.enum(ATTRIBUTION_MODELS).optional().default('last_touch'),
+    source: z.string().trim().min(1).optional(),
+    campaign: z.string().trim().min(1).optional()
 });
 function withValidDateRange(schema) {
     return schema.superRefine((value, ctx) => {
         if (value.startDate > value.endDate) {
             ctx.addIssue({
-                code: zod_1.z.ZodIssueCode.custom,
+                code: z.ZodIssueCode.custom,
                 message: 'startDate must be on or before endDate',
                 path: ['startDate']
             });
@@ -42,18 +39,18 @@ function withValidDateRange(schema) {
 }
 const baseFiltersSchema = withValidDateRange(baseFiltersObjectSchema);
 const campaignsQuerySchema = withValidDateRange(baseFiltersObjectSchema.extend({
-    limit: zod_1.z.coerce.number().int().positive().max(200).optional().default(50)
+    limit: z.coerce.number().int().positive().max(200).optional().default(50)
 }));
 const timeseriesQuerySchema = withValidDateRange(baseFiltersObjectSchema.extend({
-    groupBy: zod_1.z.enum(['day', 'source', 'campaign']).optional().default('day')
+    groupBy: z.enum(['day', 'source', 'campaign']).optional().default('day')
 }));
 const ordersQuerySchema = withValidDateRange(baseFiltersObjectSchema.extend({
-    limit: zod_1.z.coerce.number().int().positive().max(200).optional().default(50)
+    limit: z.coerce.number().int().positive().max(200).optional().default(50)
 }));
-const orderDetailsParamsSchema = zod_1.z.object({
-    shopifyOrderId: zod_1.z.string().trim().min(1)
+const orderDetailsParamsSchema = z.object({
+    shopifyOrderId: z.string().trim().min(1)
 });
-const reconciliationQuerySchema = zod_1.z.object({
+const reconciliationQuerySchema = z.object({
     runDate: dateStringSchema.optional()
 });
 function parseInput(schema, input) {
@@ -61,7 +58,7 @@ function parseInput(schema, input) {
         return schema.parse(input);
     }
     catch (error) {
-        if (error instanceof zod_1.z.ZodError) {
+        if (error instanceof z.ZodError) {
             throw new ReportingHttpError(400, 'invalid_request', 'Invalid reporting query parameters', error.flatten());
         }
         throw error;
@@ -115,15 +112,15 @@ function countDaysInRange(startDate, endDate) {
     }
     return Math.floor((end - start) / 86_400_000) + 1;
 }
-function createReportingRouter() {
-    const router = (0, express_1.Router)();
-    router.use(index_js_1.attachAuthContext);
-    router.use(index_js_1.requireAuthenticated);
+export function createReportingRouter() {
+    const router = Router();
+    router.use(attachAuthContext);
+    router.use(requireAuthenticated);
     router.get('/summary', async (req, res, next) => {
         try {
             const input = parseInput(baseFiltersSchema, req.query);
             const filters = buildMetricDimensionFilters(input.attributionModel, input.source, input.campaign);
-            const result = await (0, pool_js_1.query)(`
+            const result = await query(`
           SELECT
             COALESCE(SUM(visits), 0) AS visits,
             COALESCE(SUM(attributed_orders), 0) AS orders,
@@ -134,7 +131,7 @@ function createReportingRouter() {
           ${filters.sql}
         `, [input.startDate, input.endDate, ...filters.params]);
             const row = result.rows[0];
-            const metrics = (0, metrics_js_1.calculatePerformanceMetrics)({
+            const metrics = calculatePerformanceMetrics({
                 visits: row?.visits ?? 0,
                 orders: row?.orders ?? 0,
                 attributedRevenue: row?.revenue ?? 0,
@@ -163,7 +160,7 @@ function createReportingRouter() {
         try {
             const input = parseInput(campaignsQuerySchema, req.query);
             const filters = buildMetricDimensionFilters(input.attributionModel, input.source, input.campaign);
-            const result = await (0, pool_js_1.query)(`
+            const result = await query(`
           SELECT
             source,
             medium,
@@ -206,7 +203,7 @@ function createReportingRouter() {
         try {
             const input = parseInput(baseFiltersSchema, req.query);
             const filters = buildMetricDimensionFilters(input.attributionModel, input.source, input.campaign);
-            const result = await (0, pool_js_1.query)(`
+            const result = await query(`
           SELECT
             source,
             medium,
@@ -280,7 +277,7 @@ function createReportingRouter() {
             const input = parseInput(timeseriesQuerySchema, req.query);
             const filters = buildMetricDimensionFilters(input.attributionModel, input.source, input.campaign);
             const groupExpr = input.groupBy === 'source' ? 'source' : input.groupBy === 'campaign' ? 'campaign' : 'metric_date::text';
-            const result = await (0, pool_js_1.query)(`
+            const result = await query(`
           SELECT
             ${groupExpr} AS bucket,
             COALESCE(SUM(visits), 0) AS visits,
@@ -294,7 +291,7 @@ function createReportingRouter() {
           ORDER BY bucket ASC
         `, [input.startDate, input.endDate, ...filters.params]);
             const bucketMetrics = result.rows.map((row) => {
-                const metrics = (0, metrics_js_1.calculatePerformanceMetrics)({
+                const metrics = calculatePerformanceMetrics({
                     visits: row.visits,
                     orders: row.orders,
                     attributedRevenue: row.revenue,
@@ -333,8 +330,8 @@ function createReportingRouter() {
         try {
             const input = parseInput(ordersQuerySchema, req.query);
             const filters = buildOrderAttributionFilters(input.attributionModel, input.source, input.campaign);
-            const reportingTimezone = await (0, index_js_3.getReportingTimezone)();
-            const result = await (0, pool_js_1.query)(`
+            const reportingTimezone = await getReportingTimezone();
+            const result = await query(`
           SELECT
             o.shopify_order_id,
             COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) AS processed_at,
@@ -388,7 +385,7 @@ function createReportingRouter() {
     router.get('/orders/:shopifyOrderId', async (req, res, next) => {
         try {
             const { shopifyOrderId } = parseInput(orderDetailsParamsSchema, req.params);
-            const orderResult = await (0, pool_js_1.query)(`
+            const orderResult = await query(`
           SELECT
             o.shopify_order_id,
             o.shopify_order_number,
@@ -417,7 +414,7 @@ function createReportingRouter() {
             if (!orderResult.rowCount) {
                 throw new ReportingHttpError(404, 'order_not_found', `Shopify order ${shopifyOrderId} was not found`);
             }
-            const lineItemsResult = await (0, pool_js_1.query)(`
+            const lineItemsResult = await query(`
           SELECT
             li.shopify_line_item_id,
             li.shopify_product_id,
@@ -438,7 +435,7 @@ function createReportingRouter() {
           WHERE li.shopify_order_id = $1
           ORDER BY li.id ASC
         `, [shopifyOrderId]);
-            const creditsResult = await (0, pool_js_1.query)(`
+            const creditsResult = await query(`
           SELECT
             c.attribution_model,
             c.touchpoint_position,
@@ -534,8 +531,8 @@ function createReportingRouter() {
     router.get('/reconciliation', async (req, res, next) => {
         try {
             const input = parseInput(reconciliationQuerySchema, req.query);
-            const runDate = input.runDate ?? (0, index_js_2.resolveRunDate)();
-            const report = await (0, index_js_2.fetchDataQualityReport)(runDate);
+            const runDate = input.runDate ?? resolveRunDate();
+            const report = await fetchDataQualityReport(runDate);
             res.json({
                 version: '2026-04-11',
                 tenantId: 'roas-radar',

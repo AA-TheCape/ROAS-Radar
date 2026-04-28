@@ -1,17 +1,12 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.OrderAttributionBackfillRunError = void 0;
-exports.backfillRecentOrdersWithRecoveredAttribution = backfillRecentOrdersWithRecoveredAttribution;
-exports.toOrderAttributionBackfillJobReport = toOrderAttributionBackfillJobReport;
-const pool_js_1 = require("../../db/pool.js");
-const index_js_1 = require("../../observability/index.js");
-const aggregates_js_1 = require("../reporting/aggregates.js");
-const index_js_2 = require("../settings/index.js");
-const writeback_js_1 = require("../shopify/writeback.js");
-const engine_js_1 = require("./engine.js");
-const resolver_js_1 = require("./resolver.js");
-const ga4_fallback_candidates_js_1 = require("./ga4-fallback-candidates.js");
-const shopify_hints_js_1 = require("./shopify-hints.js");
+import { withTransaction } from '../../db/pool.js';
+import { logError, logInfo } from '../../observability/index.js';
+import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
+import { formatDateInTimezone, getReportingTimezone } from '../settings/index.js';
+import { applyShopifyOrderWriteback } from '../shopify/writeback.js';
+import { ATTRIBUTION_MODELS, computeAttributionOutputs, computeSingleWinnerCredits } from './engine.js';
+import { confidenceLabelForScore, confidenceScoreForWinner, dedupeDeterministicCandidates, isDirectTouchpoint, selectGa4FallbackWinner, selectLastNonDirectWinner } from './resolver.js';
+import { lookupGa4FallbackCandidates } from './ga4-fallback-candidates.js';
+import { extractShopifyHintAttribution } from './shopify-hints.js';
 const ATTRIBUTION_MODEL_VERSION = 1;
 const ATTRIBUTION_WINDOW_DAYS = 7;
 const MAX_PREVIEW_ORDERS = 25;
@@ -28,7 +23,7 @@ const MISSING_ATTRIBUTION_SQL = `
     AND attribution.attributed_click_id_value IS NULL
   )
 `;
-class OrderAttributionBackfillRunError extends Error {
+export class OrderAttributionBackfillRunError extends Error {
     code;
     report;
     constructor(message, options) {
@@ -38,7 +33,6 @@ class OrderAttributionBackfillRunError extends Error {
         this.report = options.report;
     }
 }
-exports.OrderAttributionBackfillRunError = OrderAttributionBackfillRunError;
 function normalizeFailureCode(error, fallback) {
     if (typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string' && error.code.trim()) {
         return error.code.trim();
@@ -104,7 +98,7 @@ function resolveOrderOccurredAt(order) {
     return order.processed_at ?? order.created_at_shopify ?? order.ingested_at;
 }
 function buildResolvedTouchpointFromValues(input) {
-    const confidenceScore = (0, resolver_js_1.confidenceScoreForWinner)({
+    const confidenceScore = confidenceScoreForWinner({
         matchSource: input.matchSource,
         clickIdValue: input.clickIdValue
     });
@@ -122,10 +116,10 @@ function buildResolvedTouchpointFromValues(input) {
         attributionReason: input.attributionReason,
         matchSource: input.matchSource,
         ingestionSource: input.ingestionSource,
-        confidenceLabel: (0, resolver_js_1.confidenceLabelForScore)(confidenceScore),
+        confidenceLabel: confidenceLabelForScore(confidenceScore),
         ga4ClientId: input.ga4ClientId ?? null,
         ga4SessionId: input.ga4SessionId ?? null,
-        isDirect: (0, resolver_js_1.isDirectTouchpoint)({
+        isDirect: isDirectTouchpoint({
             source: input.source,
             medium: input.medium,
             campaign: input.campaign,
@@ -359,7 +353,7 @@ function resolveShopifyHintFallback(order) {
     if (normalizeNullableString(order.source_name) !== 'web') {
         return null;
     }
-    const hint = (0, shopify_hints_js_1.extractShopifyHintAttribution)(order.raw_payload);
+    const hint = extractShopifyHintAttribution(order.raw_payload);
     if (!hint) {
         return null;
     }
@@ -383,7 +377,7 @@ async function resolveGa4Fallback(client, order, orderOccurredAt) {
     if (normalizeNullableString(order.source_name) !== 'web') {
         return null;
     }
-    const winner = (0, resolver_js_1.selectGa4FallbackWinner)(await (0, ga4_fallback_candidates_js_1.lookupGa4FallbackCandidates)({
+    const winner = selectGa4FallbackWinner(await lookupGa4FallbackCandidates({
         orderOccurredAt: orderOccurredAt.toISOString(),
         customerIdentityId: order.customer_identity_id,
         emailHash: order.email_hash,
@@ -413,16 +407,16 @@ async function resolveGa4Fallback(client, order, orderOccurredAt) {
 async function resolveAttributionJourney(client, order) {
     const orderOccurredAt = resolveOrderOccurredAt(order);
     const candidates = await collectDeterministicCandidates(client, order);
-    const touchpoints = (0, resolver_js_1.dedupeDeterministicCandidates)(candidates);
-    const winner = (0, resolver_js_1.selectLastNonDirectWinner)(touchpoints) ??
+    const touchpoints = dedupeDeterministicCandidates(candidates);
+    const winner = selectLastNonDirectWinner(touchpoints) ??
         resolveShopifyHintFallback(order) ??
         (await resolveGa4Fallback(client, order, orderOccurredAt));
-    const confidenceScore = (0, resolver_js_1.confidenceScoreForWinner)(winner);
+    const confidenceScore = confidenceScoreForWinner(winner);
     return {
         touchpoints: winner && touchpoints.length === 0 ? [winner] : touchpoints,
         winner,
         confidenceScore,
-        confidenceLabel: (0, resolver_js_1.confidenceLabelForScore)(confidenceScore)
+        confidenceLabel: confidenceLabelForScore(confidenceScore)
     };
 }
 function selectPrimaryCredit(credits) {
@@ -436,14 +430,14 @@ function touchpointForCredit(journey, credit) {
 }
 async function persistAttribution(client, order, journey) {
     const orderOccurredAt = resolveOrderOccurredAt(order);
-    const outputs = (0, engine_js_1.computeAttributionOutputs)(journey.touchpoints, {
+    const outputs = computeAttributionOutputs(journey.touchpoints, {
         orderOccurredAt,
         orderRevenue: order.total_price
     });
     if (journey.winner) {
         const winnerIndex = journey.touchpoints.findIndex((touchpoint) => touchpoint.sessionId === journey.winner?.sessionId);
         if (winnerIndex >= 0) {
-            outputs.last_touch = (0, engine_js_1.computeSingleWinnerCredits)('last_touch', journey.touchpoints, winnerIndex, order.total_price);
+            outputs.last_touch = computeSingleWinnerCredits('last_touch', journey.touchpoints, winnerIndex, order.total_price);
         }
     }
     const primaryCredit = selectPrimaryCredit(outputs.last_touch);
@@ -451,7 +445,7 @@ async function persistAttribution(client, order, journey) {
         throw new Error(`Failed to compute attribution credits for Shopify order ${order.shopify_order_id}`);
     }
     await client.query('DELETE FROM attribution_order_credits WHERE shopify_order_id = $1', [order.shopify_order_id]);
-    for (const model of engine_js_1.ATTRIBUTION_MODELS) {
+    for (const model of ATTRIBUTION_MODELS) {
         for (const credit of outputs[model]) {
             const touchpoint = touchpointForCredit(journey, credit);
             await client.query(`
@@ -709,7 +703,7 @@ function previewRowForOrder(order, journey) {
         attributionReason: journey.winner?.attributionReason ?? 'unrecoverable'
     };
 }
-async function backfillRecentOrdersWithRecoveredAttribution(options) {
+export async function backfillRecentOrdersWithRecoveredAttribution(options) {
     if (!(options.windowStart instanceof Date) || Number.isNaN(options.windowStart.getTime())) {
         throw new Error('windowStart must be a valid Date');
     }
@@ -723,7 +717,7 @@ async function backfillRecentOrdersWithRecoveredAttribution(options) {
     const dryRun = options.dryRun ?? false;
     const onlyWebOrders = options.onlyWebOrders ?? true;
     const writeToShopifyWhenAvailable = options.writeToShopifyWhenAvailable ?? true;
-    const applyWriteback = options.applyWriteback ?? writeback_js_1.applyShopifyOrderWriteback;
+    const applyWriteback = options.applyWriteback ?? applyShopifyOrderWriteback;
     let beforeMetrics = buildEmptyScopeMetrics();
     let afterMetrics = buildEmptyScopeMetrics();
     let scannedOrders = 0;
@@ -737,7 +731,7 @@ async function backfillRecentOrdersWithRecoveredAttribution(options) {
     const failures = [];
     const preview = [];
     try {
-        (0, index_js_1.logInfo)('order_attribution_backfill_started', {
+        logInfo('order_attribution_backfill_started', {
             requestedBy: options.requestedBy,
             workerId: options.workerId,
             dryRun,
@@ -746,12 +740,12 @@ async function backfillRecentOrdersWithRecoveredAttribution(options) {
             windowStart: options.windowStart.toISOString(),
             windowEnd: options.windowEnd.toISOString()
         });
-        beforeMetrics = await (0, pool_js_1.withTransaction)((client) => fetchScopeMetrics(client, {
+        beforeMetrics = await withTransaction((client) => fetchScopeMetrics(client, {
             windowStart: options.windowStart,
             windowEnd: options.windowEnd,
             onlyWebOrders
         }));
-        const candidateRows = await (0, pool_js_1.withTransaction)((client) => fetchBackfillCandidates(client, {
+        const candidateRows = await withTransaction((client) => fetchBackfillCandidates(client, {
             windowStart: options.windowStart,
             windowEnd: options.windowEnd,
             onlyWebOrders,
@@ -759,10 +753,10 @@ async function backfillRecentOrdersWithRecoveredAttribution(options) {
         }));
         scannedOrders = candidateRows.length;
         const reportingDates = new Set();
-        const reportingTimezone = dryRun ? null : await (0, pool_js_1.withTransaction)((client) => (0, index_js_2.getReportingTimezone)(client));
+        const reportingTimezone = dryRun ? null : await withTransaction((client) => getReportingTimezone(client));
         for (const candidate of candidateRows) {
             try {
-                const resolved = await (0, pool_js_1.withTransaction)(async (client) => {
+                const resolved = await withTransaction(async (client) => {
                     const order = await fetchOrder(client, candidate.shopify_order_id);
                     if (!order) {
                         return null;
@@ -790,10 +784,10 @@ async function backfillRecentOrdersWithRecoveredAttribution(options) {
                 if (dryRun) {
                     continue;
                 }
-                await (0, pool_js_1.withTransaction)(async (client) => {
+                await withTransaction(async (client) => {
                     await persistAttribution(client, resolved.order, resolved.journey);
                     if (reportingTimezone) {
-                        reportingDates.add((0, index_js_2.formatDateInTimezone)(resolveOrderOccurredAt(resolved.order), reportingTimezone));
+                        reportingDates.add(formatDateInTimezone(resolveOrderOccurredAt(resolved.order), reportingTimezone));
                     }
                 });
                 recoveredOrders += 1;
@@ -818,7 +812,7 @@ async function backfillRecentOrdersWithRecoveredAttribution(options) {
                             code: normalizeFailureCode(error, 'shopify_writeback_failed'),
                             message: normalizeFailureMessage(error, `Shopify writeback failed for Shopify order ${resolved.order.shopify_order_id}`)
                         });
-                        (0, index_js_1.logError)('order_attribution_backfill_shopify_writeback_failed', error, {
+                        logError('order_attribution_backfill_shopify_writeback_failed', error, {
                             requestedBy: options.requestedBy,
                             workerId: options.workerId,
                             shopifyOrderId: resolved.order.shopify_order_id
@@ -833,7 +827,7 @@ async function backfillRecentOrdersWithRecoveredAttribution(options) {
                     code: normalizeFailureCode(error, 'order_attribution_backfill_failed'),
                     message: normalizeFailureMessage(error, `Failed to backfill Shopify order ${candidate.shopify_order_id}`)
                 });
-                (0, index_js_1.logError)('order_attribution_backfill_order_failed', error, {
+                logError('order_attribution_backfill_order_failed', error, {
                     requestedBy: options.requestedBy,
                     workerId: options.workerId,
                     shopifyOrderId: candidate.shopify_order_id
@@ -841,11 +835,11 @@ async function backfillRecentOrdersWithRecoveredAttribution(options) {
             }
         }
         if (!dryRun && reportingDates.size > 0) {
-            await (0, pool_js_1.withTransaction)((client) => (0, aggregates_js_1.refreshDailyReportingMetrics)(client, [...reportingDates]));
+            await withTransaction((client) => refreshDailyReportingMetrics(client, [...reportingDates]));
         }
         afterMetrics = dryRun
             ? beforeMetrics
-            : await (0, pool_js_1.withTransaction)((client) => fetchScopeMetrics(client, {
+            : await withTransaction((client) => fetchScopeMetrics(client, {
                 windowStart: options.windowStart,
                 windowEnd: options.windowEnd,
                 onlyWebOrders
@@ -871,7 +865,7 @@ async function backfillRecentOrdersWithRecoveredAttribution(options) {
             failures,
             preview
         });
-        (0, index_js_1.logInfo)(dryRun ? 'order_attribution_backfill_dry_run_completed' : 'order_attribution_backfill_completed', report);
+        logInfo(dryRun ? 'order_attribution_backfill_dry_run_completed' : 'order_attribution_backfill_completed', report);
         return report;
     }
     catch (error) {
@@ -896,7 +890,7 @@ async function backfillRecentOrdersWithRecoveredAttribution(options) {
             failures,
             preview
         });
-        (0, index_js_1.logError)('order_attribution_backfill_run_failed', error, {
+        logError('order_attribution_backfill_run_failed', error, {
             requestedBy: options.requestedBy,
             workerId: options.workerId,
             scannedOrders,
@@ -912,7 +906,7 @@ async function backfillRecentOrdersWithRecoveredAttribution(options) {
         });
     }
 }
-function toOrderAttributionBackfillJobReport(report) {
+export function toOrderAttributionBackfillJobReport(report) {
     return {
         scanned: report.scannedOrders,
         recovered: report.recoveredOrders,

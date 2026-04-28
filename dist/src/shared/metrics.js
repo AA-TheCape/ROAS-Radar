@@ -1,10 +1,3 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.toNumber = toNumber;
-exports.safeDivide = safeDivide;
-exports.calculatePerformanceMetrics = calculatePerformanceMetrics;
-exports.compareMetricValues = compareMetricValues;
-exports.compareModelMetrics = compareModelMetrics;
 const COMPARABLE_METRICS = [
     'attributedRevenue',
     'revenue',
@@ -16,7 +9,7 @@ const COMPARABLE_METRICS = [
     'clickThroughRate',
     'newCustomerRate'
 ];
-function toNumber(value) {
+export function toNumber(value) {
     if (typeof value === 'number') {
         return Number.isFinite(value) ? value : 0;
     }
@@ -26,7 +19,7 @@ function toNumber(value) {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : 0;
 }
-function safeDivide(numerator, denominator) {
+export function safeDivide(numerator, denominator) {
     const normalizedNumerator = toNumber(numerator);
     const normalizedDenominator = toNumber(denominator);
     if (!Number.isFinite(normalizedNumerator) || !Number.isFinite(normalizedDenominator) || normalizedDenominator === 0) {
@@ -34,7 +27,7 @@ function safeDivide(numerator, denominator) {
     }
     return normalizedNumerator / normalizedDenominator;
 }
-function calculatePerformanceMetrics(input) {
+export function calculatePerformanceMetrics(input) {
     const visits = toNumber(input.visits);
     const orders = toNumber(input.orders);
     const attributedRevenue = toNumber(input.attributedRevenue);
@@ -67,14 +60,14 @@ function calculatePerformanceMetrics(input) {
         returningCustomerRate: safeDivide(returningCustomerOrders, orders) ?? 0
     };
 }
-function compareMetricValues(left, right) {
+export function compareMetricValues(left, right) {
     if (typeof left === 'number' || typeof right === 'number') {
         return (typeof left === 'number' ? left : Number.NEGATIVE_INFINITY) -
             (typeof right === 'number' ? right : Number.NEGATIVE_INFINITY);
     }
     return (left ?? '').localeCompare(right ?? '', undefined, { sensitivity: 'base' });
 }
-function compareModelMetrics(baseline, comparison) {
+export function compareModelMetrics(baseline, comparison) {
     return {
         baselineModel: baseline.attributionModel,
         comparisonModel: comparison.attributionModel,

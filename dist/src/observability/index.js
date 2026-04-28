@@ -1,21 +1,5 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.__observabilityTestUtils = exports.requestContextStorage = void 0;
-exports.parseCloudTraceContext = parseCloudTraceContext;
-exports.logInfo = logInfo;
-exports.logWarning = logWarning;
-exports.logError = logError;
-exports.createRequestLoggingMiddleware = createRequestLoggingMiddleware;
-exports.logHttpError = logHttpError;
-exports.summarizeOrderAttributionBackfillReport = summarizeOrderAttributionBackfillReport;
-exports.emitOrderAttributionBackfillJobLifecycleLog = emitOrderAttributionBackfillJobLifecycleLog;
-exports.buildAttributionBacklogLog = buildAttributionBacklogLog;
-exports.summarizeAttributionObservation = summarizeAttributionObservation;
-exports.summarizeDualWriteConsistency = summarizeDualWriteConsistency;
-exports.summarizeResolverOutcome = summarizeResolverOutcome;
-exports.summarizeGa4IngestionResult = summarizeGa4IngestionResult;
-const node_async_hooks_1 = require("node:async_hooks");
-exports.requestContextStorage = new node_async_hooks_1.AsyncLocalStorage();
+import { AsyncLocalStorage } from 'node:async_hooks';
+export const requestContextStorage = new AsyncLocalStorage();
 function normalizeString(value) {
     return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
@@ -56,7 +40,7 @@ function toSerializableFields(fields) {
     }
     return serialized;
 }
-function parseCloudTraceContext(header) {
+export function parseCloudTraceContext(header) {
     const normalized = normalizeString(header);
     if (!normalized) {
         return {};
@@ -70,7 +54,7 @@ function parseCloudTraceContext(header) {
     };
 }
 function writeLog(severity, event, fields, stream) {
-    const context = exports.requestContextStorage.getStore();
+    const context = requestContextStorage.getStore();
     const correlationId = normalizeString(fields.correlationId) ??
         normalizeString(fields.requestId) ??
         normalizeString(context?.requestId);
@@ -85,13 +69,13 @@ function writeLog(severity, event, fields, stream) {
     };
     stream.write(`${JSON.stringify(payload)}\n`);
 }
-function logInfo(event, fields) {
+export function logInfo(event, fields) {
     writeLog('INFO', event, toSerializableFields(fields), process.stdout);
 }
-function logWarning(event, fields) {
+export function logWarning(event, fields) {
     writeLog('WARNING', event, toSerializableFields(fields), process.stdout);
 }
-function logError(event, error, fields) {
+export function logError(event, error, fields) {
     writeLog('ERROR', event, toSerializableFields({
         ...fields,
         errorName: error instanceof Error ? error.name : 'Error',
@@ -99,11 +83,11 @@ function logError(event, error, fields) {
         errorStack: error instanceof Error ? error.stack ?? null : null
     }), process.stderr);
 }
-function createRequestLoggingMiddleware(service) {
+export function createRequestLoggingMiddleware(service) {
     return (req, res, next) => {
         const requestId = normalizeString(req.header('x-request-id')) ?? req.header('x-cloud-trace-context')?.split('/')[0] ?? null;
         const startedAt = Date.now();
-        exports.requestContextStorage.run({ requestId }, () => {
+        requestContextStorage.run({ requestId }, () => {
             res.on('finish', () => {
                 logInfo('http_request_completed', {
                     service,
@@ -118,7 +102,7 @@ function createRequestLoggingMiddleware(service) {
         });
     };
 }
-function logHttpError(event, error, req, fields = {}) {
+export function logHttpError(event, error, req, fields = {}) {
     logError(event, error, {
         method: req.method,
         path: req.originalUrl,
@@ -137,7 +121,7 @@ function toBackfillLifecycleStatus(stage) {
             return 'failed';
     }
 }
-function summarizeOrderAttributionBackfillReport(report) {
+export function summarizeOrderAttributionBackfillReport(report) {
     if (!report) {
         return {};
     }
@@ -153,7 +137,7 @@ function summarizeOrderAttributionBackfillReport(report) {
         dryRun: typeof report.dryRun === 'boolean' ? report.dryRun : null
     };
 }
-function emitOrderAttributionBackfillJobLifecycleLog(input) {
+export function emitOrderAttributionBackfillJobLifecycleLog(input) {
     logInfo('order_attribution_backfill_job_lifecycle', {
         service: process.env.K_SERVICE ?? 'roas-radar',
         correlationId: input.jobId,
@@ -169,7 +153,7 @@ function emitOrderAttributionBackfillJobLifecycleLog(input) {
         errorMessage: input.error instanceof Error ? input.error.message : input.error ? String(input.error) : null
     });
 }
-function buildAttributionBacklogLog(input) {
+export function buildAttributionBacklogLog(input) {
     return JSON.stringify({
         severity: 'INFO',
         event: 'attribution_worker_backlog',
@@ -179,7 +163,7 @@ function buildAttributionBacklogLog(input) {
         ...input
     });
 }
-function summarizeAttributionObservation(payload) {
+export function summarizeAttributionObservation(payload) {
     const input = (payload ?? {});
     const source = normalizeString(input.utm_source ?? input.utmSource);
     const medium = normalizeString(input.utm_medium ?? input.utmMedium);
@@ -204,14 +188,14 @@ function summarizeAttributionObservation(payload) {
         hasClickId: Boolean(clickId)
     };
 }
-function summarizeDualWriteConsistency(input) {
+export function summarizeDualWriteConsistency(input) {
     return {
         browserOutcome: input.browserOutcome,
         serverOutcome: input.serverOutcome,
         dualWriteConsistent: input.browserOutcome === input.serverOutcome || input.serverOutcome === 'accepted'
     };
 }
-function summarizeResolverOutcome(input) {
+export function summarizeResolverOutcome(input) {
     if (!input.winner) {
         return {
             resolverOutcome: 'unattributed',
@@ -262,7 +246,7 @@ function computeLagHours(now, watermarkAfter) {
     }
     return Math.max(0, Math.round((latestCompleteHour.getTime() - watermarkDate.getTime()) / (60 * 60 * 1000)));
 }
-function summarizeGa4IngestionResult(input) {
+export function summarizeGa4IngestionResult(input) {
     const rows = input.rows ?? [];
     const rowCount = rows.length;
     const countPresent = (selector) => rows.reduce((total, row) => total + Number(hasMeaningfulValue(selector(row))), 0);
@@ -293,7 +277,7 @@ function summarizeGa4IngestionResult(input) {
         clickIdFillRate: rowCount > 0 ? clickIdPresentRows / rowCount : 0
     };
 }
-exports.__observabilityTestUtils = {
+export const __observabilityTestUtils = {
     buildAttributionBacklogLog,
     emitOrderAttributionBackfillJobLifecycleLog,
     parseCloudTraceContext,

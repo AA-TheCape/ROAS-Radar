@@ -1,14 +1,7 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.__identityTestUtils = exports.normalizeIdentityPhone = exports.hashIdentityPhone = exports.hashIdentityEmail = exports.normalizeIdentityEmail = void 0;
-exports.resolveIdentityStitch = resolveIdentityStitch;
-exports.buildIdentityEdgeIngestionMetricsLog = buildIdentityEdgeIngestionMetricsLog;
-exports.stitchKnownCustomerIdentity = stitchKnownCustomerIdentity;
-exports.ingestIdentityEdges = ingestIdentityEdges;
-const node_crypto_1 = require("node:crypto");
-const index_js_1 = require("../../observability/index.js");
-const privacy_js_1 = require("../../shared/privacy.js");
-const customer_journey_js_1 = require("./customer-journey.js");
+import { randomUUID } from 'node:crypto';
+import { logInfo, logWarning } from '../../observability/index.js';
+import { hashEmailAddress, hashPhoneNumber, normalizeEmailAddress, normalizePhoneNumber } from '../../shared/privacy.js';
+import { refreshCustomerJourneyForJourneys } from './customer-journey.js';
 const IDENTITY_PRECEDENCE = {
     shopify_customer_id: 100,
     hashed_email: 70,
@@ -21,13 +14,13 @@ const ACTIVE_IDENTITY_STATUSES = new Set(['active', 'quarantined']);
 const AUTHORITATIVE_CONFLICT = 'authoritative_shopify_customer_conflict';
 const HISTORICAL_IDENTITY_LOOKBACK_DAYS = 30;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-exports.normalizeIdentityEmail = privacy_js_1.normalizeEmailAddress;
-exports.hashIdentityEmail = privacy_js_1.hashEmailAddress;
-exports.hashIdentityPhone = privacy_js_1.hashPhoneNumber;
-exports.normalizeIdentityPhone = privacy_js_1.normalizePhoneNumber;
-function resolveIdentityStitch(existingIdentities, input) {
+export const normalizeIdentityEmail = normalizeEmailAddress;
+export const hashIdentityEmail = hashEmailAddress;
+export const hashIdentityPhone = hashPhoneNumber;
+export const normalizeIdentityPhone = normalizePhoneNumber;
+export function resolveIdentityStitch(existingIdentities, input) {
     const shopifyCustomerId = normalizeNullableString(input.shopifyCustomerId);
-    const emailHash = input.emailHash ?? (0, exports.hashIdentityEmail)(input.email);
+    const emailHash = input.emailHash ?? hashIdentityEmail(input.email);
     if (!shopifyCustomerId && !emailHash) {
         return {
             outcome: 'skipped',
@@ -80,7 +73,7 @@ function resolveIdentityStitch(existingIdentities, input) {
         operation: 'create'
     };
 }
-function buildIdentityEdgeIngestionMetricsLog(result) {
+export function buildIdentityEdgeIngestionMetricsLog(result) {
     return JSON.stringify({
         severity: 'INFO',
         event: 'identity_edge_ingestion_processed',
@@ -90,8 +83,8 @@ function buildIdentityEdgeIngestionMetricsLog(result) {
         ...result
     });
 }
-async function stitchKnownCustomerIdentity(client, input) {
-    const emailHash = input.email ? (0, exports.hashIdentityEmail)(input.email) : null;
+export async function stitchKnownCustomerIdentity(client, input) {
+    const emailHash = input.email ? hashIdentityEmail(input.email) : null;
     const graphResult = await ingestIdentityEdges(client, {
         sourceTimestamp: input.sourceTimestamp ?? new Date(),
         evidenceSource: input.evidenceSource ?? 'shopify_order_webhook',
@@ -127,7 +120,7 @@ async function stitchKnownCustomerIdentity(client, input) {
         linkedSessionIds: graphResult.linkedSessionIds
     };
 }
-async function ingestIdentityEdges(client, input) {
+export async function ingestIdentityEdges(client, input) {
     const sourceTimestamp = normalizeSourceTimestamp(input.sourceTimestamp);
     const normalizedNodes = buildNormalizedIdentityNodes(input);
     if (normalizedNodes.length === 0) {
@@ -288,7 +281,7 @@ async function ingestIdentityEdges(client, input) {
             await touchActiveIdentityEdge(client, activeCandidate.edge_id, sourceTimestamp);
             continue;
         }
-        const newEdgeId = (0, node_crypto_1.randomUUID)();
+        const newEdgeId = randomUUID();
         await deactivateIdentityEdge(client, activeCandidate.edge_id);
         await insertIdentityEdge(client, {
             id: newEdgeId,
@@ -332,7 +325,7 @@ async function ingestIdentityEdges(client, input) {
         phoneHash: normalizedNodes.find((node) => node.nodeType === 'phone_hash')?.nodeKey ?? null,
         qualifyingIdentityObservedAt
     });
-    await (0, customer_journey_js_1.refreshCustomerJourneyForJourneys)(client, [
+    await refreshCustomerJourneyForJourneys(client, [
         winnerJourneyId,
         ...candidateRows.map((row) => row.journey_id).filter((journeyId) => Boolean(journeyId))
     ]);
@@ -487,8 +480,8 @@ function buildNormalizedIdentityNodes(input) {
     const checkoutToken = normalizeToken(input.checkoutToken);
     const cartToken = normalizeToken(input.cartToken);
     const shopifyCustomerId = normalizeNullableString(input.shopifyCustomerId);
-    const hashedEmail = input.hashedEmail ?? (0, exports.hashIdentityEmail)(input.email);
-    const phoneHash = input.phoneHash ?? (0, exports.hashIdentityPhone)(input.phone);
+    const hashedEmail = input.hashedEmail ?? hashIdentityEmail(input.email);
+    const phoneHash = input.phoneHash ?? hashIdentityPhone(input.phone);
     const candidates = [];
     if (sessionId) {
         candidates.push({ nodeType: 'session_id', nodeKey: sessionId });
@@ -662,7 +655,7 @@ async function resolveWinningJourney(client, input) {
         authoritativeIds = distinctAuthoritativeShopifyIds(workingCandidates);
     }
     if (authoritativeIds.length > 1) {
-        (0, index_js_1.logWarning)('identity_edge_ingestion_conflict', {
+        logWarning('identity_edge_ingestion_conflict', {
             reason: AUTHORITATIVE_CONFLICT,
             authoritativeShopifyCustomerIds: authoritativeIds
         });
@@ -745,7 +738,7 @@ function selectBestJourneyId(rows, journeyScores) {
     })[0];
 }
 async function createJourney(client, input) {
-    const journeyId = (0, node_crypto_1.randomUUID)();
+    const journeyId = randomUUID();
     const lookbackWindow = buildHistoricalLookbackWindow(input.lookbackAnchorTimestamp);
     await client.query(`
       INSERT INTO identity_journeys (
@@ -804,7 +797,7 @@ async function createJourney(client, input) {
     return journeyId;
 }
 async function quarantineIdentityNode(client, input) {
-    const newEdgeId = (0, node_crypto_1.randomUUID)();
+    const newEdgeId = randomUUID();
     await client.query(`
       UPDATE identity_nodes
       SET
@@ -870,7 +863,7 @@ async function insertIdentityEdge(client, input) {
         now()
       )
     `, [
-        input.id ?? (0, node_crypto_1.randomUUID)(),
+        input.id ?? randomUUID(),
         input.nodeId,
         input.journeyId,
         input.edgeType,
@@ -1240,7 +1233,7 @@ async function customerIdentityExists(client, journeyId) {
 }
 function emitIdentityIngestionMetrics(input) {
     const payload = buildIdentityEdgeIngestionMetricsLog(input);
-    (0, index_js_1.logInfo)('identity_edge_ingestion_processed', JSON.parse(payload));
+    logInfo('identity_edge_ingestion_processed', JSON.parse(payload));
 }
 function normalizeNullableString(value) {
     const normalized = value?.trim();
@@ -1267,7 +1260,7 @@ function buildHistoricalLookbackWindow(anchorTimestamp) {
         lastTouchEligibleAt: anchorTimestamp
     };
 }
-exports.__identityTestUtils = {
+export const __identityTestUtils = {
     buildNormalizedIdentityNodes,
     selectBestJourneyId
 };

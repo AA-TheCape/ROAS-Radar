@@ -1,9 +1,53 @@
 {
+  "name": "roas-radar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start:api": "node dist/src/server.js",
+    "dev:api": "tsx watch src/server.ts",
+    "lint": "biome check .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node scripts/run-tests.mjs all",
+    "test:unit": "node scripts/run-tests.mjs unit",
+    "test:integration": "node scripts/run-tests.mjs integration",
+    "test:attribution": "node scripts/run-attribution-tests.mjs critical",
+    "test:attribution:coverage": "node scripts/run-attribution-tests.mjs coverage",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "db:migrate:check": "node scripts/check-migrations.mjs",
     "ga4:ingest": "tsx src/ga4-session-attribution-worker.ts",
-    "ga4:ingest:start": "node dist/src/ga4-session-attribution-worker.js"
+    "ga4:ingest:start": "node dist/src/ga4-session-attribution-worker.js",
+    "start:worker": "node dist/src/worker.js",
+    "dev:worker": "tsx watch src/worker.ts",
+    "start:worker-service": "node dist/src/worker-service.js",
+    "dev:worker-service": "tsx watch src/worker-service.ts",
+    "meta-ads:sync": "node dist/src/meta-ads-worker.js",
+    "meta-ads:sync:dev": "tsx src/meta-ads-worker.ts",
+    "google-ads:sync": "node dist/src/google-ads-worker.js",
+    "google-ads:sync:dev": "tsx src/google-ads-worker.ts",
+    "data-quality:run": "node dist/src/data-quality-worker.js",
+    "data-quality:run:dev": "tsx src/data-quality-worker.ts",
+    "session-attribution:retention": "tsx src/session-attribution-retention-worker.ts",
+    "identity:backfill-graph": "tsx src/identity-graph-backfill-worker.ts",
+    "attribution:backfill-orders": "tsx src/admin/backfill-order-attribution.ts",
+    "dead-letters:replay": "tsx src/admin/replay-dead-letters.ts"
   },
   "dependencies": {
-    "@google-cloud/bigquery": "^7.8.0"
+    "@google-cloud/bigquery": "^7.8.0",
+    "express": "^4.21.2",
+    "pg": "^8.16.3",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@types/express": "^5.0.3",
+    "@types/node": "^22.18.0",
+    "@types/pg": "^8.15.5",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.3"
   }
 }

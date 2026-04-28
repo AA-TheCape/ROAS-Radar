@@ -1,10 +1,7 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.createIdentityAdminRouter = createIdentityAdminRouter;
-const express_1 = require("express");
-const zod_1 = require("zod");
-const pool_js_1 = require("../../db/pool.js");
-const index_js_1 = require("../auth/index.js");
+import { Router } from 'express';
+import { z } from 'zod';
+import { query } from '../../db/pool.js';
+import { attachAuthContext, requireAdmin } from '../auth/index.js';
 class IdentityAdminHttpError extends Error {
     statusCode;
     code;
@@ -17,17 +14,17 @@ class IdentityAdminHttpError extends Error {
         this.details = details;
     }
 }
-const dateStringSchema = zod_1.z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
-const baseHealthQueryObjectSchema = zod_1.z.object({
+const dateStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const baseHealthQueryObjectSchema = z.object({
     startDate: dateStringSchema,
     endDate: dateStringSchema,
-    source: zod_1.z.string().trim().min(1).optional()
+    source: z.string().trim().min(1).optional()
 });
 function withValidDateRange(schema) {
     return schema.superRefine((value, ctx) => {
         if (value.startDate > value.endDate) {
             ctx.addIssue({
-                code: zod_1.z.ZodIssueCode.custom,
+                code: z.ZodIssueCode.custom,
                 message: 'startDate must be on or before endDate',
                 path: ['startDate']
             });
@@ -36,14 +33,14 @@ function withValidDateRange(schema) {
 }
 const baseHealthQuerySchema = withValidDateRange(baseHealthQueryObjectSchema);
 const conflictsQuerySchema = withValidDateRange(baseHealthQueryObjectSchema.extend({
-    limit: zod_1.z.coerce.number().int().positive().max(100).optional().default(25)
+    limit: z.coerce.number().int().positive().max(100).optional().default(25)
 }));
 function parseInput(schema, input) {
     try {
         return schema.parse(input);
     }
     catch (error) {
-        if (error instanceof zod_1.z.ZodError) {
+        if (error instanceof z.ZodError) {
             throw new IdentityAdminHttpError(400, 'invalid_request', 'Invalid identity health query parameters', error.flatten());
         }
         throw error;
@@ -56,7 +53,7 @@ async function fetchIdentityHealthOverview(input) {
     `
         : '';
     const params = input.source ? [input.startDate, input.endDate, input.source] : [input.startDate, input.endDate];
-    const summaryResult = await (0, pool_js_1.query)(`
+    const summaryResult = await query(`
       SELECT
         COUNT(*)::bigint AS total_ingestions,
         COUNT(*) FILTER (WHERE runs.status = 'completed' AND COALESCE(runs.outcome_reason, 'linked') <> 'missing_identifiers')::bigint AS linked_ingestions,
@@ -76,7 +73,7 @@ async function fetchIdentityHealthOverview(input) {
         AND runs.source_timestamp < ($2::date + INTERVAL '1 day')
         ${sourceFilter}
     `, params);
-    const seriesResult = await (0, pool_js_1.query)(`
+    const seriesResult = await query(`
       SELECT
         to_char(date_trunc('day', runs.source_timestamp AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS bucket_date,
         COUNT(*) FILTER (WHERE runs.status = 'completed' AND COALESCE(runs.outcome_reason, 'linked') <> 'missing_identifiers')::bigint AS linked_count,
@@ -97,7 +94,7 @@ async function fetchIdentityHealthOverview(input) {
       AND (sessions.initial_utm_source = $3 OR $3 = 'tracking_sessions')
     `
         : '';
-    const unlinkedSessionsResult = await (0, pool_js_1.query)(`
+    const unlinkedSessionsResult = await query(`
       SELECT
         COUNT(*) FILTER (WHERE sessions.identity_journey_id IS NULL)::bigint AS unlinked_sessions,
         COUNT(*) FILTER (WHERE sessions.identity_journey_id IS NOT NULL)::bigint AS linked_sessions
@@ -118,7 +115,7 @@ async function fetchIdentityHealthOverview(input) {
       )
     `
         : '';
-    const backfillStatusResult = await (0, pool_js_1.query)(`
+    const backfillStatusResult = await query(`
       SELECT
         COUNT(*) FILTER (WHERE runs.status = 'processing')::bigint AS active_runs,
         COUNT(*) FILTER (WHERE runs.status = 'failed')::bigint AS failed_runs,
@@ -128,7 +125,7 @@ async function fetchIdentityHealthOverview(input) {
         AND runs.started_at < ($2::date + INTERVAL '1 day')
         ${backfillRunSourceFilter}
     `, params);
-    const latestBackfillResult = await (0, pool_js_1.query)(`
+    const latestBackfillResult = await query(`
       SELECT
         runs.id::text AS id,
         runs.status,
@@ -230,7 +227,7 @@ async function fetchIdentityConflictDetails(input) {
         ? [input.startDate, input.endDate, input.source, input.limit]
         : [input.startDate, input.endDate, input.limit];
     const limitPlaceholder = input.source ? '$4' : '$3';
-    const result = await (0, pool_js_1.query)(`
+    const result = await query(`
       SELECT
         edge.id::text AS edge_id,
         journey.id::text AS journey_id,
@@ -280,10 +277,10 @@ async function fetchIdentityConflictDetails(input) {
         }))
     };
 }
-function createIdentityAdminRouter() {
-    const router = (0, express_1.Router)();
-    router.use(index_js_1.attachAuthContext);
-    router.use(index_js_1.requireAdmin);
+export function createIdentityAdminRouter() {
+    const router = Router();
+    router.use(attachAuthContext);
+    router.use(requireAdmin);
     router.get('/health', async (req, res, next) => {
         try {
             const input = parseInput(baseHealthQuerySchema, req.query);

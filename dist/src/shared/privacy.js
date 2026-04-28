@@ -1,29 +1,21 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.isSha256Hex = isSha256Hex;
-exports.normalizeEmailAddress = normalizeEmailAddress;
-exports.hashEmailAddress = hashEmailAddress;
-exports.normalizePhoneNumber = normalizePhoneNumber;
-exports.hashPhoneNumber = hashPhoneNumber;
-exports.buildHashedContactProfile = buildHashedContactProfile;
-const node_crypto_1 = require("node:crypto");
+import { createHash } from 'node:crypto';
 const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/;
 const E164_DIGIT_COUNT_PATTERN = /^\d{8,15}$/;
 function sha256Hex(value) {
-    return (0, node_crypto_1.createHash)('sha256').update(value).digest('hex');
+    return createHash('sha256').update(value).digest('hex');
 }
-function isSha256Hex(value) {
+export function isSha256Hex(value) {
     return typeof value === 'string' && SHA256_HEX_PATTERN.test(value);
 }
-function normalizeEmailAddress(email) {
+export function normalizeEmailAddress(email) {
     const normalized = email?.trim().toLowerCase();
     return normalized ? normalized : null;
 }
-function hashEmailAddress(email) {
+export function hashEmailAddress(email) {
     const normalized = normalizeEmailAddress(email);
     return normalized ? sha256Hex(normalized) : null;
 }
-function normalizePhoneNumber(phone) {
+export function normalizePhoneNumber(phone) {
     const trimmed = phone?.trim();
     if (!trimmed) {
         return null;
@@ -48,11 +40,11 @@ function normalizePhoneNumber(phone) {
     }
     return E164_DIGIT_COUNT_PATTERN.test(digitsOnly) ? `+${digitsOnly}` : null;
 }
-function hashPhoneNumber(phone) {
+export function hashPhoneNumber(phone) {
     const normalized = normalizePhoneNumber(phone);
     return normalized ? sha256Hex(normalized) : null;
 }
-function buildHashedContactProfile(input) {
+export function buildHashedContactProfile(input) {
     return {
         emailHash: hashEmailAddress(input.email),
         phoneHash: hashPhoneNumber(input.phone)

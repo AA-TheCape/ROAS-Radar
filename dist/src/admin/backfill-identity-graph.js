@@ -1,6 +1,4 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-const backfill_js_1 = require("../modules/identity/backfill.js");
+import { backfillHistoricalIdentityGraph } from '../modules/identity/backfill.js';
 function readFlag(name) {
     const prefixed = `--${name}`;
     const index = process.argv.indexOf(prefixed);
@@ -49,7 +47,7 @@ function parseOptionalSourceList() {
         .filter(Boolean);
 }
 async function run() {
-    const report = await (0, backfill_js_1.backfillHistoricalIdentityGraph)({
+    const report = await backfillHistoricalIdentityGraph({
         requestedBy: requireFlag('requested-by'),
         workerId: readFlag('worker-id')?.trim() || 'identity-graph-backfill',
         runId: readFlag('run-id')?.trim() || null,

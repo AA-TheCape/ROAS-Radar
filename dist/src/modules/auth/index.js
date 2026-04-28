@@ -1,20 +1,10 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.isInternalServiceToken = isInternalServiceToken;
-exports.resolveAuthContext = resolveAuthContext;
-exports.attachAuthContext = attachAuthContext;
-exports.requireAuthenticated = requireAuthenticated;
-exports.requireAdmin = requireAdmin;
-exports.requireInternalService = requireInternalService;
-exports.createAuthRouter = createAuthRouter;
-exports.createUserAdminRouter = createUserAdminRouter;
-const node_crypto_1 = require("node:crypto");
-const node_util_1 = require("node:util");
-const express_1 = require("express");
-const zod_1 = require("zod");
-const env_js_1 = require("../../config/env.js");
-const pool_js_1 = require("../../db/pool.js");
-const scrypt = (0, node_util_1.promisify)(node_crypto_1.scrypt);
+import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
+import { promisify } from 'node:util';
+import { Router } from 'express';
+import { z } from 'zod';
+import { env, getConfiguredReportingApiToken } from '../../config/env.js';
+import { query, withTransaction } from '../../db/pool.js';
+const scrypt = promisify(scryptCallback);
 const SESSION_TOKEN_PREFIX = 'rrs_';
 class AuthHttpError extends Error {
     statusCode;
@@ -28,22 +18,22 @@ class AuthHttpError extends Error {
         this.details = details;
     }
 }
-const loginSchema = zod_1.z.object({
-    email: zod_1.z.string().trim().email().transform((value) => value.toLowerCase()),
-    password: zod_1.z.string().min(1)
+const loginSchema = z.object({
+    email: z.string().trim().email().transform((value) => value.toLowerCase()),
+    password: z.string().min(1)
 });
-const createUserSchema = zod_1.z.object({
-    email: zod_1.z.string().trim().email().transform((value) => value.toLowerCase()),
-    password: zod_1.z.string().min(12),
-    displayName: zod_1.z.string().trim().min(1).max(120),
-    isAdmin: zod_1.z.boolean().optional().default(false)
+const createUserSchema = z.object({
+    email: z.string().trim().email().transform((value) => value.toLowerCase()),
+    password: z.string().min(12),
+    displayName: z.string().trim().min(1).max(120),
+    isAdmin: z.boolean().optional().default(false)
 });
 function parseInput(schema, input) {
     try {
         return schema.parse(input);
     }
     catch (error) {
-        if (error instanceof zod_1.z.ZodError) {
+        if (error instanceof z.ZodError) {
             throw new AuthHttpError(400, 'invalid_request', 'Invalid authentication request', error.flatten());
         }
         throw error;
@@ -60,10 +50,10 @@ function parseBearerToken(authHeader) {
     return token.trim() || null;
 }
 function computeSessionDigest(token) {
-    return (0, node_crypto_1.createHash)('sha256').update(token).digest('hex');
+    return createHash('sha256').update(token).digest('hex');
 }
 async function hashPassword(password) {
-    const salt = (0, node_crypto_1.randomBytes)(16).toString('base64url');
+    const salt = randomBytes(16).toString('base64url');
     const derivedKey = (await scrypt(password, salt, 64));
     return `scrypt$${salt}$${derivedKey.toString('base64url')}`;
 }
@@ -74,7 +64,7 @@ async function verifyPassword(password, passwordHash) {
     }
     const expected = Buffer.from(encodedHash, 'base64url');
     const actual = (await scrypt(password, salt, expected.length));
-    return expected.length === actual.length && (0, node_crypto_1.timingSafeEqual)(expected, actual);
+    return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 function mapUser(row) {
     return {
@@ -88,7 +78,7 @@ function mapUser(row) {
     };
 }
 async function findUserByEmail(email) {
-    const result = await (0, pool_js_1.query)(`
+    const result = await query(`
       SELECT
         id,
         email,
@@ -105,9 +95,9 @@ async function findUserByEmail(email) {
     return result.rows[0] ?? null;
 }
 async function createUserSession(user) {
-    const token = `${SESSION_TOKEN_PREFIX}${(0, node_crypto_1.randomBytes)(32).toString('hex')}`;
+    const token = `${SESSION_TOKEN_PREFIX}${randomBytes(32).toString('hex')}`;
     const digest = computeSessionDigest(token);
-    await (0, pool_js_1.withTransaction)(async (client) => {
+    await withTransaction(async (client) => {
         await client.query(`
         INSERT INTO app_sessions (
           user_id,
@@ -119,7 +109,7 @@ async function createUserSession(user) {
           $2,
           now() + ($3::text || ' hours')::interval
         )
-      `, [user.id, digest, String(env_js_1.env.APP_SESSION_TTL_HOURS)]);
+      `, [user.id, digest, String(env.APP_SESSION_TTL_HOURS)]);
         await client.query(`
         UPDATE app_users
         SET
@@ -136,14 +126,14 @@ async function createUserSession(user) {
         }
     };
 }
-function isInternalServiceToken(authHeader) {
-    const configuredToken = (0, env_js_1.getConfiguredReportingApiToken)();
+export function isInternalServiceToken(authHeader) {
+    const configuredToken = getConfiguredReportingApiToken();
     if (!configuredToken) {
         return false;
     }
     return authHeader === `Bearer ${configuredToken}`;
 }
-async function resolveAuthContext(authHeader) {
+export async function resolveAuthContext(authHeader) {
     if (isInternalServiceToken(authHeader)) {
         return { kind: 'internal' };
     }
@@ -151,7 +141,7 @@ async function resolveAuthContext(authHeader) {
     if (!token) {
         return null;
     }
-    const result = await (0, pool_js_1.query)(`
+    const result = await query(`
       SELECT
         s.id AS session_id,
         u.id AS user_id,
@@ -187,7 +177,7 @@ async function resolveAuthContext(authHeader) {
         }
     };
 }
-async function attachAuthContext(req, res, next) {
+export async function attachAuthContext(req, res, next) {
     try {
         const auth = await resolveAuthContext(req.header('authorization') ?? undefined);
         res.locals.auth = auth;
@@ -197,7 +187,7 @@ async function attachAuthContext(req, res, next) {
         next(error);
     }
 }
-function requireAuthenticated(req, res, next) {
+export function requireAuthenticated(req, res, next) {
     const auth = res.locals.auth;
     if (!auth) {
         res.status(401).json({
@@ -208,7 +198,7 @@ function requireAuthenticated(req, res, next) {
     }
     next();
 }
-function requireAdmin(req, res, next) {
+export function requireAdmin(req, res, next) {
     const auth = res.locals.auth;
     if (!auth) {
         res.status(401).json({
@@ -230,7 +220,7 @@ function requireAdmin(req, res, next) {
     }
     next();
 }
-function requireInternalService(req, res, next) {
+export function requireInternalService(req, res, next) {
     const auth = res.locals.auth;
     if (!auth) {
         res.status(401).json({
@@ -248,8 +238,8 @@ function requireInternalService(req, res, next) {
     }
     next();
 }
-function createAuthRouter() {
-    const router = (0, express_1.Router)();
+export function createAuthRouter() {
+    const router = Router();
     router.use(attachAuthContext);
     router.post('/login', async (req, res, next) => {
         try {
@@ -290,7 +280,7 @@ function createAuthRouter() {
         try {
             const auth = res.locals.auth;
             if (auth.kind === 'user') {
-                await (0, pool_js_1.query)(`
+                await query(`
             UPDATE app_sessions
             SET
               revoked_at = now(),
@@ -306,13 +296,13 @@ function createAuthRouter() {
     });
     return router;
 }
-function createUserAdminRouter() {
-    const router = (0, express_1.Router)();
+export function createUserAdminRouter() {
+    const router = Router();
     router.use(attachAuthContext);
     router.use(requireAdmin);
     router.get('/', async (_req, res, next) => {
         try {
-            const result = await (0, pool_js_1.query)(`
+            const result = await query(`
           SELECT
             id,
             email,
@@ -337,7 +327,7 @@ function createUserAdminRouter() {
         try {
             const payload = parseInput(createUserSchema, req.body);
             const passwordHash = await hashPassword(payload.password);
-            const result = await (0, pool_js_1.query)(`
+            const result = await query(`
           INSERT INTO app_users (
             email,
             password_hash,
