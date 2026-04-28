@@ -120,24 +120,28 @@ The environment files also carry non-secret runtime settings that must be popula
 1. Provision Cloud SQL and private networking from `infra/cloud-sql/`.
 2. Run `infra/cloud-run/bootstrap-iam.sh ENVIRONMENT` to create service accounts and grant IAM roles.
 3. Create the environment secrets in Secret Manager.
-4. Populate `infra/cloud-run/environments/ENVIRONMENT.env`.
+4. Populate `infra/cloud-run/environments/dev.env`, `staging.env`, and `production.env`.
 5. Deploy with `infra/cloud-run/deploy.sh ENVIRONMENT`.
 6. Apply monitoring with `infra/monitoring/apply.sh ENVIRONMENT`.
 7. Validate the scheduled jobs and schedulers with `docs/runbooks/cloud-run-pipelines.md`.
 
 ## Deployment
 
-For manual deployments, run `infra/cloud-run/deploy.sh staging` or `infra/cloud-run/deploy.sh production`.
+For one-off environment deploys, run `infra/cloud-run/deploy.sh dev`, `infra/cloud-run/deploy.sh staging`, or `infra/cloud-run/deploy.sh production`.
 
-If you want Cloud Build to deploy staging automatically from `main`, use `cloudbuild.staging.yaml` as the trigger build config. The build config:
+`infra/cloud-run/deploy.sh` now deploys the migrator job first, runs schema migration before any service rollout, then deploys the API, worker, dashboard, jobs, and schedulers. If `DEPLOY_METADATA_FILE` is set, the script also records the previous and newly deployed Cloud Run revisions for the API, worker, and dashboard so rollback can route traffic back to the prior revision quickly.
 
-- builds and pushes the API image,
-- builds and pushes the dashboard image,
-- reuses `infra/cloud-run/deploy.sh staging` with `SKIP_BUILDS=true`,
-- optionally runs migrations and monitoring apply during the triggered deploy.
+For staged promotion, use `infra/cloud-run/promote.sh <dev|staging|production>`. The promotion script:
+
+- deploys each environment in order (`dev -> staging -> production`)
+- runs migrations before shifting service traffic in each environment
+- executes smoke tests after each environment deploy
+- can run a staging rollback drill by toggling `RUN_STAGING_ROLLBACK_DRILL=true`
+- persists rollout metadata in `infra/cloud-run/.deploy-state/`
 
 The Cloud Build trigger should run as the environment deployer service account created by `bootstrap-iam.sh`:
 
+- `roas-radar-deployer-dev@<project>.iam.gserviceaccount.com` for dev
 - `roas-radar-deployer-staging@<project>.iam.gserviceaccount.com` for staging
 - `roas-radar-deployer-prod@<project>.iam.gserviceaccount.com` for production
 
@@ -147,6 +151,8 @@ Recommended trigger settings:
 - branch regex: `^main$`
 - region: the same region used by Cloud Run and Artifact Registry
 - build config: `cloudbuild.staging.yaml`
+
+Use `cloudbuild.release.yaml` for the full staged promotion pipeline. Its defaults promote through production, run migrations, apply monitoring, and require a successful staging rollback drill before production deployment continues. Use substitutions to stop at staging or disable the drill when needed.
 
 ## Scheduled Pipelines
 
@@ -179,15 +185,5 @@ Keep request parser limits below the Cloud Run hard request-body ceiling. Cloud 
 
 ## Staging Verification
 
-After deploying staging, run the large-payload smoke/load test against the public API:
+After deploying staging or production, run the smoke-test helper:
 
-Then verify the scheduled pipeline path:
-
-1. `gcloud run jobs list --region "$GCP_REGION" --project "$GCP_PROJECT_ID"`
-2. `gcloud scheduler jobs list --location "$GCP_REGION" --project "$GCP_PROJECT_ID"`
-3. `gcloud run jobs execute "$IDENTITY_GRAPH_BACKFILL_JOB_NAME" --region "$GCP_REGION" --project "$GCP_PROJECT_ID" --wait`
-4. `gcloud run jobs execute "$ORDER_ATTRIBUTION_MATERIALIZATION_JOB_NAME" --region "$GCP_REGION" --project "$GCP_PROJECT_ID" --wait`
-5. confirm logs include `identity_graph_backfill_worker_started` and `order_attribution_materialization_worker_started`
-6. confirm `/api/reporting/reconciliation?runDate=YYYY-MM-DD` remains healthy after both jobs complete
-
-Use `docs/runbooks/cloud-run-pipelines.md` for the full operational procedure and rollback commands.
