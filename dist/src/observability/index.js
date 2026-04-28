@@ -83,6 +83,32 @@ export function logError(event, error, fields) {
         errorStack: error instanceof Error ? error.stack ?? null : null
     }), process.stderr);
 }
+export function createRequestLoggingMiddleware(service) {
+    return (req, res, next) => {
+        const requestId = normalizeString(req.header('x-request-id')) ?? req.header('x-cloud-trace-context')?.split('/')[0] ?? null;
+        const startedAt = Date.now();
+        requestContextStorage.run({ requestId }, () => {
+            res.on('finish', () => {
+                logInfo('http_request_completed', {
+                    service,
+                    requestId,
+                    method: req.method,
+                    path: req.originalUrl,
+                    responseStatusCode: res.statusCode,
+                    durationMs: Date.now() - startedAt
+                });
+            });
+            next();
+        });
+    };
+}
+export function logHttpError(event, error, req, fields = {}) {
+    logError(event, error, {
+        method: req.method,
+        path: req.originalUrl,
+        ...fields
+    });
+}
 function toBackfillLifecycleStatus(stage) {
     switch (stage) {
         case 'enqueued':

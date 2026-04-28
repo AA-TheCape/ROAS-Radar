@@ -339,6 +339,8 @@ export function createReportingRouter() {
             c.attributed_source,
             c.attributed_medium,
             c.attributed_campaign,
+            c.match_source,
+            c.confidence_label,
             c.attribution_reason
           FROM shopify_orders o
           LEFT JOIN LATERAL (
@@ -346,6 +348,8 @@ export function createReportingRouter() {
               attributed_source,
               attributed_medium,
               attributed_campaign,
+              match_source,
+              confidence_label,
               attribution_reason
             FROM attribution_order_credits
             WHERE shopify_order_id = o.shopify_order_id
@@ -368,6 +372,8 @@ export function createReportingRouter() {
                     source: row.attributed_source,
                     medium: row.attributed_medium,
                     campaign: row.attributed_campaign,
+                    matchSource: row.match_source ?? 'unattributed',
+                    confidenceLabel: row.confidence_label ?? 'none',
                     attributionReason: row.attribution_reason ?? 'unattributed'
                 }))
             });
@@ -399,6 +405,7 @@ export function createReportingRouter() {
             o.cart_token,
             o.source_name,
             o.ingested_at,
+            o.attribution_snapshot,
             o.raw_payload
           FROM shopify_orders o
           WHERE o.shopify_order_id = $1
@@ -445,6 +452,8 @@ export function createReportingRouter() {
             c.revenue_credit,
             c.is_primary,
             c.attribution_reason,
+            c.match_source,
+            c.confidence_label,
             c.created_at,
             c.model_version
           FROM attribution_order_credits c
@@ -472,6 +481,7 @@ export function createReportingRouter() {
                     cartToken: order.cart_token,
                     sourceName: order.source_name,
                     ingestedAt: order.ingested_at.toISOString(),
+                    attributionSnapshot: order.attribution_snapshot,
                     rawPayload: order.raw_payload
                 },
                 lineItems: lineItemsResult.rows.map((row) => ({
@@ -507,6 +517,8 @@ export function createReportingRouter() {
                     revenueCredit: Number(row.revenue_credit),
                     isPrimary: row.is_primary,
                     attributionReason: row.attribution_reason,
+                    matchSource: row.match_source,
+                    confidenceLabel: row.confidence_label,
                     createdAt: row.created_at.toISOString(),
                     modelVersion: row.model_version
                 }))
