@@ -1,5 +1,63 @@
 {
   "name": "roas_attribution_resolver_outcomes",
-  "description": "Counts deterministic resolver outcomes for attribution winner selection.",
-  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"attribution_resolver_outcome\""
+  "description": "Counts per-order attribution resolver outcomes with tier, fallthrough, pipeline, and unattributed diagnostics.",
+  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"attribution_resolver_outcome\"",
+  "labelExtractors": {
+    "service": "EXTRACT(jsonPayload.service)",
+    "pipeline": "EXTRACT(jsonPayload.pipeline)",
+    "attribution_tier": "EXTRACT(jsonPayload.attributionTier)",
+    "resolver_outcome": "EXTRACT(jsonPayload.resolverOutcome)",
+    "fallthrough_stage": "EXTRACT(jsonPayload.fallthroughStage)",
+    "winning_ingestion_source": "EXTRACT(jsonPayload.winningIngestionSource)",
+    "first_normalization_failure_scope": "EXTRACT(jsonPayload.firstNormalizationFailureScope)",
+    "first_normalization_failure_reason": "EXTRACT(jsonPayload.firstNormalizationFailureReason)"
+  },
+  "metricDescriptor": {
+    "metricKind": "DELTA",
+    "valueType": "INT64",
+    "unit": "1",
+    "displayName": "ROAS Radar Attribution Resolver Outcomes",
+    "labels": [
+      {
+        "key": "service",
+        "valueType": "STRING",
+        "description": "Cloud Run service emitting the resolver outcome."
+      },
+      {
+        "key": "pipeline",
+        "valueType": "STRING",
+        "description": "Attribution pipeline path that persisted the outcome."
+      },
+      {
+        "key": "attribution_tier",
+        "valueType": "STRING",
+        "description": "Final attribution tier selected for the order."
+      },
+      {
+        "key": "resolver_outcome",
+        "valueType": "STRING",
+        "description": "Resolver winner classification."
+      },
+      {
+        "key": "fallthrough_stage",
+        "valueType": "STRING",
+        "description": "How far the resolver fell through before selecting a tier."
+      },
+      {
+        "key": "winning_ingestion_source",
+        "valueType": "STRING",
+        "description": "Winning deterministic, Shopify hint, or GA4 source."
+      },
+      {
+        "key": "first_normalization_failure_scope",
+        "valueType": "STRING",
+        "description": "Scope of the first normalization failure recorded for diagnostics."
+      },
+      {
+        "key": "first_normalization_failure_reason",
+        "valueType": "STRING",
+        "description": "Reason of the first normalization failure recorded for diagnostics."
+      }
+    ]
+  }
 }
