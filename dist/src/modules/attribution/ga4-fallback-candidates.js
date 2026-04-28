@@ -1,6 +1,12 @@
-import { createHash } from 'node:crypto';
-import { env } from '../../config/env.js';
-import { query } from '../../db/pool.js';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.buildGa4FallbackCandidateKey = buildGa4FallbackCandidateKey;
+exports.upsertGa4FallbackCandidates = upsertGa4FallbackCandidates;
+exports.lookupGa4FallbackCandidates = lookupGa4FallbackCandidates;
+exports.listGa4FallbackCandidates = listGa4FallbackCandidates;
+const node_crypto_1 = require("node:crypto");
+const env_js_1 = require("../../config/env.js");
+const pool_js_1 = require("../../db/pool.js");
 const ATTRIBUTION_WINDOW_DAYS = 7;
 const DEFAULT_RETENTION_DAYS = 35;
 function normalizeNullableString(value, { lowerCase = false } = {}) {
@@ -29,11 +35,11 @@ function normalizePositiveInteger(value, fallback) {
 function buildRetentionTimestamp(occurredAtIso) {
     const occurredAt = new Date(occurredAtIso);
     const retainedUntil = new Date(occurredAt);
-    retainedUntil.setUTCDate(retainedUntil.getUTCDate() + (env.GA4_FALLBACK_RETENTION_DAYS || DEFAULT_RETENTION_DAYS));
+    retainedUntil.setUTCDate(retainedUntil.getUTCDate() + (env_js_1.env.GA4_FALLBACK_RETENTION_DAYS || DEFAULT_RETENTION_DAYS));
     return retainedUntil.toISOString();
 }
-export function buildGa4FallbackCandidateKey(input) {
-    const digest = createHash('sha256');
+function buildGa4FallbackCandidateKey(input) {
+    const digest = (0, node_crypto_1.createHash)('sha256');
     digest.update(JSON.stringify({
         occurredAt: input.occurredAt,
         ga4UserKey: input.ga4UserKey,
@@ -118,9 +124,9 @@ async function executeQuery(client, text, params) {
     if (client) {
         return client.query(text, params);
     }
-    return query(text, params);
+    return (0, pool_js_1.query)(text, params);
 }
-export async function upsertGa4FallbackCandidates(candidates, client) {
+async function upsertGa4FallbackCandidates(candidates, client) {
     if (candidates.length === 0) {
         return 0;
     }
@@ -328,7 +334,7 @@ function compareLookupRows(left, right) {
     }
     return compareLexical(left.candidate_key, right.candidate_key);
 }
-export async function lookupGa4FallbackCandidates(input, client) {
+async function lookupGa4FallbackCandidates(input, client) {
     const orderOccurredAt = new Date(input.orderOccurredAt).toISOString();
     const lookbackDays = normalizePositiveInteger(input.lookbackDays, ATTRIBUTION_WINDOW_DAYS);
     const perKeyLimit = normalizePositiveInteger(input.limit, 25);
@@ -486,7 +492,7 @@ export async function lookupGa4FallbackCandidates(input, client) {
     `, [customerIdentityId, emailHash, transactionId, orderOccurredAt, lookbackDays, perKeyLimit]);
     return result.rows.sort(compareLookupRows).map(mapPersistedCandidate);
 }
-export async function listGa4FallbackCandidates(client) {
+async function listGa4FallbackCandidates(client) {
     const db = client;
     const result = await executeQuery(db, `
       SELECT

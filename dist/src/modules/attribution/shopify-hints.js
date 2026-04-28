@@ -1,7 +1,10 @@
-import { normalizeAttributionString, normalizeAttributionUrl } from '../../../packages/attribution-schema/index.js';
-import { buildCanonicalTouchpointDimensions } from '../marketing-dimensions/index.js';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.extractShopifyHintAttribution = extractShopifyHintAttribution;
+const index_js_1 = require("../../../packages/attribution-schema/index.js");
+const index_js_2 = require("../marketing-dimensions/index.js");
 function normalizeNullableString(value) {
-    return normalizeAttributionString(value);
+    return (0, index_js_1.normalizeAttributionString)(value);
 }
 function stringifyAttributeValue(value) {
     if (typeof value !== 'string') {
@@ -45,7 +48,7 @@ function hasAttributionDimensions(value) {
         value.clickIdType ||
         value.clickIdValue);
 }
-export function extractShopifyHintAttribution(payload) {
+function extractShopifyHintAttribution(payload) {
     if (!payload || typeof payload !== 'object') {
         return null;
     }
@@ -83,7 +86,7 @@ export function extractShopifyHintAttribution(payload) {
     ].filter((value) => Boolean(value));
     for (const candidate of hintCandidates) {
         try {
-            const url = new URL(normalizeAttributionUrl(candidate, 'https://shopify-hint.local') ?? candidate);
+            const url = new URL((0, index_js_1.normalizeAttributionUrl)(candidate, 'https://shopify-hint.local') ?? candidate);
             rawDimensions.source ??= normalizeNullableString(url.searchParams.get('utm_source'));
             rawDimensions.medium ??= normalizeNullableString(url.searchParams.get('utm_medium'));
             rawDimensions.campaign ??= normalizeNullableString(url.searchParams.get('utm_campaign'));
@@ -98,7 +101,7 @@ export function extractShopifyHintAttribution(payload) {
         }
         catch { }
     }
-    const canonicalDimensions = buildCanonicalTouchpointDimensions({
+    const canonicalDimensions = (0, index_js_2.buildCanonicalTouchpointDimensions)({
         source: rawDimensions.source,
         medium: rawDimensions.medium,
         campaign: rawDimensions.campaign,

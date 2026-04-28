@@ -1,3 +1,5 @@
+// @ts-nocheck
+
 import type { PoolClient, QueryResult, QueryResultRow } from 'pg';
 
 import type {

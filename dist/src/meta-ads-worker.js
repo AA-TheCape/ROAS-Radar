@@ -1,10 +1,12 @@
-import { randomUUID } from 'node:crypto';
-import { setTimeout as delay } from 'node:timers/promises';
-import { env } from './config/env.js';
-import { pool } from './db/pool.js';
-import { processMetaAdsSyncQueue } from './modules/meta-ads/index.js';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const node_crypto_1 = require("node:crypto");
+const promises_1 = require("node:timers/promises");
+const env_js_1 = require("./config/env.js");
+const pool_js_1 = require("./db/pool.js");
+const index_js_1 = require("./modules/meta-ads/index.js");
 async function run() {
-    const workerId = `meta-ads-worker-${randomUUID()}`;
+    const workerId = `meta-ads-worker-${(0, node_crypto_1.randomUUID)()}`;
     let shouldStop = false;
     const requestStop = () => {
         shouldStop = true;
@@ -12,25 +14,25 @@ async function run() {
     process.on('SIGINT', requestStop);
     process.on('SIGTERM', requestStop);
     do {
-        const result = await processMetaAdsSyncQueue({
+        const result = await (0, index_js_1.processMetaAdsSyncQueue)({
             workerId,
-            limit: env.META_ADS_SYNC_BATCH_SIZE,
+            limit: env_js_1.env.META_ADS_SYNC_BATCH_SIZE,
             emitMetrics: true
         });
-        if (!env.META_ADS_WORKER_LOOP) {
+        if (!env_js_1.env.META_ADS_WORKER_LOOP) {
             break;
         }
         if (shouldStop) {
             break;
         }
         if (result.claimedJobs === 0 && result.enqueuedJobs === 0) {
-            await delay(env.META_ADS_WORKER_POLL_INTERVAL_MS);
+            await (0, promises_1.setTimeout)(env_js_1.env.META_ADS_WORKER_POLL_INTERVAL_MS);
         }
     } while (!shouldStop);
-    await pool.end();
+    await pool_js_1.pool.end();
 }
 run().catch(async (error) => {
     process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
-    await pool.end().catch(() => undefined);
+    await pool_js_1.pool.end().catch(() => undefined);
     process.exit(1);
 });

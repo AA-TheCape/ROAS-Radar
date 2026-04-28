@@ -1,4 +1,9 @@
-import { query } from '../../db/pool.js';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.buildSearchParamsAuditPayload = buildSearchParamsAuditPayload;
+exports.parseJsonResponsePayload = parseJsonResponsePayload;
+exports.recordAdSyncApiTransaction = recordAdSyncApiTransaction;
+const pool_js_1 = require("../../db/pool.js");
 function toJsonbLiteral(payload) {
     return JSON.stringify(payload === undefined ? null : payload);
 }
@@ -14,7 +19,7 @@ function pushQueryParamValue(target, key, value) {
     }
     target[key] = [existing, value];
 }
-export function buildSearchParamsAuditPayload(searchParams, redactedKeys = []) {
+function buildSearchParamsAuditPayload(searchParams, redactedKeys = []) {
     const payload = {};
     const redacted = new Set(redactedKeys);
     for (const [key, value] of searchParams.entries()) {
@@ -22,7 +27,7 @@ export function buildSearchParamsAuditPayload(searchParams, redactedKeys = []) {
     }
     return Object.keys(payload).length > 0 ? payload : null;
 }
-export function parseJsonResponsePayload(text) {
+function parseJsonResponsePayload(text) {
     if (!text) {
         return null;
     }
@@ -33,8 +38,8 @@ export function parseJsonResponsePayload(text) {
         return text;
     }
 }
-export async function recordAdSyncApiTransaction(input) {
-    await query(`
+async function recordAdSyncApiTransaction(input) {
+    await (0, pool_js_1.query)(`
       INSERT INTO ad_sync_api_transactions (
         platform,
         connection_id,

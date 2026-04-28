@@ -1,11 +1,21 @@
-export const DETERMINISTIC_INGESTION_SOURCES = [
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.ATTRIBUTION_MATCH_SOURCES = exports.DETERMINISTIC_INGESTION_SOURCES = void 0;
+exports.isDirectTouchpoint = isDirectTouchpoint;
+exports.dedupeDeterministicCandidates = dedupeDeterministicCandidates;
+exports.selectLastNonDirectWinner = selectLastNonDirectWinner;
+exports.confidenceScoreForWinner = confidenceScoreForWinner;
+exports.confidenceLabelForScore = confidenceLabelForScore;
+exports.isEligibleGa4FallbackCandidate = isEligibleGa4FallbackCandidate;
+exports.selectGa4FallbackWinner = selectGa4FallbackWinner;
+exports.DETERMINISTIC_INGESTION_SOURCES = [
     'landing_session_id',
     'checkout_token',
     'cart_token',
     'customer_identity'
 ];
-export const ATTRIBUTION_MATCH_SOURCES = [
-    ...DETERMINISTIC_INGESTION_SOURCES,
+exports.ATTRIBUTION_MATCH_SOURCES = [
+    ...exports.DETERMINISTIC_INGESTION_SOURCES,
     'shopify_hint_fallback',
     'ga4_fallback',
     'unattributed'
@@ -33,7 +43,7 @@ function compareIngestionSource(left, right) {
 function compareLexical(left, right) {
     return (left ?? '').localeCompare(right ?? '');
 }
-export function isDirectTouchpoint(touchpoint) {
+function isDirectTouchpoint(touchpoint) {
     return !touchpoint.source &&
         !touchpoint.medium &&
         !touchpoint.campaign &&
@@ -86,7 +96,7 @@ function compareTimelineOrder(left, right) {
     }
     return compareLexical(left.sessionId, right.sessionId);
 }
-export function dedupeDeterministicCandidates(candidates) {
+function dedupeDeterministicCandidates(candidates) {
     const deduped = new Map();
     for (const candidate of candidates) {
         if (!candidate.sessionId) {
@@ -99,7 +109,7 @@ export function dedupeDeterministicCandidates(candidates) {
     }
     return Array.from(deduped.values()).sort(compareTimelineOrder);
 }
-export function selectLastNonDirectWinner(candidates) {
+function selectLastNonDirectWinner(candidates) {
     const nonDirectCandidates = candidates.filter((candidate) => !candidate.isDirect);
     const directCandidates = candidates.filter((candidate) => candidate.isDirect);
     const selectionPool = nonDirectCandidates.length > 0 ? nonDirectCandidates : directCandidates;
@@ -108,7 +118,7 @@ export function selectLastNonDirectWinner(candidates) {
     }
     return selectionPool.slice().sort(compareWinnerPriority)[0] ?? null;
 }
-export function confidenceScoreForWinner(winner) {
+function confidenceScoreForWinner(winner) {
     if (!winner) {
         return 0;
     }
@@ -128,7 +138,7 @@ export function confidenceScoreForWinner(winner) {
             return 0;
     }
 }
-export function confidenceLabelForScore(score) {
+function confidenceLabelForScore(score) {
     if (score >= 0.9) {
         return 'high';
     }
@@ -178,7 +188,7 @@ function compareGa4FallbackCandidates(left, right) {
     }
     return 0;
 }
-export function isEligibleGa4FallbackCandidate(candidate, orderOccurredAt) {
+function isEligibleGa4FallbackCandidate(candidate, orderOccurredAt) {
     const candidateOccurredAt = new Date(candidate.occurredAt);
     if (candidateOccurredAt.getTime() > orderOccurredAt.getTime()) {
         return false;
@@ -194,7 +204,7 @@ export function isEligibleGa4FallbackCandidate(candidate, orderOccurredAt) {
     }
     return true;
 }
-export function selectGa4FallbackWinner(candidates, orderOccurredAt) {
+function selectGa4FallbackWinner(candidates, orderOccurredAt) {
     const eligibleCandidates = candidates.filter((candidate) => isEligibleGa4FallbackCandidate(candidate, orderOccurredAt));
     if (eligibleCandidates.length === 0) {
         return null;

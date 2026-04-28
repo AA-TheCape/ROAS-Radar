@@ -1,8 +1,11 @@
-import { Router } from 'express';
-import { z } from 'zod';
-import { query } from '../../db/pool.js';
-import { isSha256Hex } from '../../shared/privacy.js';
-import { attachAuthContext, requireInternalService } from '../auth/index.js';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.createInternalIdentityRouter = createInternalIdentityRouter;
+const express_1 = require("express");
+const zod_1 = require("zod");
+const pool_js_1 = require("../../db/pool.js");
+const privacy_js_1 = require("../../shared/privacy.js");
+const index_js_1 = require("../auth/index.js");
 class IdentityReadHttpError extends Error {
     statusCode;
     code;
@@ -23,39 +26,39 @@ const identityNodeTypes = [
     'hashed_email',
     'phone_hash'
 ];
-const lookupQuerySchema = z
+const lookupQuerySchema = zod_1.z
     .object({
-    nodeType: z.enum(identityNodeTypes),
-    nodeKey: z.string().trim().min(1)
+    nodeType: zod_1.z.enum(identityNodeTypes),
+    nodeKey: zod_1.z.string().trim().min(1)
 })
     .superRefine((value, ctx) => {
-    if ((value.nodeType === 'hashed_email' || value.nodeType === 'phone_hash') && !isSha256Hex(value.nodeKey)) {
+    if ((value.nodeType === 'hashed_email' || value.nodeType === 'phone_hash') && !(0, privacy_js_1.isSha256Hex)(value.nodeKey)) {
         ctx.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: zod_1.z.ZodIssueCode.custom,
             path: ['nodeKey'],
             message: `${value.nodeType} lookups require a sha256 hex digest`
         });
     }
     if (value.nodeType === 'session_id') {
-        const parsed = z.string().uuid().safeParse(value.nodeKey);
+        const parsed = zod_1.z.string().uuid().safeParse(value.nodeKey);
         if (!parsed.success) {
             ctx.addIssue({
-                code: z.ZodIssueCode.custom,
+                code: zod_1.z.ZodIssueCode.custom,
                 path: ['nodeKey'],
                 message: 'session_id lookups require a valid UUID'
             });
         }
     }
 });
-const journeyParamsSchema = z.object({
-    journeyId: z.string().uuid()
+const journeyParamsSchema = zod_1.z.object({
+    journeyId: zod_1.z.string().uuid()
 });
 function parseInput(schema, input) {
     try {
         return schema.parse(input);
     }
     catch (error) {
-        if (error instanceof z.ZodError) {
+        if (error instanceof zod_1.z.ZodError) {
             throw new IdentityReadHttpError(400, 'invalid_request', 'Invalid identity lookup request', error.flatten());
         }
         throw error;
@@ -166,7 +169,7 @@ function mapOrderRow(row) {
     };
 }
 async function fetchJourneySummaryById(journeyId) {
-    const result = await query(`
+    const result = await (0, pool_js_1.query)(`
       SELECT
         id::text AS id,
         status,
@@ -188,7 +191,7 @@ async function fetchJourneySummaryById(journeyId) {
     return result.rows[0] ?? null;
 }
 async function fetchJourneySummaryByLookup(nodeType, nodeKey) {
-    const result = await query(`
+    const result = await (0, pool_js_1.query)(`
       SELECT
         journey.id::text AS id,
         journey.status,
@@ -216,7 +219,7 @@ async function fetchJourneySummaryByLookup(nodeType, nodeKey) {
     return result.rows[0] ?? null;
 }
 async function fetchJourneyEdges(journeyId) {
-    const result = await query(`
+    const result = await (0, pool_js_1.query)(`
       SELECT
         edge.id::text AS edge_id,
         node.id::text AS node_id,
@@ -244,7 +247,7 @@ async function fetchJourneyEdges(journeyId) {
     return result.rows;
 }
 async function fetchJourneySessions(journeyId) {
-    const result = await query(`
+    const result = await (0, pool_js_1.query)(`
       SELECT
         session_id::text AS session_id,
         session_started_at,
@@ -282,7 +285,7 @@ async function fetchJourneySessions(journeyId) {
     return result.rows;
 }
 async function fetchJourneyOrders(journeyId) {
-    const result = await query(`
+    const result = await (0, pool_js_1.query)(`
       SELECT
         shopify_order_id,
         shopify_order_number,
@@ -330,10 +333,10 @@ async function buildJourneyResponse(journeyId) {
         }
     };
 }
-export function createInternalIdentityRouter() {
-    const router = Router();
-    router.use(attachAuthContext);
-    router.use(requireInternalService);
+function createInternalIdentityRouter() {
+    const router = (0, express_1.Router)();
+    router.use(index_js_1.attachAuthContext);
+    router.use(index_js_1.requireInternalService);
     router.get('/lookup', async (req, res, next) => {
         try {
             const { nodeType, nodeKey } = parseInput(lookupQuerySchema, req.query);

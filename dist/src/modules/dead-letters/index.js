@@ -1,6 +1,12 @@
-import { env } from '../../config/env.js';
-import { query, withTransaction } from '../../db/pool.js';
-import { logError, logInfo } from '../../observability/index.js';
+"use strict";
+// @ts-nocheck
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.recordDeadLetter = recordDeadLetter;
+exports.replayDeadLetters = replayDeadLetters;
+exports.countPendingDeadLetters = countPendingDeadLetters;
+const env_js_1 = require("../../config/env.js");
+const pool_js_1 = require("../../db/pool.js");
+const index_js_1 = require("../../observability/index.js");
 function serializeError(error) {
     if (error instanceof Error) {
         const extraContext = error;
@@ -205,13 +211,29 @@ async function requeueSourceRecord(client, deadLetter) {
       `, [deadLetter.source_record_id]);
         return result.rowCount ? 'replayed' : 'skipped';
     }
+    if (deadLetter.source_table === 'ga4_bigquery_hourly_jobs') {
+        const result = await client.query(`
+        UPDATE ga4_bigquery_hourly_jobs
+        SET
+          status = 'pending',
+          available_at = now(),
+          locked_at = NULL,
+          locked_by = NULL,
+          last_error = NULL,
+          dead_lettered_at = NULL,
+          updated_at = now()
+        WHERE pipeline_name = $1
+          AND hour_start = $2::timestamptz
+      `, [deadLetter.source_queue_key, deadLetter.source_record_id]);
+        return result.rowCount ? 'replayed' : 'skipped';
+    }
     return 'skipped';
 }
 function normalizeReplayFilters(filters) {
     const requestedBy = filters.requestedBy?.trim() || null;
     const fromTime = filters.fromTime ?? filters.windowStart ?? null;
     const toTime = filters.toTime ?? filters.windowEnd ?? null;
-    const limit = Math.max(1, Math.min(filters.limit ?? env.DEAD_LETTER_REPLAY_MAX_BATCH_SIZE, 500));
+    const limit = Math.max(1, Math.min(filters.limit ?? env_js_1.env.DEAD_LETTER_REPLAY_MAX_BATCH_SIZE, 500));
     const status = filters.status ?? 'pending_replay';
     const dryRun = filters.dryRun ?? false;
     return {
@@ -238,7 +260,7 @@ async function insertReplayRunItem(client, input) {
       VALUES ($1, $2, $3, $4, $5, $6)
     `, [input.replayRunId, input.deadLetter.id, input.deadLetter.source_table, input.deadLetter.source_record_id, input.outcome, input.message]);
 }
-export async function recordDeadLetter(client, input) {
+async function recordDeadLetter(client, input) {
     await ensureDeadLetterTables(client);
     const serializedError = serializeError(input.error);
     await client.query(`
@@ -293,8 +315,8 @@ export async function recordDeadLetter(client, input) {
         JSON.stringify(serializedError.context)
     ]);
 }
-export async function replayDeadLetters(filters) {
-    return withTransaction(async (client) => {
+async function replayDeadLetters(filters) {
+    return (0, pool_js_1.withTransaction)(async (client) => {
         await ensureDeadLetterTables(client);
         const normalized = normalizeReplayFilters(filters);
         const replayRunResult = await client.query(`
@@ -397,7 +419,7 @@ export async function replayDeadLetters(filters) {
                     outcome: 'failed',
                     message: serializedError.message
                 });
-                logError('dead_letter_replay_failed', error, {
+                (0, index_js_1.logError)('dead_letter_replay_failed', error, {
                     replayRunId,
                     deadLetterId: deadLetter.id,
                     eventType: deadLetter.event_type,
@@ -432,7 +454,7 @@ export async function replayDeadLetters(filters) {
                 dryRunCount
             })
         ]);
-        logInfo('dead_letter_replay_completed', {
+        (0, index_js_1.logInfo)('dead_letter_replay_completed', {
             replayRunId,
             requestedBy: normalized.requestedBy,
             dryRun: normalized.dryRun,
@@ -452,17 +474,17 @@ export async function replayDeadLetters(filters) {
         };
     });
 }
-export async function countPendingDeadLetters() {
+async function countPendingDeadLetters() {
     try {
-        const result = await query(`
-        SELECT COUNT(*)::text AS total
-        FROM event_dead_letters
-        WHERE status = 'pending_replay'
-      `);
+        const result = await (0, pool_js_1.query)(`
+      SELECT COUNT(*)::text AS total
+      FROM event_dead_letters
+      WHERE status = 'pending_replay'
+    `);
         return Number(result.rows[0]?.total ?? '0');
     }
     catch (error) {
-        logError('dead_letter_count_failed', error, {});
+        (0, index_js_1.logError)('dead_letter_count_failed', error, {});
         return 0;
     }
 }

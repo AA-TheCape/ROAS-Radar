@@ -1,7 +1,20 @@
-import { query, withTransaction } from '../../db/pool.js';
-import { logError, logInfo, logWarning, summarizeGa4IngestionResult } from '../../observability/index.js';
-import { assertGa4BigQueryIngestionConfig } from './ga4-bigquery-config.js';
-const GA4_SESSION_ATTRIBUTION_PIPELINE = 'ga4_session_attribution';
+"use strict";
+// @ts-nocheck
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.GA4_SESSION_ATTRIBUTION_PIPELINE = void 0;
+exports.planGa4SessionAttributionHourlyWindows = planGa4SessionAttributionHourlyWindows;
+exports.buildGa4SessionAttributionHourlyQuery = buildGa4SessionAttributionHourlyQuery;
+exports.extractAllowedGa4ClickIdsFromEventParams = extractAllowedGa4ClickIdsFromEventParams;
+exports.extractGa4SessionAttributionForHour = extractGa4SessionAttributionForHour;
+exports.markGa4SessionAttributionRunFailed = markGa4SessionAttributionRunFailed;
+exports.listGa4SessionAttributionRows = listGa4SessionAttributionRows;
+exports.getGa4SessionAttributionWatermark = getGa4SessionAttributionWatermark;
+exports.ingestGa4SessionAttributionHours = ingestGa4SessionAttributionHours;
+exports.ingestGa4SessionAttribution = ingestGa4SessionAttribution;
+const pool_js_1 = require("../../db/pool.js");
+const index_js_1 = require("../../observability/index.js");
+const ga4_bigquery_config_js_1 = require("./ga4-bigquery-config.js");
+exports.GA4_SESSION_ATTRIBUTION_PIPELINE = 'ga4_session_attribution';
 const GA4_INGESTION_LAG_ALERT_THRESHOLD_HOURS = 2;
 const ALLOWED_CLICK_ID_KEYS = ['gclid', 'dclid', 'gbraid', 'wbraid', 'fbclid', 'ttclid', 'msclkid'];
 function normalizeNullableString(value) {
@@ -40,13 +53,17 @@ function compareIsoAscending(left, right) {
     return left.localeCompare(right);
 }
 function normalizeEnabledConfig(config) {
-    const resolved = config ?? assertGa4BigQueryIngestionConfig();
+    const resolved = config ?? (0, ga4_bigquery_config_js_1.assertGa4BigQueryIngestionConfig)();
     if (!resolved.enabled) {
         throw new Error('GA4 BigQuery ingestion is disabled');
     }
     return resolved;
 }
-export function planGa4SessionAttributionHourlyWindows(input) {
+function normalizeHourStartIso(value, fieldName = 'hourStart') {
+    const normalized = normalizeIsoTimestamp(value, fieldName);
+    return toHourStart(new Date(normalized)).toISOString();
+}
+function planGa4SessionAttributionHourlyWindows(input) {
     const config = normalizeEnabledConfig(input.config);
     const latestCompleteHour = addHours(toHourStart(input.now), -1);
     const startHour = input.watermarkHour
@@ -67,7 +84,7 @@ export function planGa4SessionAttributionHourlyWindows(input) {
 function buildDateSuffix(dateIso) {
     return dateIso.slice(0, 10).replaceAll('-', '');
 }
-export function buildGa4SessionAttributionHourlyQuery(input) {
+function buildGa4SessionAttributionHourlyQuery(input) {
     const config = normalizeEnabledConfig(input.config);
     const params = {
         window_start: input.hourStart,
@@ -144,7 +161,7 @@ function extractEventParamValue(param) {
     }
     return null;
 }
-export function extractAllowedGa4ClickIdsFromEventParams(eventParams) {
+function extractAllowedGa4ClickIdsFromEventParams(eventParams) {
     if (!Array.isArray(eventParams)) {
         return {};
     }
@@ -199,9 +216,7 @@ function pickClickId(rawRow) {
         }
     }
     return {
-        clickIdType: explicitType && ALLOWED_CLICK_ID_KEYS.includes(explicitType)
-            ? explicitType
-            : null,
+        clickIdType: explicitType && ALLOWED_CLICK_ID_KEYS.includes(explicitType) ? explicitType : null,
         clickIdValue: explicitValue
     };
 }
@@ -251,8 +266,8 @@ function normalizeRawExtractionRow(raw) {
         sourceTableType: normalizeLowercaseString(row.source_table_type) === 'intraday' ? 'intraday' : 'events'
     };
 }
-export async function extractGa4SessionAttributionForHour(input) {
-    const hourStart = normalizeIsoTimestamp(input.hourStart, 'hourStart');
+async function extractGa4SessionAttributionForHour(input) {
+    const hourStart = normalizeHourStartIso(input.hourStart, 'hourStart');
     const hourEndExclusive = addHours(new Date(hourStart), 1).toISOString();
     const statement = buildGa4SessionAttributionHourlyQuery({
         config: input.config,
@@ -294,12 +309,12 @@ function mapNormalizedRowForPersistence(row) {
     };
 }
 async function readWatermarkHour() {
-    const result = await query(`
+    const result = await (0, pool_js_1.query)(`
       SELECT watermark_hour
       FROM ga4_bigquery_ingestion_state
       WHERE pipeline_name = $1
       LIMIT 1
-    `, [GA4_SESSION_ATTRIBUTION_PIPELINE]);
+    `, [exports.GA4_SESSION_ATTRIBUTION_PIPELINE]);
     return result.rows[0]?.watermark_hour ?? null;
 }
 async function markRunStarted(client, startedAt) {
@@ -318,7 +333,7 @@ async function markRunStarted(client, startedAt) {
         last_run_status = 'running',
         last_error = NULL,
         updated_at = now()
-    `, [GA4_SESSION_ATTRIBUTION_PIPELINE, startedAt]);
+    `, [exports.GA4_SESSION_ATTRIBUTION_PIPELINE, startedAt]);
 }
 async function markRunCompleted(client, completedAt, watermarkHour) {
     await client.query(`
@@ -333,15 +348,19 @@ async function markRunCompleted(client, completedAt, watermarkHour) {
       VALUES ($1, $2::timestamptz, $3, 'completed', NULL, now())
       ON CONFLICT (pipeline_name)
       DO UPDATE SET
-        watermark_hour = EXCLUDED.watermark_hour,
+        watermark_hour = CASE
+          WHEN ga4_bigquery_ingestion_state.watermark_hour IS NULL THEN EXCLUDED.watermark_hour
+          WHEN EXCLUDED.watermark_hour IS NULL THEN ga4_bigquery_ingestion_state.watermark_hour
+          ELSE GREATEST(ga4_bigquery_ingestion_state.watermark_hour, EXCLUDED.watermark_hour)
+        END,
         last_run_completed_at = EXCLUDED.last_run_completed_at,
         last_run_status = 'completed',
         last_error = NULL,
         updated_at = now()
-    `, [GA4_SESSION_ATTRIBUTION_PIPELINE, watermarkHour, completedAt]);
+    `, [exports.GA4_SESSION_ATTRIBUTION_PIPELINE, watermarkHour, completedAt]);
 }
-export async function markGa4SessionAttributionRunFailed(error) {
-    await query(`
+async function markGa4SessionAttributionRunFailed(error) {
+    await (0, pool_js_1.query)(`
       INSERT INTO ga4_bigquery_ingestion_state (
         pipeline_name,
         last_run_completed_at,
@@ -356,10 +375,7 @@ export async function markGa4SessionAttributionRunFailed(error) {
         last_run_status = 'failed',
         last_error = EXCLUDED.last_error,
         updated_at = now()
-    `, [
-        GA4_SESSION_ATTRIBUTION_PIPELINE,
-        error instanceof Error ? error.message : String(error)
-    ]);
+    `, [exports.GA4_SESSION_ATTRIBUTION_PIPELINE, error instanceof Error ? error.message : String(error)]);
 }
 async function upsertGa4SessionAttributionRow(client, row) {
     await client.query(`
@@ -475,7 +491,7 @@ function mapPersistedRowForRead(row) {
         sourceTableType: row.source_table_type
     };
 }
-export async function listGa4SessionAttributionRows(db) {
+async function listGa4SessionAttributionRows(db) {
     const result = await db.query(`
       SELECT
         ga4_session_key,
@@ -507,19 +523,107 @@ export async function listGa4SessionAttributionRows(db) {
     `);
     return result.rows.map((row) => mapPersistedRowForRead(row));
 }
-export async function getGa4SessionAttributionWatermark(db) {
+async function getGa4SessionAttributionWatermark(db) {
     const result = await db.query(`
       SELECT watermark_hour
       FROM ga4_bigquery_ingestion_state
       WHERE pipeline_name = $1
       LIMIT 1
-    `, [GA4_SESSION_ATTRIBUTION_PIPELINE]);
+    `, [exports.GA4_SESSION_ATTRIBUTION_PIPELINE]);
     return result.rows[0]?.watermark_hour?.toISOString() ?? null;
 }
 function buildGa4IngestionCorrelationId() {
     return `ga4-ingestion:${crypto.randomUUID()}`;
 }
-export async function ingestGa4SessionAttribution(input) {
+async function ingestExplicitHours(input) {
+    const correlationId = input.correlationId ?? buildGa4IngestionCorrelationId();
+    const config = normalizeEnabledConfig(input.config);
+    const now = input.now ?? new Date();
+    const watermarkBeforeDate = await readWatermarkHour();
+    const explicitHours = Array.from(new Set((input.hourStarts ?? []).map((hourStart) => normalizeHourStartIso(hourStart)))).sort(compareIsoAscending);
+    const hourlyResults = [];
+    for (const hourStart of explicitHours) {
+        const hourlyResult = await extractGa4SessionAttributionForHour({
+            config,
+            executor: input.executor,
+            hourStart
+        });
+        hourlyResults.push(hourlyResult);
+        (0, index_js_1.logInfo)('ga4_session_attribution_ingestion_hour_completed', {
+            service: process.env.K_SERVICE ?? 'roas-radar',
+            pipeline: exports.GA4_SESSION_ATTRIBUTION_PIPELINE,
+            correlationId,
+            hourStart: hourlyResult.hourStart,
+            rowCount: hourlyResult.rows.length
+        });
+    }
+    const rowsToPersist = hourlyResults.flatMap((result) => result.rows).map(mapNormalizedRowForPersistence);
+    const watermarkAfter = explicitHours.length > 0 ? explicitHours[explicitHours.length - 1] : watermarkBeforeDate?.toISOString() ?? null;
+    const upsertedRows = await (0, pool_js_1.withTransaction)(async (client) => {
+        await markRunStarted(client, new Date());
+        for (const row of rowsToPersist) {
+            await upsertGa4SessionAttributionRow(client, row);
+        }
+        if (input.beforeCommit) {
+            await input.beforeCommit(client);
+        }
+        await markRunCompleted(client, new Date(), watermarkAfter);
+        return rowsToPersist.length;
+    });
+    const result = {
+        watermarkBefore: watermarkBeforeDate?.toISOString() ?? null,
+        watermarkAfter: (await getGa4SessionAttributionWatermark({ query: pool_js_1.query })) ?? watermarkAfter,
+        processedHours: explicitHours,
+        extractedRows: hourlyResults.reduce((sum, hourlyResult) => sum + hourlyResult.rows.length, 0),
+        upsertedRows
+    };
+    const summary = (0, index_js_1.summarizeGa4IngestionResult)({
+        ...result,
+        now,
+        lagAlertThresholdHours: GA4_INGESTION_LAG_ALERT_THRESHOLD_HOURS,
+        rows: rowsToPersist.map((row) => ({
+            source: row.source,
+            medium: row.medium,
+            campaign: row.campaign,
+            clickIdValue: row.click_id_value
+        }))
+    });
+    (0, index_js_1.logInfo)('ga4_session_attribution_ingestion_completed', {
+        service: process.env.K_SERVICE ?? 'roas-radar',
+        pipeline: exports.GA4_SESSION_ATTRIBUTION_PIPELINE,
+        correlationId,
+        ...summary
+    });
+    if (summary.lagStatus === 'lagging') {
+        (0, index_js_1.logWarning)('ga4_session_attribution_ingestion_lag_alert', {
+            service: process.env.K_SERVICE ?? 'roas-radar',
+            pipeline: exports.GA4_SESSION_ATTRIBUTION_PIPELINE,
+            correlationId,
+            ...summary,
+            alertable: true
+        });
+    }
+    return result;
+}
+async function ingestGa4SessionAttributionHours(input) {
+    const correlationId = buildGa4IngestionCorrelationId();
+    try {
+        return await ingestExplicitHours({
+            ...input,
+            correlationId
+        });
+    }
+    catch (error) {
+        (0, index_js_1.logError)('ga4_session_attribution_ingestion_failed', error, {
+            service: process.env.K_SERVICE ?? 'roas-radar',
+            pipeline: exports.GA4_SESSION_ATTRIBUTION_PIPELINE,
+            correlationId,
+            alertable: true
+        });
+        throw error;
+    }
+}
+async function ingestGa4SessionAttribution(input) {
     const correlationId = buildGa4IngestionCorrelationId();
     try {
         const config = normalizeEnabledConfig(input.config);
@@ -530,75 +634,18 @@ export async function ingestGa4SessionAttribution(input) {
             watermarkHour: watermarkBefore,
             config
         });
-        const hourlyResults = [];
-        for (const window of windows) {
-            const hourlyResult = await extractGa4SessionAttributionForHour({
-                config,
-                executor: input.executor,
-                hourStart: window.hourStart
-            });
-            hourlyResults.push(hourlyResult);
-            logInfo('ga4_session_attribution_ingestion_hour_completed', {
-                service: process.env.K_SERVICE ?? 'roas-radar',
-                pipeline: GA4_SESSION_ATTRIBUTION_PIPELINE,
-                correlationId,
-                hourStart: hourlyResult.hourStart,
-                rowCount: hourlyResult.rows.length
-            });
-        }
-        const rowsToPersist = hourlyResults.flatMap((result) => result.rows).map(mapNormalizedRowForPersistence);
-        const watermarkAfter = windows.length > 0 ? windows[windows.length - 1]?.hourStart ?? null : watermarkBefore?.toISOString() ?? null;
-        const upsertedRows = await withTransaction(async (client) => {
-            const startedAt = new Date();
-            await markRunStarted(client, startedAt);
-            for (const row of rowsToPersist) {
-                await upsertGa4SessionAttributionRow(client, row);
-            }
-            if (input.beforeCommit) {
-                await input.beforeCommit(client);
-            }
-            await markRunCompleted(client, new Date(), watermarkAfter);
-            return rowsToPersist.length;
-        });
-        const result = {
-            watermarkBefore: watermarkBefore?.toISOString() ?? null,
-            watermarkAfter,
-            processedHours: windows.map((window) => window.hourStart).sort(compareIsoAscending),
-            extractedRows: hourlyResults.reduce((sum, hourlyResult) => sum + hourlyResult.rows.length, 0),
-            upsertedRows
-        };
-        const summary = summarizeGa4IngestionResult({
-            ...result,
+        return await ingestExplicitHours({
+            ...input,
+            config,
             now,
-            lagAlertThresholdHours: GA4_INGESTION_LAG_ALERT_THRESHOLD_HOURS,
-            rows: rowsToPersist.map((row) => ({
-                source: row.source,
-                medium: row.medium,
-                campaign: row.campaign,
-                clickIdValue: row.click_id_value
-            }))
+            hourStarts: windows.map((window) => window.hourStart),
+            correlationId
         });
-        logInfo('ga4_session_attribution_ingestion_completed', {
-            service: process.env.K_SERVICE ?? 'roas-radar',
-            pipeline: GA4_SESSION_ATTRIBUTION_PIPELINE,
-            correlationId,
-            ...summary
-        });
-        if (summary.lagStatus === 'lagging') {
-            logWarning('ga4_session_attribution_ingestion_lag_alert', {
-                service: process.env.K_SERVICE ?? 'roas-radar',
-                pipeline: GA4_SESSION_ATTRIBUTION_PIPELINE,
-                correlationId,
-                ...summary,
-                alertable: true
-            });
-        }
-        return result;
     }
     catch (error) {
-        logError('ga4_session_attribution_ingestion_failed', error, {
+        (0, index_js_1.logError)('ga4_session_attribution_ingestion_failed', error, {
             service: process.env.K_SERVICE ?? 'roas-radar',
-            pipeline: GA4_SESSION_ATTRIBUTION_PIPELINE,
+            pipeline: exports.GA4_SESSION_ATTRIBUTION_PIPELINE,
             correlationId,
             alertable: true
         });

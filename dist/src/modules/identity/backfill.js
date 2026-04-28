@@ -1,7 +1,11 @@
-import { randomUUID } from 'node:crypto';
-import { query, withTransaction } from '../../db/pool.js';
-import { logError, logInfo } from '../../observability/index.js';
-import { ingestIdentityEdges } from './index.js';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.getIdentityGraphBackfillRun = getIdentityGraphBackfillRun;
+exports.backfillHistoricalIdentityGraph = backfillHistoricalIdentityGraph;
+const node_crypto_1 = require("node:crypto");
+const pool_js_1 = require("../../db/pool.js");
+const index_js_1 = require("../../observability/index.js");
+const index_js_2 = require("./index.js");
 const IDENTITY_BACKFILL_SOURCES = [
     'tracking_sessions',
     'tracking_events',
@@ -223,8 +227,8 @@ function mapRunRow(row) {
     };
 }
 async function createIdentityGraphBackfillRun(options) {
-    const runId = randomUUID();
-    await query(`
+    const runId = (0, node_crypto_1.randomUUID)();
+    await (0, pool_js_1.query)(`
       INSERT INTO identity_graph_backfill_runs (
         id,
         status,
@@ -262,7 +266,7 @@ async function createIdentityGraphBackfillRun(options) {
     return runId;
 }
 async function fetchIdentityGraphBackfillRunRow(runId) {
-    const result = await query(`
+    const result = await (0, pool_js_1.query)(`
       SELECT
         id::text AS id,
         status,
@@ -283,7 +287,7 @@ async function fetchIdentityGraphBackfillRunRow(runId) {
     `, [runId]);
     return result.rows[0] ?? null;
 }
-export async function getIdentityGraphBackfillRun(runId) {
+async function getIdentityGraphBackfillRun(runId) {
     const row = await fetchIdentityGraphBackfillRunRow(runId);
     if (!row) {
         return null;
@@ -303,7 +307,7 @@ export async function getIdentityGraphBackfillRun(runId) {
         }));
 }
 async function updateIdentityGraphBackfillRunProgress(input) {
-    await query(`
+    await (0, pool_js_1.query)(`
       UPDATE identity_graph_backfill_runs
       SET
         status = 'processing',
@@ -323,7 +327,7 @@ async function updateIdentityGraphBackfillRunProgress(input) {
     ]);
 }
 async function completeIdentityGraphBackfillRun(input) {
-    await query(`
+    await (0, pool_js_1.query)(`
       UPDATE identity_graph_backfill_runs
       SET
         status = 'completed',
@@ -366,7 +370,7 @@ function normalizeErrorMessage(error) {
     return 'Identity graph backfill failed';
 }
 async function failIdentityGraphBackfillRun(input) {
-    await query(`
+    await (0, pool_js_1.query)(`
       UPDATE identity_graph_backfill_runs
       SET
         status = 'failed',
@@ -398,7 +402,7 @@ async function hydrateExpectedCounts(scope, metrics) {
 async function countSourceRows(source, scope) {
     switch (source) {
         case 'tracking_sessions': {
-            const result = await query(`
+            const result = await (0, pool_js_1.query)(`
           SELECT COUNT(*)::text AS row_count
           FROM tracking_sessions
           WHERE ($1::timestamptz IS NULL OR first_seen_at >= $1::timestamptz)
@@ -407,7 +411,7 @@ async function countSourceRows(source, scope) {
             return Number(result.rows[0]?.row_count ?? '0');
         }
         case 'tracking_events': {
-            const result = await query(`
+            const result = await (0, pool_js_1.query)(`
           SELECT COUNT(*)::text AS row_count
           FROM tracking_events
           WHERE ($1::timestamptz IS NULL OR occurred_at >= $1::timestamptz)
@@ -416,7 +420,7 @@ async function countSourceRows(source, scope) {
             return Number(result.rows[0]?.row_count ?? '0');
         }
         case 'shopify_customers': {
-            const result = await query(`
+            const result = await (0, pool_js_1.query)(`
           SELECT COUNT(*)::text AS row_count
           FROM shopify_customers
           WHERE ($1::timestamptz IS NULL OR created_at >= $1::timestamptz)
@@ -425,7 +429,7 @@ async function countSourceRows(source, scope) {
             return Number(result.rows[0]?.row_count ?? '0');
         }
         case 'shopify_orders': {
-            const result = await query(`
+            const result = await (0, pool_js_1.query)(`
           SELECT COUNT(*)::text AS row_count
           FROM shopify_orders
           WHERE ($1::timestamptz IS NULL OR COALESCE(processed_at, created_at_shopify, ingested_at) >= $1::timestamptz)
@@ -438,7 +442,7 @@ async function countSourceRows(source, scope) {
 async function fetchSourceBatch(source, scope, checkpoint) {
     switch (source) {
         case 'tracking_sessions': {
-            const result = await query(`
+            const result = await (0, pool_js_1.query)(`
           SELECT
             id::text AS session_id,
             first_seen_at AS source_timestamp
@@ -460,7 +464,7 @@ async function fetchSourceBatch(source, scope, checkpoint) {
             }));
         }
         case 'tracking_events': {
-            const result = await query(`
+            const result = await (0, pool_js_1.query)(`
           SELECT
             id::text AS event_id,
             session_id::text AS session_id,
@@ -485,7 +489,7 @@ async function fetchSourceBatch(source, scope, checkpoint) {
             }));
         }
         case 'shopify_customers': {
-            const result = await query(`
+            const result = await (0, pool_js_1.query)(`
           SELECT
             id::text AS row_id,
             shopify_customer_id,
@@ -510,7 +514,7 @@ async function fetchSourceBatch(source, scope, checkpoint) {
             }));
         }
         case 'shopify_orders': {
-            const result = await query(`
+            const result = await (0, pool_js_1.query)(`
           SELECT
             id::text AS row_id,
             shopify_order_id,
@@ -541,10 +545,10 @@ async function fetchSourceBatch(source, scope, checkpoint) {
     }
 }
 async function processSourceRow(row) {
-    return withTransaction(async (client) => {
+    return (0, pool_js_1.withTransaction)(async (client) => {
         switch (row.source) {
             case 'tracking_sessions': {
-                const result = await ingestIdentityEdges(client, {
+                const result = await (0, index_js_2.ingestIdentityEdges)(client, {
                     sourceTimestamp: row.source_timestamp,
                     evidenceSource: 'backfill',
                     sourceTable: 'tracking_sessions',
@@ -559,7 +563,7 @@ async function processSourceRow(row) {
                 };
             }
             case 'tracking_events': {
-                const result = await ingestIdentityEdges(client, {
+                const result = await (0, index_js_2.ingestIdentityEdges)(client, {
                     sourceTimestamp: row.source_timestamp,
                     evidenceSource: 'backfill',
                     sourceTable: 'tracking_events',
@@ -576,7 +580,7 @@ async function processSourceRow(row) {
                 };
             }
             case 'shopify_customers': {
-                const result = await ingestIdentityEdges(client, {
+                const result = await (0, index_js_2.ingestIdentityEdges)(client, {
                     sourceTimestamp: row.source_timestamp,
                     evidenceSource: 'backfill',
                     sourceTable: 'shopify_customers',
@@ -593,7 +597,7 @@ async function processSourceRow(row) {
                 };
             }
             case 'shopify_orders': {
-                const result = await ingestIdentityEdges(client, {
+                const result = await (0, index_js_2.ingestIdentityEdges)(client, {
                     sourceTimestamp: row.source_timestamp,
                     evidenceSource: 'backfill',
                     sourceTable: 'shopify_orders',
@@ -626,7 +630,7 @@ function accumulateRowMetrics(metrics, source, rowResult) {
     metrics.ingestionMetrics.rehomedNodes += rowResult.metrics.rehomedNodes;
     metrics.ingestionMetrics.quarantinedNodes += rowResult.metrics.quarantinedNodes;
 }
-export async function backfillHistoricalIdentityGraph(options) {
+async function backfillHistoricalIdentityGraph(options) {
     const requestedBy = normalizeNullableString(options.requestedBy);
     const workerId = normalizeNullableString(options.workerId) ?? 'identity-graph-backfill';
     if (!requestedBy) {
@@ -659,7 +663,7 @@ export async function backfillHistoricalIdentityGraph(options) {
             metrics
         });
     }
-    logInfo('identity_graph_backfill_started', {
+    (0, index_js_1.logInfo)('identity_graph_backfill_started', {
         runId,
         requestedBy,
         workerId,
@@ -725,7 +729,7 @@ export async function backfillHistoricalIdentityGraph(options) {
             workerId,
             report
         });
-        logInfo('identity_graph_backfill_completed', {
+        (0, index_js_1.logInfo)('identity_graph_backfill_completed', {
             runId,
             workerId,
             reconciliationMatches: report.reconciliation.matches,
@@ -741,7 +745,7 @@ export async function backfillHistoricalIdentityGraph(options) {
             metrics,
             error
         });
-        logError('identity_graph_backfill_failed', error, {
+        (0, index_js_1.logError)('identity_graph_backfill_failed', error, {
             runId,
             workerId,
             checkpoints,

@@ -1,6 +1,10 @@
-import { env } from '../../config/env.js';
-import { withTransaction } from '../../db/pool.js';
-import { logError, logInfo } from '../../observability/index.js';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.runSessionAttributionRetention = runSessionAttributionRetention;
+exports.runSessionAttributionRetentionJob = runSessionAttributionRetentionJob;
+const env_js_1 = require("../../config/env.js");
+const pool_js_1 = require("../../db/pool.js");
+const index_js_1 = require("../../observability/index.js");
 const DEFAULT_RETENTION_BATCH_SIZE = 100;
 const DEFAULT_RETENTION_MAX_BATCHES = 50;
 function normalizePositiveInteger(value, fallback) {
@@ -11,12 +15,12 @@ function normalizePositiveInteger(value, fallback) {
 }
 function resolveCutoffAt(asOf) {
     const referenceTime = asOf ? new Date(asOf) : new Date();
-    referenceTime.setUTCDate(referenceTime.getUTCDate() - env.SESSION_ATTRIBUTION_RETENTION_DAYS);
+    referenceTime.setUTCDate(referenceTime.getUTCDate() - env_js_1.env.SESSION_ATTRIBUTION_RETENTION_DAYS);
     return referenceTime;
 }
 function resolveGa4FallbackCutoffAt(asOf) {
     const referenceTime = asOf ? new Date(asOf) : new Date();
-    referenceTime.setUTCDate(referenceTime.getUTCDate() - env.GA4_FALLBACK_RETENTION_DAYS);
+    referenceTime.setUTCDate(referenceTime.getUTCDate() - env_js_1.env.GA4_FALLBACK_RETENTION_DAYS);
     return referenceTime;
 }
 async function countProtectedRows(client, cutoffAt) {
@@ -109,7 +113,7 @@ async function deleteExpiredGa4FallbackCandidates(client, cutoffAt, batchSize) {
     `, [cutoffAt, batchSize]);
     return result.rowCount ?? 0;
 }
-export async function runSessionAttributionRetention(options = {}) {
+async function runSessionAttributionRetention(options = {}) {
     const batchSize = normalizePositiveInteger(options.batchSize, DEFAULT_RETENTION_BATCH_SIZE);
     const maxBatches = normalizePositiveInteger(options.maxBatches, DEFAULT_RETENTION_MAX_BATCHES);
     const cutoffAt = resolveCutoffAt(options.asOf);
@@ -135,7 +139,7 @@ export async function runSessionAttributionRetention(options = {}) {
             deletedTouchEvents += deletedTouchEventsInBatch;
             deletedSessions += deletedSessionsInBatch;
             if (emitLogs) {
-                logInfo('session_attribution_retention_batch_completed', {
+                (0, index_js_1.logInfo)('session_attribution_retention_batch_completed', {
                     batchNumber,
                     cutoffAt: cutoffAt.toISOString(),
                     ga4FallbackCutoffAt: ga4FallbackCutoffAt.toISOString(),
@@ -159,20 +163,20 @@ export async function runSessionAttributionRetention(options = {}) {
             protectedTouchEventsSkipped: Number(protectedCounts.protected_touch_events ?? '0')
         };
         if (emitLogs) {
-            logInfo('session_attribution_retention_completed', result);
+            (0, index_js_1.logInfo)('session_attribution_retention_completed', result);
         }
         return result;
     };
     if (options.client) {
         return runWithClient(options.client);
     }
-    const protectedCounts = await withTransaction(async (client) => countProtectedRows(client, cutoffAt));
+    const protectedCounts = await (0, pool_js_1.withTransaction)(async (client) => countProtectedRows(client, cutoffAt));
     let batchesRun = 0;
     let deletedGa4FallbackCandidates = 0;
     let deletedTouchEvents = 0;
     let deletedSessions = 0;
     for (let batchNumber = 1; batchNumber <= maxBatches; batchNumber += 1) {
-        const batchResult = await withTransaction(async (client) => {
+        const batchResult = await (0, pool_js_1.withTransaction)(async (client) => {
             const deletedGa4FallbackCandidatesInBatch = await deleteExpiredGa4FallbackCandidates(client, ga4FallbackCutoffAt, batchSize);
             const deletedTouchEventsInBatch = await deleteExpiredTouchEvents(client, cutoffAt, batchSize);
             const deletedSessionsInBatch = await deleteExpiredSessions(client, cutoffAt, batchSize);
@@ -192,7 +196,7 @@ export async function runSessionAttributionRetention(options = {}) {
         deletedTouchEvents += batchResult.deletedTouchEventsInBatch;
         deletedSessions += batchResult.deletedSessionsInBatch;
         if (emitLogs) {
-            logInfo('session_attribution_retention_batch_completed', {
+            (0, index_js_1.logInfo)('session_attribution_retention_batch_completed', {
                 batchNumber,
                 cutoffAt: cutoffAt.toISOString(),
                 ga4FallbackCutoffAt: ga4FallbackCutoffAt.toISOString(),
@@ -216,16 +220,16 @@ export async function runSessionAttributionRetention(options = {}) {
         protectedTouchEventsSkipped: Number(protectedCounts.protected_touch_events ?? '0')
     };
     if (emitLogs) {
-        logInfo('session_attribution_retention_completed', result);
+        (0, index_js_1.logInfo)('session_attribution_retention_completed', result);
     }
     return result;
 }
-export async function runSessionAttributionRetentionJob(options = {}) {
+async function runSessionAttributionRetentionJob(options = {}) {
     try {
         return await runSessionAttributionRetention(options);
     }
     catch (error) {
-        logError('session_attribution_retention_failed', error, {
+        (0, index_js_1.logError)('session_attribution_retention_failed', error, {
             batchSize: options.batchSize ?? DEFAULT_RETENTION_BATCH_SIZE,
             maxBatches: options.maxBatches ?? DEFAULT_RETENTION_MAX_BATCHES,
             hasCustomAsOf: Boolean(options.asOf)

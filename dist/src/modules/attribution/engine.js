@@ -1,4 +1,10 @@
-export const ATTRIBUTION_MODELS = [
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.ATTRIBUTION_MODELS = void 0;
+exports.computeSingleWinnerCredits = computeSingleWinnerCredits;
+exports.buildUnattributedTouchpoint = buildUnattributedTouchpoint;
+exports.computeAttributionOutputs = computeAttributionOutputs;
+exports.ATTRIBUTION_MODELS = [
     'first_touch',
     'last_touch',
     'linear',
@@ -96,7 +102,7 @@ function buildCredits(attributionModel, touchpoints, normalizedWeights, totalRev
         isPrimary: index === primaryTouchpointIndex
     }));
 }
-export function computeSingleWinnerCredits(attributionModel, touchpoints, winnerIndex, totalRevenue) {
+function computeSingleWinnerCredits(attributionModel, touchpoints, winnerIndex, totalRevenue) {
     const winnerWeights = touchpoints.map((_touchpoint, index) => (index === winnerIndex ? 1 : 0));
     return buildCredits(attributionModel, touchpoints, normalizeWeights(winnerWeights), totalRevenue);
 }
@@ -173,7 +179,7 @@ function ruleBasedWeights(touchpoints, config) {
         return positionWeight * multiplier;
     });
 }
-export function buildUnattributedTouchpoint(orderOccurredAt) {
+function buildUnattributedTouchpoint(orderOccurredAt) {
     return {
         sessionId: null,
         occurredAt: orderOccurredAt,
@@ -189,7 +195,7 @@ export function buildUnattributedTouchpoint(orderOccurredAt) {
         isForced: true
     };
 }
-export function computeAttributionOutputs(rawTouchpoints, options) {
+function computeAttributionOutputs(rawTouchpoints, options) {
     const touchpoints = rawTouchpoints.length > 0 ? rawTouchpoints : [buildUnattributedTouchpoint(options.orderOccurredAt)];
     const positionFirstWeight = toPositiveNumber(options.positionBasedFirstWeight, DEFAULT_POSITION_BASED_FIRST_WEIGHT);
     const positionLastWeight = toPositiveNumber(options.positionBasedLastWeight, DEFAULT_POSITION_BASED_LAST_WEIGHT);
@@ -201,7 +207,7 @@ export function computeAttributionOutputs(rawTouchpoints, options) {
         position_based: normalizeWeights(positionBasedWeights(touchpoints, positionFirstWeight, positionLastWeight)),
         rule_based_weighted: normalizeWeights(ruleBasedWeights(touchpoints, options.ruleBasedWeightConfig))
     };
-    return ATTRIBUTION_MODELS.reduce((outputs, attributionModel) => {
+    return exports.ATTRIBUTION_MODELS.reduce((outputs, attributionModel) => {
         outputs[attributionModel] = buildCredits(attributionModel, touchpoints, modelWeights[attributionModel], options.orderRevenue);
         return outputs;
     }, {});

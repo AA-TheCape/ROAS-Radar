@@ -1,7 +1,15 @@
-import { ATTRIBUTION_CLICK_ID_FIELDS, ATTRIBUTION_SCHEMA_VERSION, ATTRIBUTION_UTM_FIELDS, normalizeAttributionClickId, normalizeAttributionUrl, normalizeAttributionUtm } from '../../../packages/attribution-schema/index.js';
-import { env } from '../../config/env.js';
-import { query, withTransaction } from '../../db/pool.js';
-import { recordDeadLetter } from '../dead-letters/index.js';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.__shopifyWritebackTestUtils = void 0;
+exports.previewShopifyOrderWritebackAttributes = previewShopifyOrderWritebackAttributes;
+exports.enqueueShopifyOrderWriteback = enqueueShopifyOrderWriteback;
+exports.applyShopifyOrderWriteback = applyShopifyOrderWriteback;
+exports.processShopifyOrderWritebackQueue = processShopifyOrderWritebackQueue;
+exports.reconcileRecentShopifyOrderAttributes = reconcileRecentShopifyOrderAttributes;
+const index_js_1 = require("../../../packages/attribution-schema/index.js");
+const env_js_1 = require("../../config/env.js");
+const pool_js_1 = require("../../db/pool.js");
+const index_js_2 = require("../dead-letters/index.js");
 class ShopifyWritebackError extends Error {
     retryable;
     statusCode;
@@ -25,17 +33,17 @@ function coalesce(...values) {
 }
 function normalizeOptionalUrl(value) {
     try {
-        return normalizeAttributionUrl(value);
+        return (0, index_js_1.normalizeAttributionUrl)(value);
     }
     catch {
         return null;
     }
 }
 function normalizeOptionalUtm(value) {
-    return normalizeAttributionUtm(value);
+    return (0, index_js_1.normalizeAttributionUtm)(value);
 }
 function normalizeOptionalClickId(value) {
-    return normalizeAttributionClickId(value);
+    return (0, index_js_1.normalizeAttributionClickId)(value);
 }
 function stringifyAttributeValue(value) {
     if (value == null) {
@@ -92,7 +100,7 @@ function buildCanonicalAttributeRows(row) {
         throw new ShopifyWritebackError('session attribution capture was not found for landing session', { retryable: false });
     }
     const attributes = [
-        { key: 'schema_version', value: String(ATTRIBUTION_SCHEMA_VERSION) },
+        { key: 'schema_version', value: String(index_js_1.ATTRIBUTION_SCHEMA_VERSION) },
         { key: 'roas_radar_session_id', value: row.resolved_session_id }
     ];
     const urlPairs = [
@@ -105,13 +113,13 @@ function buildCanonicalAttributeRows(row) {
             attributes.push({ key, value });
         }
     }
-    for (const field of ATTRIBUTION_UTM_FIELDS) {
+    for (const field of index_js_1.ATTRIBUTION_UTM_FIELDS) {
         const value = normalizeOptionalUtm(coalesce(row[field], row[`initial_${field}`]));
         if (value) {
             attributes.push({ key: field, value });
         }
     }
-    for (const field of ATTRIBUTION_CLICK_ID_FIELDS) {
+    for (const field of index_js_1.ATTRIBUTION_CLICK_ID_FIELDS) {
         const value = normalizeOptionalClickId(coalesce(row[field], row[`initial_${field}`]));
         if (value) {
             attributes.push({ key: field, value });
@@ -187,14 +195,14 @@ async function fetchCanonicalAttributeRows(db, shopifyOrderId) {
     }
     return buildCanonicalAttributeRows(row);
 }
-export async function previewShopifyOrderWritebackAttributes(shopifyOrderId) {
-    return fetchCanonicalAttributeRows({ query }, shopifyOrderId);
+async function previewShopifyOrderWritebackAttributes(shopifyOrderId) {
+    return fetchCanonicalAttributeRows({ query: pool_js_1.query }, shopifyOrderId);
 }
 async function fetchShopifyWritebackCredentials() {
-    if (!env.SHOPIFY_APP_ENCRYPTION_KEY) {
+    if (!env_js_1.env.SHOPIFY_APP_ENCRYPTION_KEY) {
         throw new ShopifyWritebackError('shopify writeback is not configured', { retryable: false });
     }
-    const result = await query(`
+    const result = await (0, pool_js_1.query)(`
       SELECT
         shop_domain,
         pgp_sym_decrypt(access_token_encrypted, $1) AS access_token
@@ -202,7 +210,7 @@ async function fetchShopifyWritebackCredentials() {
       WHERE status = 'active'
       ORDER BY updated_at DESC
       LIMIT 1
-    `, [env.SHOPIFY_APP_ENCRYPTION_KEY]);
+    `, [env_js_1.env.SHOPIFY_APP_ENCRYPTION_KEY]);
     if (!result.rowCount) {
         throw new ShopifyWritebackError('no active Shopify installation is available for writeback', { retryable: false });
     }
@@ -213,7 +221,7 @@ async function fetchShopifyWritebackCredentials() {
 }
 async function defaultShopifyWritebackProcessor(payload) {
     const credentials = await fetchShopifyWritebackCredentials();
-    const response = await fetch(`https://${credentials.shopDomain}/admin/api/${env.SHOPIFY_APP_API_VERSION}/orders/${encodeURIComponent(payload.shopifyOrderId)}.json`, {
+    const response = await fetch(`https://${credentials.shopDomain}/admin/api/${env_js_1.env.SHOPIFY_APP_API_VERSION}/orders/${encodeURIComponent(payload.shopifyOrderId)}.json`, {
         method: 'PUT',
         headers: {
             'content-type': 'application/json',
@@ -270,7 +278,7 @@ function calculateRetryDelayMs(attemptNumber) {
     return Math.min(60_000, 1_000 * 2 ** Math.max(0, attemptNumber - 1));
 }
 async function claimShopifyOrderWritebackJobs(workerId, now, limit) {
-    return withTransaction(async (client) => {
+    return (0, pool_js_1.withTransaction)(async (client) => {
         const result = await client.query(`
         WITH candidates AS (
           SELECT id
@@ -294,7 +302,7 @@ async function claimShopifyOrderWritebackJobs(workerId, now, limit) {
         return result.rows;
     });
 }
-export async function enqueueShopifyOrderWriteback(shopifyOrderId, requestedReason, client = { query }) {
+async function enqueueShopifyOrderWriteback(shopifyOrderId, requestedReason, client = { query: pool_js_1.query }) {
     if (enqueueHook) {
         await enqueueHook({ shopifyOrderId, requestedReason });
     }
@@ -343,7 +351,7 @@ export async function enqueueShopifyOrderWriteback(shopifyOrderId, requestedReas
     };
 }
 async function markJobCompleted(jobId) {
-    await query(`
+    await (0, pool_js_1.query)(`
       UPDATE shopify_order_writeback_jobs
       SET
         status = 'completed',
@@ -356,7 +364,7 @@ async function markJobCompleted(jobId) {
     `, [jobId]);
 }
 async function markJobSkipped(jobId, message) {
-    await query(`
+    await (0, pool_js_1.query)(`
       UPDATE shopify_order_writeback_jobs
       SET
         status = 'completed',
@@ -370,10 +378,10 @@ async function markJobSkipped(jobId, message) {
 }
 async function markJobForRetry(job, workerId, error) {
     const nextAttempts = job.attempts + 1;
-    const shouldDeadLetter = !isRetryableError(error) || nextAttempts >= env.SHOPIFY_ORDER_WRITEBACK_MAX_RETRIES;
+    const shouldDeadLetter = !isRetryableError(error) || nextAttempts >= env_js_1.env.SHOPIFY_ORDER_WRITEBACK_MAX_RETRIES;
     if (shouldDeadLetter) {
-        await withTransaction(async (client) => {
-            await recordDeadLetter(client, {
+        await (0, pool_js_1.withTransaction)(async (client) => {
+            await (0, index_js_2.recordDeadLetter)(client, {
                 eventType: 'shopify_writeback_failed',
                 sourceTable: 'shopify_order_writeback_jobs',
                 sourceRecordId: String(job.id),
@@ -402,7 +410,7 @@ async function markJobForRetry(job, workerId, error) {
         });
         return 'dead_lettered';
     }
-    await query(`
+    await (0, pool_js_1.query)(`
       UPDATE shopify_order_writeback_jobs
       SET
         status = 'retry',
@@ -416,8 +424,8 @@ async function markJobForRetry(job, workerId, error) {
     `, [job.id, nextAttempts, String(calculateRetryDelayMs(nextAttempts)), errorMessage(error)]);
     return 'retry';
 }
-export async function applyShopifyOrderWriteback(input) {
-    const attributes = await fetchCanonicalAttributeRows({ query }, input.shopifyOrderId);
+async function applyShopifyOrderWriteback(input) {
+    const attributes = await fetchCanonicalAttributeRows({ query: pool_js_1.query }, input.shopifyOrderId);
     if (!attributes || attributes.length === 0) {
         return {
             status: 'skipped',
@@ -437,10 +445,10 @@ export async function applyShopifyOrderWriteback(input) {
         attributesCount: attributes.length
     };
 }
-export async function processShopifyOrderWritebackQueue(options) {
+async function processShopifyOrderWritebackQueue(options) {
     const workerId = options.workerId;
     const now = options.now ?? new Date();
-    const limit = Math.max(1, options.limit ?? env.SHOPIFY_ORDER_WRITEBACK_BATCH_SIZE);
+    const limit = Math.max(1, options.limit ?? env_js_1.env.SHOPIFY_ORDER_WRITEBACK_BATCH_SIZE);
     const jobs = await claimShopifyOrderWritebackJobs(workerId, now, limit);
     let completedJobs = 0;
     let retriedJobs = 0;
@@ -479,11 +487,11 @@ export async function processShopifyOrderWritebackQueue(options) {
         skippedJobs
     };
 }
-export async function reconcileRecentShopifyOrderAttributes(options) {
-    const limit = Math.max(1, options.limit ?? env.SHOPIFY_RECONCILIATION_BATCH_SIZE);
-    const lookbackDays = Math.max(1, options.lookbackDays ?? env.SHOPIFY_RECONCILIATION_LOOKBACK_DAYS);
+async function reconcileRecentShopifyOrderAttributes(options) {
+    const limit = Math.max(1, options.limit ?? env_js_1.env.SHOPIFY_RECONCILIATION_BATCH_SIZE);
+    const lookbackDays = Math.max(1, options.lookbackDays ?? env_js_1.env.SHOPIFY_RECONCILIATION_LOOKBACK_DAYS);
     const now = options.now ?? new Date();
-    const recentOrders = await query(`
+    const recentOrders = await (0, pool_js_1.query)(`
       SELECT
         shopify_order_id,
         landing_session_id::text AS landing_session_id,
@@ -504,7 +512,7 @@ export async function reconcileRecentShopifyOrderAttributes(options) {
             continue;
         }
         try {
-            const expectedAttributes = await fetchCanonicalAttributeRows({ query }, order.shopify_order_id);
+            const expectedAttributes = await fetchCanonicalAttributeRows({ query: pool_js_1.query }, order.shopify_order_id);
             if (!expectedAttributes || expectedAttributes.length === 0) {
                 failedOrders += 1;
                 continue;
@@ -532,7 +540,7 @@ export async function reconcileRecentShopifyOrderAttributes(options) {
         failedOrders
     };
 }
-export const __shopifyWritebackTestUtils = {
+exports.__shopifyWritebackTestUtils = {
     getAppliedWritebacks() {
         return [...appliedWritebacks];
     },

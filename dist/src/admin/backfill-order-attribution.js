@@ -1,4 +1,6 @@
-import { backfillRecentOrdersWithRecoveredAttribution } from '../modules/attribution/backfill.js';
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const backfill_js_1 = require("../modules/attribution/backfill.js");
 function readFlag(name) {
     const prefixed = `--${name}`;
     const index = process.argv.indexOf(prefixed);
@@ -32,7 +34,7 @@ function parseLimit(value) {
     return parsed;
 }
 async function run() {
-    const report = await backfillRecentOrdersWithRecoveredAttribution({
+    const report = await (0, backfill_js_1.backfillRecentOrdersWithRecoveredAttribution)({
         windowStart: parseIsoDate('from', requireFlag('from')),
         windowEnd: parseIsoDate('to', requireFlag('to')),
         requestedBy: requireFlag('requested-by'),

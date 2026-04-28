@@ -1,13 +1,19 @@
-import { createHash } from 'node:crypto';
-import { isDeepStrictEqual } from 'node:util';
-import { logWarning } from '../observability/index.js';
-export function buildRawPayloadStorageMetadata(rawPayload) {
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.__rawPayloadStorageTestUtils = void 0;
+exports.buildRawPayloadStorageMetadata = buildRawPayloadStorageMetadata;
+exports.summarizeRawPayloadIntegrity = summarizeRawPayloadIntegrity;
+exports.logRawPayloadIntegrityMismatch = logRawPayloadIntegrityMismatch;
+const node_crypto_1 = require("node:crypto");
+const node_util_1 = require("node:util");
+const index_js_1 = require("../observability/index.js");
+function buildRawPayloadStorageMetadata(rawPayload) {
     const rawPayloadJson = stableJsonStringify(rawPayload);
     return {
         rawPayload,
         rawPayloadJson,
         payloadSizeBytes: Buffer.byteLength(rawPayloadJson, 'utf8'),
-        payloadHash: createHash('sha256').update(rawPayloadJson).digest('hex')
+        payloadHash: (0, node_crypto_1.createHash)('sha256').update(rawPayloadJson).digest('hex')
     };
 }
 function stableJsonValue(value) {
@@ -23,9 +29,9 @@ function stableJsonValue(value) {
 function stableJsonStringify(value) {
     return JSON.stringify(stableJsonValue(value));
 }
-export function summarizeRawPayloadIntegrity(expected, actual) {
+function summarizeRawPayloadIntegrity(expected, actual) {
     const persistedMetadata = buildRawPayloadStorageMetadata(actual.persistedRawPayload);
-    const payloadMatches = isDeepStrictEqual(actual.persistedRawPayload, expected.rawPayload);
+    const payloadMatches = (0, node_util_1.isDeepStrictEqual)(actual.persistedRawPayload, expected.rawPayload);
     const storedSizeMatches = actual.storedPayloadSizeBytes === expected.payloadSizeBytes;
     const storedHashMatches = actual.storedPayloadHash === expected.payloadHash;
     const persistedSizeMatches = persistedMetadata.payloadSizeBytes === expected.payloadSizeBytes;
@@ -54,12 +60,12 @@ export function summarizeRawPayloadIntegrity(expected, actual) {
         persistedPayloadHash: persistedMetadata.payloadHash
     };
 }
-export function logRawPayloadIntegrityMismatch(expected, actual, context) {
+function logRawPayloadIntegrityMismatch(expected, actual, context) {
     const summary = summarizeRawPayloadIntegrity(expected, actual);
     if (summary.integrityStatus === 'matched') {
         return;
     }
-    logWarning('raw_payload_integrity_mismatch', {
+    (0, index_js_1.logWarning)('raw_payload_integrity_mismatch', {
         surface: context.surface,
         operation: context.operation,
         recordId: context.recordId ?? null,
@@ -67,7 +73,7 @@ export function logRawPayloadIntegrityMismatch(expected, actual, context) {
         ...(context.fields ?? {})
     });
 }
-export const __rawPayloadStorageTestUtils = {
+exports.__rawPayloadStorageTestUtils = {
     buildRawPayloadStorageMetadata,
     summarizeRawPayloadIntegrity,
     logRawPayloadIntegrityMismatch
