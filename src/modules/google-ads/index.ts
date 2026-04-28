@@ -658,10 +658,9 @@ function listDateRangeInclusive(startDate: string, endDate: string): string[] {
 
 function buildPlanningDates(now = new Date(), lastSyncCompletedAt: Date | null = null): string[] {
   const currentBusinessDate = parseDateOnly(formatDateInTimeZone(now, GOOGLE_ADS_SYNC_TIME_ZONE));
-  const lookbackDays = lastSyncCompletedAt
-    ? env.GOOGLE_ADS_SYNC_LOOKBACK_DAYS
-    : env.GOOGLE_ADS_SYNC_INITIAL_LOOKBACK_DAYS;
-  const firstDate = new Date(currentBusinessDate.getTime() - (lookbackDays - 1) * 24 * 60 * 60 * 1000);
+  const firstDate = lastSyncCompletedAt
+    ? parseDateOnly(formatDateInTimeZone(lastSyncCompletedAt, GOOGLE_ADS_SYNC_TIME_ZONE))
+    : new Date(currentBusinessDate.getTime() - (env.GOOGLE_ADS_SYNC_INITIAL_LOOKBACK_DAYS - 1) * 24 * 60 * 60 * 1000);
 
   if (currentBusinessDate.getTime() < firstDate.getTime()) {
     return [];
