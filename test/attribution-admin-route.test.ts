@@ -1,4 +1,26 @@
-// Existing file retained; new tests shown below.
+import assert from 'node:assert/strict';
+import type { AddressInfo } from 'node:net';
+import test from 'node:test';
+
+process.env.DATABASE_URL ??= 'postgres://postgres:postgres@localhost:5432/roas_radar_test';
+process.env.REPORTING_API_TOKEN = 'test-reporting-token';
+
+const poolModule = await import('../src/db/pool.js');
+const serverModule = await import('../src/server.js');
+
+const { pool } = poolModule;
+const { closeServer, createServer } = serverModule;
+const originalPoolQuery = pool.query.bind(pool);
+
+async function requestJson(server: ReturnType<typeof createServer>, path: string, headers?: Record<string, string>) {
+  const address = server.address() as AddressInfo;
+  const response = await fetch(`http://127.0.0.1:${address.port}${path}`, {
+    headers
+  });
+  const body = await response.json();
+
+  return { response, body };
+}
 
 test('GA4 fallback shadow report route validates the requested date range', async () => {
   let queryCalls = 0;
@@ -14,9 +36,7 @@ test('GA4 fallback shadow report route validates the requested date range', asyn
       server,
       '/api/admin/attribution/ga4-fallback/shadow-report?startDate=2026-04-10&endDate=2026-04-01',
       {
-        headers: {
-          authorization: 'Bearer test-reporting-token'
-        }
+        authorization: 'Bearer test-reporting-token'
       }
     );
 
@@ -63,9 +83,7 @@ test('GA4 fallback shadow report route returns fallback volume, key deltas, and 
       server,
       '/api/admin/attribution/ga4-fallback/shadow-report?startDate=2026-04-01&endDate=2026-04-10',
       {
-        headers: {
-          authorization: 'Bearer test-reporting-token'
-        }
+        authorization: 'Bearer test-reporting-token'
       }
     );
 

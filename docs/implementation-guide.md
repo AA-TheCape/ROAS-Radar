@@ -103,6 +103,7 @@ The current deployment docs in `infra/cloud-run/README.md` assume:
 - `roas-radar-migrate`: migration job
 - `roas-radar-meta-ads-sync`: scheduled spend sync job
 - `roas-radar-google-ads-sync`: scheduled spend sync job
+- `roas-radar-ga4-session-attribution`: scheduled GA4 ingestion job plus hourly Cloud Scheduler trigger
 
 That topology matches the current Node.js codebase and should remain the reference when preparing Cloud Run manifests or deployment scripts.
 
@@ -307,7 +308,7 @@ The migration runner in `src/db/migrate.ts` acquires a PostgreSQL advisory lock,
 ### 4. Start the API
 
 ```bash
-npm run dev
+npm run dev:api
 ```
 
 This starts `tsx watch src/server.ts`. By default the API listens on port `8080` unless `PORT` is set.
