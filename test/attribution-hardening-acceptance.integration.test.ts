@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
 import test from 'node:test';
 
+import { buildRawPayloadFixture } from './integration-test-helpers.js';
+
 process.env.DATABASE_URL ??= 'postgres://postgres:postgres@127.0.0.1:5432/roas_radar';
 process.env.REPORTING_API_TOKEN = 'test-reporting-token';
 process.env.SHOPIFY_APP_API_SECRET ??= 'test-app-secret';
@@ -275,6 +277,15 @@ test('hard-to-lose acceptance preserves canonical capture, session id, and Shopi
       msclkid: 'MSCLKID-123',
       ingestion_source: 'request_query'
     });
+    const orderProcessedAt = new Date(`${new Date().toISOString().slice(0, 10)}T12:15:00.000Z`);
+    const orderFixture = buildRawPayloadFixture(
+      {
+        id: 'hardening-order-1',
+        landing_session_id: bootstrap.body.sessionId,
+        note_attributes: []
+      },
+      'hardening-order-1'
+    );
 
     await pool.query(
       `
@@ -286,6 +297,9 @@ test('hard-to-lose acceptance preserves canonical capture, session id, and Shopi
           processed_at,
           landing_session_id,
           source_name,
+          payload_external_id,
+          payload_size_bytes,
+          payload_hash,
           raw_payload,
           ingested_at
         )
@@ -294,20 +308,23 @@ test('hard-to-lose acceptance preserves canonical capture, session id, and Shopi
           'USD',
           '120.00',
           '120.00',
-          '2026-04-23T12:15:00.000Z',
+          $6,
           $1::uuid,
           'web',
-          $2::jsonb,
+          $2,
+          $3,
+          $4,
+          $5::jsonb,
           now()
         )
       `,
       [
         bootstrap.body.sessionId,
-        JSON.stringify({
-          id: 'hardening-order-1',
-          landing_session_id: bootstrap.body.sessionId,
-          note_attributes: []
-        })
+        orderFixture.payloadExternalId,
+        orderFixture.payloadSizeBytes,
+        orderFixture.payloadHash,
+        orderFixture.rawPayloadJson,
+        orderProcessedAt.toISOString()
       ]
     );
 

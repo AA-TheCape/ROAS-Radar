@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Pool } from 'pg';
 
+import { buildRawPayloadFixture, resetIntegrationTables } from './integration-test-helpers.js';
+
 process.env.DATABASE_URL ??= 'postgres://postgres:postgres@127.0.0.1:5432/roas_radar';
 process.env.REPORTING_API_TOKEN = 'test-reporting-token';
 process.env.SHOPIFY_APP_API_SECRET ??= 'test-app-secret';
@@ -83,6 +85,8 @@ async function insertTrackingSession(pool: Pool, input: TrackingSessionInput): P
 }
 
 async function insertTrackingEvent(pool: Pool, input: TrackingEventInput): Promise<void> {
+  const payload = buildRawPayloadFixture({});
+
   await pool.query(
     `
       INSERT INTO tracking_events (
@@ -96,9 +100,11 @@ async function insertTrackingEvent(pool: Pool, input: TrackingEventInput): Promi
         gclid,
         shopify_checkout_token,
         shopify_cart_token,
-        raw_payload
+        raw_payload,
+        payload_size_bytes,
+        payload_hash
       )
-      VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, '{}'::jsonb)
+      VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13)
     `,
     [
       input.sessionId,
@@ -110,12 +116,20 @@ async function insertTrackingEvent(pool: Pool, input: TrackingEventInput): Promi
       input.utmCampaign ?? null,
       input.gclid ?? null,
       input.shopifyCheckoutToken ?? null,
-      input.shopifyCartToken ?? null
+      input.shopifyCartToken ?? null,
+      payload.rawPayloadJson,
+      payload.payloadSizeBytes,
+      payload.payloadHash
     ]
   );
 }
 
 async function insertShopifyOrder(pool: Pool, input: ShopifyOrderInput): Promise<void> {
+  const payload = buildRawPayloadFixture(
+    JSON.parse(input.rawPayload ?? JSON.stringify({ id: input.shopifyOrderId })),
+    input.shopifyOrderId
+  );
+
   await pool.query(
     `
       INSERT INTO shopify_orders (
@@ -128,6 +142,9 @@ async function insertShopifyOrder(pool: Pool, input: ShopifyOrderInput): Promise
         checkout_token,
         cart_token,
         source_name,
+        payload_external_id,
+        payload_size_bytes,
+        payload_hash,
         raw_payload,
         ingested_at
       )
@@ -141,7 +158,10 @@ async function insertShopifyOrder(pool: Pool, input: ShopifyOrderInput): Promise
         $4,
         $5,
         $6,
-        $7::jsonb,
+        $7,
+        $8,
+        $9,
+        $10::jsonb,
         now()
       )
     `,
@@ -152,7 +172,10 @@ async function insertShopifyOrder(pool: Pool, input: ShopifyOrderInput): Promise
       input.checkoutToken ?? null,
       input.cartToken ?? null,
       input.sourceName ?? 'web',
-      input.rawPayload ?? JSON.stringify({ id: input.shopifyOrderId })
+      payload.payloadExternalId,
+      payload.payloadSizeBytes,
+      payload.payloadHash,
+      payload.rawPayloadJson
     ]
   );
 }
@@ -160,25 +183,23 @@ async function insertShopifyOrder(pool: Pool, input: ShopifyOrderInput): Promise
 async function resetIntegrationDatabase() {
   const { pool } = await getModules();
 
-  await pool.query(`
-    TRUNCATE TABLE
-      attribution_jobs,
-      shopify_order_writeback_jobs,
-      attribution_order_credits,
-      attribution_results,
-      daily_reporting_metrics,
-      order_attribution_links,
-      session_attribution_touch_events,
-      session_attribution_identities,
-      shopify_order_line_items,
-      shopify_orders,
-      shopify_webhook_receipts,
-      tracking_events,
-      tracking_sessions,
-      shopify_customers,
-      customer_identities
-    RESTART IDENTITY CASCADE
-  `);
+  await resetIntegrationTables(pool, [
+    'attribution_jobs',
+    'shopify_order_writeback_jobs',
+    'attribution_order_credits',
+    'attribution_results',
+    'daily_reporting_metrics',
+    'order_attribution_links',
+    'session_attribution_touch_events',
+    'session_attribution_identities',
+    'shopify_order_line_items',
+    'shopify_orders',
+    'shopify_webhook_receipts',
+    'tracking_events',
+    'tracking_sessions',
+    'shopify_customers',
+    'customer_identities'
+  ]);
 }
 
 async function fetchAttributionResult(shopifyOrderId: string) {
@@ -333,8 +354,8 @@ test('recoverShopifyAttributionHints applies click-id-backed synthetic attributi
         attribution_reason: orderAudit?.attribution_reason
       },
       {
-        attribution_tier: 'deterministic_shopify_hint',
-        attribution_source: 'shopify_marketing_hint',
+        attribution_tier: 'deterministic_first_party',
+        attribution_source: 'stitched_identity_journey',
         attribution_reason: 'shopify_hint_derived'
       }
     );

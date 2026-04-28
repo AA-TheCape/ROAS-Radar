@@ -3,6 +3,7 @@ import test from 'node:test';
 import type { Pool } from 'pg';
 
 import type { OrderAttributionBackfillProgress } from '../src/modules/attribution/backfill-progress.js';
+import { buildRawPayloadFixture, resetIntegrationTables } from './integration-test-helpers.js';
 
 process.env.DATABASE_URL ??= 'postgres://postgres:postgres@127.0.0.1:5432/roas_radar';
 
@@ -24,25 +25,23 @@ async function resetIntegrationDatabase() {
 
   shopifyWritebackTestUtils.reset();
 
-  await pool.query(`
-    TRUNCATE TABLE
-      attribution_jobs,
-      shopify_order_writeback_jobs,
-      attribution_order_credits,
-      attribution_results,
-      daily_reporting_metrics,
-      order_attribution_links,
-      session_attribution_touch_events,
-      session_attribution_identities,
-      shopify_order_line_items,
-      shopify_orders,
-      shopify_webhook_receipts,
-      tracking_events,
-      tracking_sessions,
-      shopify_customers,
-      customer_identities
-    RESTART IDENTITY CASCADE
-  `);
+  await resetIntegrationTables(pool, [
+    'attribution_jobs',
+    'shopify_order_writeback_jobs',
+    'attribution_order_credits',
+    'attribution_results',
+    'daily_reporting_metrics',
+    'order_attribution_links',
+    'session_attribution_touch_events',
+    'session_attribution_identities',
+    'shopify_order_line_items',
+    'shopify_orders',
+    'shopify_webhook_receipts',
+    'tracking_events',
+    'tracking_sessions',
+    'shopify_customers',
+    'customer_identities'
+  ]);
 }
 
 async function insertRecoverableOrder(pool: Pool, input: {
@@ -51,11 +50,11 @@ async function insertRecoverableOrder(pool: Pool, input: {
   processedAt: string;
 }): Promise<string> {
   const emptyPayload = JSON.stringify({});
-  const orderPayload = JSON.stringify({
+  const orderFixture = buildRawPayloadFixture({
     id: input.shopifyOrderId,
     source_name: 'web',
     note_attributes: []
-  });
+  }, input.shopifyOrderId);
   const sessionResult = await pool.query<{ id: string }>(
     `
       INSERT INTO tracking_sessions (
@@ -225,7 +224,9 @@ async function insertRecoverableOrder(pool: Pool, input: {
         processed_at,
         checkout_token,
         source_name,
+        payload_external_id,
         payload_size_bytes,
+        payload_hash,
         raw_payload,
         ingested_at
       )
@@ -238,7 +239,9 @@ async function insertRecoverableOrder(pool: Pool, input: {
         $3,
         'web',
         $4,
-        $5::jsonb,
+        $5,
+        $6,
+        $7::jsonb,
         now()
       )
     `,
@@ -246,8 +249,10 @@ async function insertRecoverableOrder(pool: Pool, input: {
       input.shopifyOrderId,
       input.processedAt,
       input.checkoutToken,
-      Buffer.byteLength(orderPayload, 'utf8'),
-      orderPayload
+      orderFixture.payloadExternalId,
+      orderFixture.payloadSizeBytes,
+      orderFixture.payloadHash,
+      orderFixture.rawPayloadJson
     ]
   );
 
@@ -258,11 +263,11 @@ async function insertUnattributedOrder(pool: Pool, input: {
   shopifyOrderId: string;
   processedAt: string;
 }): Promise<void> {
-  const orderPayload = JSON.stringify({
+  const orderFixture = buildRawPayloadFixture({
     id: input.shopifyOrderId,
     source_name: 'web',
     note_attributes: []
-  });
+  }, input.shopifyOrderId);
 
   await pool.query(
     `
@@ -273,7 +278,9 @@ async function insertUnattributedOrder(pool: Pool, input: {
         total_price,
         processed_at,
         source_name,
+        payload_external_id,
         payload_size_bytes,
+        payload_hash,
         raw_payload,
         ingested_at
       )
@@ -285,15 +292,19 @@ async function insertUnattributedOrder(pool: Pool, input: {
         $2,
         'web',
         $3,
-        $4::jsonb,
+        $4,
+        $5,
+        $6::jsonb,
         now()
       )
     `,
     [
       input.shopifyOrderId,
       input.processedAt,
-      Buffer.byteLength(orderPayload, 'utf8'),
-      orderPayload
+      orderFixture.payloadExternalId,
+      orderFixture.payloadSizeBytes,
+      orderFixture.payloadHash,
+      orderFixture.rawPayloadJson
     ]
   );
 }
@@ -463,7 +474,9 @@ test('historical backfill recomputes every order in scope and persists unattribu
           attribution_reason,
           attributed_at,
           reprocess_version,
-          model_version
+          model_version,
+          match_source,
+          confidence_label
         )
         VALUES (
           'order-backfill-historical-2',
@@ -476,7 +489,9 @@ test('historical backfill recomputes every order in scope and persists unattribu
           'legacy_seed',
           now(),
           1,
-          1
+          1,
+          'legacy_seed',
+          'high'
         )
       `
     );

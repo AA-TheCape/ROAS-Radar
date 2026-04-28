@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Pool } from 'pg';
 
+import { buildRawPayloadFixture, resetIntegrationTables } from './integration-test-helpers.js';
+
 process.env.DATABASE_URL ??= 'postgres://postgres:postgres@127.0.0.1:5432/roas_radar';
 process.env.REPORTING_API_TOKEN = 'test-reporting-token';
 process.env.SHOPIFY_APP_API_SECRET ??= 'test-app-secret';
@@ -159,6 +161,7 @@ async function insertTrackingSession(pool: Pool, input: TrackingSessionInput): P
 }
 
 async function insertTrackingEvent(pool: Pool, input: TrackingEventInput): Promise<string> {
+  const rawPayloadFixture = buildRawPayloadFixture({});
   const result = await pool.query<{ id: string }>(
     `
       INSERT INTO tracking_events (
@@ -180,6 +183,8 @@ async function insertTrackingEvent(pool: Pool, input: TrackingEventInput): Promi
         msclkid,
         shopify_checkout_token,
         shopify_cart_token,
+        payload_size_bytes,
+        payload_hash,
         raw_payload
       )
       VALUES (
@@ -201,7 +206,9 @@ async function insertTrackingEvent(pool: Pool, input: TrackingEventInput): Promi
         $16,
         $17,
         $18,
-        '{}'::jsonb
+        $19,
+        $20,
+        $21::jsonb
       )
       RETURNING id::text
     `,
@@ -223,7 +230,10 @@ async function insertTrackingEvent(pool: Pool, input: TrackingEventInput): Promi
       input.ttclid ?? null,
       input.msclkid ?? null,
       input.shopifyCheckoutToken ?? null,
-      input.shopifyCartToken ?? null
+      input.shopifyCartToken ?? null,
+      rawPayloadFixture.payloadSizeBytes,
+      rawPayloadFixture.payloadHash,
+      rawPayloadFixture.rawPayloadJson
     ]
   );
 
@@ -231,6 +241,9 @@ async function insertTrackingEvent(pool: Pool, input: TrackingEventInput): Promi
 }
 
 async function insertShopifyOrder(pool: Pool, input: ShopifyOrderInput): Promise<void> {
+  const rawPayloadJson = input.rawPayload ?? JSON.stringify({ id: input.shopifyOrderId });
+  const orderFixture = buildRawPayloadFixture(JSON.parse(rawPayloadJson) as Record<string, unknown>, input.shopifyOrderId);
+
   await pool.query(
     `
       INSERT INTO shopify_orders (
@@ -244,6 +257,9 @@ async function insertShopifyOrder(pool: Pool, input: ShopifyOrderInput): Promise
         cart_token,
         customer_identity_id,
         source_name,
+        payload_external_id,
+        payload_size_bytes,
+        payload_hash,
         raw_payload,
         ingested_at
       )
@@ -258,7 +274,10 @@ async function insertShopifyOrder(pool: Pool, input: ShopifyOrderInput): Promise
         $7,
         $8::uuid,
         $9,
-        $10::jsonb,
+        $10,
+        $11,
+        $12,
+        $13::jsonb,
         now()
       )
     `,
@@ -272,7 +291,10 @@ async function insertShopifyOrder(pool: Pool, input: ShopifyOrderInput): Promise
       input.cartToken ?? null,
       input.customerIdentityId ?? null,
       input.sourceName ?? 'web',
-      input.rawPayload ?? JSON.stringify({ id: input.shopifyOrderId })
+      orderFixture.payloadExternalId,
+      orderFixture.payloadSizeBytes,
+      orderFixture.payloadHash,
+      orderFixture.rawPayloadJson
     ]
   );
 }
@@ -366,25 +388,23 @@ async function fetchOrderAttributionAudit(shopifyOrderId: string) {
 async function resetIntegrationDatabase() {
   const { pool } = await getModules();
 
-  await pool.query(`
-    TRUNCATE TABLE
-      attribution_jobs,
-      shopify_order_writeback_jobs,
-      attribution_order_credits,
-      attribution_results,
-      daily_reporting_metrics,
-      order_attribution_links,
-      session_attribution_touch_events,
-      session_attribution_identities,
-      shopify_order_line_items,
-      shopify_orders,
-      shopify_webhook_receipts,
-      tracking_events,
-      tracking_sessions,
-      shopify_customers,
-      customer_identities
-    RESTART IDENTITY CASCADE
-  `);
+  await resetIntegrationTables(pool, [
+    'attribution_jobs',
+    'shopify_order_writeback_jobs',
+    'attribution_order_credits',
+    'attribution_results',
+    'daily_reporting_metrics',
+    'order_attribution_links',
+    'session_attribution_touch_events',
+    'session_attribution_identities',
+    'shopify_order_line_items',
+    'shopify_orders',
+    'shopify_webhook_receipts',
+    'tracking_events',
+    'tracking_sessions',
+    'shopify_customers',
+    'customer_identities'
+  ]);
 }
 
 test('order finalization persists a deterministic last non-direct winner snapshot with source touch event auditability', async () => {
@@ -392,6 +412,8 @@ test('order finalization persists a deterministic last non-direct winner snapsho
   const { pool, enqueueAttributionForOrder, processAttributionQueue } = await getModules();
 
   try {
+    const emptyRawPayloadFixture = buildRawPayloadFixture({});
+    const orderRawPayloadFixture = buildRawPayloadFixture({ id: 'order-finalization-1' }, 'order-finalization-1');
     const paidSessionResult = await pool.query<{ id: string }>(
       `
         INSERT INTO tracking_sessions (
@@ -431,6 +453,8 @@ test('order finalization persists a deterministic last non-direct winner snapsho
           utm_medium,
           utm_campaign,
           gclid,
+          payload_size_bytes,
+          payload_hash,
           raw_payload
         )
         VALUES (
@@ -443,11 +467,18 @@ test('order finalization persists a deterministic last non-direct winner snapsho
           'cpc',
           'brand-search',
           'gclid-123',
-          '{}'::jsonb
+          $2,
+          $3,
+          $4::jsonb
         )
         RETURNING id::text
       `,
-      [paidSessionId]
+      [
+        paidSessionId,
+        emptyRawPayloadFixture.payloadSizeBytes,
+        emptyRawPayloadFixture.payloadHash,
+        emptyRawPayloadFixture.rawPayloadJson
+      ]
     );
     const paidEventId = paidEventResult.rows[0].id;
 
@@ -476,6 +507,8 @@ test('order finalization persists a deterministic last non-direct winner snapsho
           occurred_at,
           page_url,
           shopify_checkout_token,
+          payload_size_bytes,
+          payload_hash,
           raw_payload
         )
         VALUES (
@@ -484,10 +517,17 @@ test('order finalization persists a deterministic last non-direct winner snapsho
           '2026-04-03T09:00:00.000Z',
           'https://store.example/checkout',
           'checkout-direct-1',
-          '{}'::jsonb
+          $2,
+          $3,
+          $4::jsonb
         )
       `,
-      [directSessionId]
+      [
+        directSessionId,
+        emptyRawPayloadFixture.payloadSizeBytes,
+        emptyRawPayloadFixture.payloadHash,
+        emptyRawPayloadFixture.rawPayloadJson
+      ]
     );
 
     await pool.query(
@@ -501,6 +541,9 @@ test('order finalization persists a deterministic last non-direct winner snapsho
           landing_session_id,
           checkout_token,
           source_name,
+          payload_external_id,
+          payload_size_bytes,
+          payload_hash,
           raw_payload,
           ingested_at
         )
@@ -513,11 +556,20 @@ test('order finalization persists a deterministic last non-direct winner snapsho
           $1::uuid,
           'checkout-direct-1',
           'web',
-          '{"id":"order-finalization-1"}'::jsonb,
+          $2,
+          $3,
+          $4,
+          $5::jsonb,
           now()
         )
       `,
-      [paidSessionId]
+      [
+        paidSessionId,
+        orderRawPayloadFixture.payloadExternalId,
+        orderRawPayloadFixture.payloadSizeBytes,
+        orderRawPayloadFixture.payloadHash,
+        orderRawPayloadFixture.rawPayloadJson
+      ]
     );
 
     await enqueueAttributionForOrder('order-finalization-1', 'test_order_finalization_snapshot');

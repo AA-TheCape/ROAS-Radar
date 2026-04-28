@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
 import test from 'node:test';
 
+import { buildRawPayloadFixture } from './integration-test-helpers.js';
+
 process.env.DATABASE_URL ??= 'postgres://postgres:postgres@127.0.0.1:5432/roas_radar';
 process.env.REPORTING_API_TOKEN = 'test-reporting-token';
 process.env.SHOPIFY_APP_API_SECRET ??= 'test-app-secret';
@@ -118,6 +120,15 @@ test('paid capture survives attribution, Shopify writeback, and reporting end to
   try {
     const bootstrap = await bootstrapSession(server);
     assert.equal(bootstrap.isNewSession, true);
+    const reportingDate = new Date().toISOString().slice(0, 10);
+    const orderProcessedAt = new Date(`${reportingDate}T12:15:00.000Z`);
+    const orderFixture = buildRawPayloadFixture(
+      {
+        id: 'e2e-order-1',
+        landing_session_id: bootstrap.sessionId
+      },
+      'e2e-order-1'
+    );
 
     await pool.query(
       `
@@ -129,6 +140,9 @@ test('paid capture survives attribution, Shopify writeback, and reporting end to
           processed_at,
           landing_session_id,
           source_name,
+          payload_external_id,
+          payload_size_bytes,
+          payload_hash,
           raw_payload,
           ingested_at
         )
@@ -137,19 +151,23 @@ test('paid capture survives attribution, Shopify writeback, and reporting end to
           'USD',
           '120.00',
           '120.00',
-          '2026-04-23T12:15:00.000Z',
+          $6,
           $1::uuid,
           'web',
-          $2::jsonb,
+          $2,
+          $3,
+          $4,
+          $5::jsonb,
           now()
         )
       `,
       [
         bootstrap.sessionId,
-        JSON.stringify({
-          id: 'e2e-order-1',
-          landing_session_id: bootstrap.sessionId
-        })
+        orderFixture.payloadExternalId,
+        orderFixture.payloadSizeBytes,
+        orderFixture.payloadHash,
+        orderFixture.rawPayloadJson,
+        orderProcessedAt.toISOString()
       ]
     );
 
@@ -226,14 +244,14 @@ test('paid capture survives attribution, Shopify writeback, and reporting end to
 
     const reportingSummary = await requestJson(
       server,
-      '/api/reporting/summary?startDate=2026-04-23&endDate=2026-04-23&source=google&campaign=spring-sale'
+      `/api/reporting/summary?startDate=${reportingDate}&endDate=${reportingDate}&source=google&campaign=spring-sale`
     );
 
     assert.equal(reportingSummary.response.status, 200);
     assert.deepEqual(reportingSummary.body, {
       range: {
-        startDate: '2026-04-23',
-        endDate: '2026-04-23'
+        startDate: reportingDate,
+        endDate: reportingDate
       },
       totals: {
         visits: 0,
