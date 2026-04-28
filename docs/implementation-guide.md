@@ -31,6 +31,7 @@ The repository currently contains one Node.js backend, one React dashboard, and 
 - Meta Ads sync worker: `src/meta-ads-worker.ts`
 - Google Ads sync worker: `src/google-ads-worker.ts`
 - Data quality worker: `src/data-quality-worker.ts`
+- GA4 session attribution worker: `src/ga4-session-attribution-worker.ts`
 - React dashboard: Vite app under `dashboard/`
 - PostgreSQL schema and migrations: `db/migrations/*.sql`
 
@@ -100,10 +101,12 @@ The current deployment docs in `infra/cloud-run/README.md` assume:
 
 - `roas-radar-api`: public service
 - `roas-radar-attribution-worker`: internal worker service
+- `roas-radar-dashboard`: optional public dashboard service
 - `roas-radar-migrate`: migration job
 - `roas-radar-meta-ads-sync`: scheduled spend sync job
 - `roas-radar-google-ads-sync`: scheduled spend sync job
-- `roas-radar-ga4-session-attribution`: scheduled GA4 ingestion job plus hourly Cloud Scheduler trigger
+- `roas-radar-ga4-session-attribution`: scheduled GA4 ingestion job
+- `roas-radar-ga4-session-attribution-scheduler`: hourly Cloud Scheduler HTTP trigger for the GA4 job
 
 That topology matches the current Node.js codebase and should remain the reference when preparing Cloud Run manifests or deployment scripts.
 
@@ -263,19 +266,19 @@ These are required only if you are running the Shopify OAuth install flow or val
 
 ### Prerequisites
 
-- Node.js 22 or newer
+- Node.js 22.x
 - npm
 - PostgreSQL
 
-The backend `package.json` declares `node >=22`. The dashboard is a separate npm project in `dashboard/`.
+The backend `package.json` declares `node >=22`, and the checked-in production Docker image uses `node:22-bookworm-slim`. The dashboard is a separate npm project in `dashboard/`.
 
 ### 1. Install dependencies
 
 From the repository root:
 
 ```bash
-npm install
-npm --prefix dashboard install
+npm ci --include=dev
+npm ci --include=dev --prefix dashboard
 ```
 
 ### 2. Create a local database
@@ -470,7 +473,7 @@ Responsibilities:
 
 ### Data quality worker
 
-Start with `npm run data-quality:check`.
+Start with `npm run data-quality:run`.
 
 Responsibilities:
 
@@ -482,30 +485,65 @@ Responsibilities:
 
 ## Engineer Validation Flow
 
-The fastest reliable way to validate the MVP is to use the existing integration harness and tests before doing any manual probing.
+Use this exact order when validating backend changes locally. It matches the current runtime entrypoints, the checked-in Docker image, and the GA4 branch verification contract for this branch.
 
-### 1. Run the full automated test suite
+### 1. Clean install on Node 22
 
 ```bash
-npm test
+npm ci --include=dev
 ```
 
-`scripts/run-tests.mjs` will:
+### 2. Compile the backend
 
-- run migrations before integration tests
-- execute unit tests under `test/*.test.ts`
-- execute integration tests:
-  - `test/attribution-e2e.integration.test.ts`
-  - `test/reporting-api.integration.test.ts`
+```bash
+npm run build
+```
 
-Use these narrower commands when iterating:
+This generates the `dist/` output used by Cloud Run and by the runtime smoke steps below.
+
+### 3. Smoke the compiled API entrypoint
+
+```bash
+npm run start:api
+```
+
+Confirm the process starts cleanly from `dist/src/server.js`, then stop it after the readiness smoke you need for the change under review.
+
+### 4. Smoke the compiled GA4 worker entrypoint
+
+```bash
+npm run ga4:ingest:start
+```
+
+This validates that the checked-in GA4 worker entrypoint resolves from `dist/src/ga4-session-attribution-worker.js`. For a local bounded run instead of the compiled smoke, use `npm run ga4:ingest` with explicit `GA4_INGESTION_START_HOUR` and `GA4_INGESTION_END_HOUR` overrides.
+
+### 5. Verify migrations
+
+```bash
+npm run db:migrate:check
+```
+
+Run this against a disposable PostgreSQL instance. It is the branch-gate migration integrity check and is stricter than only applying migrations once.
+
+### 6. Run the automated suites in order
 
 ```bash
 npm run test:unit
 npm run test:integration
+npm run test:attribution
 ```
 
-### 2. Understand what the synthetic harness validates
+`npm run test:integration` covers the end-to-end ingestion and reporting harness. `npm run test:attribution` is the critical GA4 and attribution suite that must pass before merge.
+
+### 7. Verify Docker packaging parity
+
+```bash
+docker build -t roas-radar .
+```
+
+The root `Dockerfile` is the production backend packaging path for Cloud Run, so a successful local build is part of verifying that the deployable artifact shape still matches the docs and runtime contract.
+
+### 8. Understand what the synthetic harness validates
 
 `test/e2e-harness.ts` seeds two deterministic journeys:
 
@@ -523,7 +561,7 @@ The harness:
 
 This makes it the best reference for how the system is expected to behave from ingestion through reporting.
 
-### 3. Validate attribution behavior directly
+### 9. Validate attribution behavior directly
 
 Run:
 
@@ -546,7 +584,7 @@ Expected evidence:
 - `rule_based_weighted` splits revenue across Google, direct, and Meta, with Meta marked primary
 - the checkout-token order attributes to the checkout-started session
 
-### 4. Validate reporting responses against seeded data
+### 10. Validate reporting responses against seeded data
 
 `test/reporting-api.integration.test.ts` validates the reporting endpoints directly against persisted aggregates.
 
@@ -562,7 +600,7 @@ The seeded journey assertions in `test/attribution-e2e.integration.test.ts` also
 - `/api/reporting/timeseries`
 - `/api/reporting/orders`
 
-### 5. Optional manual API smoke test
+### 11. Optional manual API smoke test
 
 After starting the API and worker locally, post a synthetic event:
 
@@ -606,7 +644,7 @@ curl 'http://localhost:8080/api/reporting/summary?startDate=2026-04-01&endDate=2
   -H 'Authorization: Bearer dev-reporting-token'
 ```
 
-### 6. Optional dashboard validation
+### 12. Optional dashboard validation
 
 With the API and dashboard running:
 
@@ -663,11 +701,10 @@ When the local dashboard is loading but the numbers look wrong, use this map bef
 
 ## Recommended Engineer Workflow
 
-When making changes to tracking, Shopify ingestion, attribution, or reporting:
+When making changes to tracking, Shopify ingestion, attribution, reporting, or GA4 ingestion:
 
-1. Run `npm run test:integration`.
-2. Run any directly related unit tests or `npm test`.
-3. Smoke-test `/healthz`, `/readyz`, and the affected API route locally.
-4. If the change affects dashboard behavior, run `npm --prefix dashboard run dev` and verify the corresponding view.
-5. If the change affects Cloud Run deployment shape or secrets, re-read `infra/cloud-run/README.md` before merging.
-6. If the change affects Shopify, Meta Ads, or Google Ads raw-source persistence, update `docs/raw-payload-persistence-contract.md` and the nearby ingestion-module reference in the same PR.
+1. Run the required backend verification order: `npm ci --include=dev`, `npm run build`, `npm run start:api`, `npm run ga4:ingest:start`, `npm run db:migrate:check`, `npm run test:unit`, `npm run test:integration`, `npm run test:attribution`, `docker build -t roas-radar .`.
+2. If the change affects manual runtime behavior, smoke-test `/healthz`, `/readyz`, and the affected API or worker path locally.
+3. If the change affects dashboard behavior, run `npm --prefix dashboard run dev` and verify the corresponding view.
+4. If the change affects Cloud Run deployment shape, env vars, scheduler wiring, or secrets, re-read `infra/cloud-run/README.md` and `docs/runbooks/cloud-run-pipelines.md` before merging.
+5. If the change affects Shopify, Meta Ads, Google Ads, or GA4 raw-source persistence, update the governing contract or runbook in the same PR.

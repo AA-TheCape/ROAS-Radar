@@ -55,7 +55,7 @@ The goal is to avoid wide JSONB GIN indexes and repeated `raw_payload ->>` scans
 Use the staging-safe plan check before approving changes to raw-payload lookup paths:
 
 ```bash
-npm run db:verify-raw-payload-query-plans
+node scripts/verify-raw-payload-query-plans.mjs
 ```
 
 The script seeds representative rows inside a transaction, runs `EXPLAIN (FORMAT JSON)` against the supported lookup patterns, asserts that the targeted lookup indexes are used, and then rolls the data back.
@@ -90,7 +90,7 @@ The cleanup contract is:
 Use the staging-safe plan check before approving lookup-path changes:
 
 ```bash
-npm run db:verify-ga4-fallback-query-plans
+node scripts/verify-ga4-fallback-query-plans.mjs
 ```
 
 `order_attribution_links` rows are not pruned by the 30-day session cleanup job.

@@ -11,9 +11,33 @@ Use this runbook when the GA4 session attribution Cloud Run Job is lagging, dead
 
 ## Quick verification
 
+Confirm the scheduler and job contract first:
+
+```bash
+gcloud run jobs describe roas-radar-ga4-session-attribution-staging --region us-central1
+gcloud scheduler jobs describe roas-radar-ga4-session-attribution-scheduler-staging --location us-central1
+```
+
+The expected deploy shape is:
+
+- Cloud Run Job command: `npm`
+- Cloud Run Job args: `run,ga4:ingest:start`
+- Cloud Run Job retries: `0`
+- Scheduler target: Run Jobs API `.../jobs/roas-radar-ga4-session-attribution-staging:run`
+- Scheduler frequency: hourly, default `5 * * * *`
+
+Then execute the job and inspect logs:
+
 ```bash
 gcloud run jobs execute roas-radar-ga4-session-attribution-staging --region us-central1 --wait
 gcloud logging read 'jsonPayload.event="ga4_session_attribution_worker_started"' --limit 20
+```
+
+Also inspect failure and progress signals when the execution does not behave as expected:
+
+```bash
+gcloud logging read 'jsonPayload.event="ga4_session_attribution_worker_failed"' --limit 20
+gcloud logging read 'jsonPayload.event="ga4_hour_dead_lettered"' --limit 20
 ```
 
 Verify the queue and dead-letter tables directly when logs are not enough:
@@ -51,12 +75,15 @@ npm run ga4:ingest
 
 The worker normalizes both values to whole UTC hours and processes every hour in the range.
 
+For Cloud Run parity, keep production and staging replays on `npm run ga4:ingest:start` unless you explicitly need a local developer replay with `tsx`.
+
 ## Common failures
 
 - `Invalid GA4_INGESTION_* value`: the scheduler or job env file contains a non-positive integer or malformed timestamp.
 - `GA4 BigQuery ingestion is disabled`: `GA4_BIGQUERY_ENABLED` is false or missing in the job environment.
 - repeated BigQuery transport failures: confirm the job service account still has BigQuery access and that the dataset location matches the configured executor location.
 - stale job locks: verify `GA4_INGESTION_STALE_LOCK_MINUTES` and check whether an older execution is still running.
+- scheduler executes but no useful work is claimed: verify `GA4_INGESTION_REQUESTED_BY`, `GA4_INGESTION_BATCH_SIZE`, and the BigQuery enablement flag in the environment file that `deploy.sh` loaded.
 
 ## Rollback
 

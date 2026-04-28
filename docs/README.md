@@ -4,7 +4,7 @@
 
 ### Engineers
 
-1. Read [Implementation Guide](implementation-guide.md) for local setup, service topology, validation flow, and troubleshooting.
+1. Read [Implementation Guide](implementation-guide.md) for local setup, service topology, the required Node 22 verification order, and troubleshooting.
 2. Read [Attribution Schema V1](attribution-schema-v1.md) for canonical field names, normalization rules, DB mappings, and Shopify attribute keys.
 3. Read [Raw Payload Persistence Contract](raw-payload-persistence-contract.md) before changing Shopify, Meta Ads, or Google Ads raw-source ingestion behavior.
 4. Read [Operational Attribution Contracts](operational-attribution-contracts.md) for resolver precedence, Shopify writeback, retention, and recovery semantics.
@@ -20,11 +20,11 @@
 - Start with [Implementation Guide](implementation-guide.md#troubleshooting) for local setup and validation issues.
 - Use [Operational Attribution Contracts](operational-attribution-contracts.md) when you need resolver, writeback, retention, or dead-letter behavior.
 - Use [Attribution Completeness](runbooks/attribution-completeness.md), [Ingestion Failures](runbooks/ingestion-failures.md), and [Attribution Worker Backlog](runbooks/attribution-worker-backlog.md) for incident response.
-- Use [Cloud Run Pipelines](runbooks/cloud-run-pipelines.md) for Cloud Run deploy, scheduler, IAM, and rollback operations.
+- Use [Cloud Run Pipelines](runbooks/cloud-run-pipelines.md) for the full pre-deploy verification order, Cloud Run deploy, scheduler validation, IAM, and rollback operations.
 
 ## Core References
 
-- [Implementation Guide](implementation-guide.md): local setup, service responsibilities, end-to-end validation, ad sync raw request/response audit storage, and the raw-vs-derived contract for ad spend tables.
+- [Implementation Guide](implementation-guide.md): local setup, service responsibilities, required backend verification flow, ad sync raw request/response audit storage, and the raw-vs-derived contract for ad spend tables.
 - [Attribution Schema V1](attribution-schema-v1.md): shared attribution contract, normalization rules, DB mappings, Shopify keys, rollout expectations, and how canonical attribution fields relate to raw-source storage.
 - [Raw Payload Persistence Contract](raw-payload-persistence-contract.md): exact-as-received JSONB contract for Shopify, Meta Ads, and Google Ads raw-source ingestion surfaces.
 - [Operational Attribution Contracts](operational-attribution-contracts.md): resolver precedence, Shopify writeback lifecycle, retention rules, and incident-routing links.
@@ -42,4 +42,4 @@
 - [Attribution Worker Backlog](runbooks/attribution-worker-backlog.md): worker lag investigation and recovery steps.
 - [Ingestion Failures](runbooks/ingestion-failures.md): failed ingestion triage and remediation.
 - [API Latency](runbooks/api-latency.md): API latency investigation and recovery.
-- [Cloud Run Pipelines](runbooks/cloud-run-pipelines.md): staged deploy verification, scheduler validation, least-privilege IAM, and rollback steps.
+- [Cloud Run Pipelines](runbooks/cloud-run-pipelines.md): full branch-gate verification order, staged deploy verification, scheduler validation, least-privilege IAM, and rollback steps.

@@ -2,15 +2,17 @@
 
 This directory contains the checked-in deployment contract for the Node backend, the optional dashboard service, and the scheduled jobs that support attribution and ad-ingestion workloads.
 
+The root backend `Dockerfile` is the production packaging path for every backend Cloud Run workload in this directory. It builds on `node:22-bookworm-slim` and defaults the API container command to `npm run start:api`.
+
 ## Managed workloads
 
-- `roas-radar-api`: public backend service running `npm run start:api`
+- `roas-radar-api`: public backend service running the image default command `npm run start:api`
 - `roas-radar-attribution-worker`: internal worker service running `npm run start:worker-service`
 - `roas-radar-migrate`: one-shot migration job running `npm run db:migrate`
 - `roas-radar-meta-ads-sync`: scheduled job running `npm run meta-ads:sync`
 - `roas-radar-google-ads-sync`: scheduled job running `npm run google-ads:sync`
 - `roas-radar-ga4-session-attribution`: scheduled GA4 ingestion job running `npm run ga4:ingest:start`
-- `roas-radar-ga4-session-attribution-scheduler`: Cloud Scheduler HTTP job that executes the GA4 ingestion Cloud Run Job
+- `roas-radar-ga4-session-attribution-scheduler`: Cloud Scheduler HTTP job that executes the GA4 ingestion Cloud Run Job through the Run Jobs API
 
 ## Files
 
@@ -34,6 +36,24 @@ Each environment file must define:
 
 The checked-in env files are valid shell files. Replace the placeholder project id, Cloud SQL connection name, VPC connector, and any extra secret bindings before deploying.
 
+## Required pre-deploy verification
+
+Run these commands from the repo root on Node 22 before deploying:
+
+```bash
+npm ci --include=dev
+npm run build
+npm run start:api
+npm run ga4:ingest:start
+npm run db:migrate:check
+npm run test:unit
+npm run test:integration
+npm run test:attribution
+docker build -t roas-radar .
+```
+
+This sequence validates the compiled backend entrypoints, the migration check, the GA4-critical test suite, and the Docker packaging path that Cloud Run consumes.
+
 ## Typical flow
 
 ```bash
@@ -53,11 +73,20 @@ Common deploy flags:
 The deploy contract for GA4 is:
 
 1. Deploy the backend image that contains `dist/src/ga4-session-attribution-worker.js`.
-2. Deploy the Cloud Run Job with `npm run ga4:ingest:start`.
-3. Bind `GA4_BIGQUERY_ENABLED=true` plus the GA4 ingestion retry and stale-lock env vars.
+2. Deploy the Cloud Run Job with command `npm` and args `run,ga4:ingest:start`.
+3. Bind `GA4_BIGQUERY_ENABLED=true` plus `GA4_INGESTION_REQUESTED_BY`, batch size, retry, backoff, and stale-lock env vars.
 4. Upsert the Cloud Scheduler job on `5 * * * *` unless the environment file says otherwise.
+5. Keep the Cloud Run Job retry count at `0`; the application owns hour-level retry and dead-letter behavior.
 
-The worker itself handles hour-level retries and dead-lettering, so the job-level Cloud Run retry count stays at `0`.
+The checked-in environment files set:
+
+- `GA4_INGESTION_REQUESTED_BY=cloud-run-scheduler-<environment>`
+- `GA4_INGESTION_BATCH_SIZE=6`
+- `GA4_INGESTION_MAX_RETRIES=5`
+- `GA4_INGESTION_INITIAL_BACKOFF_SECONDS=300`
+- `GA4_INGESTION_MAX_BACKOFF_SECONDS=21600`
+- `GA4_INGESTION_STALE_LOCK_MINUTES=30`
+- `GA4_INGESTION_SCHEDULER_TIME_ZONE=Etc/UTC`
 
 ## Verification after deploy
 
@@ -65,6 +94,9 @@ The worker itself handles hour-level retries and dead-lettering, so the job-leve
 - `gcloud run services describe "$ATTRIBUTION_WORKER_SERVICE_NAME" --region "$GCP_REGION"`
 - `gcloud run jobs describe "$GA4_INGESTION_JOB_NAME" --region "$GCP_REGION"`
 - `gcloud scheduler jobs describe "$GA4_INGESTION_SCHEDULER_JOB_NAME" --location "$GCP_REGION"`
+- `gcloud run jobs execute "$MIGRATION_JOB_NAME" --region "$GCP_REGION" --wait`
 - `gcloud run jobs execute "$GA4_INGESTION_JOB_NAME" --region "$GCP_REGION" --wait`
+
+Check that the job description still shows command `npm`, args `run,ga4:ingest:start`, and `maxRetries: 0`.
 
 For repeated GA4 failures, use `docs/runbooks/ga4-hourly-ingestion.md`. For staged fallback cutover, use `docs/runbooks/ga4-fallback-rollout.md`.
