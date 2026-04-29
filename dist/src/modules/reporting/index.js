@@ -1,18 +1,18 @@
-import { Router } from 'express';
-import { z } from 'zod';
-import { query } from '../../db/pool.js';
-import { calculatePerformanceMetrics } from '../../shared/metrics.js';
-import { ATTRIBUTION_MODELS } from '../attribution/engine.js';
-import { attachAuthContext, requireAuthenticated } from '../auth/index.js';
-import { fetchDataQualityReport, resolveRunDate } from '../data-quality/index.js';
-import { getReportingTimezone } from '../settings/index.js';
+import { Router } from "express";
+import { z } from "zod";
+import { query } from "../../db/pool.js";
+import { calculatePerformanceMetrics } from "../../shared/metrics.js";
+import { ATTRIBUTION_MODELS } from "../attribution/engine.js";
+import { attachAuthContext, requireAuthenticated } from "../auth/index.js";
+import { fetchDataQualityReport, resolveRunDate, } from "../data-quality/index.js";
+import { getReportingTimezone } from "../settings/index.js";
 class ReportingHttpError extends Error {
     statusCode;
     code;
     details;
     constructor(statusCode, code, message, details) {
         super(message);
-        this.name = 'ReportingHttpError';
+        this.name = "ReportingHttpError";
         this.statusCode = statusCode;
         this.code = code;
         this.details = details;
@@ -22,36 +22,36 @@ const dateStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const baseFiltersObjectSchema = z.object({
     startDate: dateStringSchema,
     endDate: dateStringSchema,
-    attributionModel: z.enum(ATTRIBUTION_MODELS).optional().default('last_touch'),
+    attributionModel: z.enum(ATTRIBUTION_MODELS).optional().default("last_touch"),
     source: z.string().trim().min(1).optional(),
-    campaign: z.string().trim().min(1).optional()
+    campaign: z.string().trim().min(1).optional(),
 });
 function withValidDateRange(schema) {
     return schema.superRefine((value, ctx) => {
         if (value.startDate > value.endDate) {
             ctx.addIssue({
                 code: z.ZodIssueCode.custom,
-                message: 'startDate must be on or before endDate',
-                path: ['startDate']
+                message: "startDate must be on or before endDate",
+                path: ["startDate"],
             });
         }
     });
 }
 const baseFiltersSchema = withValidDateRange(baseFiltersObjectSchema);
 const campaignsQuerySchema = withValidDateRange(baseFiltersObjectSchema.extend({
-    limit: z.coerce.number().int().positive().max(200).optional().default(50)
+    limit: z.coerce.number().int().positive().max(200).optional().default(50),
 }));
 const timeseriesQuerySchema = withValidDateRange(baseFiltersObjectSchema.extend({
-    groupBy: z.enum(['day', 'source', 'campaign']).optional().default('day')
+    groupBy: z.enum(["day", "source", "campaign"]).optional().default("day"),
 }));
 const ordersQuerySchema = withValidDateRange(baseFiltersObjectSchema.extend({
-    limit: z.coerce.number().int().positive().max(200).optional().default(50)
+    limit: z.coerce.number().int().positive().max(200).optional().default(50),
 }));
 const orderDetailsParamsSchema = z.object({
-    shopifyOrderId: z.string().trim().min(1)
+    shopifyOrderId: z.string().trim().min(1),
 });
 const reconciliationQuerySchema = z.object({
-    runDate: dateStringSchema.optional()
+    runDate: dateStringSchema.optional(),
 });
 function parseInput(schema, input) {
     try {
@@ -59,14 +59,14 @@ function parseInput(schema, input) {
     }
     catch (error) {
         if (error instanceof z.ZodError) {
-            throw new ReportingHttpError(400, 'invalid_request', 'Invalid reporting query parameters', error.flatten());
+            throw new ReportingHttpError(400, "invalid_request", "Invalid reporting query parameters", error.flatten());
         }
         throw error;
     }
 }
-function buildMetricDimensionFilters(attributionModel, source, campaign, alias = '') {
+function buildMetricDimensionFilters(attributionModel, source, campaign, alias = "") {
     const params = [attributionModel];
-    const qualifiedAlias = alias ? `${alias}.` : '';
+    const qualifiedAlias = alias ? `${alias}.` : "";
     const filters = [`${qualifiedAlias}attribution_model = $3`];
     if (source) {
         params.push(source);
@@ -77,8 +77,8 @@ function buildMetricDimensionFilters(attributionModel, source, campaign, alias =
         filters.push(`${qualifiedAlias}campaign = $${params.length + 2}`);
     }
     return {
-        sql: filters.length > 0 ? ` AND ${filters.join(' AND ')}` : '',
-        params
+        sql: filters.length > 0 ? ` AND ${filters.join(" AND ")}` : "",
+        params,
     };
 }
 function buildOrderAttributionFilters(attributionModel, source, campaign) {
@@ -93,12 +93,12 @@ function buildOrderAttributionFilters(attributionModel, source, campaign) {
         filters.push(`c.attributed_campaign = $${params.length + 2}`);
     }
     return {
-        sql: filters.length > 0 ? ` AND ${filters.join(' AND ')}` : '',
-        params
+        sql: filters.length > 0 ? ` AND ${filters.join(" AND ")}` : "",
+        params,
     };
 }
 function normalizeContent(value) {
-    if (typeof value !== 'string') {
+    if (typeof value !== "string") {
         return null;
     }
     const trimmed = value.trim();
@@ -116,7 +116,7 @@ export function createReportingRouter() {
     const router = Router();
     router.use(attachAuthContext);
     router.use(requireAuthenticated);
-    router.get('/summary', async (req, res, next) => {
+    router.get("/summary", async (req, res, next) => {
         try {
             const input = parseInput(baseFiltersSchema, req.query);
             const filters = buildMetricDimensionFilters(input.attributionModel, input.source, input.campaign);
@@ -135,12 +135,12 @@ export function createReportingRouter() {
                 visits: row?.visits ?? 0,
                 orders: row?.orders ?? 0,
                 attributedRevenue: row?.revenue ?? 0,
-                spend: row?.spend ?? 0
+                spend: row?.spend ?? 0,
             });
             res.json({
                 range: {
                     startDate: input.startDate,
-                    endDate: input.endDate
+                    endDate: input.endDate,
                 },
                 totals: {
                     visits: metrics.visits,
@@ -148,15 +148,15 @@ export function createReportingRouter() {
                     revenue: metrics.attributedRevenue,
                     spend: metrics.spend,
                     conversionRate: metrics.conversionRate,
-                    roas: metrics.roas
-                }
+                    roas: metrics.roas,
+                },
             });
         }
         catch (error) {
             next(error);
         }
     });
-    router.get('/campaigns', async (req, res, next) => {
+    router.get("/campaigns", async (req, res, next) => {
         try {
             const input = parseInput(campaignsQuerySchema, req.query);
             const filters = buildMetricDimensionFilters(input.attributionModel, input.source, input.campaign);
@@ -189,17 +189,17 @@ export function createReportingRouter() {
                         visits,
                         orders,
                         revenue,
-                        conversionRate: visits > 0 ? orders / visits : 0
+                        conversionRate: visits > 0 ? orders / visits : 0,
                     };
                 }),
-                nextCursor: null
+                nextCursor: null,
             });
         }
         catch (error) {
             next(error);
         }
     });
-    router.get('/spend-details', async (req, res, next) => {
+    router.get("/spend-details", async (req, res, next) => {
         try {
             const input = parseInput(baseFiltersSchema, req.query);
             const filters = buildMetricDimensionFilters(input.attributionModel, input.source, input.campaign);
@@ -228,7 +228,7 @@ export function createReportingRouter() {
                     existingGroup.subtotal += spend;
                     existingGroup.campaigns.push({
                         campaign: row.campaign,
-                        spend
+                        spend,
                     });
                     continue;
                 }
@@ -240,12 +240,13 @@ export function createReportingRouter() {
                     campaigns: [
                         {
                             campaign: row.campaign,
-                            spend
-                        }
-                    ]
+                            spend,
+                        },
+                    ],
                 });
             }
-            const groups = [...groupMap.values()].sort((left, right) => right.subtotal - left.subtotal || left.channel.localeCompare(right.channel));
+            const groups = [...groupMap.values()].sort((left, right) => right.subtotal - left.subtotal ||
+                left.channel.localeCompare(right.channel));
             const totalSpend = groups.reduce((sum, group) => sum + group.subtotal, 0);
             const rangeDays = countDaysInRange(input.startDate, input.endDate);
             const topChannel = groups[0]
@@ -253,7 +254,7 @@ export function createReportingRouter() {
                     source: groups[0].source,
                     medium: groups[0].medium,
                     channel: groups[0].channel,
-                    spend: groups[0].subtotal
+                    spend: groups[0].subtotal,
                 }
                 : null;
             res.json({
@@ -262,21 +263,25 @@ export function createReportingRouter() {
                     activeChannels: groups.length,
                     activeCampaigns: result.rows.length,
                     averageDailySpend: rangeDays > 0 ? totalSpend / rangeDays : 0,
-                    topChannel
+                    topChannel,
                 },
                 groups,
-                totalSpend
+                totalSpend,
             });
         }
         catch (error) {
             next(error);
         }
     });
-    router.get('/timeseries', async (req, res, next) => {
+    router.get("/timeseries", async (req, res, next) => {
         try {
             const input = parseInput(timeseriesQuerySchema, req.query);
             const filters = buildMetricDimensionFilters(input.attributionModel, input.source, input.campaign);
-            const groupExpr = input.groupBy === 'source' ? 'source' : input.groupBy === 'campaign' ? 'campaign' : 'metric_date::text';
+            const groupExpr = input.groupBy === "source"
+                ? "source"
+                : input.groupBy === "campaign"
+                    ? "campaign"
+                    : "metric_date::text";
             const result = await query(`
           SELECT
             ${groupExpr} AS bucket,
@@ -295,7 +300,7 @@ export function createReportingRouter() {
                     visits: row.visits,
                     orders: row.orders,
                     attributedRevenue: row.revenue,
-                    spend: row.spend
+                    spend: row.spend,
                 });
                 return {
                     bucket: row.bucket,
@@ -304,7 +309,7 @@ export function createReportingRouter() {
                     revenue: metrics.attributedRevenue,
                     spend: metrics.spend,
                     conversionRate: metrics.conversionRate,
-                    roas: metrics.roas
+                    roas: metrics.roas,
                 };
             });
             res.json({
@@ -312,21 +317,21 @@ export function createReportingRouter() {
                     date: row.bucket,
                     visits: row.visits,
                     orders: row.orders,
-                    revenue: row.revenue
+                    revenue: row.revenue,
                 })),
                 lowestBuckets: [...bucketMetrics]
                     .sort((left, right) => left.revenue - right.revenue ||
                     left.orders - right.orders ||
                     left.visits - right.visits ||
                     left.bucket.localeCompare(right.bucket))
-                    .slice(0, 3)
+                    .slice(0, 3),
             });
         }
         catch (error) {
             next(error);
         }
     });
-    router.get('/orders', async (req, res, next) => {
+    router.get("/orders", async (req, res, next) => {
         try {
             const input = parseInput(ordersQuerySchema, req.query);
             const filters = buildOrderAttributionFilters(input.attributionModel, input.source, input.campaign);
@@ -363,7 +368,13 @@ export function createReportingRouter() {
             ${filters.sql}
           ORDER BY COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) DESC, o.shopify_order_id DESC
           LIMIT $${filters.params.length + 4}
-        `, [input.startDate, input.endDate, ...filters.params, reportingTimezone, input.limit]);
+        `, [
+                input.startDate,
+                input.endDate,
+                ...filters.params,
+                reportingTimezone,
+                input.limit,
+            ]);
             res.json({
                 rows: result.rows.map((row) => ({
                     shopifyOrderId: row.shopify_order_id,
@@ -372,17 +383,17 @@ export function createReportingRouter() {
                     source: row.attributed_source,
                     medium: row.attributed_medium,
                     campaign: row.attributed_campaign,
-                    matchSource: row.match_source ?? 'unattributed',
-                    confidenceLabel: row.confidence_label ?? 'none',
-                    attributionReason: row.attribution_reason ?? 'unattributed'
-                }))
+                    matchSource: row.match_source ?? "unattributed",
+                    confidenceLabel: row.confidence_label ?? "none",
+                    attributionReason: row.attribution_reason ?? "unattributed",
+                })),
             });
         }
         catch (error) {
             next(error);
         }
     });
-    router.get('/orders/:shopifyOrderId', async (req, res, next) => {
+    router.get("/orders/:shopifyOrderId", async (req, res, next) => {
         try {
             const { shopifyOrderId } = parseInput(orderDetailsParamsSchema, req.params);
             const orderResult = await query(`
@@ -412,7 +423,7 @@ export function createReportingRouter() {
           LIMIT 1
         `, [shopifyOrderId]);
             if (!orderResult.rowCount) {
-                throw new ReportingHttpError(404, 'order_not_found', `Shopify order ${shopifyOrderId} was not found`);
+                throw new ReportingHttpError(404, "order_not_found", `Shopify order ${shopifyOrderId} was not found`);
             }
             const lineItemsResult = await query(`
           SELECT
@@ -482,7 +493,7 @@ export function createReportingRouter() {
                     sourceName: order.source_name,
                     ingestedAt: order.ingested_at.toISOString(),
                     attributionSnapshot: order.attribution_snapshot,
-                    rawPayload: order.raw_payload
+                    rawPayload: order.raw_payload,
                 },
                 lineItems: lineItemsResult.rows.map((row) => ({
                     shopifyLineItemId: row.shopify_line_item_id,
@@ -499,7 +510,7 @@ export function createReportingRouter() {
                     requiresShipping: row.requires_shipping,
                     taxable: row.taxable,
                     ingestedAt: row.ingested_at.toISOString(),
-                    rawPayload: row.raw_payload
+                    rawPayload: row.raw_payload,
                 })),
                 attributionCredits: creditsResult.rows.map((row) => ({
                     attributionModel: row.attribution_model,
@@ -520,23 +531,23 @@ export function createReportingRouter() {
                     matchSource: row.match_source,
                     confidenceLabel: row.confidence_label,
                     createdAt: row.created_at.toISOString(),
-                    modelVersion: row.model_version
-                }))
+                    modelVersion: row.model_version,
+                })),
             });
         }
         catch (error) {
             next(error);
         }
     });
-    router.get('/reconciliation', async (req, res, next) => {
+    router.get("/reconciliation", async (req, res, next) => {
         try {
             const input = parseInput(reconciliationQuerySchema, req.query);
             const runDate = input.runDate ?? resolveRunDate();
             const report = await fetchDataQualityReport(runDate);
             res.json({
-                version: '2026-04-11',
-                tenantId: 'roas-radar',
-                data: report
+                version: "2026-04-11",
+                tenantId: "roas-radar",
+                data: report,
             });
         }
         catch (error) {

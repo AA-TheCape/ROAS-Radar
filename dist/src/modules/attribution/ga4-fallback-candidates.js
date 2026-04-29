@@ -1,10 +1,10 @@
-import { createHash } from 'node:crypto';
-import { env } from '../../config/env.js';
-import { query } from '../../db/pool.js';
+import { createHash } from "node:crypto";
+import { env } from "../../config/env.js";
+import { query } from "../../db/pool.js";
 const ATTRIBUTION_WINDOW_DAYS = 7;
 const DEFAULT_RETENTION_DAYS = 35;
 function normalizeNullableString(value, { lowerCase = false } = {}) {
-    if (typeof value !== 'string') {
+    if (typeof value !== "string") {
         return null;
     }
     const trimmed = value.trim();
@@ -29,19 +29,20 @@ function normalizePositiveInteger(value, fallback) {
 function buildRetentionTimestamp(occurredAtIso) {
     const occurredAt = new Date(occurredAtIso);
     const retainedUntil = new Date(occurredAt);
-    retainedUntil.setUTCDate(retainedUntil.getUTCDate() + (env.GA4_FALLBACK_RETENTION_DAYS || DEFAULT_RETENTION_DAYS));
+    retainedUntil.setUTCDate(retainedUntil.getUTCDate() +
+        (env.GA4_FALLBACK_RETENTION_DAYS || DEFAULT_RETENTION_DAYS));
     return retainedUntil.toISOString();
 }
 export function buildGa4FallbackCandidateKey(input) {
-    const digest = createHash('sha256');
+    const digest = createHash("sha256");
     digest.update(JSON.stringify({
         occurredAt: input.occurredAt,
         ga4UserKey: input.ga4UserKey,
         ga4SessionId: normalizeNullableString(input.ga4SessionId),
         ga4ClientId: normalizeNullableString(input.ga4ClientId),
-        transactionId: normalizeNullableString(input.transactionId)
+        transactionId: normalizeNullableString(input.transactionId),
     }));
-    return digest.digest('hex');
+    return digest.digest("hex");
 }
 function mapPersistedCandidate(row) {
     return {
@@ -64,16 +65,18 @@ function mapPersistedCandidate(row) {
         sourceExportHour: row.source_export_hour.toISOString(),
         sourceDataset: row.source_dataset,
         sourceTableType: row.source_table_type,
-        retainedUntil: row.retained_until.toISOString()
+        retainedUntil: row.retained_until.toISOString(),
     };
 }
 async function ensureTouchedPartitions(db, occurredAtValues) {
     const months = Array.from(new Set(occurredAtValues.map((value) => {
         const occurredAt = new Date(value);
-        return new Date(Date.UTC(occurredAt.getUTCFullYear(), occurredAt.getUTCMonth(), 1)).toISOString().slice(0, 10);
+        return new Date(Date.UTC(occurredAt.getUTCFullYear(), occurredAt.getUTCMonth(), 1))
+            .toISOString()
+            .slice(0, 10);
     })));
     for (const month of months) {
-        await executeQuery(db, 'SELECT ensure_ga4_fallback_candidate_partition($1::date)', [month]);
+        await executeQuery(db, "SELECT ensure_ga4_fallback_candidate_partition($1::date)", [month]);
     }
 }
 function buildGa4SignalSql(alias) {
@@ -127,7 +130,7 @@ export async function upsertGa4FallbackCandidates(candidates, client) {
     const db = client;
     await ensureTouchedPartitions(db, candidates.map((candidate) => candidate.occurredAt));
     let upsertedRows = 0;
-    const shouldReplaceBundleSql = buildShouldReplaceGa4BundleSql('ga4_fallback_candidates', 'EXCLUDED');
+    const shouldReplaceBundleSql = buildShouldReplaceGa4BundleSql("ga4_fallback_candidates", "EXCLUDED");
     for (const candidate of candidates) {
         const normalized = {
             candidateKey: buildGa4FallbackCandidateKey(candidate),
@@ -143,7 +146,9 @@ export async function upsertGa4FallbackCandidates(candidates, client) {
             campaign: normalizeNullableString(candidate.campaign),
             content: normalizeNullableString(candidate.content),
             term: normalizeNullableString(candidate.term),
-            clickIdType: normalizeNullableString(candidate.clickIdType, { lowerCase: true }),
+            clickIdType: normalizeNullableString(candidate.clickIdType, {
+                lowerCase: true,
+            }),
             clickIdValue: normalizeNullableString(candidate.clickIdValue),
             sessionHasRequiredFields: Boolean(candidate.sessionHasRequiredFields),
             sourceExportHour: new Date(candidate.sourceExportHour).toISOString(),
@@ -151,20 +156,20 @@ export async function upsertGa4FallbackCandidates(candidates, client) {
             sourceTableType: candidate.sourceTableType,
             retainedUntil: candidate.retainedUntil
                 ? new Date(candidate.retainedUntil).toISOString()
-                : buildRetentionTimestamp(candidate.occurredAt)
+                : buildRetentionTimestamp(candidate.occurredAt),
         };
         if (!normalized.ga4UserKey) {
-            throw new Error('GA4 fallback candidate requires ga4UserKey');
+            throw new Error("GA4 fallback candidate requires ga4UserKey");
         }
         if (!normalized.sourceDataset) {
-            throw new Error('GA4 fallback candidate requires sourceDataset');
+            throw new Error("GA4 fallback candidate requires sourceDataset");
         }
         if (!normalized.customerIdentityId &&
             !normalized.emailHash &&
             !normalized.transactionId &&
             !normalized.ga4ClientId &&
             !normalized.ga4SessionId) {
-            throw new Error('GA4 fallback candidate requires at least one lookup key');
+            throw new Error("GA4 fallback candidate requires at least one lookup key");
         }
         const result = await executeQuery(db, `
         INSERT INTO ga4_fallback_candidates (
@@ -274,7 +279,7 @@ export async function upsertGa4FallbackCandidates(candidates, client) {
             normalized.sourceExportHour,
             normalized.sourceDataset,
             normalized.sourceTableType,
-            normalized.retainedUntil
+            normalized.retainedUntil,
         ]);
         upsertedRows += result.rowCount ?? 0;
     }
@@ -286,19 +291,20 @@ function countPopulatedDimensions(row) {
 function compareSourceTableType(left, right) {
     const precedence = {
         events: 0,
-        intraday: 1
+        intraday: 1,
     };
     return precedence[left] - precedence[right];
 }
 function compareLexical(left, right) {
-    return (left ?? '').localeCompare(right ?? '');
+    return (left ?? "").localeCompare(right ?? "");
 }
 function compareLookupRows(left, right) {
     const occurredAtComparison = right.occurred_at.getTime() - left.occurred_at.getTime();
     if (occurredAtComparison !== 0) {
         return occurredAtComparison;
     }
-    const clickComparison = Number(Boolean(right.click_id_value)) - Number(Boolean(left.click_id_value));
+    const clickComparison = Number(Boolean(right.click_id_value)) -
+        Number(Boolean(left.click_id_value));
     if (clickComparison !== 0) {
         return clickComparison;
     }
@@ -483,7 +489,14 @@ export async function lookupGa4FallbackCandidates(input, client) {
           OR term IS NOT NULL
         )
       ORDER BY candidate_key ASC, occurred_at ASC, matched_on ASC
-    `, [customerIdentityId, emailHash, transactionId, orderOccurredAt, lookbackDays, perKeyLimit]);
+    `, [
+        customerIdentityId,
+        emailHash,
+        transactionId,
+        orderOccurredAt,
+        lookbackDays,
+        perKeyLimit,
+    ]);
     return result.rows.sort(compareLookupRows).map(mapPersistedCandidate);
 }
 export async function listGa4FallbackCandidates(client) {

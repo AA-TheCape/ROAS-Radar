@@ -1,4 +1,4 @@
-import { BigQuery } from '@google-cloud/bigquery';
+import { BigQuery } from "@google-cloud/bigquery";
 let bigQueryClient = null;
 function getBigQueryClient() {
     if (!bigQueryClient) {
@@ -13,9 +13,9 @@ export function createGa4BigQueryExecutor(location) {
                 location,
                 query: input.query,
                 params: input.params,
-                useLegacySql: false
+                useLegacySql: false,
             });
             return rows;
-        }
+        },
     };
 }

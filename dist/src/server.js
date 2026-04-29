@@ -1,7 +1,7 @@
-import { createServer as createHttpServer } from 'node:http';
-import { env } from './config/env.js';
-import { pool } from './db/pool.js';
-import { createApp } from './app.js';
+import { createServer as createHttpServer } from "node:http";
+import { createApp } from "./app.js";
+import { env } from "./config/env.js";
+import { pool } from "./db/pool.js";
 export function createServer(port = 0) {
     const app = createApp();
     const server = createHttpServer(app);
@@ -27,6 +27,6 @@ if (isEntrypoint) {
         await pool.end().catch(() => undefined);
         process.exit(0);
     };
-    process.on('SIGINT', shutdown);
-    process.on('SIGTERM', shutdown);
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
 }

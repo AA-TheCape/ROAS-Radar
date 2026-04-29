@@ -1,39 +1,51 @@
-import { createHash, randomBytes } from 'node:crypto';
-import { setTimeout as delay } from 'node:timers/promises';
-import { Router } from 'express';
-import { z } from 'zod';
-import { env } from '../../config/env.js';
-import { query, withTransaction } from '../../db/pool.js';
-import { buildRawPayloadStorageMetadata, logRawPayloadIntegrityMismatch } from '../../shared/raw-payload-storage.js';
-import { attachAuthContext, requireAdmin } from '../auth/index.js';
-import { buildSearchParamsAuditPayload, parseJsonResponsePayload, recordAdSyncApiTransaction } from '../ad-sync-audit/index.js';
-import { buildCanonicalSpendDimensions } from '../marketing-dimensions/index.js';
-import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
+import { createHash, randomBytes } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
+import { Router } from "express";
+import { z } from "zod";
+import { env } from "../../config/env.js";
+import { query, withTransaction } from "../../db/pool.js";
+import { buildRawPayloadStorageMetadata, logRawPayloadIntegrityMismatch, } from "../../shared/raw-payload-storage.js";
+import { buildSearchParamsAuditPayload, parseJsonResponsePayload, recordAdSyncApiTransaction, } from "../ad-sync-audit/index.js";
+import { attachAuthContext, requireAdmin } from "../auth/index.js";
+import { buildCanonicalSpendDimensions } from "../marketing-dimensions/index.js";
+import { refreshDailyReportingMetrics } from "../reporting/aggregates.js";
 const META_OAUTH_STATE_TTL_MINUTES = 10;
-const META_GRAPH_BASE_URL = 'https://graph.facebook.com';
-const META_SYNC_JOB_STATUSES = ['pending', 'processing', 'retry', 'completed', 'failed'];
-const META_SPEND_LEVELS = ['account', 'campaign', 'adset', 'ad'];
-const META_SPEND_GRANULARITIES = ['account', 'campaign', 'adset', 'ad', 'creative'];
-const META_ADS_SYNC_TIME_ZONE = 'America/Los_Angeles';
+const META_GRAPH_BASE_URL = "https://graph.facebook.com";
+const META_SYNC_JOB_STATUSES = [
+    "pending",
+    "processing",
+    "retry",
+    "completed",
+    "failed",
+];
+const META_SPEND_LEVELS = ["account", "campaign", "adset", "ad"];
+const META_SPEND_GRANULARITIES = [
+    "account",
+    "campaign",
+    "adset",
+    "ad",
+    "creative",
+];
+const META_ADS_SYNC_TIME_ZONE = "America/Los_Angeles";
 const oauthStartQuerySchema = z.object({
-    redirectPath: z.string().optional()
+    redirectPath: z.string().optional(),
 });
 const metaAdsConfigUpdateSchema = z.object({
     appId: z.string().min(1),
     appSecret: z.string().optional(),
     appBaseUrl: z.string().url(),
     appScopes: z.union([z.string(), z.array(z.string())]).optional(),
-    adAccountId: z.string().min(1)
+    adAccountId: z.string().min(1),
 });
 const manualSyncSchema = z.object({
     startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+    endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
 });
 const oauthCallbackSchema = z.object({
     code: z.string().min(1).optional(),
     state: z.string().min(1).optional(),
     error: z.string().optional(),
-    error_description: z.string().optional()
+    error_description: z.string().optional(),
 });
 class MetaAdsHttpError extends Error {
     statusCode;
@@ -41,7 +53,7 @@ class MetaAdsHttpError extends Error {
     details;
     constructor(statusCode, code, message, details) {
         super(message);
-        this.name = 'MetaAdsHttpError';
+        this.name = "MetaAdsHttpError";
         this.statusCode = statusCode;
         this.code = code;
         this.details = details;
@@ -52,7 +64,7 @@ class MetaAdsApiError extends Error {
     details;
     constructor(statusCode, message, details = null) {
         super(message);
-        this.name = 'MetaAdsApiError';
+        this.name = "MetaAdsApiError";
         this.statusCode = statusCode;
         this.details = details;
     }
@@ -61,19 +73,21 @@ function normalizeMetaAdsScopes(rawValue) {
     if (Array.isArray(rawValue)) {
         return rawValue.map((entry) => entry.trim()).filter(Boolean);
     }
-    if (typeof rawValue !== 'string') {
+    if (typeof rawValue !== "string") {
         return [];
     }
     return rawValue
-        .split(',')
+        .split(",")
         .map((entry) => entry.trim())
         .filter(Boolean);
 }
 function normalizeMetaAdAccountId(value) {
     const normalized = value.trim();
-    const accountId = normalized.startsWith('act_') ? normalized.slice(4) : normalized;
+    const accountId = normalized.startsWith("act_")
+        ? normalized.slice(4)
+        : normalized;
     if (!/^\d+$/.test(accountId)) {
-        throw new MetaAdsHttpError(400, 'invalid_meta_ad_account_id', 'META_ADS_AD_ACCOUNT_ID must be numeric or act_<id>');
+        throw new MetaAdsHttpError(400, "invalid_meta_ad_account_id", "META_ADS_AD_ACCOUNT_ID must be numeric or act_<id>");
     }
     return accountId;
 }
@@ -85,8 +99,8 @@ function normalizeRedirectPath(rawValue) {
     if (!trimmed) {
         return null;
     }
-    if (!trimmed.startsWith('/')) {
-        throw new MetaAdsHttpError(400, 'invalid_redirect_path', 'redirectPath must be a root-relative path');
+    if (!trimmed.startsWith("/")) {
+        throw new MetaAdsHttpError(400, "invalid_redirect_path", "redirectPath must be a root-relative path");
     }
     return trimmed;
 }
@@ -108,24 +122,26 @@ async function getStoredMetaAdsSettings() {
 }
 async function getResolvedMetaAdsConfig() {
     if (!env.META_ADS_ENCRYPTION_KEY) {
-        throw new MetaAdsHttpError(500, 'meta_ads_config_missing', 'Missing Meta Ads configuration: META_ADS_ENCRYPTION_KEY');
+        throw new MetaAdsHttpError(500, "meta_ads_config_missing", "Missing Meta Ads configuration: META_ADS_ENCRYPTION_KEY");
     }
     const stored = await getStoredMetaAdsSettings();
     const appId = stored?.app_id?.trim() || env.META_ADS_APP_ID.trim();
     const appSecret = stored?.app_secret?.trim() || env.META_ADS_APP_SECRET.trim();
-    const appBaseUrl = (stored?.app_base_url?.trim() || env.META_ADS_APP_BASE_URL.trim()).replace(/\/$/, '');
-    const appScopes = (stored?.app_scopes?.length ? stored.app_scopes : env.META_ADS_APP_SCOPES).map((entry) => entry.trim()).filter(Boolean);
+    const appBaseUrl = (stored?.app_base_url?.trim() || env.META_ADS_APP_BASE_URL.trim()).replace(/\/$/, "");
+    const appScopes = (stored?.app_scopes?.length ? stored.app_scopes : env.META_ADS_APP_SCOPES)
+        .map((entry) => entry.trim())
+        .filter(Boolean);
     const adAccountId = stored?.ad_account_id?.trim() || env.META_ADS_AD_ACCOUNT_ID.trim();
     const missing = [
-        ['META_ADS_APP_ID', appId],
-        ['META_ADS_APP_SECRET', appSecret],
-        ['META_ADS_APP_BASE_URL', appBaseUrl],
-        ['META_ADS_AD_ACCOUNT_ID', adAccountId]
+        ["META_ADS_APP_ID", appId],
+        ["META_ADS_APP_SECRET", appSecret],
+        ["META_ADS_APP_BASE_URL", appBaseUrl],
+        ["META_ADS_AD_ACCOUNT_ID", adAccountId],
     ]
         .filter(([, value]) => !value)
         .map(([key]) => key);
     if (missing.length > 0) {
-        throw new MetaAdsHttpError(500, 'meta_ads_config_missing', `Missing Meta Ads configuration: ${missing.join(', ')}`);
+        throw new MetaAdsHttpError(500, "meta_ads_config_missing", `Missing Meta Ads configuration: ${missing.join(", ")}`);
     }
     return {
         appId,
@@ -134,43 +150,50 @@ async function getResolvedMetaAdsConfig() {
         appScopes,
         adAccountId,
         encryptionKey: env.META_ADS_ENCRYPTION_KEY,
-        source: stored ? 'database' : 'environment'
+        source: stored ? "database" : "environment",
     };
 }
 async function getMetaAdsConfigurationSummary() {
-    const stored = env.META_ADS_ENCRYPTION_KEY ? await getStoredMetaAdsSettings() : null;
+    const stored = env.META_ADS_ENCRYPTION_KEY
+        ? await getStoredMetaAdsSettings()
+        : null;
     const appId = stored?.app_id?.trim() || env.META_ADS_APP_ID.trim();
     const appSecretConfigured = Boolean(stored?.app_secret?.trim() || env.META_ADS_APP_SECRET.trim());
-    const appBaseUrl = (stored?.app_base_url?.trim() || env.META_ADS_APP_BASE_URL.trim()).replace(/\/$/, '');
-    const appScopes = (stored?.app_scopes?.length ? stored.app_scopes : env.META_ADS_APP_SCOPES).map((entry) => entry.trim()).filter(Boolean);
+    const appBaseUrl = (stored?.app_base_url?.trim() || env.META_ADS_APP_BASE_URL.trim()).replace(/\/$/, "");
+    const appScopes = (stored?.app_scopes?.length ? stored.app_scopes : env.META_ADS_APP_SCOPES)
+        .map((entry) => entry.trim())
+        .filter(Boolean);
     const adAccountId = stored?.ad_account_id?.trim() || env.META_ADS_AD_ACCOUNT_ID.trim();
     const missingFields = [
-        ['appId', appId],
-        ['appSecret', appSecretConfigured ? 'configured' : ''],
-        ['appBaseUrl', appBaseUrl],
-        ['adAccountId', adAccountId],
-        ['encryptionKey', env.META_ADS_ENCRYPTION_KEY]
+        ["appId", appId],
+        ["appSecret", appSecretConfigured ? "configured" : ""],
+        ["appBaseUrl", appBaseUrl],
+        ["adAccountId", adAccountId],
+        ["encryptionKey", env.META_ADS_ENCRYPTION_KEY],
     ]
         .filter(([, value]) => !value)
         .map(([key]) => key);
     return {
-        source: stored ? 'database' : 'environment',
+        source: stored ? "database" : "environment",
         appId,
         appBaseUrl,
         appScopes,
         adAccountId,
         appSecretConfigured,
-        missingFields
+        missingFields,
     };
 }
 async function upsertMetaAdsSettings(payload) {
     if (!env.META_ADS_ENCRYPTION_KEY) {
-        throw new MetaAdsHttpError(500, 'meta_ads_config_missing', 'Missing Meta Ads configuration: META_ADS_ENCRYPTION_KEY');
+        throw new MetaAdsHttpError(500, "meta_ads_config_missing", "Missing Meta Ads configuration: META_ADS_ENCRYPTION_KEY");
     }
-    const secretProvided = typeof payload.appSecret === 'string' && payload.appSecret.trim().length > 0;
+    const secretProvided = typeof payload.appSecret === "string" &&
+        payload.appSecret.trim().length > 0;
     const normalizedScopes = normalizeMetaAdsScopes(payload.appScopes);
     const existing = await getStoredMetaAdsSettings();
-    const nextSecret = secretProvided ? (payload.appSecret ?? '').trim() : existing?.app_secret ?? '';
+    const nextSecret = secretProvided
+        ? (payload.appSecret ?? "").trim()
+        : (existing?.app_secret ?? "");
     await query(`
       DELETE FROM meta_ads_settings
     `);
@@ -199,27 +222,27 @@ async function upsertMetaAdsSettings(payload) {
     `, [
         payload.appId.trim(),
         nextSecret,
-        new URL(payload.appBaseUrl).toString().replace(/\/$/, ''),
+        new URL(payload.appBaseUrl).toString().replace(/\/$/, ""),
         normalizedScopes,
         payload.adAccountId.trim(),
-        env.META_ADS_ENCRYPTION_KEY
+        env.META_ADS_ENCRYPTION_KEY,
     ]);
 }
 function getMetaAdsAppBaseUrl(config) {
-    return new URL(config.appBaseUrl).toString().replace(/\/$/, '');
+    return new URL(config.appBaseUrl).toString().replace(/\/$/, "");
 }
 function buildMetaAdsRedirectUri(config) {
     return `${getMetaAdsAppBaseUrl(config)}/meta-ads/oauth/callback`;
 }
 function createOAuthStateDigest(state) {
-    return createHash('sha256').update(state).digest('hex');
+    return createHash("sha256").update(state).digest("hex");
 }
 function buildMetaAdsAuthorizationUrl(config, state) {
-    const url = new URL('https://www.facebook.com/dialog/oauth');
-    url.searchParams.set('client_id', config.appId);
-    url.searchParams.set('redirect_uri', buildMetaAdsRedirectUri(config));
-    url.searchParams.set('state', state);
-    url.searchParams.set('scope', config.appScopes.join(','));
+    const url = new URL("https://www.facebook.com/dialog/oauth");
+    url.searchParams.set("client_id", config.appId);
+    url.searchParams.set("redirect_uri", buildMetaAdsRedirectUri(config));
+    url.searchParams.set("state", state);
+    url.searchParams.set("scope", config.appScopes.join(","));
     return url.toString();
 }
 function calculateTokenExpiresAt(expiresInSeconds, now = new Date()) {
@@ -236,7 +259,8 @@ function shouldRefreshToken(tokenExpiresAt, now = new Date()) {
     if (!tokenExpiresAt) {
         return false;
     }
-    return tokenExpiresAt.getTime() - now.getTime() <= env.META_ADS_TOKEN_REFRESH_LEEWAY_HOURS * 60 * 60 * 1000;
+    return (tokenExpiresAt.getTime() - now.getTime() <=
+        env.META_ADS_TOKEN_REFRESH_LEEWAY_HOURS * 60 * 60 * 1000);
 }
 function formatDateOnly(value) {
     return value.toISOString().slice(0, 10);
@@ -248,7 +272,7 @@ function listDateRangeInclusive(startDate, endDate) {
     const start = parseDateOnly(startDate);
     const end = parseDateOnly(endDate);
     if (start.getTime() > end.getTime()) {
-        throw new MetaAdsHttpError(400, 'invalid_date_range', 'startDate must be on or before endDate');
+        throw new MetaAdsHttpError(400, "invalid_date_range", "startDate must be on or before endDate");
     }
     const dates = [];
     for (let cursor = start; cursor.getTime() <= end.getTime(); cursor = new Date(cursor.getTime() + 24 * 60 * 60 * 1000)) {
@@ -258,7 +282,9 @@ function listDateRangeInclusive(startDate, endDate) {
 }
 function buildPlanningDates(now = new Date(), lastSyncCompletedAt = null) {
     const currentBusinessDate = parseDateOnly(formatDateInTimeZone(now, META_ADS_SYNC_TIME_ZONE));
-    const lookbackDays = lastSyncCompletedAt ? env.META_ADS_SYNC_LOOKBACK_DAYS : env.META_ADS_SYNC_INITIAL_LOOKBACK_DAYS;
+    const lookbackDays = lastSyncCompletedAt
+        ? env.META_ADS_SYNC_LOOKBACK_DAYS
+        : env.META_ADS_SYNC_INITIAL_LOOKBACK_DAYS;
     const firstDate = new Date(currentBusinessDate.getTime() - (lookbackDays - 1) * 24 * 60 * 60 * 1000);
     if (currentBusinessDate.getTime() < firstDate.getTime()) {
         return [];
@@ -274,41 +300,41 @@ function buildIncrementalPlanningDates(now = new Date(), lastSyncCompletedAt = n
 }
 function buildInsightsEntityId(level, row) {
     switch (level) {
-        case 'account':
-            return row.account_id ?? '';
-        case 'campaign':
-            return row.campaign_id ?? '';
-        case 'adset':
-            return row.adset_id ?? '';
-        case 'ad':
-            return row.ad_id ?? '';
+        case "account":
+            return row.account_id ?? "";
+        case "campaign":
+            return row.campaign_id ?? "";
+        case "adset":
+            return row.adset_id ?? "";
+        case "ad":
+            return row.ad_id ?? "";
     }
 }
 function parseMetricInteger(value) {
-    const parsed = Number.parseInt(value ?? '0', 10);
+    const parsed = Number.parseInt(value ?? "0", 10);
     return Number.isFinite(parsed) ? parsed : 0;
 }
 function parseMetricDecimal(value) {
-    const parsed = Number.parseFloat(value ?? '0');
-    return Number.isFinite(parsed) ? parsed.toFixed(2) : '0.00';
+    const parsed = Number.parseFloat(value ?? "0");
+    return Number.isFinite(parsed) ? parsed.toFixed(2) : "0.00";
 }
 function formatDateInTimeZone(value, timeZone) {
-    const formatter = new Intl.DateTimeFormat('en-CA', {
+    const formatter = new Intl.DateTimeFormat("en-CA", {
         timeZone,
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit'
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
     });
     return formatter.format(value);
 }
 function normalizeInsightRows(row, creativeMap, currency) {
     const normalized = [];
     const baseDimensions = buildCanonicalSpendDimensions({
-        source: 'meta',
-        medium: 'paid_social',
+        source: "meta",
+        medium: "paid_social",
         campaign: row.campaign_name ?? null,
         content: null,
-        term: null
+        term: null,
     });
     const baseRow = {
         accountId: row.account_id ?? null,
@@ -330,59 +356,59 @@ function normalizeInsightRows(row, creativeMap, currency) {
         spend: parseMetricDecimal(row.spend),
         impressions: parseMetricInteger(row.impressions),
         clicks: parseMetricInteger(row.clicks),
-        rawPayload: row
+        rawPayload: row,
     };
     if (row.account_id) {
         normalized.push({
             ...baseRow,
-            granularity: 'account',
-            entityKey: row.account_id
+            granularity: "account",
+            entityKey: row.account_id,
         });
     }
     if (row.campaign_id) {
         normalized.push({
             ...baseRow,
-            granularity: 'campaign',
-            entityKey: row.campaign_id
+            granularity: "campaign",
+            entityKey: row.campaign_id,
         });
     }
     if (row.adset_id) {
         normalized.push({
             ...baseRow,
-            granularity: 'adset',
-            entityKey: row.adset_id
+            granularity: "adset",
+            entityKey: row.adset_id,
         });
     }
     if (row.ad_id) {
         const adDimensions = buildCanonicalSpendDimensions({
-            source: 'meta',
-            medium: 'paid_social',
+            source: "meta",
+            medium: "paid_social",
             campaign: row.campaign_name ?? null,
             content: row.ad_name ?? null,
-            term: null
+            term: null,
         });
         normalized.push({
             ...baseRow,
-            granularity: 'ad',
+            granularity: "ad",
             entityKey: row.ad_id,
-            canonicalContent: adDimensions.content
+            canonicalContent: adDimensions.content,
         });
         const creative = creativeMap[row.ad_id];
         if (creative?.creativeId) {
             const creativeDimensions = buildCanonicalSpendDimensions({
-                source: 'meta',
-                medium: 'paid_social',
+                source: "meta",
+                medium: "paid_social",
                 campaign: row.campaign_name ?? null,
                 content: creative.creativeName ?? row.ad_name ?? null,
-                term: null
+                term: null,
             });
             normalized.push({
                 ...baseRow,
-                granularity: 'creative',
+                granularity: "creative",
                 entityKey: creative.creativeId,
                 creativeId: creative.creativeId,
                 creativeName: creative.creativeName,
-                canonicalContent: creativeDimensions.content
+                canonicalContent: creativeDimensions.content,
             });
         }
     }
@@ -411,7 +437,7 @@ function rollupPersistableSpendRows(rows) {
         if (!existing) {
             rollup.set(key, {
                 rawRecordId: row.rawRecordId,
-                normalizedRow: { ...row.normalizedRow }
+                normalizedRow: { ...row.normalizedRow },
             });
             continue;
         }
@@ -427,13 +453,15 @@ function rollupPersistableSpendRows(rows) {
 function buildMetaLog(event, payload) {
     return JSON.stringify({
         event,
-        ...payload
+        ...payload,
     });
 }
 async function metaFetchJson(url, retryCount = 2, audit) {
     let lastError;
     const requestUrl = `${url.origin}${url.pathname}`;
-    const requestPayload = buildSearchParamsAuditPayload(url.searchParams, ['access_token']);
+    const requestPayload = buildSearchParamsAuditPayload(url.searchParams, [
+        "access_token",
+    ]);
     for (let attempt = 1; attempt <= retryCount + 1; attempt += 1) {
         const requestStartedAt = new Date();
         try {
@@ -443,27 +471,31 @@ async function metaFetchJson(url, retryCount = 2, audit) {
             const responseReceivedAt = new Date();
             if (audit) {
                 await recordAdSyncApiTransaction({
-                    platform: 'meta_ads',
+                    platform: "meta_ads",
                     connectionId: audit.connectionId,
                     syncJobId: audit.syncJobId,
                     transactionSource: audit.transactionSource,
                     sourceMetadata: {
                         ...(audit.sourceMetadata ?? {}),
-                        attempt
+                        attempt,
                     },
-                    requestMethod: 'GET',
+                    requestMethod: "GET",
                     requestUrl,
                     requestPayload,
                     requestStartedAt,
                     responseStatus: response.status,
                     responsePayload: json,
                     responseReceivedAt,
-                    errorMessage: response.ok ? null : json?.error?.message ?? `HTTP ${response.status}`
+                    errorMessage: response.ok
+                        ? null
+                        : (json?.error?.message ??
+                            `HTTP ${response.status}`),
                 });
             }
             if (!response.ok) {
                 const errorBody = json ?? null;
-                const errorMessage = errorBody?.error?.message ?? `Meta Ads API request failed with status ${response.status}`;
+                const errorMessage = errorBody?.error?.message ??
+                    `Meta Ads API request failed with status ${response.status}`;
                 throw new MetaAdsApiError(response.status, errorMessage, errorBody);
             }
             return json;
@@ -472,22 +504,22 @@ async function metaFetchJson(url, retryCount = 2, audit) {
             lastError = error;
             if (audit && !(error instanceof MetaAdsApiError)) {
                 await recordAdSyncApiTransaction({
-                    platform: 'meta_ads',
+                    platform: "meta_ads",
                     connectionId: audit.connectionId,
                     syncJobId: audit.syncJobId,
                     transactionSource: audit.transactionSource,
                     sourceMetadata: {
                         ...(audit.sourceMetadata ?? {}),
-                        attempt
+                        attempt,
                     },
-                    requestMethod: 'GET',
+                    requestMethod: "GET",
                     requestUrl,
                     requestPayload,
                     requestStartedAt,
                     responseStatus: null,
                     responsePayload: null,
                     responseReceivedAt: null,
-                    errorMessage: error instanceof Error ? error.message : String(error)
+                    errorMessage: error instanceof Error ? error.message : String(error),
                 });
             }
             if (attempt > retryCount ||
@@ -502,28 +534,28 @@ async function metaFetchJson(url, retryCount = 2, audit) {
 }
 async function exchangeCodeForAccessToken(config, code) {
     const url = new URL(`${META_GRAPH_BASE_URL}/${env.META_ADS_API_VERSION}/oauth/access_token`);
-    url.searchParams.set('client_id', config.appId);
-    url.searchParams.set('client_secret', config.appSecret);
-    url.searchParams.set('redirect_uri', buildMetaAdsRedirectUri(config));
-    url.searchParams.set('code', code);
+    url.searchParams.set("client_id", config.appId);
+    url.searchParams.set("client_secret", config.appSecret);
+    url.searchParams.set("redirect_uri", buildMetaAdsRedirectUri(config));
+    url.searchParams.set("code", code);
     return metaFetchJson(url);
 }
 async function exchangeLongLivedAccessToken(config, accessToken) {
     const url = new URL(`${META_GRAPH_BASE_URL}/${env.META_ADS_API_VERSION}/oauth/access_token`);
-    url.searchParams.set('grant_type', 'fb_exchange_token');
-    url.searchParams.set('client_id', config.appId);
-    url.searchParams.set('client_secret', config.appSecret);
-    url.searchParams.set('fb_exchange_token', accessToken);
+    url.searchParams.set("grant_type", "fb_exchange_token");
+    url.searchParams.set("client_id", config.appId);
+    url.searchParams.set("client_secret", config.appSecret);
+    url.searchParams.set("fb_exchange_token", accessToken);
     return metaFetchJson(url);
 }
 async function fetchMetaAdsAccount(accessToken, adAccountId) {
     const url = new URL(`${META_GRAPH_BASE_URL}/${env.META_ADS_API_VERSION}/act_${adAccountId}`);
-    url.searchParams.set('access_token', accessToken);
-    url.searchParams.set('fields', 'id,name,currency');
+    url.searchParams.set("access_token", accessToken);
+    url.searchParams.set("fields", "id,name,currency");
     return metaFetchJson(url);
 }
 async function insertOAuthState(redirectPath) {
-    const state = randomBytes(24).toString('hex');
+    const state = randomBytes(24).toString("hex");
     const stateDigest = createOAuthStateDigest(state);
     await query(`
       INSERT INTO meta_ads_oauth_states (state_digest, redirect_path, expires_at)
@@ -541,7 +573,7 @@ async function consumeOAuthState(state) {
       RETURNING redirect_path
     `, [createOAuthStateDigest(state)]);
     if (!result.rowCount) {
-        throw new MetaAdsHttpError(400, 'invalid_meta_oauth_state', 'The Meta Ads OAuth state is invalid or expired');
+        throw new MetaAdsHttpError(400, "invalid_meta_oauth_state", "The Meta Ads OAuth state is invalid or expired");
     }
     return result.rows[0].redirect_path;
 }
@@ -612,12 +644,12 @@ async function upsertMetaAdsConnection(params) {
         rawPayloadJson,
         params.adAccountId,
         payloadSizeBytes,
-        payloadHash
+        payloadHash,
     ]);
     logRawPayloadIntegrityMismatch(rawPayloadMetadata, upsertResult.rows[0], {
-        surface: 'meta_ads_connections.raw_account_data',
-        operation: 'upsert',
-        recordId: params.adAccountId
+        surface: "meta_ads_connections.raw_account_data",
+        operation: "upsert",
+        recordId: params.adAccountId,
     });
 }
 async function getActiveMetaAdsConnection() {
@@ -656,19 +688,25 @@ async function refreshMetaAdsConnectionToken(connection) {
         last_refreshed_at = now(),
         updated_at = now()
       WHERE id = $1
-    `, [connection.id, accessToken, config.encryptionKey, refreshed.token_type ?? connection.token_type, expiresAt]);
+    `, [
+        connection.id,
+        accessToken,
+        config.encryptionKey,
+        refreshed.token_type ?? connection.token_type,
+        expiresAt,
+    ]);
     return {
         ...connection,
         access_token: accessToken,
         token_type: refreshed.token_type ?? connection.token_type,
         token_expires_at: expiresAt,
-        last_refreshed_at: new Date()
+        last_refreshed_at: new Date(),
     };
 }
 async function getUsableMetaAdsConnection(forceRefresh = false) {
     const connection = await getActiveMetaAdsConnection();
     if (!connection) {
-        throw new MetaAdsHttpError(404, 'meta_ads_connection_not_found', 'No active Meta Ads connection was found');
+        throw new MetaAdsHttpError(404, "meta_ads_connection_not_found", "No active Meta Ads connection was found");
     }
     if (forceRefresh || shouldRefreshToken(connection.token_expires_at)) {
         return refreshMetaAdsConnectionToken(connection);
@@ -720,10 +758,7 @@ async function planIncrementalSyncs(now = new Date()) {
         }
         plannedJobs += await enqueueSyncDates(row.id, dates);
         if (row.last_sync_planned_for !== today) {
-            await query('UPDATE meta_ads_connections SET last_sync_planned_for = $2::date, updated_at = now() WHERE id = $1', [
-                row.id,
-                today
-            ]);
+            await query("UPDATE meta_ads_connections SET last_sync_planned_for = $2::date, updated_at = now() WHERE id = $1", [row.id, today]);
         }
     }
     return plannedJobs;
@@ -756,22 +791,22 @@ async function claimSyncJobs(workerId, limit) {
 async function fetchInsightsForLevel(audit, accessToken, adAccountId, syncDate, level) {
     const rows = [];
     let nextUrl = new URL(`${META_GRAPH_BASE_URL}/${env.META_ADS_API_VERSION}/act_${adAccountId}/insights`);
-    nextUrl.searchParams.set('fields', 'account_id,account_name,campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,spend,impressions,clicks,objective,date_start,date_stop');
-    nextUrl.searchParams.set('access_token', accessToken);
-    nextUrl.searchParams.set('level', level);
-    nextUrl.searchParams.set('time_increment', '1');
-    nextUrl.searchParams.set('limit', '500');
-    nextUrl.searchParams.set('time_range', JSON.stringify({ since: syncDate, until: syncDate }));
+    nextUrl.searchParams.set("fields", "account_id,account_name,campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,spend,impressions,clicks,objective,date_start,date_stop");
+    nextUrl.searchParams.set("access_token", accessToken);
+    nextUrl.searchParams.set("level", level);
+    nextUrl.searchParams.set("time_increment", "1");
+    nextUrl.searchParams.set("limit", "500");
+    nextUrl.searchParams.set("time_range", JSON.stringify({ since: syncDate, until: syncDate }));
     while (nextUrl) {
         const page = await metaFetchJson(nextUrl, 2, {
             connectionId: audit.connectionId,
             syncJobId: audit.syncJobId,
-            transactionSource: 'meta_ads_insights',
+            transactionSource: "meta_ads_insights",
             sourceMetadata: {
                 adAccountId,
                 syncDate,
-                level
-            }
+                level,
+            },
         });
         rows.push(...(page.data ?? []));
         nextUrl = page.paging?.next ? new URL(page.paging.next) : null;
@@ -786,24 +821,24 @@ async function fetchCreativeMap(audit, accessToken, adIds) {
             continue;
         }
         const url = new URL(`${META_GRAPH_BASE_URL}/${env.META_ADS_API_VERSION}/`);
-        url.searchParams.set('access_token', accessToken);
-        url.searchParams.set('ids', chunk.join(','));
-        url.searchParams.set('fields', 'creative{id,name}');
+        url.searchParams.set("access_token", accessToken);
+        url.searchParams.set("ids", chunk.join(","));
+        url.searchParams.set("fields", "creative{id,name}");
         const response = await metaFetchJson(url, 2, {
             connectionId: audit.connectionId,
             syncJobId: audit.syncJobId,
-            transactionSource: 'meta_ads_creatives',
+            transactionSource: "meta_ads_creatives",
             sourceMetadata: {
                 adAccountId: audit.adAccountId,
                 syncDate: audit.syncDate,
-                adIds: chunk
-            }
+                adIds: chunk,
+            },
         });
         for (const adId of chunk) {
             const creative = response[adId]?.creative;
             creativeMap[adId] = {
                 creativeId: creative?.id ?? null,
-                creativeName: creative?.name ?? null
+                creativeName: creative?.name ?? null,
             };
         }
     }
@@ -811,8 +846,8 @@ async function fetchCreativeMap(audit, accessToken, adIds) {
 }
 async function persistDailySpendSnapshot(client, params) {
     const normalizedRowsToInsert = [];
-    await client.query('DELETE FROM meta_ads_daily_spend WHERE connection_id = $1 AND report_date = $2::date', [params.connectionId, params.syncDate]);
-    await client.query('DELETE FROM meta_ads_raw_spend_records WHERE connection_id = $1 AND report_date = $2::date', [params.connectionId, params.syncDate]);
+    await client.query("DELETE FROM meta_ads_daily_spend WHERE connection_id = $1 AND report_date = $2::date", [params.connectionId, params.syncDate]);
+    await client.query("DELETE FROM meta_ads_raw_spend_records WHERE connection_id = $1 AND report_date = $2::date", [params.connectionId, params.syncDate]);
     for (const level of META_SPEND_LEVELS) {
         for (const row of params.rowsByLevel[level]) {
             const entityId = buildInsightsEntityId(level, row) || null;
@@ -856,17 +891,17 @@ async function persistDailySpendSnapshot(client, params) {
                 parseMetricInteger(row.clicks),
                 rawPayloadJson,
                 payloadSizeBytes,
-                payloadHash
+                payloadHash,
             ]);
             logRawPayloadIntegrityMismatch(rawPayloadMetadata, rawInsert.rows[0], {
-                surface: 'meta_ads_raw_spend_records',
-                operation: 'insert',
+                surface: "meta_ads_raw_spend_records",
+                operation: "insert",
                 recordId: rawInsert.rows[0].id,
                 fields: {
                     level,
                     entityId,
-                    syncJobId: params.syncJobId
-                }
+                    syncJobId: params.syncJobId,
+                },
             });
             // Raw spend records are the canonical source-payload surface. Projection rows are
             // derived later and are allowed to skip malformed rows that cannot produce entity keys.
@@ -878,7 +913,7 @@ async function persistDailySpendSnapshot(client, params) {
             for (const normalizedRow of normalizedRows) {
                 normalizedRowsToInsert.push({
                     rawRecordId,
-                    normalizedRow
+                    normalizedRow,
                 });
             }
         }
@@ -948,7 +983,7 @@ async function persistDailySpendSnapshot(client, params) {
             normalizedRow.spend,
             normalizedRow.impressions,
             normalizedRow.clicks,
-            JSON.stringify(normalizedRow.rawPayload)
+            JSON.stringify(normalizedRow.rawPayload),
         ]);
     }
     await refreshDailyReportingMetrics(client, [params.syncDate]);
@@ -978,7 +1013,7 @@ async function markSyncJobSucceeded(jobId, connectionId) {
 async function markSyncJobFailed(job, error) {
     const lastError = error instanceof Error ? error.message : String(error);
     const shouldRetry = job.attempts < env.META_ADS_SYNC_MAX_RETRIES;
-    const nextStatus = shouldRetry ? 'retry' : 'failed';
+    const nextStatus = shouldRetry ? "retry" : "failed";
     const retryDelaySeconds = computeRetryDelaySeconds(job.attempts);
     await query(`
       UPDATE meta_ads_sync_jobs
@@ -1002,9 +1037,9 @@ async function markSyncJobFailed(job, error) {
         last_sync_error = $3,
         updated_at = now()
       WHERE id = $1
-    `, [job.connection_id, shouldRetry ? 'retry' : 'failed', lastError]);
-    process.stderr.write(`${buildMetaLog('meta_ads_sync_job_failed', {
-        severity: shouldRetry ? 'WARNING' : 'ERROR',
+    `, [job.connection_id, shouldRetry ? "retry" : "failed", lastError]);
+    process.stderr.write(`${buildMetaLog("meta_ads_sync_job_failed", {
+        severity: shouldRetry ? "WARNING" : "ERROR",
         alertable: !shouldRetry,
         jobId: job.id,
         connectionId: job.connection_id,
@@ -1013,7 +1048,7 @@ async function markSyncJobFailed(job, error) {
         attempts: job.attempts,
         willRetry: shouldRetry,
         retryDelaySeconds: shouldRetry ? retryDelaySeconds : 0,
-        error: lastError
+        error: lastError,
     })}\n`);
 }
 async function processSyncJob(job) {
@@ -1030,17 +1065,21 @@ async function processSyncJob(job) {
     try {
         const rowsByLevel = {
             // Keep the decoded API responses in audit storage before row-level normalization.
-            account: await fetchInsightsForLevel({ connectionId: job.connection_id, syncJobId: job.id }, connection.access_token, job.ad_account_id, job.sync_date, 'account'),
-            campaign: await fetchInsightsForLevel({ connectionId: job.connection_id, syncJobId: job.id }, connection.access_token, job.ad_account_id, job.sync_date, 'campaign'),
-            adset: await fetchInsightsForLevel({ connectionId: job.connection_id, syncJobId: job.id }, connection.access_token, job.ad_account_id, job.sync_date, 'adset'),
-            ad: await fetchInsightsForLevel({ connectionId: job.connection_id, syncJobId: job.id }, connection.access_token, job.ad_account_id, job.sync_date, 'ad')
+            account: await fetchInsightsForLevel({ connectionId: job.connection_id, syncJobId: job.id }, connection.access_token, job.ad_account_id, job.sync_date, "account"),
+            campaign: await fetchInsightsForLevel({ connectionId: job.connection_id, syncJobId: job.id }, connection.access_token, job.ad_account_id, job.sync_date, "campaign"),
+            adset: await fetchInsightsForLevel({ connectionId: job.connection_id, syncJobId: job.id }, connection.access_token, job.ad_account_id, job.sync_date, "adset"),
+            ad: await fetchInsightsForLevel({ connectionId: job.connection_id, syncJobId: job.id }, connection.access_token, job.ad_account_id, job.sync_date, "ad"),
         };
-        const adIds = [...new Set(rowsByLevel.ad.map((row) => row.ad_id).filter((value) => Boolean(value)))];
+        const adIds = [
+            ...new Set(rowsByLevel.ad
+                .map((row) => row.ad_id)
+                .filter((value) => Boolean(value))),
+        ];
         const creativeMap = await fetchCreativeMap({
             connectionId: job.connection_id,
             syncJobId: job.id,
             adAccountId: job.ad_account_id,
-            syncDate: job.sync_date
+            syncDate: job.sync_date,
         }, connection.access_token, adIds);
         await withTransaction(async (client) => {
             await persistDailySpendSnapshot(client, {
@@ -1049,29 +1088,32 @@ async function processSyncJob(job) {
                 syncDate: job.sync_date,
                 currency: connection.account_currency,
                 rowsByLevel,
-                creativeMap
+                creativeMap,
             });
         });
         await markSyncJobSucceeded(job.id, job.connection_id);
     }
     catch (error) {
-        if (error instanceof MetaAdsApiError && [400, 401, 403].includes(error.statusCode)) {
+        if (error instanceof MetaAdsApiError &&
+            [400, 401, 403].includes(error.statusCode)) {
             connection = await getUsableMetaAdsConnection(true);
             try {
                 const rowsByLevel = {
-                    account: await fetchInsightsForLevel({ connectionId: job.connection_id, syncJobId: job.id }, connection.access_token, job.ad_account_id, job.sync_date, 'account'),
-                    campaign: await fetchInsightsForLevel({ connectionId: job.connection_id, syncJobId: job.id }, connection.access_token, job.ad_account_id, job.sync_date, 'campaign'),
-                    adset: await fetchInsightsForLevel({ connectionId: job.connection_id, syncJobId: job.id }, connection.access_token, job.ad_account_id, job.sync_date, 'adset'),
-                    ad: await fetchInsightsForLevel({ connectionId: job.connection_id, syncJobId: job.id }, connection.access_token, job.ad_account_id, job.sync_date, 'ad')
+                    account: await fetchInsightsForLevel({ connectionId: job.connection_id, syncJobId: job.id }, connection.access_token, job.ad_account_id, job.sync_date, "account"),
+                    campaign: await fetchInsightsForLevel({ connectionId: job.connection_id, syncJobId: job.id }, connection.access_token, job.ad_account_id, job.sync_date, "campaign"),
+                    adset: await fetchInsightsForLevel({ connectionId: job.connection_id, syncJobId: job.id }, connection.access_token, job.ad_account_id, job.sync_date, "adset"),
+                    ad: await fetchInsightsForLevel({ connectionId: job.connection_id, syncJobId: job.id }, connection.access_token, job.ad_account_id, job.sync_date, "ad"),
                 };
                 const adIds = [
-                    ...new Set(rowsByLevel.ad.map((row) => row.ad_id).filter((value) => Boolean(value)))
+                    ...new Set(rowsByLevel.ad
+                        .map((row) => row.ad_id)
+                        .filter((value) => Boolean(value))),
                 ];
                 const creativeMap = await fetchCreativeMap({
                     connectionId: job.connection_id,
                     syncJobId: job.id,
                     adAccountId: job.ad_account_id,
-                    syncDate: job.sync_date
+                    syncDate: job.sync_date,
                 }, connection.access_token, adIds);
                 await withTransaction(async (client) => {
                     await persistDailySpendSnapshot(client, {
@@ -1080,7 +1122,7 @@ async function processSyncJob(job) {
                         syncDate: job.sync_date,
                         currency: connection.account_currency,
                         rowsByLevel,
-                        creativeMap
+                        creativeMap,
                     });
                 });
                 await markSyncJobSucceeded(job.id, job.connection_id);
@@ -1095,18 +1137,18 @@ async function processSyncJob(job) {
     }
 }
 function buildMetricsLog(result) {
-    return buildMetaLog('meta_ads_sync_run', {
+    return buildMetaLog("meta_ads_sync_run", {
         workerId: result.workerId,
         enqueuedJobs: result.enqueuedJobs,
         claimedJobs: result.claimedJobs,
         succeededJobs: result.succeededJobs,
         failedJobs: result.failedJobs,
-        durationMs: result.durationMs
+        durationMs: result.durationMs,
     });
 }
 export async function processMetaAdsSyncQueue(options = {}) {
     const startedAt = Date.now();
-    const workerId = options.workerId ?? `meta-ads-sync-${randomBytes(6).toString('hex')}`;
+    const workerId = options.workerId ?? `meta-ads-sync-${randomBytes(6).toString("hex")}`;
     const limit = options.limit ?? env.META_ADS_SYNC_BATCH_SIZE;
     const now = options.now ?? new Date();
     const enqueuedJobs = await planIncrementalSyncs(now);
@@ -1129,7 +1171,7 @@ export async function processMetaAdsSyncQueue(options = {}) {
         claimedJobs: jobs.length,
         succeededJobs,
         failedJobs,
-        durationMs: Date.now() - startedAt
+        durationMs: Date.now() - startedAt,
     };
     if (options.emitMetrics) {
         process.stdout.write(`${buildMetricsLog(result)}\n`);
@@ -1138,15 +1180,16 @@ export async function processMetaAdsSyncQueue(options = {}) {
 }
 export function createMetaAdsPublicRouter() {
     const router = Router();
-    router.get('/oauth/callback', async (req, res, next) => {
+    router.get("/oauth/callback", async (req, res, next) => {
         try {
             const config = await getResolvedMetaAdsConfig();
             const payload = oauthCallbackSchema.parse(req.query);
             if (payload.error) {
-                throw new MetaAdsHttpError(400, 'meta_ads_oauth_denied', payload.error_description ?? `Meta Ads OAuth failed with error: ${payload.error}`);
+                throw new MetaAdsHttpError(400, "meta_ads_oauth_denied", payload.error_description ??
+                    `Meta Ads OAuth failed with error: ${payload.error}`);
             }
             if (!payload.code || !payload.state) {
-                throw new MetaAdsHttpError(400, 'meta_ads_oauth_invalid_callback', 'Missing OAuth callback parameters');
+                throw new MetaAdsHttpError(400, "meta_ads_oauth_invalid_callback", "Missing OAuth callback parameters");
             }
             const redirectPath = await consumeOAuthState(payload.state);
             const shortLivedToken = await exchangeCodeForAccessToken(config, payload.code);
@@ -1156,11 +1199,11 @@ export function createMetaAdsPublicRouter() {
             await upsertMetaAdsConnection({
                 adAccountId,
                 accessToken: longLivedToken.access_token,
-                tokenType: longLivedToken.token_type ?? shortLivedToken.token_type ?? 'Bearer',
+                tokenType: longLivedToken.token_type ?? shortLivedToken.token_type ?? "Bearer",
                 grantedScopes: config.appScopes,
                 tokenExpiresAt: calculateTokenExpiresAt(longLivedToken.expires_in),
                 account,
-                encryptionKey: config.encryptionKey
+                encryptionKey: config.encryptionKey,
             });
             const initialDates = buildPlanningDates(new Date(), null);
             const connection = await getUsableMetaAdsConnection();
@@ -1172,7 +1215,7 @@ export function createMetaAdsPublicRouter() {
             res.status(200).json({
                 ok: true,
                 adAccountId,
-                plannedDates: initialDates
+                plannedDates: initialDates,
             });
         }
         catch (error) {
@@ -1185,7 +1228,7 @@ export function createMetaAdsAdminRouter() {
     const router = Router();
     router.use(attachAuthContext);
     router.use(requireAdmin);
-    router.get('/oauth/start', async (req, res, next) => {
+    router.get("/oauth/start", async (req, res, next) => {
         try {
             const config = await getResolvedMetaAdsConfig();
             const payload = oauthStartQuerySchema.parse(req.query);
@@ -1194,14 +1237,14 @@ export function createMetaAdsAdminRouter() {
             res.status(200).json({
                 authorizationUrl: buildMetaAdsAuthorizationUrl(config, state),
                 redirectUri: buildMetaAdsRedirectUri(config),
-                state
+                state,
             });
         }
         catch (error) {
             next(error);
         }
     });
-    router.get('/status', async (_req, res, next) => {
+    router.get("/status", async (_req, res, next) => {
         try {
             const config = await getMetaAdsConfigurationSummary();
             const result = await query(`
@@ -1224,27 +1267,27 @@ export function createMetaAdsAdminRouter() {
         `);
             res.status(200).json({
                 config,
-                connection: result.rows[0] ?? null
+                connection: result.rows[0] ?? null,
             });
         }
         catch (error) {
             next(error);
         }
     });
-    router.put('/config', async (req, res, next) => {
+    router.put("/config", async (req, res, next) => {
         try {
             const payload = metaAdsConfigUpdateSchema.parse(req.body);
             await upsertMetaAdsSettings(payload);
             res.status(200).json({
                 ok: true,
-                config: await getMetaAdsConfigurationSummary()
+                config: await getMetaAdsConfigurationSummary(),
             });
         }
         catch (error) {
             next(error);
         }
     });
-    router.post('/sync', async (req, res, next) => {
+    router.post("/sync", async (req, res, next) => {
         try {
             const payload = manualSyncSchema.parse(req.body);
             const connection = await getUsableMetaAdsConnection();
@@ -1253,20 +1296,20 @@ export function createMetaAdsAdminRouter() {
             res.status(202).json({
                 ok: true,
                 enqueuedJobs,
-                dates
+                dates,
             });
         }
         catch (error) {
             next(error);
         }
     });
-    router.post('/refresh-token', async (_req, res, next) => {
+    router.post("/refresh-token", async (_req, res, next) => {
         try {
             const connection = await getUsableMetaAdsConnection(true);
             res.status(200).json({
                 ok: true,
                 tokenExpiresAt: connection.token_expires_at,
-                lastRefreshedAt: connection.last_refreshed_at
+                lastRefreshedAt: connection.last_refreshed_at,
             });
         }
         catch (error) {
@@ -1287,5 +1330,5 @@ export const __metaAdsTestUtils = {
     listDateRangeInclusive,
     normalizeInsightRows,
     rollupNormalizedSpendRows,
-    rollupPersistableSpendRows
+    rollupPersistableSpendRows,
 };

@@ -1,4 +1,4 @@
-import { backfillHistoricalIdentityGraph } from '../modules/identity/backfill.js';
+import { backfillHistoricalIdentityGraph } from "../modules/identity/backfill.js";
 function readFlag(name) {
     const prefixed = `--${name}`;
     const index = process.argv.indexOf(prefixed);
@@ -37,24 +37,24 @@ function parseOptionalPositiveInteger(name) {
     return parsed;
 }
 function parseOptionalSourceList() {
-    const value = readFlag('sources')?.trim();
+    const value = readFlag("sources")?.trim();
     if (!value) {
         return undefined;
     }
     return value
-        .split(',')
+        .split(",")
         .map((entry) => entry.trim())
         .filter(Boolean);
 }
 async function run() {
     const report = await backfillHistoricalIdentityGraph({
-        requestedBy: requireFlag('requested-by'),
-        workerId: readFlag('worker-id')?.trim() || 'identity-graph-backfill',
-        runId: readFlag('run-id')?.trim() || null,
-        startAt: parseOptionalDate('start-at'),
-        endAt: parseOptionalDate('end-at'),
-        batchSize: parseOptionalPositiveInteger('batch-size'),
-        sources: parseOptionalSourceList()
+        requestedBy: requireFlag("requested-by"),
+        workerId: readFlag("worker-id")?.trim() || "identity-graph-backfill",
+        runId: readFlag("run-id")?.trim() || null,
+        startAt: parseOptionalDate("start-at"),
+        endAt: parseOptionalDate("end-at"),
+        batchSize: parseOptionalPositiveInteger("batch-size"),
+        sources: parseOptionalSourceList(),
     });
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 }

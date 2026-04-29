@@ -1,7 +1,7 @@
-import { orderAttributionBackfillReportSchema, } from '../../../packages/attribution-schema/index.js';
-import { emitOrderAttributionBackfillJobLifecycleLog, logInfo } from '../../observability/index.js';
-import { backfillRecentOrdersWithRecoveredAttribution, OrderAttributionBackfillRunError, toOrderAttributionBackfillJobReport } from './backfill.js';
-import { claimOrderAttributionBackfillRuns, markOrderAttributionBackfillRunCompleted, markOrderAttributionBackfillRunFailed } from './backfill-run-store.js';
+import { orderAttributionBackfillReportSchema, } from "../../../packages/attribution-schema/index.js";
+import { emitOrderAttributionBackfillJobLifecycleLog, logInfo, } from "../../observability/index.js";
+import { claimOrderAttributionBackfillRuns, markOrderAttributionBackfillRunCompleted, markOrderAttributionBackfillRunFailed, } from "./backfill-run-store.js";
+import { OrderAttributionBackfillRunError, backfillRecentOrdersWithRecoveredAttribution, toOrderAttributionBackfillJobReport, } from "./backfill.js";
 const DEFAULT_ORDER_ATTRIBUTION_BACKFILL_RUN_BATCH_SIZE = 1;
 function toUtcWindowStart(dateOnly) {
     return new Date(`${dateOnly}T00:00:00.000Z`);
@@ -16,7 +16,7 @@ function extractFailedRunReport(error) {
     return orderAttributionBackfillReportSchema.parse(error.report);
 }
 export function buildBackfillExecutionOptions(run, workerId) {
-    const requestedBy = 'submittedBy' in run ? run.submittedBy : run.submitted_by;
+    const requestedBy = "submittedBy" in run ? run.submittedBy : run.submitted_by;
     return {
         windowStart: toUtcWindowStart(run.options.startDate),
         windowEnd: toUtcWindowEnd(run.options.endDate),
@@ -25,7 +25,7 @@ export function buildBackfillExecutionOptions(run, workerId) {
         limit: run.options.limit,
         dryRun: run.options.dryRun,
         onlyWebOrders: run.options.webOrdersOnly,
-        writeToShopifyWhenAvailable: !run.options.skipShopifyWriteback
+        writeToShopifyWhenAvailable: !run.options.skipShopifyWriteback,
     };
 }
 export async function processOrderAttributionBackfillRuns(options) {
@@ -37,10 +37,10 @@ export async function processOrderAttributionBackfillRuns(options) {
     const markRunFailed = options.markRunFailed ?? markOrderAttributionBackfillRunFailed;
     const runs = (await claimRuns(options.workerId, now, limit)).map((run) => ({
         id: run.id,
-        submittedBy: 'submittedBy' in run ? run.submittedBy : run.submitted_by,
+        submittedBy: "submittedBy" in run ? run.submittedBy : run.submitted_by,
         options: run.options,
         submittedAt: run.submittedAt ?? null,
-        startedAt: run.startedAt ?? null
+        startedAt: run.startedAt ?? null,
     }));
     let completedRuns = 0;
     let failedRuns = 0;
@@ -48,11 +48,11 @@ export async function processOrderAttributionBackfillRuns(options) {
         const submittedOptions = run.options;
         const startedAt = run.startedAt ?? now.toISOString();
         emitOrderAttributionBackfillJobLifecycleLog({
-            stage: 'started',
+            stage: "started",
             jobId: run.id,
             workerId: options.workerId,
             startedAt,
-            options: submittedOptions
+            options: submittedOptions,
         });
         try {
             const executionOptions = buildBackfillExecutionOptions(run, options.workerId);
@@ -61,13 +61,13 @@ export async function processOrderAttributionBackfillRuns(options) {
             const completedAt = new Date();
             await markRunCompleted(run.id, finalReport, completedAt);
             emitOrderAttributionBackfillJobLifecycleLog({
-                stage: 'completed',
+                stage: "completed",
                 jobId: run.id,
                 workerId: options.workerId,
                 startedAt,
                 completedAt: completedAt.toISOString(),
                 options: submittedOptions,
-                report: finalReport
+                report: finalReport,
             });
             completedRuns += 1;
         }
@@ -76,29 +76,29 @@ export async function processOrderAttributionBackfillRuns(options) {
             const failedReport = extractFailedRunReport(error);
             const completedAt = new Date();
             emitOrderAttributionBackfillJobLifecycleLog({
-                stage: 'failed',
+                stage: "failed",
                 jobId: run.id,
                 workerId: options.workerId,
                 startedAt,
                 completedAt: completedAt.toISOString(),
                 options: submittedOptions,
                 report: failedReport,
-                error
+                error,
             });
             await markRunFailed(run.id, error, failedReport, completedAt);
         }
     }
     if (runs.length > 0) {
-        logInfo('order_attribution_backfill_run_batch_processed', {
+        logInfo("order_attribution_backfill_run_batch_processed", {
             workerId: options.workerId,
             claimedRuns: runs.length,
             completedRuns,
-            failedRuns
+            failedRuns,
         });
     }
     return {
         claimedRuns: runs.length,
         completedRuns,
-        failedRuns
+        failedRuns,
     };
 }

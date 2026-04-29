@@ -1,7 +1,11 @@
-import { ATTRIBUTION_MODELS } from '../attribution/engine.js';
-import { getReportingTimezone } from '../settings/index.js';
+import { ATTRIBUTION_MODELS } from "../attribution/engine.js";
+import { getReportingTimezone } from "../settings/index.js";
 function normalizeMetricDates(metricDates) {
-    return [...new Set(metricDates.map((value) => value.trim()).filter((value) => /^\d{4}-\d{2}-\d{2}$/.test(value)))].sort();
+    return [
+        ...new Set(metricDates
+            .map((value) => value.trim())
+            .filter((value) => /^\d{4}-\d{2}-\d{2}$/.test(value))),
+    ].sort();
 }
 export async function refreshDailyReportingMetrics(client, metricDates) {
     const normalizedMetricDates = normalizeMetricDates(metricDates);
@@ -9,8 +13,8 @@ export async function refreshDailyReportingMetrics(client, metricDates) {
         return;
     }
     const reportingTimezone = await getReportingTimezone(client);
-    await client.query('SELECT pg_advisory_xact_lock($1)', [82134721]);
-    await client.query('DELETE FROM daily_reporting_metrics WHERE metric_date = ANY($1::date[])', [normalizedMetricDates]);
+    await client.query("SELECT pg_advisory_xact_lock($1)", [82134721]);
+    await client.query("DELETE FROM daily_reporting_metrics WHERE metric_date = ANY($1::date[])", [normalizedMetricDates]);
     await client.query(`
       WITH attribution_models AS (
         SELECT unnest($3::text[]) AS attribution_model

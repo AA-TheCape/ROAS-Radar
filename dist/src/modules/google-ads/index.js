@@ -1,42 +1,54 @@
-import { createHash, randomBytes } from 'node:crypto';
-import { setTimeout as delay } from 'node:timers/promises';
-import { Router } from 'express';
-import { z } from 'zod';
-import { env } from '../../config/env.js';
-import { query, withTransaction } from '../../db/pool.js';
-import { buildRawPayloadStorageMetadata, logRawPayloadIntegrityMismatch } from '../../shared/raw-payload-storage.js';
-import { parseJsonResponsePayload, recordAdSyncApiTransaction } from '../ad-sync-audit/index.js';
-import { attachAuthContext, requireAdmin } from '../auth/index.js';
-import { buildCanonicalSpendDimensions } from '../marketing-dimensions/index.js';
-import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
-const GOOGLE_OAUTH_TOKEN_URL = 'https://oauth2.googleapis.com/token';
-const GOOGLE_OAUTH_AUTHORIZATION_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
-const GOOGLE_ADS_API_BASE_URL = 'https://googleads.googleapis.com';
+import { createHash, randomBytes } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
+import { Router } from "express";
+import { z } from "zod";
+import { env } from "../../config/env.js";
+import { query, withTransaction } from "../../db/pool.js";
+import { buildRawPayloadStorageMetadata, logRawPayloadIntegrityMismatch, } from "../../shared/raw-payload-storage.js";
+import { parseJsonResponsePayload, recordAdSyncApiTransaction, } from "../ad-sync-audit/index.js";
+import { attachAuthContext, requireAdmin } from "../auth/index.js";
+import { buildCanonicalSpendDimensions } from "../marketing-dimensions/index.js";
+import { refreshDailyReportingMetrics } from "../reporting/aggregates.js";
+const GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
+const GOOGLE_OAUTH_AUTHORIZATION_URL = "https://accounts.google.com/o/oauth2/v2/auth";
+const GOOGLE_ADS_API_BASE_URL = "https://googleads.googleapis.com";
 const GOOGLE_ADS_OAUTH_STATE_TTL_MINUTES = 10;
-const GOOGLE_ADS_SYNC_JOB_STATUSES = ['pending', 'processing', 'retry', 'completed', 'failed'];
-const GOOGLE_ADS_SPEND_GRANULARITIES = ['account', 'campaign', 'adset', 'ad', 'creative'];
-const GOOGLE_ADS_SYNC_TIME_ZONE = 'America/Los_Angeles';
+const GOOGLE_ADS_SYNC_JOB_STATUSES = [
+    "pending",
+    "processing",
+    "retry",
+    "completed",
+    "failed",
+];
+const GOOGLE_ADS_SPEND_GRANULARITIES = [
+    "account",
+    "campaign",
+    "adset",
+    "ad",
+    "creative",
+];
+const GOOGLE_ADS_SYNC_TIME_ZONE = "America/Los_Angeles";
 const oauthStartQuerySchema = z.object({
     customerId: z.string().min(1),
     loginCustomerId: z.string().optional(),
-    redirectPath: z.string().optional()
+    redirectPath: z.string().optional(),
 });
 const googleAdsConfigUpdateSchema = z.object({
     clientId: z.string().min(1),
     clientSecret: z.string().optional(),
     developerToken: z.string().optional(),
     appBaseUrl: z.string().url(),
-    appScopes: z.union([z.string(), z.array(z.string())]).optional()
+    appScopes: z.union([z.string(), z.array(z.string())]).optional(),
 });
 const oauthCallbackSchema = z.object({
     code: z.string().min(1).optional(),
     state: z.string().min(1).optional(),
     error: z.string().optional(),
-    error_description: z.string().optional()
+    error_description: z.string().optional(),
 });
 const manualSyncSchema = z.object({
     startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+    endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
 });
 class GoogleAdsHttpError extends Error {
     statusCode;
@@ -44,7 +56,7 @@ class GoogleAdsHttpError extends Error {
     details;
     constructor(statusCode, code, message, details) {
         super(message);
-        this.name = 'GoogleAdsHttpError';
+        this.name = "GoogleAdsHttpError";
         this.statusCode = statusCode;
         this.code = code;
         this.details = details;
@@ -55,7 +67,7 @@ class GoogleAdsApiError extends Error {
     details;
     constructor(statusCode, message, details) {
         super(message);
-        this.name = 'GoogleAdsApiError';
+        this.name = "GoogleAdsApiError";
         this.statusCode = statusCode;
         this.details = details;
     }
@@ -64,10 +76,10 @@ function truncateLogValue(value, limit = 2_000) {
     return value.length <= limit ? value : `${value.slice(0, limit)}…`;
 }
 function serializeGoogleAdsErrorDetails(details) {
-    if (details === null || typeof details === 'undefined') {
-        return '';
+    if (details === null || typeof details === "undefined") {
+        return "";
     }
-    if (typeof details === 'string') {
+    if (typeof details === "string") {
         return truncateLogValue(details);
     }
     try {
@@ -102,7 +114,7 @@ function parseRetryDelaySeconds(value) {
     }
     const secondsMatch = /^(\d+)s$/i.exec(normalized);
     if (secondsMatch) {
-        return Number.parseInt(secondsMatch[1] ?? '', 10);
+        return Number.parseInt(secondsMatch[1] ?? "", 10);
     }
     return null;
 }
@@ -114,11 +126,11 @@ function extractGoogleAdsProviderRetryDelaySeconds(details) {
             stack.push(...current);
             continue;
         }
-        if (!current || typeof current !== 'object') {
+        if (!current || typeof current !== "object") {
             continue;
         }
         const record = current;
-        if (typeof record.retryDelay === 'string') {
+        if (typeof record.retryDelay === "string") {
             const parsed = parseRetryDelaySeconds(record.retryDelay);
             if (parsed !== null) {
                 return parsed;
@@ -130,25 +142,25 @@ function extractGoogleAdsProviderRetryDelaySeconds(details) {
 }
 function assertGoogleAdsConfig() {
     if (!env.GOOGLE_ADS_ENCRYPTION_KEY) {
-        throw new GoogleAdsHttpError(500, 'google_ads_config_missing', 'Missing Google Ads configuration: GOOGLE_ADS_ENCRYPTION_KEY');
+        throw new GoogleAdsHttpError(500, "google_ads_config_missing", "Missing Google Ads configuration: GOOGLE_ADS_ENCRYPTION_KEY");
     }
 }
 function normalizeGoogleAdsScopes(rawValue) {
     if (Array.isArray(rawValue)) {
         return rawValue.map((entry) => entry.trim()).filter(Boolean);
     }
-    if (typeof rawValue !== 'string') {
+    if (typeof rawValue !== "string") {
         return [];
     }
     return rawValue
-        .split(',')
+        .split(",")
         .map((entry) => entry.trim())
         .filter(Boolean);
 }
 function normalizeGoogleAdsCustomerId(value) {
-    const normalized = value.replace(/-/g, '').trim();
+    const normalized = value.replace(/-/g, "").trim();
     if (!/^\d+$/.test(normalized)) {
-        throw new GoogleAdsHttpError(400, 'invalid_google_ads_customer_id', 'Google Ads customer ids must contain digits only');
+        throw new GoogleAdsHttpError(400, "invalid_google_ads_customer_id", "Google Ads customer ids must contain digits only");
     }
     return normalized;
 }
@@ -160,8 +172,8 @@ function normalizeRedirectPath(rawValue) {
     if (!trimmed) {
         return null;
     }
-    if (!trimmed.startsWith('/')) {
-        throw new GoogleAdsHttpError(400, 'invalid_redirect_path', 'redirectPath must be a root-relative path');
+    if (!trimmed.startsWith("/")) {
+        throw new GoogleAdsHttpError(400, "invalid_redirect_path", "redirectPath must be a root-relative path");
     }
     return trimmed;
 }
@@ -187,20 +199,20 @@ async function getResolvedGoogleAdsConfig() {
     const clientId = stored?.client_id?.trim() || env.GOOGLE_ADS_CLIENT_ID.trim();
     const clientSecret = stored?.client_secret?.trim() || env.GOOGLE_ADS_CLIENT_SECRET.trim();
     const developerToken = stored?.developer_token?.trim() || env.GOOGLE_ADS_DEVELOPER_TOKEN.trim();
-    const appBaseUrl = (stored?.app_base_url?.trim() || env.GOOGLE_ADS_APP_BASE_URL.trim()).replace(/\/$/, '');
+    const appBaseUrl = (stored?.app_base_url?.trim() || env.GOOGLE_ADS_APP_BASE_URL.trim()).replace(/\/$/, "");
     const appScopes = (stored?.app_scopes?.length ? stored.app_scopes : env.GOOGLE_ADS_APP_SCOPES)
         .map((entry) => entry.trim())
         .filter(Boolean);
     const missing = [
-        ['GOOGLE_ADS_CLIENT_ID', clientId],
-        ['GOOGLE_ADS_CLIENT_SECRET', clientSecret],
-        ['GOOGLE_ADS_DEVELOPER_TOKEN', developerToken],
-        ['GOOGLE_ADS_APP_BASE_URL', appBaseUrl]
+        ["GOOGLE_ADS_CLIENT_ID", clientId],
+        ["GOOGLE_ADS_CLIENT_SECRET", clientSecret],
+        ["GOOGLE_ADS_DEVELOPER_TOKEN", developerToken],
+        ["GOOGLE_ADS_APP_BASE_URL", appBaseUrl],
     ]
         .filter(([, value]) => !value)
         .map(([key]) => key);
     if (missing.length > 0) {
-        throw new GoogleAdsHttpError(500, 'google_ads_config_missing', `Missing Google Ads configuration: ${missing.join(', ')}`);
+        throw new GoogleAdsHttpError(500, "google_ads_config_missing", `Missing Google Ads configuration: ${missing.join(", ")}`);
     }
     return {
         clientId,
@@ -209,45 +221,53 @@ async function getResolvedGoogleAdsConfig() {
         appBaseUrl,
         appScopes,
         encryptionKey: env.GOOGLE_ADS_ENCRYPTION_KEY,
-        source: stored ? 'database' : 'environment'
+        source: stored ? "database" : "environment",
     };
 }
 async function getGoogleAdsConfigurationSummary() {
-    const stored = env.GOOGLE_ADS_ENCRYPTION_KEY ? await getStoredGoogleAdsSettings() : null;
+    const stored = env.GOOGLE_ADS_ENCRYPTION_KEY
+        ? await getStoredGoogleAdsSettings()
+        : null;
     const clientId = stored?.client_id?.trim() || env.GOOGLE_ADS_CLIENT_ID.trim();
     const clientSecretConfigured = Boolean(stored?.client_secret?.trim() || env.GOOGLE_ADS_CLIENT_SECRET.trim());
     const developerTokenConfigured = Boolean(stored?.developer_token?.trim() || env.GOOGLE_ADS_DEVELOPER_TOKEN.trim());
-    const appBaseUrl = (stored?.app_base_url?.trim() || env.GOOGLE_ADS_APP_BASE_URL.trim()).replace(/\/$/, '');
+    const appBaseUrl = (stored?.app_base_url?.trim() || env.GOOGLE_ADS_APP_BASE_URL.trim()).replace(/\/$/, "");
     const appScopes = (stored?.app_scopes?.length ? stored.app_scopes : env.GOOGLE_ADS_APP_SCOPES)
         .map((entry) => entry.trim())
         .filter(Boolean);
     const missingFields = [
-        ['clientId', clientId],
-        ['clientSecret', clientSecretConfigured ? 'configured' : ''],
-        ['developerToken', developerTokenConfigured ? 'configured' : ''],
-        ['appBaseUrl', appBaseUrl],
-        ['encryptionKey', env.GOOGLE_ADS_ENCRYPTION_KEY]
+        ["clientId", clientId],
+        ["clientSecret", clientSecretConfigured ? "configured" : ""],
+        ["developerToken", developerTokenConfigured ? "configured" : ""],
+        ["appBaseUrl", appBaseUrl],
+        ["encryptionKey", env.GOOGLE_ADS_ENCRYPTION_KEY],
     ]
         .filter(([, value]) => !value)
         .map(([key]) => key);
     return {
-        source: stored ? 'database' : 'environment',
+        source: stored ? "database" : "environment",
         clientId,
         appBaseUrl,
         appScopes,
         clientSecretConfigured,
         developerTokenConfigured,
-        missingFields
+        missingFields,
     };
 }
 async function upsertGoogleAdsSettings(payload) {
     assertGoogleAdsConfig();
-    const clientSecretProvided = typeof payload.clientSecret === 'string' && payload.clientSecret.trim().length > 0;
-    const developerTokenProvided = typeof payload.developerToken === 'string' && payload.developerToken.trim().length > 0;
+    const clientSecretProvided = typeof payload.clientSecret === "string" &&
+        payload.clientSecret.trim().length > 0;
+    const developerTokenProvided = typeof payload.developerToken === "string" &&
+        payload.developerToken.trim().length > 0;
     const normalizedScopes = normalizeGoogleAdsScopes(payload.appScopes);
     const existing = await getStoredGoogleAdsSettings();
-    const nextClientSecret = clientSecretProvided ? (payload.clientSecret ?? '').trim() : existing?.client_secret ?? '';
-    const nextDeveloperToken = developerTokenProvided ? (payload.developerToken ?? '').trim() : existing?.developer_token ?? '';
+    const nextClientSecret = clientSecretProvided
+        ? (payload.clientSecret ?? "").trim()
+        : (existing?.client_secret ?? "");
+    const nextDeveloperToken = developerTokenProvided
+        ? (payload.developerToken ?? "").trim()
+        : (existing?.developer_token ?? "");
     await query(`
       DELETE FROM google_ads_settings
     `);
@@ -280,39 +300,47 @@ async function upsertGoogleAdsSettings(payload) {
         payload.clientId.trim(),
         nextClientSecret,
         nextDeveloperToken,
-        new URL(payload.appBaseUrl).toString().replace(/\/$/, ''),
+        new URL(payload.appBaseUrl).toString().replace(/\/$/, ""),
         env.GOOGLE_ADS_ENCRYPTION_KEY,
-        normalizedScopes.length > 0 ? normalizedScopes : ['https://www.googleapis.com/auth/adwords']
+        normalizedScopes.length > 0
+            ? normalizedScopes
+            : ["https://www.googleapis.com/auth/adwords"],
     ]);
 }
 function getGoogleAdsAppBaseUrl(config) {
-    return new URL(config.appBaseUrl).toString().replace(/\/$/, '');
+    return new URL(config.appBaseUrl).toString().replace(/\/$/, "");
 }
 function buildGoogleAdsRedirectUri(config) {
     return `${getGoogleAdsAppBaseUrl(config)}/google-ads/oauth/callback`;
 }
 function createOAuthStateDigest(state) {
-    return createHash('sha256').update(state).digest('hex');
+    return createHash("sha256").update(state).digest("hex");
 }
 function buildGoogleAdsAuthorizationUrl(config, state) {
     const url = new URL(GOOGLE_OAUTH_AUTHORIZATION_URL);
-    url.searchParams.set('client_id', config.clientId);
-    url.searchParams.set('redirect_uri', buildGoogleAdsRedirectUri(config));
-    url.searchParams.set('response_type', 'code');
-    url.searchParams.set('scope', config.appScopes.join(' '));
-    url.searchParams.set('access_type', 'offline');
-    url.searchParams.set('prompt', 'consent');
-    url.searchParams.set('include_granted_scopes', 'true');
-    url.searchParams.set('state', state);
+    url.searchParams.set("client_id", config.clientId);
+    url.searchParams.set("redirect_uri", buildGoogleAdsRedirectUri(config));
+    url.searchParams.set("response_type", "code");
+    url.searchParams.set("scope", config.appScopes.join(" "));
+    url.searchParams.set("access_type", "offline");
+    url.searchParams.set("prompt", "consent");
+    url.searchParams.set("include_granted_scopes", "true");
+    url.searchParams.set("state", state);
     return url.toString();
 }
 async function insertOAuthState(params) {
-    const state = randomBytes(24).toString('hex');
+    const state = randomBytes(24).toString("hex");
     const stateDigest = createOAuthStateDigest(state);
     await query(`
       INSERT INTO google_ads_oauth_states (state_digest, redirect_path, customer_id, login_customer_id, expires_at)
       VALUES ($1, $2, $3, $4, now() + ($5::int * interval '1 minute'))
-    `, [stateDigest, params.redirectPath, params.customerId, params.loginCustomerId, GOOGLE_ADS_OAUTH_STATE_TTL_MINUTES]);
+    `, [
+        stateDigest,
+        params.redirectPath,
+        params.customerId,
+        params.loginCustomerId,
+        GOOGLE_ADS_OAUTH_STATE_TTL_MINUTES,
+    ]);
     return state;
 }
 async function consumeOAuthState(state) {
@@ -325,7 +353,7 @@ async function consumeOAuthState(state) {
       RETURNING redirect_path, customer_id, login_customer_id
     `, [createOAuthStateDigest(state)]);
     if (!result.rowCount) {
-        throw new GoogleAdsHttpError(400, 'invalid_google_ads_oauth_state', 'The Google Ads OAuth state is invalid or expired');
+        throw new GoogleAdsHttpError(400, "invalid_google_ads_oauth_state", "The Google Ads OAuth state is invalid or expired");
     }
     return result.rows[0];
 }
@@ -336,11 +364,11 @@ function parseDateOnly(value) {
     return new Date(`${value}T00:00:00.000Z`);
 }
 function formatDateInTimeZone(value, timeZone) {
-    const formatter = new Intl.DateTimeFormat('en-CA', {
+    const formatter = new Intl.DateTimeFormat("en-CA", {
         timeZone,
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit'
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
     });
     return formatter.format(value);
 }
@@ -348,7 +376,7 @@ function listDateRangeInclusive(startDate, endDate) {
     const start = parseDateOnly(startDate);
     const end = parseDateOnly(endDate);
     if (start.getTime() > end.getTime()) {
-        throw new GoogleAdsHttpError(400, 'invalid_date_range', 'startDate must be on or before endDate');
+        throw new GoogleAdsHttpError(400, "invalid_date_range", "startDate must be on or before endDate");
     }
     const dates = [];
     for (let cursor = start; cursor.getTime() <= end.getTime(); cursor = new Date(cursor.getTime() + 24 * 60 * 60 * 1000)) {
@@ -375,7 +403,7 @@ function buildReconciliationWindow(now = new Date(), lastSyncCompletedAt = null)
     return {
         startDate: dates[0],
         endDate: dates[dates.length - 1],
-        dates
+        dates,
     };
 }
 function computeRetryDelaySeconds(attempts) {
@@ -383,111 +411,117 @@ function computeRetryDelaySeconds(attempts) {
     return Math.min(60 * 2 ** (safeAttempts - 1), 60 * 60);
 }
 function parseMetricInteger(value) {
-    const parsed = Number.parseInt(value ?? '0', 10);
+    const parsed = Number.parseInt(value ?? "0", 10);
     return Number.isFinite(parsed) ? parsed : 0;
 }
 function parseMicrosToDecimal(value) {
-    const parsed = Number.parseFloat(value ?? '0');
+    const parsed = Number.parseFloat(value ?? "0");
     if (!Number.isFinite(parsed)) {
-        return '0.00';
+        return "0.00";
     }
     return (parsed / 1_000_000).toFixed(2);
 }
 function buildGoogleAdsLog(event, payload) {
     return JSON.stringify({
         event,
-        ...payload
+        ...payload,
     });
 }
 function buildAccessTokenRequestBody(connection) {
     const body = new URLSearchParams();
-    body.set('client_id', connection.client_id);
-    body.set('client_secret', connection.client_secret);
-    body.set('refresh_token', connection.refresh_token);
-    body.set('grant_type', 'refresh_token');
+    body.set("client_id", connection.client_id);
+    body.set("client_secret", connection.client_secret);
+    body.set("refresh_token", connection.refresh_token);
+    body.set("grant_type", "refresh_token");
     return body;
 }
 function buildAuthorizationCodeRequestBody(config, code) {
     const body = new URLSearchParams();
-    body.set('client_id', config.clientId);
-    body.set('client_secret', config.clientSecret);
-    body.set('code', code);
-    body.set('grant_type', 'authorization_code');
-    body.set('redirect_uri', buildGoogleAdsRedirectUri(config));
+    body.set("client_id", config.clientId);
+    body.set("client_secret", config.clientSecret);
+    body.set("code", code);
+    body.set("grant_type", "authorization_code");
+    body.set("redirect_uri", buildGoogleAdsRedirectUri(config));
     return body;
 }
 async function exchangeAuthorizationCode(config, code) {
     const response = await fetch(GOOGLE_OAUTH_TOKEN_URL, {
-        method: 'POST',
+        method: "POST",
         headers: {
-            'content-type': 'application/x-www-form-urlencoded'
+            "content-type": "application/x-www-form-urlencoded",
         },
-        body: buildAuthorizationCodeRequestBody(config, code)
+        body: buildAuthorizationCodeRequestBody(config, code),
     });
     const text = await response.text();
     const payload = parseJsonResponsePayload(text) ?? {};
     if (!response.ok || !payload.access_token || !payload.refresh_token) {
-        throw new GoogleAdsApiError(response.status, payload.error_description ?? payload.error ?? 'Google OAuth code exchange failed', payload);
+        throw new GoogleAdsApiError(response.status, payload.error_description ??
+            payload.error ??
+            "Google OAuth code exchange failed", payload);
     }
     return payload;
 }
 async function exchangeRefreshToken(connection) {
     const response = await fetch(GOOGLE_OAUTH_TOKEN_URL, {
-        method: 'POST',
+        method: "POST",
         headers: {
-            'content-type': 'application/x-www-form-urlencoded'
+            "content-type": "application/x-www-form-urlencoded",
         },
-        body: buildAccessTokenRequestBody(connection)
+        body: buildAccessTokenRequestBody(connection),
     });
     const text = await response.text();
     const payload = parseJsonResponsePayload(text) ?? {};
     if (!response.ok || !payload.access_token) {
-        throw new GoogleAdsApiError(response.status, payload.error_description ?? payload.error ?? 'Google OAuth token exchange failed', payload);
+        throw new GoogleAdsApiError(response.status, payload.error_description ??
+            payload.error ??
+            "Google OAuth token exchange failed", payload);
     }
-    await query('UPDATE google_ads_connections SET last_refreshed_at = now(), updated_at = now() WHERE id = $1', [connection.id]);
+    await query("UPDATE google_ads_connections SET last_refreshed_at = now(), updated_at = now() WHERE id = $1", [connection.id]);
     return payload.access_token;
 }
 async function googleAdsSearch(params) {
     const url = new URL(`${GOOGLE_ADS_API_BASE_URL}/${env.GOOGLE_ADS_API_VERSION}/customers/${params.connection.customer_id}/googleAds:searchStream`);
     const requestStartedAt = new Date();
     const requestPayload = {
-        query: params.gaql
+        query: params.gaql,
     };
     const response = await fetch(url, {
-        method: 'POST',
+        method: "POST",
         headers: {
             authorization: `Bearer ${params.accessToken}`,
-            'content-type': 'application/json',
-            'developer-token': params.connection.developer_token,
-            ...(params.connection.login_customer_id ? { 'login-customer-id': params.connection.login_customer_id } : {})
+            "content-type": "application/json",
+            "developer-token": params.connection.developer_token,
+            ...(params.connection.login_customer_id
+                ? { "login-customer-id": params.connection.login_customer_id }
+                : {}),
         },
         body: JSON.stringify({
-            query: params.gaql
-        })
+            query: params.gaql,
+        }),
     });
     const text = await response.text();
     const payload = parseJsonResponsePayload(text);
     const responseReceivedAt = new Date();
     if (params.audit) {
         await recordAdSyncApiTransaction({
-            platform: 'google_ads',
+            platform: "google_ads",
             connectionId: params.audit.connectionId,
             syncJobId: params.audit.syncJobId,
             transactionSource: params.audit.transactionSource,
             sourceMetadata: params.audit.sourceMetadata,
-            requestMethod: 'POST',
+            requestMethod: "POST",
             requestUrl: url.toString(),
             requestPayload,
             requestStartedAt,
             responseStatus: response.status,
             responsePayload: payload,
             responseReceivedAt,
-            errorMessage: response.ok ? null : `HTTP ${response.status}`
+            errorMessage: response.ok ? null : `HTTP ${response.status}`,
         });
     }
     if (!response.ok) {
         const details = payload;
-        throw new GoogleAdsApiError(response.status, 'Google Ads API request failed', details);
+        throw new GoogleAdsApiError(response.status, "Google Ads API request failed", details);
     }
     if (!Array.isArray(payload)) {
         return [];
@@ -498,27 +532,27 @@ async function fetchCustomerMetadata(connection, accessToken, audit) {
     const rows = await googleAdsSearch({
         connection,
         accessToken,
-        gaql: 'SELECT customer.id, customer.descriptive_name, customer.currency_code FROM customer LIMIT 1',
+        gaql: "SELECT customer.id, customer.descriptive_name, customer.currency_code FROM customer LIMIT 1",
         audit: audit
             ? {
                 connectionId: audit.connectionId,
                 syncJobId: audit.syncJobId,
-                transactionSource: 'google_ads_customer_search',
+                transactionSource: "google_ads_customer_search",
                 sourceMetadata: {
-                    customerId: connection.customer_id
-                }
+                    customerId: connection.customer_id,
+                },
             }
-            : undefined
+            : undefined,
     });
     const row = rows[0]?.customer;
     if (!row?.id) {
-        throw new GoogleAdsHttpError(400, 'google_ads_customer_not_found', 'Unable to resolve the Google Ads customer');
+        throw new GoogleAdsHttpError(400, "google_ads_customer_not_found", "Unable to resolve the Google Ads customer");
     }
     return {
         customerId: normalizeGoogleAdsCustomerId(row.id),
         descriptiveName: row.descriptiveName ?? null,
         currencyCode: row.currencyCode ?? null,
-        rawPayload: rows[0] ?? {}
+        rawPayload: rows[0] ?? {},
     };
 }
 function buildCampaignSpendQuery(syncDate) {
@@ -566,12 +600,12 @@ async function fetchCampaignSpendRows(connection, accessToken, syncDate, audit) 
         audit: {
             connectionId: audit.connectionId,
             syncJobId: audit.syncJobId,
-            transactionSource: 'google_ads_campaign_search',
+            transactionSource: "google_ads_campaign_search",
             sourceMetadata: {
                 customerId: connection.customer_id,
-                syncDate
-            }
-        }
+                syncDate,
+            },
+        },
     });
 }
 async function fetchAdSpendRows(connection, accessToken, syncDate, audit) {
@@ -582,12 +616,12 @@ async function fetchAdSpendRows(connection, accessToken, syncDate, audit) {
         audit: {
             connectionId: audit.connectionId,
             syncJobId: audit.syncJobId,
-            transactionSource: 'google_ads_ad_search',
+            transactionSource: "google_ads_ad_search",
             sourceMetadata: {
                 customerId: connection.customer_id,
-                syncDate
-            }
-        }
+                syncDate,
+            },
+        },
     });
 }
 function normalizeSpendSnapshot(params) {
@@ -608,7 +642,7 @@ function normalizeSpendSnapshot(params) {
     const accountImpressions = campaignSourceRows.reduce((total, row) => total + parseMetricInteger(row.metrics?.impressions), 0);
     const accountClicks = campaignSourceRows.reduce((total, row) => total + parseMetricInteger(row.metrics?.clicks), 0);
     upsertRow({
-        granularity: 'account',
+        granularity: "account",
         entityKey: params.customer.customerId,
         accountId: params.customer.customerId,
         accountName: params.customer.descriptiveName,
@@ -620,33 +654,33 @@ function normalizeSpendSnapshot(params) {
         adName: null,
         creativeId: null,
         creativeName: null,
-        canonicalSource: 'google',
-        canonicalMedium: 'cpc',
-        canonicalCampaign: 'unknown',
-        canonicalContent: 'unknown',
-        canonicalTerm: 'unknown',
+        canonicalSource: "google",
+        canonicalMedium: "cpc",
+        canonicalCampaign: "unknown",
+        canonicalContent: "unknown",
+        canonicalTerm: "unknown",
         currency: params.customer.currencyCode,
         spend: accountSpend.toFixed(2),
         impressions: accountImpressions,
         clicks: accountClicks,
         rawPayload: {
-            source: 'google_ads_campaign_rollup',
-            rowCount: campaignSourceRows.length
-        }
+            source: "google_ads_campaign_rollup",
+            rowCount: campaignSourceRows.length,
+        },
     });
     for (const row of params.campaignRows) {
         if (!row.campaign?.id) {
             continue;
         }
         const campaignDimensions = buildCanonicalSpendDimensions({
-            source: 'google',
-            medium: 'cpc',
+            source: "google",
+            medium: "cpc",
             campaign: row.campaign.name ?? null,
             content: null,
-            term: null
+            term: null,
         });
         upsertRow({
-            granularity: 'campaign',
+            granularity: "campaign",
             entityKey: row.campaign.id,
             accountId: params.customer.customerId,
             accountName: row.customer?.descriptiveName ?? params.customer.descriptiveName,
@@ -667,7 +701,7 @@ function normalizeSpendSnapshot(params) {
             spend: parseMicrosToDecimal(row.metrics?.costMicros),
             impressions: parseMetricInteger(row.metrics?.impressions),
             clicks: parseMetricInteger(row.metrics?.clicks),
-            rawPayload: row
+            rawPayload: row,
         });
     }
     for (const row of params.adRows) {
@@ -680,22 +714,22 @@ function normalizeSpendSnapshot(params) {
         const currency = row.customer?.currencyCode ?? params.customer.currencyCode;
         const accountName = row.customer?.descriptiveName ?? params.customer.descriptiveName;
         const adsetDimensions = buildCanonicalSpendDimensions({
-            source: 'google',
-            medium: 'cpc',
+            source: "google",
+            medium: "cpc",
             campaign: row.campaign?.name ?? null,
             content: null,
-            term: null
+            term: null,
         });
         const adDimensions = buildCanonicalSpendDimensions({
-            source: 'google',
-            medium: 'cpc',
+            source: "google",
+            medium: "cpc",
             campaign: row.campaign?.name ?? null,
             content: adName,
-            term: null
+            term: null,
         });
         if (adGroupId) {
             upsertRow({
-                granularity: 'adset',
+                granularity: "adset",
                 entityKey: adGroupId,
                 accountId: params.customer.customerId,
                 accountName,
@@ -716,12 +750,12 @@ function normalizeSpendSnapshot(params) {
                 spend,
                 impressions,
                 clicks,
-                rawPayload: row
+                rawPayload: row,
             });
         }
         if (adId) {
             upsertRow({
-                granularity: 'ad',
+                granularity: "ad",
                 entityKey: adId,
                 accountId: params.customer.customerId,
                 accountName,
@@ -742,10 +776,10 @@ function normalizeSpendSnapshot(params) {
                 spend,
                 impressions,
                 clicks,
-                rawPayload: row
+                rawPayload: row,
             });
             upsertRow({
-                granularity: 'creative',
+                granularity: "creative",
                 entityKey: adId,
                 accountId: params.customer.customerId,
                 accountName,
@@ -766,7 +800,7 @@ function normalizeSpendSnapshot(params) {
                 spend,
                 impressions,
                 clicks,
-                rawPayload: row
+                rawPayload: row,
             });
         }
     }
@@ -846,12 +880,12 @@ async function upsertGoogleAdsConnection(params) {
         rawPayloadJson,
         params.customerId,
         payloadSizeBytes,
-        payloadHash
+        payloadHash,
     ]);
     logRawPayloadIntegrityMismatch(rawPayloadMetadata, upsertResult.rows[0], {
-        surface: 'google_ads_connections.raw_customer_data',
-        operation: 'upsert',
-        recordId: params.customerId
+        surface: "google_ads_connections.raw_customer_data",
+        operation: "upsert",
+        recordId: params.customerId,
     });
 }
 async function getGoogleAdsConnectionById(connectionId) {
@@ -876,7 +910,7 @@ async function getGoogleAdsConnectionById(connectionId) {
     `, [env.GOOGLE_ADS_ENCRYPTION_KEY, connectionId]);
     const connection = result.rows[0];
     if (!connection) {
-        throw new GoogleAdsHttpError(404, 'google_ads_connection_not_found', 'No active Google Ads connection was found');
+        throw new GoogleAdsHttpError(404, "google_ads_connection_not_found", "No active Google Ads connection was found");
     }
     return connection;
 }
@@ -902,7 +936,7 @@ async function getLatestGoogleAdsConnection() {
     `, [env.GOOGLE_ADS_ENCRYPTION_KEY]);
     const connection = result.rows[0];
     if (!connection) {
-        throw new GoogleAdsHttpError(404, 'google_ads_connection_not_found', 'No active Google Ads connection was found');
+        throw new GoogleAdsHttpError(404, "google_ads_connection_not_found", "No active Google Ads connection was found");
     }
     return connection;
 }
@@ -956,7 +990,9 @@ async function runReconciliation(params) {
         return 0;
     }
     const missingDates = await findMissingSyncDates(params.connectionId, window.dates);
-    const enqueuedJobs = missingDates.length > 0 ? await enqueueSyncDates(params.connectionId, missingDates) : 0;
+    const enqueuedJobs = missingDates.length > 0
+        ? await enqueueSyncDates(params.connectionId, missingDates)
+        : 0;
     await query(`
       INSERT INTO google_ads_reconciliation_runs (
         connection_id,
@@ -973,7 +1009,7 @@ async function runReconciliation(params) {
         window.endDate,
         JSON.stringify(missingDates),
         enqueuedJobs,
-        missingDates.length > 0 ? 'missing_dates' : 'healthy'
+        missingDates.length > 0 ? "missing_dates" : "healthy",
     ]);
     return enqueuedJobs;
 }
@@ -994,15 +1030,12 @@ async function planIncrementalSyncs(now = new Date()) {
             if (dates.length > 0) {
                 plannedJobs += await enqueueSyncDates(row.id, dates);
             }
-            await query('UPDATE google_ads_connections SET last_sync_planned_for = $2::date, updated_at = now() WHERE id = $1', [
-                row.id,
-                today
-            ]);
+            await query("UPDATE google_ads_connections SET last_sync_planned_for = $2::date, updated_at = now() WHERE id = $1", [row.id, today]);
         }
         plannedJobs += await runReconciliation({
             connectionId: row.id,
             now,
-            lastSyncCompletedAt: row.last_sync_completed_at
+            lastSyncCompletedAt: row.last_sync_completed_at,
         });
     }
     return plannedJobs;
@@ -1033,14 +1066,8 @@ async function claimSyncJobs(workerId, limit) {
     return result.rows;
 }
 async function persistDailySpendSnapshot(client, params) {
-    await client.query('DELETE FROM google_ads_daily_spend WHERE connection_id = $1 AND report_date = $2::date', [
-        params.connectionId,
-        params.syncDate
-    ]);
-    await client.query('DELETE FROM google_ads_raw_spend_records WHERE connection_id = $1 AND report_date = $2::date', [
-        params.connectionId,
-        params.syncDate
-    ]);
+    await client.query("DELETE FROM google_ads_daily_spend WHERE connection_id = $1 AND report_date = $2::date", [params.connectionId, params.syncDate]);
+    await client.query("DELETE FROM google_ads_raw_spend_records WHERE connection_id = $1 AND report_date = $2::date", [params.connectionId, params.syncDate]);
     for (const row of params.campaignRows) {
         const entityId = row.campaign?.id ?? null;
         const rawPayloadMetadata = buildRawPayloadStorageMetadata(row);
@@ -1082,17 +1109,17 @@ async function persistDailySpendSnapshot(client, params) {
             parseMetricInteger(row.metrics?.clicks),
             rawPayloadJson,
             payloadSizeBytes,
-            payloadHash
+            payloadHash,
         ]);
         logRawPayloadIntegrityMismatch(rawPayloadMetadata, insertResult.rows[0], {
-            surface: 'google_ads_raw_spend_records',
-            operation: 'insert',
+            surface: "google_ads_raw_spend_records",
+            operation: "insert",
             recordId: insertResult.rows[0].id,
             fields: {
-                level: 'campaign',
+                level: "campaign",
                 entityId,
-                syncJobId: params.syncJobId
-            }
+                syncJobId: params.syncJobId,
+            },
         });
     }
     const rawRecordIdsByAdId = new Map();
@@ -1137,17 +1164,17 @@ async function persistDailySpendSnapshot(client, params) {
             parseMetricInteger(row.metrics?.clicks),
             rawPayloadJson,
             payloadSizeBytes,
-            payloadHash
+            payloadHash,
         ]);
         logRawPayloadIntegrityMismatch(rawPayloadMetadata, insertResult.rows[0], {
-            surface: 'google_ads_raw_spend_records',
-            operation: 'insert',
+            surface: "google_ads_raw_spend_records",
+            operation: "insert",
             recordId: insertResult.rows[0].id,
             fields: {
-                level: 'ad',
+                level: "ad",
                 entityId,
-                syncJobId: params.syncJobId
-            }
+                syncJobId: params.syncJobId,
+            },
         });
         if (entityId) {
             rawRecordIdsByAdId.set(entityId, insertResult.rows[0].id);
@@ -1193,7 +1220,9 @@ async function persistDailySpendSnapshot(client, params) {
         )
       `, [
             params.connectionId,
-            normalizedRow.adId ? rawRecordIdsByAdId.get(normalizedRow.adId) ?? null : null,
+            normalizedRow.adId
+                ? (rawRecordIdsByAdId.get(normalizedRow.adId) ?? null)
+                : null,
             params.syncJobId,
             params.syncDate,
             normalizedRow.granularity,
@@ -1217,7 +1246,7 @@ async function persistDailySpendSnapshot(client, params) {
             normalizedRow.spend,
             normalizedRow.impressions,
             normalizedRow.clicks,
-            JSON.stringify(normalizedRow.rawPayload)
+            JSON.stringify(normalizedRow.rawPayload),
         ]);
     }
     await refreshDailyReportingMetrics(client, [params.syncDate]);
@@ -1246,11 +1275,13 @@ async function markSyncJobSucceeded(jobId, connectionId) {
 }
 async function markSyncJobFailed(job, error) {
     const lastError = formatGoogleAdsError(error);
-    const providerRetryDelaySeconds = error instanceof GoogleAdsApiError ? extractGoogleAdsProviderRetryDelaySeconds(error.details) : null;
+    const providerRetryDelaySeconds = error instanceof GoogleAdsApiError
+        ? extractGoogleAdsProviderRetryDelaySeconds(error.details)
+        : null;
     const retryDelaySeconds = providerRetryDelaySeconds ?? computeRetryDelaySeconds(job.attempts);
     const hasProviderRetryDelay = providerRetryDelaySeconds !== null;
     const shouldRetry = hasProviderRetryDelay || job.attempts < env.GOOGLE_ADS_SYNC_MAX_RETRIES;
-    const nextStatus = shouldRetry ? 'retry' : 'failed';
+    const nextStatus = shouldRetry ? "retry" : "failed";
     await query(`
       UPDATE google_ads_sync_jobs
       SET
@@ -1273,9 +1304,9 @@ async function markSyncJobFailed(job, error) {
         last_sync_error = $3,
         updated_at = now()
       WHERE id = $1
-    `, [job.connection_id, shouldRetry ? 'retry' : 'failed', lastError]);
-    process.stderr.write(`${buildGoogleAdsLog('google_ads_sync_job_failed', {
-        severity: shouldRetry ? 'WARNING' : 'ERROR',
+    `, [job.connection_id, shouldRetry ? "retry" : "failed", lastError]);
+    process.stderr.write(`${buildGoogleAdsLog("google_ads_sync_job_failed", {
+        severity: shouldRetry ? "WARNING" : "ERROR",
         alertable: !shouldRetry,
         jobId: job.id,
         connectionId: job.connection_id,
@@ -1284,7 +1315,7 @@ async function markSyncJobFailed(job, error) {
         attempts: job.attempts,
         willRetry: shouldRetry,
         retryDelaySeconds: shouldRetry ? retryDelaySeconds : 0,
-        error: lastError
+        error: lastError,
     })}\n`);
 }
 async function processSyncJob(job) {
@@ -1303,20 +1334,20 @@ async function processSyncJob(job) {
         // Preserve decoded Google Ads API responses before any projection into spend rows.
         const customer = await fetchCustomerMetadata(connection, accessToken, {
             connectionId: job.connection_id,
-            syncJobId: job.id
+            syncJobId: job.id,
         });
         const campaignRows = await fetchCampaignSpendRows(connection, accessToken, job.sync_date, {
             connectionId: job.connection_id,
-            syncJobId: job.id
+            syncJobId: job.id,
         });
         const adRows = await fetchAdSpendRows(connection, accessToken, job.sync_date, {
             connectionId: job.connection_id,
-            syncJobId: job.id
+            syncJobId: job.id,
         });
         const normalizedRows = normalizeSpendSnapshot({
             customer,
             campaignRows,
-            adRows
+            adRows,
         });
         await withTransaction(async (client) => {
             await persistDailySpendSnapshot(client, {
@@ -1325,7 +1356,7 @@ async function processSyncJob(job) {
                 syncDate: job.sync_date,
                 campaignRows,
                 adRows,
-                normalizedRows
+                normalizedRows,
             });
         });
         const rawPayloadMetadata = buildRawPayloadStorageMetadata(customer.rawPayload);
@@ -1352,52 +1383,53 @@ async function processSyncJob(job) {
             rawPayloadJson,
             customer.customerId,
             payloadSizeBytes,
-            payloadHash
+            payloadHash,
         ]);
         logRawPayloadIntegrityMismatch(rawPayloadMetadata, updateResult.rows[0], {
-            surface: 'google_ads_connections.raw_customer_data',
-            operation: 'update',
+            surface: "google_ads_connections.raw_customer_data",
+            operation: "update",
             recordId: job.connection_id,
             fields: {
-                syncJobId: job.id
-            }
+                syncJobId: job.id,
+            },
         });
     };
     try {
         await attemptJob();
         await markSyncJobSucceeded(job.id, job.connection_id);
-        return 'succeeded';
+        return "succeeded";
     }
     catch (error) {
-        if (error instanceof GoogleAdsApiError && [401, 403, 429, 500, 502, 503, 504].includes(error.statusCode)) {
+        if (error instanceof GoogleAdsApiError &&
+            [401, 403, 429, 500, 502, 503, 504].includes(error.statusCode)) {
             try {
                 await delay(500);
                 await attemptJob();
                 await markSyncJobSucceeded(job.id, job.connection_id);
-                return 'succeeded';
+                return "succeeded";
             }
             catch (retryError) {
                 await markSyncJobFailed(job, retryError);
-                return 'failed';
+                return "failed";
             }
         }
         await markSyncJobFailed(job, error);
-        return 'failed';
+        return "failed";
     }
 }
 function buildMetricsLog(result) {
-    return buildGoogleAdsLog('google_ads_sync_run', {
+    return buildGoogleAdsLog("google_ads_sync_run", {
         workerId: result.workerId,
         enqueuedJobs: result.enqueuedJobs,
         claimedJobs: result.claimedJobs,
         succeededJobs: result.succeededJobs,
         failedJobs: result.failedJobs,
-        durationMs: result.durationMs
+        durationMs: result.durationMs,
     });
 }
 export async function processGoogleAdsSyncQueue(options = {}) {
     const startedAt = Date.now();
-    const workerId = options.workerId ?? `google-ads-sync-${randomBytes(6).toString('hex')}`;
+    const workerId = options.workerId ?? `google-ads-sync-${randomBytes(6).toString("hex")}`;
     const limit = options.limit ?? env.GOOGLE_ADS_SYNC_BATCH_SIZE;
     const now = options.now ?? new Date();
     const enqueuedJobs = await planIncrementalSyncs(now);
@@ -1406,7 +1438,7 @@ export async function processGoogleAdsSyncQueue(options = {}) {
     let failedJobs = 0;
     for (const job of jobs) {
         const outcome = await processSyncJob(job);
-        if (outcome === 'succeeded') {
+        if (outcome === "succeeded") {
             succeededJobs += 1;
         }
         else {
@@ -1419,7 +1451,7 @@ export async function processGoogleAdsSyncQueue(options = {}) {
         claimedJobs: jobs.length,
         succeededJobs,
         failedJobs,
-        durationMs: Date.now() - startedAt
+        durationMs: Date.now() - startedAt,
     };
     if (options.emitMetrics) {
         process.stdout.write(`${buildMetricsLog(result)}\n`);
@@ -1428,22 +1460,23 @@ export async function processGoogleAdsSyncQueue(options = {}) {
 }
 export function createGoogleAdsPublicRouter() {
     const router = Router();
-    router.get('/oauth/callback', async (req, res, next) => {
+    router.get("/oauth/callback", async (req, res, next) => {
         try {
             const config = await getResolvedGoogleAdsConfig();
             const payload = oauthCallbackSchema.parse(req.query);
             if (payload.error) {
-                throw new GoogleAdsHttpError(400, 'google_ads_oauth_denied', payload.error_description ?? `Google Ads OAuth failed with error: ${payload.error}`);
+                throw new GoogleAdsHttpError(400, "google_ads_oauth_denied", payload.error_description ??
+                    `Google Ads OAuth failed with error: ${payload.error}`);
             }
             if (!payload.code || !payload.state) {
-                throw new GoogleAdsHttpError(400, 'google_ads_oauth_invalid_callback', 'Missing OAuth callback parameters');
+                throw new GoogleAdsHttpError(400, "google_ads_oauth_invalid_callback", "Missing OAuth callback parameters");
             }
             const oauthState = await consumeOAuthState(payload.state);
             const tokenPayload = await exchangeAuthorizationCode(config, payload.code);
             const refreshToken = tokenPayload.refresh_token;
             const accessToken = tokenPayload.access_token;
             if (!refreshToken || !accessToken) {
-                throw new GoogleAdsHttpError(502, 'google_ads_oauth_token_missing', 'Google Ads OAuth response did not include the required access and refresh tokens');
+                throw new GoogleAdsHttpError(502, "google_ads_oauth_token_missing", "Google Ads OAuth response did not include the required access and refresh tokens");
             }
             const connectionForValidation = {
                 id: 0,
@@ -1455,13 +1488,13 @@ export function createGoogleAdsPublicRouter() {
                 refresh_token: refreshToken,
                 token_scopes: config.appScopes,
                 last_refreshed_at: null,
-                status: 'active',
+                status: "active",
                 customer_descriptive_name: null,
-                currency_code: null
+                currency_code: null,
             };
             const customer = await fetchCustomerMetadata(connectionForValidation, accessToken);
             if (customer.customerId !== oauthState.customer_id) {
-                throw new GoogleAdsHttpError(400, 'google_ads_customer_mismatch', `Provided customerId ${oauthState.customer_id} does not match resolved customer ${customer.customerId}`);
+                throw new GoogleAdsHttpError(400, "google_ads_customer_mismatch", `Provided customerId ${oauthState.customer_id} does not match resolved customer ${customer.customerId}`);
             }
             await upsertGoogleAdsConnection({
                 customerId: oauthState.customer_id,
@@ -1470,7 +1503,7 @@ export function createGoogleAdsPublicRouter() {
                 clientId: config.clientId,
                 clientSecret: config.clientSecret,
                 refreshToken,
-                customer
+                customer,
             });
             const connection = await getLatestGoogleAdsConnection();
             const initialDates = buildPlanningDates(new Date(), null);
@@ -1484,7 +1517,7 @@ export function createGoogleAdsPublicRouter() {
                 customerId: oauthState.customer_id,
                 customerName: customer.descriptiveName,
                 currencyCode: customer.currencyCode,
-                plannedDates: initialDates
+                plannedDates: initialDates,
             });
         }
         catch (error) {
@@ -1497,42 +1530,44 @@ export function createGoogleAdsAdminRouter() {
     const router = Router();
     router.use(attachAuthContext);
     router.use(requireAdmin);
-    router.put('/config', async (req, res, next) => {
+    router.put("/config", async (req, res, next) => {
         try {
             const payload = googleAdsConfigUpdateSchema.parse(req.body);
             await upsertGoogleAdsSettings(payload);
             res.status(200).json({
                 ok: true,
-                config: await getGoogleAdsConfigurationSummary()
+                config: await getGoogleAdsConfigurationSummary(),
             });
         }
         catch (error) {
             next(error);
         }
     });
-    router.get('/oauth/start', async (req, res, next) => {
+    router.get("/oauth/start", async (req, res, next) => {
         try {
             const config = await getResolvedGoogleAdsConfig();
             const payload = oauthStartQuerySchema.parse(req.query);
             const normalizedCustomerId = normalizeGoogleAdsCustomerId(payload.customerId);
-            const loginCustomerId = payload.loginCustomerId ? normalizeGoogleAdsCustomerId(payload.loginCustomerId) : null;
+            const loginCustomerId = payload.loginCustomerId
+                ? normalizeGoogleAdsCustomerId(payload.loginCustomerId)
+                : null;
             const redirectPath = normalizeRedirectPath(payload.redirectPath);
             const state = await insertOAuthState({
                 redirectPath,
                 customerId: normalizedCustomerId,
-                loginCustomerId
+                loginCustomerId,
             });
             res.status(200).json({
                 authorizationUrl: buildGoogleAdsAuthorizationUrl(config, state),
                 redirectUri: buildGoogleAdsRedirectUri(config),
-                state
+                state,
             });
         }
         catch (error) {
             next(error);
         }
     });
-    router.get('/status', async (_req, res, next) => {
+    router.get("/status", async (_req, res, next) => {
         try {
             const config = await getGoogleAdsConfigurationSummary();
             const connectionResult = await query(`
@@ -1570,14 +1605,14 @@ export function createGoogleAdsAdminRouter() {
             res.status(200).json({
                 config,
                 connection: connectionResult.rows[0] ?? null,
-                reconciliation: reconciliationResult.rows[0] ?? null
+                reconciliation: reconciliationResult.rows[0] ?? null,
             });
         }
         catch (error) {
             next(error);
         }
     });
-    router.post('/sync', async (req, res, next) => {
+    router.post("/sync", async (req, res, next) => {
         try {
             const payload = manualSyncSchema.parse(req.body);
             const connection = await getLatestGoogleAdsConnection();
@@ -1586,22 +1621,22 @@ export function createGoogleAdsAdminRouter() {
             res.status(202).json({
                 ok: true,
                 enqueuedJobs,
-                dates
+                dates,
             });
         }
         catch (error) {
             next(error);
         }
     });
-    router.post('/reconcile', async (_req, res, next) => {
+    router.post("/reconcile", async (_req, res, next) => {
         try {
             const connection = await getLatestGoogleAdsConnection();
             const enqueuedJobs = await runReconciliation({
-                connectionId: connection.id
+                connectionId: connection.id,
             });
             res.status(200).json({
                 ok: true,
-                enqueuedJobs
+                enqueuedJobs,
             });
         }
         catch (error) {
@@ -1619,5 +1654,5 @@ export const __googleAdsTestUtils = {
     normalizeSpendSnapshot,
     formatGoogleAdsError,
     extractGoogleAdsProviderRetryDelaySeconds,
-    createGoogleAdsApiErrorForTest: (statusCode, message, details) => new GoogleAdsApiError(statusCode, message, details)
+    createGoogleAdsApiErrorForTest: (statusCode, message, details) => new GoogleAdsApiError(statusCode, message, details),
 };

@@ -1,4 +1,6 @@
-// @ts-nocheck
+import crypto from "node:crypto";
+
+import type { PoolClient, QueryResultRow } from "pg";
 
 import { query, withTransaction } from "../../db/pool.js";
 import {
@@ -8,7 +10,10 @@ import {
 	summarizeGa4IngestionResult,
 } from "../../observability/index.js";
 
-import { assertGa4BigQueryIngestionConfig } from "./ga4-bigquery-config.js";
+import {
+	assertGa4BigQueryIngestionConfig,
+	type Ga4BigQueryIngestionConfig,
+} from "./ga4-bigquery-config.js";
 
 export type Ga4BigQueryExecutor = {
 	runQuery(input: {
@@ -28,9 +33,186 @@ const ALLOWED_CLICK_ID_KEYS = [
 	"fbclid",
 	"ttclid",
 	"msclkid",
-];
+ ] as const;
 
-function normalizeNullableString(value) {
+type EnabledGa4BigQueryIngestionConfig = Extract<
+	Ga4BigQueryIngestionConfig,
+	{ enabled: true }
+>;
+
+type Ga4ClickIdKey = (typeof ALLOWED_CLICK_ID_KEYS)[number];
+type AllowedGa4ClickIds = Partial<Record<Ga4ClickIdKey, string>>;
+
+type Ga4EventParamValue = {
+	string_value?: unknown;
+	int_value?: unknown;
+	float_value?: unknown;
+	double_value?: unknown;
+};
+
+type Ga4EventParamEntry = {
+	key?: unknown;
+	value?: Ga4EventParamValue | null;
+};
+
+type Ga4RawExtractionRow = Record<string, unknown> & {
+	ga4_session_key?: unknown;
+	ga4_user_key?: unknown;
+	ga4_client_id?: unknown;
+	ga4_session_id?: unknown;
+	session_started_at?: unknown;
+	last_event_at?: unknown;
+	source?: unknown;
+	medium?: unknown;
+	campaign_id?: unknown;
+	campaign?: unknown;
+	content?: unknown;
+	term?: unknown;
+	click_id_type?: unknown;
+	click_id_value?: unknown;
+	account_id?: unknown;
+	account_name?: unknown;
+	channel_type?: unknown;
+	channel_subtype?: unknown;
+	campaign_metadata_source?: unknown;
+	account_metadata_source?: unknown;
+	channel_metadata_source?: unknown;
+	source_export_hour?: unknown;
+	source_dataset?: unknown;
+	source_table_type?: unknown;
+	event_params?: unknown;
+};
+
+type Ga4ExtractedRow = {
+	ga4SessionKey: string;
+	ga4UserKey: string;
+	ga4ClientId: string | null;
+	ga4SessionId: string;
+	sessionStartedAt: string;
+	lastEventAt: string;
+	source: string | null;
+	medium: string | null;
+	campaignId: string | null;
+	campaign: string | null;
+	content: string | null;
+	term: string | null;
+	clickIdType: string | null;
+	clickIdValue: string | null;
+	accountId: string | null;
+	accountName: string | null;
+	channelType: string | null;
+	channelSubtype: string | null;
+	campaignMetadataSource: "ga4_raw" | "google_ads_transfer" | "unresolved";
+	accountMetadataSource: "ga4_raw" | "google_ads_transfer" | "unresolved";
+	channelMetadataSource: "ga4_raw" | "google_ads_transfer" | "unresolved";
+	sourceExportHour: string;
+	sourceDataset: string;
+	sourceTableType: "events" | "intraday";
+};
+
+type PersistedGa4SessionAttributionRow = {
+	ga4_session_key: string;
+	ga4_user_key: string;
+	ga4_client_id: string | null;
+	ga4_session_id: string;
+	session_started_at: string;
+	last_event_at: string;
+	source: string | null;
+	medium: string | null;
+	campaign_id: string | null;
+	campaign: string | null;
+	content: string | null;
+	term: string | null;
+	click_id_type: string | null;
+	click_id_value: string | null;
+	account_id: string | null;
+	account_name: string | null;
+	channel_type: string | null;
+	channel_subtype: string | null;
+	campaign_metadata_source: "ga4_raw" | "google_ads_transfer" | "unresolved";
+	account_metadata_source: "ga4_raw" | "google_ads_transfer" | "unresolved";
+	channel_metadata_source: "ga4_raw" | "google_ads_transfer" | "unresolved";
+	source_export_hour: string;
+	source_dataset: string;
+	source_table_type: "events" | "intraday";
+};
+
+type PersistedGa4SessionAttributionReadRow = QueryResultRow & {
+	ga4_session_key: string;
+	ga4_user_key: string;
+	ga4_client_id: string | null;
+	ga4_session_id: string;
+	session_started_at: Date;
+	last_event_at: Date;
+	source: string | null;
+	medium: string | null;
+	campaign_id: string | null;
+	campaign: string | null;
+	content: string | null;
+	term: string | null;
+	click_id_type: string | null;
+	click_id_value: string | null;
+	account_id: string | null;
+	account_name: string | null;
+	channel_type: string | null;
+	channel_subtype: string | null;
+	campaign_metadata_source: "ga4_raw" | "google_ads_transfer" | "unresolved";
+	account_metadata_source: "ga4_raw" | "google_ads_transfer" | "unresolved";
+	channel_metadata_source: "ga4_raw" | "google_ads_transfer" | "unresolved";
+	source_export_hour: Date;
+	source_dataset: string;
+	source_table_type: "events" | "intraday";
+};
+
+type WatermarkRow = QueryResultRow & {
+	watermark_hour: Date | null;
+};
+
+type Queryable = {
+	query: <T extends QueryResultRow = QueryResultRow>(
+		text: string,
+		params?: unknown[],
+	) => Promise<{ rows: T[]; rowCount: number | null }>;
+};
+
+type Ga4HourlyWindow = {
+	hourStart: string;
+	hourEndExclusive: string;
+};
+
+type PlanGa4SessionAttributionHourlyWindowsInput = {
+	now: Date;
+	watermarkHour: Date | null;
+	config?: Ga4BigQueryIngestionConfig;
+};
+
+type BuildGa4SessionAttributionHourlyQueryInput = {
+	config?: Ga4BigQueryIngestionConfig;
+	hourStart: string;
+	hourEndExclusive: string;
+};
+
+type ExtractGa4SessionAttributionForHourInput = {
+	config?: Ga4BigQueryIngestionConfig;
+	executor: Ga4BigQueryExecutor;
+	hourStart: string;
+};
+
+type ExtractGa4SessionAttributionForHourResult = {
+	hourStart: string;
+	rows: Ga4ExtractedRow[];
+};
+
+type IngestGa4SessionAttributionInput = {
+	config?: Ga4BigQueryIngestionConfig;
+	executor: Ga4BigQueryExecutor;
+	now?: Date;
+	hourStarts?: string[];
+	beforeCommit?: (client: PoolClient) => Promise<void> | void;
+	correlationId?: string;
+};
+
+function normalizeNullableString(value: unknown): string | null {
 	if (typeof value !== "string") {
 		return null;
 	}
@@ -39,17 +221,17 @@ function normalizeNullableString(value) {
 	return trimmed ? trimmed : null;
 }
 
-function normalizeLowercaseString(value) {
+function normalizeLowercaseString(value: unknown): string | null {
 	const normalized = normalizeNullableString(value);
 	return normalized ? normalized.toLowerCase() : null;
 }
 
-function normalizeUppercaseString(value) {
+function normalizeUppercaseString(value: unknown): string | null {
 	const normalized = normalizeNullableString(value);
 	return normalized ? normalized.toUpperCase() : null;
 }
 
-function normalizeIsoTimestamp(value, fieldName) {
+function normalizeIsoTimestamp(value: unknown, fieldName: string): string {
 	const normalized = normalizeNullableString(value);
 	if (!normalized) {
 		throw new Error(`${fieldName} is required`);
@@ -63,7 +245,7 @@ function normalizeIsoTimestamp(value, fieldName) {
 	return timestamp.toISOString();
 }
 
-function toHourStart(date) {
+function toHourStart(date: Date): Date {
 	return new Date(
 		Date.UTC(
 			date.getUTCFullYear(),
@@ -74,15 +256,17 @@ function toHourStart(date) {
 	);
 }
 
-function addHours(date, hours) {
+function addHours(date: Date, hours: number): Date {
 	return new Date(date.getTime() + hours * 60 * 60 * 1000);
 }
 
-function compareIsoAscending(left, right) {
+function compareIsoAscending(left: string, right: string): number {
 	return left.localeCompare(right);
 }
 
-function normalizeEnabledConfig(config) {
+function normalizeEnabledConfig(
+	config?: Ga4BigQueryIngestionConfig,
+): EnabledGa4BigQueryIngestionConfig {
 	const resolved = config ?? assertGa4BigQueryIngestionConfig();
 	if (!resolved.enabled) {
 		throw new Error("GA4 BigQuery ingestion is disabled");
@@ -91,12 +275,14 @@ function normalizeEnabledConfig(config) {
 	return resolved;
 }
 
-function normalizeHourStartIso(value, fieldName = "hourStart") {
+function normalizeHourStartIso(value: string, fieldName = "hourStart"): string {
 	const normalized = normalizeIsoTimestamp(value, fieldName);
 	return toHourStart(new Date(normalized)).toISOString();
 }
 
-export function planGa4SessionAttributionHourlyWindows(input) {
+export function planGa4SessionAttributionHourlyWindows(
+	input: PlanGa4SessionAttributionHourlyWindowsInput,
+): Ga4HourlyWindow[] {
 	const config = normalizeEnabledConfig(input.config);
 	const latestCompleteHour = addHours(toHourStart(input.now), -1);
 	const startHour = input.watermarkHour
@@ -125,11 +311,13 @@ export function planGa4SessionAttributionHourlyWindows(input) {
 	return windows;
 }
 
-function buildDateSuffix(dateIso) {
+function buildDateSuffix(dateIso: string): string {
 	return dateIso.slice(0, 10).replaceAll("-", "");
 }
 
-export function buildGa4SessionAttributionHourlyQuery(input) {
+export function buildGa4SessionAttributionHourlyQuery(
+	input: BuildGa4SessionAttributionHourlyQueryInput,
+): { params: Record<string, unknown>; query: string } {
 	const config = normalizeEnabledConfig(input.config);
 	const params = {
 		window_start: input.hourStart,
@@ -181,7 +369,7 @@ WHERE TRUE
 	};
 }
 
-function normalizeClickIdValue(value) {
+function normalizeClickIdValue(value: string | null): string | null {
 	if (!value) {
 		return null;
 	}
@@ -193,7 +381,7 @@ function normalizeClickIdValue(value) {
 	return value;
 }
 
-function extractEventParamValue(param) {
+function extractEventParamValue(param: Ga4EventParamValue | null | undefined): string | null {
 	if (!param || typeof param !== "object") {
 		return null;
 	}
@@ -223,24 +411,29 @@ function extractEventParamValue(param) {
 	return null;
 }
 
-export function extractAllowedGa4ClickIdsFromEventParams(eventParams) {
+export function extractAllowedGa4ClickIdsFromEventParams(
+	eventParams: unknown,
+): AllowedGa4ClickIds {
 	if (!Array.isArray(eventParams)) {
 		return {};
 	}
 
-	const extracted = {};
+	const extracted: AllowedGa4ClickIds = {};
 	for (const rawEntry of eventParams) {
 		if (!rawEntry || typeof rawEntry !== "object") {
 			continue;
 		}
 
-		const entry = rawEntry;
+		const entry = rawEntry as Ga4EventParamEntry;
 		const normalizedKey = normalizeLowercaseString(entry.key);
-		if (!normalizedKey || !ALLOWED_CLICK_ID_KEYS.includes(normalizedKey)) {
+		if (
+			!normalizedKey ||
+			!ALLOWED_CLICK_ID_KEYS.includes(normalizedKey as Ga4ClickIdKey)
+		) {
 			continue;
 		}
 
-		const clickKey = normalizedKey;
+		const clickKey = normalizedKey as Ga4ClickIdKey;
 		if (extracted[clickKey]) {
 			continue;
 		}
@@ -258,7 +451,9 @@ export function extractAllowedGa4ClickIdsFromEventParams(eventParams) {
 	return extracted;
 }
 
-function pickClickId(rawRow) {
+function pickClickId(
+	rawRow: Ga4RawExtractionRow,
+): { clickIdType: string | null; clickIdValue: string | null } {
 	const explicitType = normalizeLowercaseString(rawRow.click_id_type);
 	const explicitValue = normalizeClickIdValue(
 		normalizeNullableString(rawRow.click_id_value),
@@ -267,7 +462,7 @@ function pickClickId(rawRow) {
 	if (
 		explicitType &&
 		explicitValue &&
-		ALLOWED_CLICK_ID_KEYS.includes(explicitType)
+		ALLOWED_CLICK_ID_KEYS.includes(explicitType as Ga4ClickIdKey)
 	) {
 		return {
 			clickIdType: explicitType,
@@ -300,14 +495,17 @@ function pickClickId(rawRow) {
 
 	return {
 		clickIdType:
-			explicitType && ALLOWED_CLICK_ID_KEYS.includes(explicitType)
+			explicitType &&
+			ALLOWED_CLICK_ID_KEYS.includes(explicitType as Ga4ClickIdKey)
 				? explicitType
 				: null,
 		clickIdValue: explicitValue,
 	};
 }
 
-function normalizeMetadataSource(value) {
+function normalizeMetadataSource(
+	value: unknown,
+): "ga4_raw" | "google_ads_transfer" | "unresolved" {
 	const normalized = normalizeLowercaseString(value);
 	if (
 		normalized === "ga4_raw" ||
@@ -320,12 +518,12 @@ function normalizeMetadataSource(value) {
 	return "unresolved";
 }
 
-function normalizeRawExtractionRow(raw) {
+function normalizeRawExtractionRow(raw: unknown): Ga4ExtractedRow {
 	if (!raw || typeof raw !== "object") {
 		throw new Error("GA4 extraction row must be an object");
 	}
 
-	const row = raw;
+	const row = raw as Ga4RawExtractionRow;
 	const clickId = pickClickId(row);
 
 	return {
@@ -379,7 +577,9 @@ function normalizeRawExtractionRow(raw) {
 	};
 }
 
-export async function extractGa4SessionAttributionForHour(input) {
+export async function extractGa4SessionAttributionForHour(
+	input: ExtractGa4SessionAttributionForHourInput,
+): Promise<ExtractGa4SessionAttributionForHourResult> {
 	const hourStart = normalizeHourStartIso(input.hourStart, "hourStart");
 	const hourEndExclusive = addHours(new Date(hourStart), 1).toISOString();
 	const statement = buildGa4SessionAttributionHourlyQuery({
@@ -395,7 +595,9 @@ export async function extractGa4SessionAttributionForHour(input) {
 	};
 }
 
-function mapNormalizedRowForPersistence(row) {
+function mapNormalizedRowForPersistence(
+	row: Ga4ExtractedRow,
+): PersistedGa4SessionAttributionRow {
 	return {
 		ga4_session_key: row.ga4SessionKey,
 		ga4_user_key: row.ga4UserKey,
@@ -425,7 +627,7 @@ function mapNormalizedRowForPersistence(row) {
 }
 
 async function readWatermarkHour() {
-	const result = await query(
+	const result = await query<WatermarkRow>(
 		`
       SELECT watermark_hour
       FROM ga4_bigquery_ingestion_state
@@ -438,7 +640,7 @@ async function readWatermarkHour() {
 	return result.rows[0]?.watermark_hour ?? null;
 }
 
-async function markRunStarted(client, startedAt) {
+async function markRunStarted(client: Queryable, startedAt: Date): Promise<void> {
 	await client.query(
 		`
       INSERT INTO ga4_bigquery_ingestion_state (
@@ -460,7 +662,11 @@ async function markRunStarted(client, startedAt) {
 	);
 }
 
-async function markRunCompleted(client, completedAt, watermarkHour) {
+async function markRunCompleted(
+	client: Queryable,
+	completedAt: Date,
+	watermarkHour: string | null,
+): Promise<void> {
 	await client.query(
 		`
       INSERT INTO ga4_bigquery_ingestion_state (
@@ -488,7 +694,9 @@ async function markRunCompleted(client, completedAt, watermarkHour) {
 	);
 }
 
-export async function markGa4SessionAttributionRunFailed(error) {
+export async function markGa4SessionAttributionRunFailed(
+	error: unknown,
+): Promise<void> {
 	await query(
 		`
       INSERT INTO ga4_bigquery_ingestion_state (
@@ -513,7 +721,10 @@ export async function markGa4SessionAttributionRunFailed(error) {
 	);
 }
 
-async function upsertGa4SessionAttributionRow(client, row) {
+async function upsertGa4SessionAttributionRow(
+	client: Queryable,
+	row: PersistedGa4SessionAttributionRow,
+): Promise<void> {
 	await client.query(
 		`
       INSERT INTO ga4_session_attribution (
@@ -603,7 +814,9 @@ async function upsertGa4SessionAttributionRow(client, row) {
 	);
 }
 
-function mapPersistedRowForRead(row) {
+function mapPersistedRowForRead(
+	row: PersistedGa4SessionAttributionReadRow,
+): Ga4ExtractedRow {
 	return {
 		ga4SessionKey: row.ga4_session_key,
 		ga4UserKey: row.ga4_user_key,
@@ -632,8 +845,10 @@ function mapPersistedRowForRead(row) {
 	};
 }
 
-export async function listGa4SessionAttributionRows(db) {
-	const result = await db.query(
+export async function listGa4SessionAttributionRows(
+	db: Queryable,
+): Promise<Ga4ExtractedRow[]> {
+	const result = await db.query<PersistedGa4SessionAttributionReadRow>(
 		`
       SELECT
         ga4_session_key,
@@ -668,8 +883,10 @@ export async function listGa4SessionAttributionRows(db) {
 	return result.rows.map((row) => mapPersistedRowForRead(row));
 }
 
-export async function getGa4SessionAttributionWatermark(db) {
-	const result = await db.query(
+export async function getGa4SessionAttributionWatermark(
+	db: Queryable,
+): Promise<string | null> {
+	const result = await db.query<WatermarkRow>(
 		`
       SELECT watermark_hour
       FROM ga4_bigquery_ingestion_state
@@ -682,24 +899,32 @@ export async function getGa4SessionAttributionWatermark(db) {
 	return result.rows[0]?.watermark_hour?.toISOString() ?? null;
 }
 
-function buildGa4IngestionCorrelationId() {
+function buildGa4IngestionCorrelationId(): string {
 	return `ga4-ingestion:${crypto.randomUUID()}`;
 }
 
-async function ingestExplicitHours(input) {
+async function ingestExplicitHours(
+	input: IngestGa4SessionAttributionInput,
+): Promise<{
+	watermarkBefore: string | null;
+	watermarkAfter: string | null;
+	processedHours: string[];
+	extractedRows: number;
+	upsertedRows: number;
+}> {
 	const correlationId = input.correlationId ?? buildGa4IngestionCorrelationId();
 	const config = normalizeEnabledConfig(input.config);
 	const now = input.now ?? new Date();
 	const watermarkBeforeDate = await readWatermarkHour();
 	const explicitHours = Array.from(
 		new Set(
-			(input.hourStarts ?? []).map((hourStart) =>
+			(input.hourStarts ?? []).map((hourStart: string) =>
 				normalizeHourStartIso(hourStart),
 			),
 		),
 	).sort(compareIsoAscending);
 
-	const hourlyResults = [];
+	const hourlyResults: ExtractGa4SessionAttributionForHourResult[] = [];
 	for (const hourStart of explicitHours) {
 		const hourlyResult = await extractGa4SessionAttributionForHour({
 			config,
@@ -779,7 +1004,9 @@ async function ingestExplicitHours(input) {
 	return result;
 }
 
-export async function ingestGa4SessionAttributionHours(input) {
+export async function ingestGa4SessionAttributionHours(
+	input: IngestGa4SessionAttributionInput,
+) {
 	const correlationId = buildGa4IngestionCorrelationId();
 	try {
 		return await ingestExplicitHours({
@@ -797,7 +1024,9 @@ export async function ingestGa4SessionAttributionHours(input) {
 	}
 }
 
-export async function ingestGa4SessionAttribution(input) {
+export async function ingestGa4SessionAttribution(
+	input: IngestGa4SessionAttributionInput,
+) {
 	const correlationId = buildGa4IngestionCorrelationId();
 
 	try {

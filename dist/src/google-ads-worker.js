@@ -1,21 +1,21 @@
-import { randomUUID } from 'node:crypto';
-import { setTimeout as delay } from 'node:timers/promises';
-import { env } from './config/env.js';
-import { pool } from './db/pool.js';
-import { processGoogleAdsSyncQueue } from './modules/google-ads/index.js';
+import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
+import { env } from "./config/env.js";
+import { pool } from "./db/pool.js";
+import { processGoogleAdsSyncQueue } from "./modules/google-ads/index.js";
 async function run() {
     const workerId = `google-ads-worker-${randomUUID()}`;
     let shouldStop = false;
     const requestStop = () => {
         shouldStop = true;
     };
-    process.on('SIGINT', requestStop);
-    process.on('SIGTERM', requestStop);
+    process.on("SIGINT", requestStop);
+    process.on("SIGTERM", requestStop);
     do {
         const result = await processGoogleAdsSyncQueue({
             workerId,
             limit: env.GOOGLE_ADS_SYNC_BATCH_SIZE,
-            emitMetrics: true
+            emitMetrics: true,
         });
         if (!env.GOOGLE_ADS_WORKER_LOOP) {
             break;

@@ -1,4 +1,4 @@
-// @ts-nocheck
+import type { PoolClient, QueryResultRow } from "pg";
 
 import { query, withTransaction } from "../../db/pool.js";
 import { logError, logInfo } from "../../observability/index.js";
@@ -20,7 +20,86 @@ const DEFAULT_INITIAL_BACKOFF_SECONDS = 30;
 const DEFAULT_MAX_BACKOFF_SECONDS = 1_800;
 const DEFAULT_STALE_LOCK_MINUTES = 30;
 
-function toHourStart(date) {
+type Queryable = Pick<PoolClient, "query">;
+
+type HourlyJobRow = QueryResultRow & {
+	pipeline_name: string;
+	hour_start: Date;
+	status: string;
+	attempts: number;
+	requested_by: string | null;
+	available_at: Date | null;
+	locked_at: Date | null;
+	locked_by: string | null;
+};
+
+type HourlyJob = {
+	pipelineName: string;
+	hourStart: string;
+	attempts: number;
+	requestedBy: string | null;
+};
+
+type EnqueueHoursInput = {
+	pipelineName?: string;
+	requestedBy?: string | null;
+	hourStarts?: string[];
+	reviveDeadLettered?: boolean;
+};
+
+type ClaimHourlyJobsInput = {
+	pipelineName?: string;
+	workerId: string;
+	limit?: number;
+	staleLockMinutes?: number;
+	explicitHourStarts?: string[] | null;
+};
+
+type ProcessGa4SessionAttributionHourlyJobsInput = {
+	pipelineName?: string;
+	config?: Ga4BigQueryIngestionConfig;
+	executor: Ga4BigQueryExecutor;
+	workerId: string;
+	requestedBy?: string | null;
+	now?: Date;
+	batchSize?: number;
+	maxRetries?: number;
+	initialBackoffSeconds?: number;
+	maxBackoffSeconds?: number;
+	staleLockMinutes?: number;
+	explicitHourStarts?: string[] | null;
+};
+
+type SeedHoursForProcessingInput = {
+	pipelineName?: string;
+	config?: Ga4BigQueryIngestionConfig;
+	requestedBy?: string | null;
+	explicitHourStarts?: string[] | null;
+	now?: Date;
+};
+
+type UpsertHourlyJobInput = {
+	pipelineName: string;
+	hourStart: string;
+	requestedBy?: string | null;
+	reviveDeadLettered?: boolean;
+};
+
+type MarkHourlyJobRetryInput = {
+	job: HourlyJob;
+	workerId: string;
+	backoffSeconds: number;
+	errorMessage: string;
+};
+
+type MarkHourlyJobDeadLetteredInput = {
+	job: HourlyJob;
+	workerId: string;
+	error: unknown;
+	errorMessage: string;
+};
+
+function toHourStart(date: Date): Date {
 	return new Date(
 		Date.UTC(
 			date.getUTCFullYear(),
@@ -31,11 +110,11 @@ function toHourStart(date) {
 	);
 }
 
-function addHours(date, hours) {
+function addHours(date: Date, hours: number): Date {
 	return new Date(date.getTime() + hours * 60 * 60 * 1000);
 }
 
-function normalizeHourStart(value, fieldName = "hourStart") {
+function normalizeHourStart(value: string, fieldName = "hourStart"): string {
 	const normalized = typeof value === "string" ? value.trim() : "";
 	if (!normalized) {
 		throw new Error(`${fieldName} is required`);
@@ -49,20 +128,20 @@ function normalizeHourStart(value, fieldName = "hourStart") {
 	return toHourStart(parsed).toISOString();
 }
 
-function normalizePositiveInteger(value, fallback) {
+function normalizePositiveInteger(value: number | undefined, fallback: number): number {
 	if (!Number.isFinite(value)) {
 		return fallback;
 	}
 
-	const normalized = Math.trunc(value);
+	const normalized = Math.trunc(value ?? fallback);
 	return normalized > 0 ? normalized : fallback;
 }
 
 function computeBackoffSeconds(
-	attempts,
-	initialBackoffSeconds,
-	maxBackoffSeconds,
-) {
+	attempts: number,
+	initialBackoffSeconds: number,
+	maxBackoffSeconds: number,
+): number {
 	const normalizedAttempts = Math.max(1, Math.trunc(attempts));
 	return Math.min(
 		initialBackoffSeconds * 2 ** (normalizedAttempts - 1),
@@ -70,7 +149,7 @@ function computeBackoffSeconds(
 	);
 }
 
-export function listHourlyRange(startHour, endHour) {
+export function listHourlyRange(startHour: string, endHour: string): string[] {
 	const normalizedStart = normalizeHourStart(startHour, "startHour");
 	const normalizedEnd = normalizeHourStart(endHour, "endHour");
 
@@ -92,7 +171,10 @@ export function listHourlyRange(startHour, endHour) {
 	return hours;
 }
 
-async function upsertHourlyJob(client, input) {
+async function upsertHourlyJob(
+	client: Queryable,
+	input: UpsertHourlyJobInput,
+): Promise<void> {
 	const reviveDeadLettered = Boolean(input.reviveDeadLettered);
 
 	await client.query(
@@ -148,9 +230,11 @@ async function upsertHourlyJob(client, input) {
 	);
 }
 
-export async function enqueueHours(input) {
+export async function enqueueHours(
+	input: EnqueueHoursInput,
+): Promise<{ hourStarts: string[]; enqueuedCount: number }> {
 	const hourStarts = Array.from(
-		new Set((input.hourStarts ?? []).map((hour) => normalizeHourStart(hour))),
+		new Set((input.hourStarts ?? []).map((hour: string) => normalizeHourStart(hour))),
 	).sort();
 	if (hourStarts.length === 0) {
 		return { hourStarts: [], enqueuedCount: 0 };
@@ -173,7 +257,11 @@ export async function enqueueHours(input) {
 	};
 }
 
-async function requeueStaleLocks(client, pipelineName, staleLockMinutes) {
+async function requeueStaleLocks(
+	client: Queryable,
+	pipelineName: string,
+	staleLockMinutes: number,
+): Promise<number> {
 	const result = await client.query(
 		`
       WITH stale_jobs AS (
@@ -204,7 +292,9 @@ async function requeueStaleLocks(client, pipelineName, staleLockMinutes) {
 	return result.rowCount ?? result.rows.length;
 }
 
-export async function claimHourlyJobs(input) {
+export async function claimHourlyJobs(
+	input: ClaimHourlyJobsInput,
+): Promise<HourlyJob[]> {
 	return withTransaction(async (client) => {
 		await requeueStaleLocks(
 			client,
@@ -220,12 +310,12 @@ export async function claimHourlyJobs(input) {
 			input.explicitHourStarts.length > 0
 				? Array.from(
 						new Set(
-							input.explicitHourStarts.map((hour) => normalizeHourStart(hour)),
+							input.explicitHourStarts.map((hour: string) => normalizeHourStart(hour)),
 						),
 					).sort()
 				: null;
 
-		const result = await client.query(
+		const result = await client.query<HourlyJobRow>(
 			`
         WITH candidate_jobs AS (
           SELECT pipeline_name, hour_start
@@ -270,7 +360,7 @@ export async function claimHourlyJobs(input) {
 			],
 		);
 
-		return result.rows.map((row) => ({
+		return result.rows.map((row: HourlyJobRow) => ({
 			pipelineName: row.pipeline_name,
 			hourStart: row.hour_start.toISOString(),
 			attempts: row.attempts,
@@ -279,7 +369,11 @@ export async function claimHourlyJobs(input) {
 	});
 }
 
-async function markHourlyJobCompleted(client, job, workerId) {
+async function markHourlyJobCompleted(
+	client: Queryable,
+	job: HourlyJob,
+	workerId: string,
+): Promise<void> {
 	await client.query(
 		`
       UPDATE ga4_bigquery_hourly_jobs
@@ -298,7 +392,10 @@ async function markHourlyJobCompleted(client, job, workerId) {
 	);
 }
 
-async function markHourlyJobForRetry(client, input) {
+async function markHourlyJobForRetry(
+	client: Queryable,
+	input: MarkHourlyJobRetryInput,
+): Promise<void> {
 	await client.query(
 		`
       UPDATE ga4_bigquery_hourly_jobs
@@ -324,7 +421,10 @@ async function markHourlyJobForRetry(client, input) {
 	);
 }
 
-async function markHourlyJobDeadLettered(client, input) {
+async function markHourlyJobDeadLettered(
+	client: Queryable,
+	input: MarkHourlyJobDeadLetteredInput,
+): Promise<void> {
 	const sourceRecordId = input.job.hourStart;
 	const sourceQueueKey = input.job.pipelineName;
 
@@ -366,7 +466,9 @@ async function markHourlyJobDeadLettered(client, input) {
 	);
 }
 
-async function seedHoursForProcessing(input) {
+async function seedHoursForProcessing(
+	input: SeedHoursForProcessingInput,
+): Promise<{ hourStarts: string[]; enqueuedCount: number }> {
 	if (input.explicitHourStarts && input.explicitHourStarts.length > 0) {
 		return enqueueHours({
 			pipelineName: input.pipelineName,
@@ -391,7 +493,9 @@ async function seedHoursForProcessing(input) {
 	});
 }
 
-export async function processGa4SessionAttributionHourlyJobs(input) {
+export async function processGa4SessionAttributionHourlyJobs(
+	input: ProcessGa4SessionAttributionHourlyJobsInput,
+) {
 	const pipelineName = input.pipelineName ?? GA4_SESSION_ATTRIBUTION_PIPELINE;
 	const batchSize = normalizePositiveInteger(
 		input.batchSize,
@@ -416,7 +520,7 @@ export async function processGa4SessionAttributionHourlyJobs(input) {
 	const explicitHourStarts = input.explicitHourStarts?.length
 		? Array.from(
 				new Set(
-					input.explicitHourStarts.map((hour) => normalizeHourStart(hour)),
+					input.explicitHourStarts.map((hour: string) => normalizeHourStart(hour)),
 				),
 			).sort()
 		: null;

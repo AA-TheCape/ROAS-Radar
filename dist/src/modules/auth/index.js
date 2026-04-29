@@ -1,32 +1,40 @@
-import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
-import { promisify } from 'node:util';
-import { Router } from 'express';
-import { z } from 'zod';
-import { env, getConfiguredReportingApiToken } from '../../config/env.js';
-import { query, withTransaction } from '../../db/pool.js';
+import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual, } from "node:crypto";
+import { promisify } from "node:util";
+import { Router, } from "express";
+import { z } from "zod";
+import { env, getConfiguredReportingApiToken } from "../../config/env.js";
+import { query, withTransaction } from "../../db/pool.js";
 const scrypt = promisify(scryptCallback);
-const SESSION_TOKEN_PREFIX = 'rrs_';
+const SESSION_TOKEN_PREFIX = "rrs_";
 class AuthHttpError extends Error {
     statusCode;
     code;
     details;
     constructor(statusCode, code, message, details) {
         super(message);
-        this.name = 'AuthHttpError';
+        this.name = "AuthHttpError";
         this.statusCode = statusCode;
         this.code = code;
         this.details = details;
     }
 }
 const loginSchema = z.object({
-    email: z.string().trim().email().transform((value) => value.toLowerCase()),
-    password: z.string().min(1)
+    email: z
+        .string()
+        .trim()
+        .email()
+        .transform((value) => value.toLowerCase()),
+    password: z.string().min(1),
 });
 const createUserSchema = z.object({
-    email: z.string().trim().email().transform((value) => value.toLowerCase()),
+    email: z
+        .string()
+        .trim()
+        .email()
+        .transform((value) => value.toLowerCase()),
     password: z.string().min(12),
     displayName: z.string().trim().min(1).max(120),
-    isAdmin: z.boolean().optional().default(false)
+    isAdmin: z.boolean().optional().default(false),
 });
 function parseInput(schema, input) {
     try {
@@ -34,7 +42,7 @@ function parseInput(schema, input) {
     }
     catch (error) {
         if (error instanceof z.ZodError) {
-            throw new AuthHttpError(400, 'invalid_request', 'Invalid authentication request', error.flatten());
+            throw new AuthHttpError(400, "invalid_request", "Invalid authentication request", error.flatten());
         }
         throw error;
     }
@@ -44,25 +52,25 @@ function parseBearerToken(authHeader) {
         return null;
     }
     const [scheme, token] = authHeader.split(/\s+/, 2);
-    if (!scheme || !token || scheme.toLowerCase() !== 'bearer') {
+    if (!scheme || !token || scheme.toLowerCase() !== "bearer") {
         return null;
     }
     return token.trim() || null;
 }
 function computeSessionDigest(token) {
-    return createHash('sha256').update(token).digest('hex');
+    return createHash("sha256").update(token).digest("hex");
 }
 async function hashPassword(password) {
-    const salt = randomBytes(16).toString('base64url');
+    const salt = randomBytes(16).toString("base64url");
     const derivedKey = (await scrypt(password, salt, 64));
-    return `scrypt$${salt}$${derivedKey.toString('base64url')}`;
+    return `scrypt$${salt}$${derivedKey.toString("base64url")}`;
 }
 async function verifyPassword(password, passwordHash) {
-    const [algorithm, salt, encodedHash] = passwordHash.split('$');
-    if (algorithm !== 'scrypt' || !salt || !encodedHash) {
+    const [algorithm, salt, encodedHash] = passwordHash.split("$");
+    if (algorithm !== "scrypt" || !salt || !encodedHash) {
         return false;
     }
-    const expected = Buffer.from(encodedHash, 'base64url');
+    const expected = Buffer.from(encodedHash, "base64url");
     const actual = (await scrypt(password, salt, expected.length));
     return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
@@ -74,7 +82,7 @@ function mapUser(row) {
         isAdmin: row.is_admin,
         status: row.status,
         lastLoginAt: row.last_login_at?.toISOString() ?? null,
-        createdAt: row.created_at.toISOString()
+        createdAt: row.created_at.toISOString(),
     };
 }
 async function findUserByEmail(email) {
@@ -95,7 +103,7 @@ async function findUserByEmail(email) {
     return result.rows[0] ?? null;
 }
 async function createUserSession(user) {
-    const token = `${SESSION_TOKEN_PREFIX}${randomBytes(32).toString('hex')}`;
+    const token = `${SESSION_TOKEN_PREFIX}${randomBytes(32).toString("hex")}`;
     const digest = computeSessionDigest(token);
     await withTransaction(async (client) => {
         await client.query(`
@@ -122,8 +130,8 @@ async function createUserSession(user) {
         token,
         user: {
             ...mapUser(user),
-            lastLoginAt: new Date().toISOString()
-        }
+            lastLoginAt: new Date().toISOString(),
+        },
     };
 }
 export function isInternalServiceToken(authHeader) {
@@ -135,7 +143,7 @@ export function isInternalServiceToken(authHeader) {
 }
 export async function resolveAuthContext(authHeader) {
     if (isInternalServiceToken(authHeader)) {
-        return { kind: 'internal' };
+        return { kind: "internal" };
     }
     const token = parseBearerToken(authHeader);
     if (!token) {
@@ -160,11 +168,11 @@ export async function resolveAuthContext(authHeader) {
       LIMIT 1
     `, [computeSessionDigest(token)]);
     const row = result.rows[0];
-    if (!row || row.status !== 'active') {
+    if (!row || row.status !== "active") {
         return null;
     }
     return {
-        kind: 'user',
+        kind: "user",
         sessionId: row.session_id,
         user: {
             id: row.user_id,
@@ -173,13 +181,13 @@ export async function resolveAuthContext(authHeader) {
             isAdmin: row.is_admin,
             status: row.status,
             lastLoginAt: row.last_login_at?.toISOString() ?? null,
-            createdAt: row.created_at.toISOString()
-        }
+            createdAt: row.created_at.toISOString(),
+        },
     };
 }
 export async function attachAuthContext(req, res, next) {
     try {
-        const auth = await resolveAuthContext(req.header('authorization') ?? undefined);
+        const auth = await resolveAuthContext(req.header("authorization") ?? undefined);
         res.locals.auth = auth;
         next();
     }
@@ -191,8 +199,8 @@ export function requireAuthenticated(req, res, next) {
     const auth = res.locals.auth;
     if (!auth) {
         res.status(401).json({
-            error: 'unauthorized',
-            message: 'Authentication required'
+            error: "unauthorized",
+            message: "Authentication required",
         });
         return;
     }
@@ -202,19 +210,19 @@ export function requireAdmin(req, res, next) {
     const auth = res.locals.auth;
     if (!auth) {
         res.status(401).json({
-            error: 'unauthorized',
-            message: 'Authentication required'
+            error: "unauthorized",
+            message: "Authentication required",
         });
         return;
     }
-    if (auth.kind === 'internal') {
+    if (auth.kind === "internal") {
         next();
         return;
     }
     if (!auth.user.isAdmin) {
         res.status(403).json({
-            error: 'forbidden',
-            message: 'Admin access required'
+            error: "forbidden",
+            message: "Admin access required",
         });
         return;
     }
@@ -224,15 +232,15 @@ export function requireInternalService(req, res, next) {
     const auth = res.locals.auth;
     if (!auth) {
         res.status(401).json({
-            error: 'unauthorized',
-            message: 'Authentication required'
+            error: "unauthorized",
+            message: "Authentication required",
         });
         return;
     }
-    if (auth.kind !== 'internal') {
+    if (auth.kind !== "internal") {
         res.status(403).json({
-            error: 'forbidden',
-            message: 'Internal service token required'
+            error: "forbidden",
+            message: "Internal service token required",
         });
         return;
     }
@@ -241,45 +249,47 @@ export function requireInternalService(req, res, next) {
 export function createAuthRouter() {
     const router = Router();
     router.use(attachAuthContext);
-    router.post('/login', async (req, res, next) => {
+    router.post("/login", async (req, res, next) => {
         try {
             const payload = parseInput(loginSchema, req.body);
             const user = await findUserByEmail(payload.email);
-            if (!user || user.status !== 'active' || !(await verifyPassword(payload.password, user.password_hash))) {
-                throw new AuthHttpError(401, 'invalid_credentials', 'Invalid email or password');
+            if (!user ||
+                user.status !== "active" ||
+                !(await verifyPassword(payload.password, user.password_hash))) {
+                throw new AuthHttpError(401, "invalid_credentials", "Invalid email or password");
             }
             const session = await createUserSession(user);
             res.status(200).json({
                 token: session.token,
-                user: session.user
+                user: session.user,
             });
         }
         catch (error) {
             next(error);
         }
     });
-    router.get('/me', requireAuthenticated, async (_req, res) => {
+    router.get("/me", requireAuthenticated, async (_req, res) => {
         const auth = res.locals.auth;
-        if (auth.kind === 'internal') {
+        if (auth.kind === "internal") {
             res.status(200).json({
                 user: {
                     id: 0,
-                    email: 'internal@system',
-                    displayName: 'Internal service token',
+                    email: "internal@system",
+                    displayName: "Internal service token",
                     isAdmin: true,
-                    status: 'active',
+                    status: "active",
                     lastLoginAt: null,
-                    createdAt: new Date(0).toISOString()
-                }
+                    createdAt: new Date(0).toISOString(),
+                },
             });
             return;
         }
         res.status(200).json({ user: auth.user });
     });
-    router.post('/logout', requireAuthenticated, async (_req, res, next) => {
+    router.post("/logout", requireAuthenticated, async (_req, res, next) => {
         try {
             const auth = res.locals.auth;
-            if (auth.kind === 'user') {
+            if (auth.kind === "user") {
                 await query(`
             UPDATE app_sessions
             SET
@@ -300,7 +310,7 @@ export function createUserAdminRouter() {
     const router = Router();
     router.use(attachAuthContext);
     router.use(requireAdmin);
-    router.get('/', async (_req, res, next) => {
+    router.get("/", async (_req, res, next) => {
         try {
             const result = await query(`
           SELECT
@@ -316,14 +326,14 @@ export function createUserAdminRouter() {
           ORDER BY email ASC
         `);
             res.status(200).json({
-                users: result.rows.map((row) => mapUser(row))
+                users: result.rows.map((row) => mapUser(row)),
             });
         }
         catch (error) {
             next(error);
         }
     });
-    router.post('/', async (req, res, next) => {
+    router.post("/", async (req, res, next) => {
         try {
             const payload = parseInput(createUserSchema, req.body);
             const passwordHash = await hashPassword(payload.password);
@@ -347,12 +357,15 @@ export function createUserAdminRouter() {
             created_at
         `, [payload.email, passwordHash, payload.displayName, payload.isAdmin]);
             res.status(201).json({
-                user: mapUser(result.rows[0])
+                user: mapUser(result.rows[0]),
             });
         }
         catch (error) {
-            if (typeof error === 'object' && error !== null && 'code' in error && error.code === '23505') {
-                next(new AuthHttpError(409, 'user_exists', 'A user with that email already exists'));
+            if (typeof error === "object" &&
+                error !== null &&
+                "code" in error &&
+                error.code === "23505") {
+                next(new AuthHttpError(409, "user_exists", "A user with that email already exists"));
                 return;
             }
             next(error);

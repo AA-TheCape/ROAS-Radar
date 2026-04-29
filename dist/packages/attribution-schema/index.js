@@ -1,13 +1,34 @@
-import { z } from 'zod';
-export { ORDER_ATTRIBUTION_BACKFILL_DEFAULT_LIMIT, ORDER_ATTRIBUTION_BACKFILL_MAX_LIMIT, normalizeOrderAttributionBackfillRequest, orderAttributionBackfillEnqueueResponseSchema, orderAttributionBackfillFailureSchema, orderAttributionBackfillJobResponseSchema, orderAttributionBackfillJobStatusSchema, orderAttributionBackfillReportSchema, orderAttributionBackfillRequestSchema, orderAttributionBackfillSubmittedOptionsSchema } from './order-attribution-backfill.js';
+import { z } from "zod";
+export { ORDER_ATTRIBUTION_BACKFILL_DEFAULT_LIMIT, ORDER_ATTRIBUTION_BACKFILL_MAX_LIMIT, normalizeOrderAttributionBackfillRequest, orderAttributionBackfillEnqueueResponseSchema, orderAttributionBackfillFailureSchema, orderAttributionBackfillJobResponseSchema, orderAttributionBackfillJobStatusSchema, orderAttributionBackfillReportSchema, orderAttributionBackfillRequestSchema, orderAttributionBackfillSubmittedOptionsSchema, } from "./order-attribution-backfill.js";
 export const ATTRIBUTION_SCHEMA_VERSION = 1;
 export const MAX_ATTRIBUTION_URL_LENGTH = 2048;
 export const MAX_ATTRIBUTION_TEXT_LENGTH = 255;
 export const MAX_SESSION_ID_LENGTH = 36;
-export const ATTRIBUTION_CONSENT_STATES = ['granted', 'denied', 'unknown'];
-export const ATTRIBUTION_URL_FIELDS = ['landing_url', 'referrer_url', 'page_url'];
-export const ATTRIBUTION_UTM_FIELDS = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term'];
-export const ATTRIBUTION_CLICK_ID_FIELDS = ['gclid', 'gbraid', 'wbraid', 'fbclid', 'ttclid', 'msclkid'];
+export const ATTRIBUTION_CONSENT_STATES = [
+    "granted",
+    "denied",
+    "unknown",
+];
+export const ATTRIBUTION_URL_FIELDS = [
+    "landing_url",
+    "referrer_url",
+    "page_url",
+];
+export const ATTRIBUTION_UTM_FIELDS = [
+    "utm_source",
+    "utm_medium",
+    "utm_campaign",
+    "utm_content",
+    "utm_term",
+];
+export const ATTRIBUTION_CLICK_ID_FIELDS = [
+    "gclid",
+    "gbraid",
+    "wbraid",
+    "fbclid",
+    "ttclid",
+    "msclkid",
+];
 const ISO_TIMESTAMP_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 export function normalizeAttributionString(value) {
@@ -24,10 +45,10 @@ export function normalizeAttributionUrl(value, baseUrl) {
         return null;
     }
     const url = baseUrl ? new URL(normalized, baseUrl) : new URL(normalized);
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-        throw new Error('invalid_protocol');
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+        throw new Error("invalid_protocol");
     }
-    url.hash = '';
+    url.hash = "";
     return url.toString();
 }
 export function normalizeAttributionUtm(value) {
@@ -38,13 +59,15 @@ export function normalizeAttributionClickId(value) {
 }
 export function isAttributionSessionId(value) {
     const normalized = normalizeAttributionString(value);
-    return Boolean(normalized && normalized.length <= MAX_SESSION_ID_LENGTH && UUID_REGEX.test(normalized));
+    return Boolean(normalized &&
+        normalized.length <= MAX_SESSION_ID_LENGTH &&
+        UUID_REGEX.test(normalized));
 }
 const nullableUrlSchema = z
     .union([z.string(), z.null(), z.undefined()])
     .transform((value) => normalizeAttributionString(value))
     .refine((value) => value === null || value.length <= MAX_ATTRIBUTION_URL_LENGTH, {
-    message: `String must contain at most ${MAX_ATTRIBUTION_URL_LENGTH} character(s)`
+    message: `String must contain at most ${MAX_ATTRIBUTION_URL_LENGTH} character(s)`,
 })
     .superRefine((value, ctx) => {
     if (!value) {
@@ -56,7 +79,9 @@ const nullableUrlSchema = z
     catch (error) {
         ctx.addIssue({
             code: z.ZodIssueCode.custom,
-            message: error instanceof Error && error.message === 'invalid_protocol' ? 'URL must use http or https' : 'Invalid URL'
+            message: error instanceof Error && error.message === "invalid_protocol"
+                ? "URL must use http or https"
+                : "Invalid URL",
         });
     }
 })
@@ -65,22 +90,24 @@ const nullableUtmSchema = z
     .union([z.string(), z.null(), z.undefined()])
     .transform((value) => normalizeAttributionString(value))
     .refine((value) => value === null || value.length <= MAX_ATTRIBUTION_TEXT_LENGTH, {
-    message: `String must contain at most ${MAX_ATTRIBUTION_TEXT_LENGTH} character(s)`
+    message: `String must contain at most ${MAX_ATTRIBUTION_TEXT_LENGTH} character(s)`,
 })
     .transform((value) => normalizeAttributionUtm(value));
 const nullableClickIdSchema = z
     .union([z.string(), z.null(), z.undefined()])
     .transform((value) => normalizeAttributionString(value))
     .refine((value) => value === null || value.length <= MAX_ATTRIBUTION_TEXT_LENGTH, {
-    message: `String must contain at most ${MAX_ATTRIBUTION_TEXT_LENGTH} character(s)`
+    message: `String must contain at most ${MAX_ATTRIBUTION_TEXT_LENGTH} character(s)`,
 })
     .transform((value) => normalizeAttributionClickId(value));
 const isoTimestampSchema = z
     .string()
     .trim()
-    .refine((value) => ISO_TIMESTAMP_REGEX.test(value), 'Invalid ISO-8601 timestamp')
+    .refine((value) => ISO_TIMESTAMP_REGEX.test(value), "Invalid ISO-8601 timestamp")
     .transform((value) => new Date(value).toISOString());
-export const attributionConsentStateSchema = z.enum(ATTRIBUTION_CONSENT_STATES).default('unknown');
+export const attributionConsentStateSchema = z
+    .enum(ATTRIBUTION_CONSENT_STATES)
+    .default("unknown");
 export const attributionCaptureV1Schema = z.object({
     schema_version: z.literal(ATTRIBUTION_SCHEMA_VERSION),
     roas_radar_session_id: z.string().uuid().max(MAX_SESSION_ID_LENGTH),
@@ -99,7 +126,7 @@ export const attributionCaptureV1Schema = z.object({
     wbraid: nullableClickIdSchema,
     fbclid: nullableClickIdSchema,
     ttclid: nullableClickIdSchema,
-    msclkid: nullableClickIdSchema
+    msclkid: nullableClickIdSchema,
 });
 export function normalizeAttributionCaptureV1(input) {
     return attributionCaptureV1Schema.parse(input);

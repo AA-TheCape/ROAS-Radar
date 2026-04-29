@@ -1,4 +1,4 @@
-import { replayDeadLetters } from '../modules/dead-letters/index.js';
+import { replayDeadLetters, } from "../modules/dead-letters/index.js";
 function readFlag(name) {
     const prefixed = `--${name}`;
     const index = process.argv.indexOf(prefixed);
@@ -38,21 +38,21 @@ function parseStatus(value) {
     if (!value) {
         return undefined;
     }
-    if (value === 'pending_replay' || value === 'replayed') {
+    if (value === "pending_replay" || value === "replayed") {
         return value;
     }
     throw new Error(`Invalid status value: ${value}`);
 }
 async function run() {
     const result = await replayDeadLetters({
-        requestedBy: requireFlag('requested-by'),
-        eventType: readFlag('event-type') ?? undefined,
-        sourceTable: readFlag('source-table') ?? undefined,
-        status: parseStatus(readFlag('status')),
-        fromTime: optionalDate(readFlag('from')),
-        toTime: optionalDate(readFlag('to')),
-        limit: parseLimit(readFlag('limit')),
-        dryRun: process.argv.includes('--dry-run')
+        requestedBy: requireFlag("requested-by"),
+        eventType: readFlag("event-type") ?? undefined,
+        sourceTable: readFlag("source-table") ?? undefined,
+        status: parseStatus(readFlag("status")),
+        fromTime: optionalDate(readFlag("from")),
+        toTime: optionalDate(readFlag("to")),
+        limit: parseLimit(readFlag("limit")),
+        dryRun: process.argv.includes("--dry-run"),
     });
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }

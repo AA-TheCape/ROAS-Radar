@@ -1,12 +1,14 @@
 function normalizeJourneyIds(journeyIds) {
-    return [...new Set(journeyIds.map((journeyId) => journeyId.trim()).filter(Boolean))].sort();
+    return [
+        ...new Set(journeyIds.map((journeyId) => journeyId.trim()).filter(Boolean)),
+    ].sort();
 }
 export async function refreshCustomerJourneyForJourneys(client, journeyIds) {
     const normalizedJourneyIds = normalizeJourneyIds(journeyIds);
     if (normalizedJourneyIds.length === 0) {
         return;
     }
-    await client.query('SELECT pg_advisory_xact_lock($1)', [918_440_12]);
+    await client.query("SELECT pg_advisory_xact_lock($1)", [918_440_12]);
     await client.query(`
       DELETE FROM customer_journey
       WHERE identity_journey_id = ANY($1::uuid[])

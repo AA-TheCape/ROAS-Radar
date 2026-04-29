@@ -1,23 +1,27 @@
-import { randomUUID } from 'node:crypto';
-import { orderAttributionBackfillEnqueueResponseSchema, orderAttributionBackfillJobResponseSchema, orderAttributionBackfillReportSchema, orderAttributionBackfillSubmittedOptionsSchema } from '../../../packages/attribution-schema/index.js';
-import { query, withTransaction } from '../../db/pool.js';
+import { randomUUID } from "node:crypto";
+import { orderAttributionBackfillEnqueueResponseSchema, orderAttributionBackfillJobResponseSchema, orderAttributionBackfillReportSchema, orderAttributionBackfillSubmittedOptionsSchema, } from "../../../packages/attribution-schema/index.js";
+import { query, withTransaction } from "../../db/pool.js";
 function normalizeErrorCode(error) {
-    if (typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string' && error.code.trim()) {
+    if (typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        typeof error.code === "string" &&
+        error.code.trim()) {
         return error.code.trim();
     }
     if (error instanceof Error && error.name.trim()) {
         return error.name.trim();
     }
-    return 'order_attribution_backfill_run_failed';
+    return "order_attribution_backfill_run_failed";
 }
 function normalizeErrorMessage(error) {
     if (error instanceof Error && error.message.trim()) {
         return error.message.trim();
     }
-    if (typeof error === 'string' && error.trim()) {
+    if (typeof error === "string" && error.trim()) {
         return error.trim();
     }
-    return 'Order attribution backfill job failed';
+    return "Order attribution backfill job failed";
 }
 function mapBackfillRunRow(row) {
     return orderAttributionBackfillJobResponseSchema.parse({
@@ -29,13 +33,15 @@ function mapBackfillRunRow(row) {
         startedAt: row.started_at?.toISOString() ?? null,
         completedAt: row.completed_at?.toISOString() ?? null,
         options: orderAttributionBackfillSubmittedOptionsSchema.parse(row.options),
-        report: row.report == null ? null : orderAttributionBackfillReportSchema.parse(row.report),
+        report: row.report == null
+            ? null
+            : orderAttributionBackfillReportSchema.parse(row.report),
         error: row.error_code && row.error_message
             ? {
                 code: row.error_code,
-                message: row.error_message
+                message: row.error_message,
             }
-            : null
+            : null,
     });
 }
 export async function enqueueOrderAttributionBackfillRun(options, submittedBy, now = new Date()) {
@@ -60,10 +66,10 @@ export async function enqueueOrderAttributionBackfillRun(options, submittedBy, n
     return orderAttributionBackfillEnqueueResponseSchema.parse({
         ok: true,
         jobId,
-        status: 'queued',
+        status: "queued",
         submittedAt,
         submittedBy,
-        options
+        options,
     });
 }
 export async function getOrderAttributionBackfillRun(jobId) {
@@ -127,7 +133,7 @@ export async function claimOrderAttributionBackfillRuns(workerId, now, limit) {
             submittedBy: row.submitted_by,
             submittedAt: row.submitted_at.toISOString(),
             startedAt: row.started_at?.toISOString() ?? null,
-            options
+            options,
         };
     });
 }
@@ -157,5 +163,11 @@ export async function markOrderAttributionBackfillRunFailed(runId, error, report
         error_message = $5,
         updated_at = $2
       WHERE id = $1
-    `, [runId, now, normalizedReport === null ? null : JSON.stringify(normalizedReport), normalizeErrorCode(error), normalizeErrorMessage(error)]);
+    `, [
+        runId,
+        now,
+        normalizedReport === null ? null : JSON.stringify(normalizedReport),
+        normalizeErrorCode(error),
+        normalizeErrorMessage(error),
+    ]);
 }

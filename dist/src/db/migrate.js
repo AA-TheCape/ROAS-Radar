@@ -1,25 +1,25 @@
-import { existsSync } from 'node:fs';
-import { readdir, readFile } from 'node:fs/promises';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { pool } from './pool.js';
+import { existsSync } from "node:fs";
+import { readFile, readdir } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { pool } from "./pool.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const migrationDirCandidates = [
-    path.resolve(__dirname, '../../db/migrations'),
-    path.resolve(__dirname, '../../../db/migrations'),
-    path.resolve(process.cwd(), 'db/migrations')
+    path.resolve(__dirname, "../../db/migrations"),
+    path.resolve(__dirname, "../../../db/migrations"),
+    path.resolve(process.cwd(), "db/migrations"),
 ];
 const resolvedMigrationsDir = migrationDirCandidates.find((candidate) => existsSync(candidate));
 if (!resolvedMigrationsDir) {
-    throw new Error(`Could not locate db/migrations. Tried: ${migrationDirCandidates.join(', ')}`);
+    throw new Error(`Could not locate db/migrations. Tried: ${migrationDirCandidates.join(", ")}`);
 }
 const migrationsDir = resolvedMigrationsDir;
 async function migrate() {
     const client = await pool.connect();
     try {
-        await client.query('BEGIN');
-        await client.query('SELECT pg_advisory_xact_lock($1)', [7_204_202_6]);
+        await client.query("BEGIN");
+        await client.query("SELECT pg_advisory_xact_lock($1)", [7_204_202_6]);
         await client.query(`
       CREATE TABLE IF NOT EXISTS schema_migrations (
         filename text PRIMARY KEY,
@@ -27,22 +27,22 @@ async function migrate() {
       )
     `);
         const files = (await readdir(migrationsDir))
-            .filter((file) => file.endsWith('.sql'))
+            .filter((file) => file.endsWith(".sql"))
             .sort();
         for (const file of files) {
-            const existing = await client.query('SELECT filename FROM schema_migrations WHERE filename = $1', [file]);
+            const existing = await client.query("SELECT filename FROM schema_migrations WHERE filename = $1", [file]);
             if (existing.rowCount) {
                 continue;
             }
-            const sql = await readFile(path.join(migrationsDir, file), 'utf8');
+            const sql = await readFile(path.join(migrationsDir, file), "utf8");
             await client.query(sql);
-            await client.query('INSERT INTO schema_migrations (filename) VALUES ($1)', [file]);
+            await client.query("INSERT INTO schema_migrations (filename) VALUES ($1)", [file]);
             process.stdout.write(`Applied migration ${file}\n`);
         }
-        await client.query('COMMIT');
+        await client.query("COMMIT");
     }
     catch (error) {
-        await client.query('ROLLBACK').catch(() => undefined);
+        await client.query("ROLLBACK").catch(() => undefined);
         throw error;
     }
     finally {

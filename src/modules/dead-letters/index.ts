@@ -1,4 +1,4 @@
-// @ts-nocheck
+import type { PoolClient, QueryResultRow } from "pg";
 
 import { env } from "../../config/env.js";
 import { query, withTransaction } from "../../db/pool.js";
@@ -6,22 +6,92 @@ import { logError, logInfo } from "../../observability/index.js";
 
 export type DeadLetterStatus = "pending_replay" | "replayed";
 
-function serializeError(error) {
+const DEFAULT_DEAD_LETTER_REPLAY_MAX_BATCH_SIZE = 100;
+
+type Queryable = Pick<PoolClient, "query">;
+
+type SerializedError = {
+	message: string;
+	context: Record<string, unknown>;
+};
+
+type DeadLetterSourceTable =
+	| "shopify_order_writeback_jobs"
+	| "attribution_jobs"
+	| "ga4_bigquery_hourly_jobs";
+
+type DeadLetterRow = {
+	id: number;
+	event_type: string;
+	source_table: string;
+	source_record_id: string;
+	source_queue_key: string | null;
+};
+
+type ReplayFiltersInput = {
+	requestedBy?: string | null;
+	eventType?: string | null;
+	sourceTable?: string | null;
+	status?: DeadLetterStatus;
+	fromTime?: Date | null;
+	toTime?: Date | null;
+	windowStart?: Date | null;
+	windowEnd?: Date | null;
+	limit?: number;
+	dryRun?: boolean;
+};
+
+type NormalizedReplayFilters = {
+	requestedBy: string | null;
+	eventType: string | null;
+	sourceTable: string | null;
+	status: DeadLetterStatus;
+	fromTime: Date | null;
+	toTime: Date | null;
+	limit: number;
+	dryRun: boolean;
+};
+
+type InsertReplayRunItemInput = {
+	replayRunId: number;
+	deadLetter: DeadLetterRow;
+	outcome: "replayed" | "skipped" | "failed" | "dry_run";
+	message: string;
+};
+
+type RecordDeadLetterInput = {
+	eventType: string;
+	sourceTable: string;
+	sourceRecordId: string;
+	sourceQueueKey?: string | null;
+	payload?: Record<string, unknown>;
+	error: unknown;
+};
+
+type ReplayRunIdRow = QueryResultRow & { id: number };
+type CountRow = QueryResultRow & { total: string };
+
+function serializeError(error: unknown): SerializedError {
 	if (error instanceof Error) {
-		const extraContext = error;
+		const {
+			name,
+			message,
+			stack,
+			...extraContext
+		} = error as Error & Record<string, unknown>;
 		return {
-			message: error.message,
+			message,
 			context: {
-				name: error.name,
-				message: error.message,
-				stack: error.stack,
+				name,
+				message,
+				stack,
 				...extraContext,
 			},
 		};
 	}
 
 	if (typeof error === "object" && error !== null) {
-		const context = error;
+		const context = error as Record<string, unknown>;
 		return {
 			message: String(context.message ?? "Unknown error"),
 			context,
@@ -34,7 +104,7 @@ function serializeError(error) {
 	};
 }
 
-async function ensureDeadLetterTables(client) {
+async function ensureDeadLetterTables(client: Queryable): Promise<void> {
 	await client.query(`
     CREATE TABLE IF NOT EXISTS event_dead_letters (
       id bigserial PRIMARY KEY,
@@ -183,8 +253,14 @@ async function ensureDeadLetterTables(client) {
   `);
 }
 
-async function requeueSourceRecord(client, deadLetter) {
-	if (deadLetter.source_table === "shopify_order_writeback_jobs") {
+async function requeueSourceRecord(
+	client: Queryable,
+	deadLetter: DeadLetterRow,
+): Promise<"replayed" | "skipped"> {
+	if (
+		(deadLetter.source_table as DeadLetterSourceTable) ===
+		"shopify_order_writeback_jobs"
+	) {
 		const result = await client.query(
 			`
         UPDATE shopify_order_writeback_jobs
@@ -203,7 +279,7 @@ async function requeueSourceRecord(client, deadLetter) {
 		return result.rowCount ? "replayed" : "skipped";
 	}
 
-	if (deadLetter.source_table === "attribution_jobs") {
+	if ((deadLetter.source_table as DeadLetterSourceTable) === "attribution_jobs") {
 		const result = await client.query(
 			`
         UPDATE attribution_jobs
@@ -222,7 +298,10 @@ async function requeueSourceRecord(client, deadLetter) {
 		return result.rowCount ? "replayed" : "skipped";
 	}
 
-	if (deadLetter.source_table === "ga4_bigquery_hourly_jobs") {
+	if (
+		(deadLetter.source_table as DeadLetterSourceTable) ===
+		"ga4_bigquery_hourly_jobs"
+	) {
 		const result = await client.query(
 			`
         UPDATE ga4_bigquery_hourly_jobs
@@ -245,13 +324,15 @@ async function requeueSourceRecord(client, deadLetter) {
 	return "skipped";
 }
 
-function normalizeReplayFilters(filters) {
+function normalizeReplayFilters(
+	filters: ReplayFiltersInput,
+): NormalizedReplayFilters {
 	const requestedBy = filters.requestedBy?.trim() || null;
 	const fromTime = filters.fromTime ?? filters.windowStart ?? null;
 	const toTime = filters.toTime ?? filters.windowEnd ?? null;
 	const limit = Math.max(
 		1,
-		Math.min(filters.limit ?? env.DEAD_LETTER_REPLAY_MAX_BATCH_SIZE, 500),
+		Math.min(filters.limit ?? DEFAULT_DEAD_LETTER_REPLAY_MAX_BATCH_SIZE, 500),
 	);
 	const status = filters.status ?? "pending_replay";
 	const dryRun = filters.dryRun ?? false;
@@ -268,7 +349,10 @@ function normalizeReplayFilters(filters) {
 	};
 }
 
-async function insertReplayRunItem(client, input) {
+async function insertReplayRunItem(
+	client: Queryable,
+	input: InsertReplayRunItemInput,
+): Promise<void> {
 	await client.query(
 		`
       INSERT INTO event_replay_run_items (
@@ -292,7 +376,10 @@ async function insertReplayRunItem(client, input) {
 	);
 }
 
-export async function recordDeadLetter(client, input) {
+export async function recordDeadLetter(
+	client: Queryable,
+	input: RecordDeadLetterInput,
+): Promise<void> {
 	await ensureDeadLetterTables(client);
 	const serializedError = serializeError(input.error);
 
@@ -352,11 +439,11 @@ export async function recordDeadLetter(client, input) {
 	);
 }
 
-export async function replayDeadLetters(filters) {
+export async function replayDeadLetters(filters: ReplayFiltersInput) {
 	return withTransaction(async (client) => {
 		await ensureDeadLetterTables(client);
 		const normalized = normalizeReplayFilters(filters);
-		const replayRunResult = await client.query(
+		const replayRunResult = await client.query<ReplayRunIdRow>(
 			`
         INSERT INTO event_replay_runs (
           replay_scope,
@@ -400,7 +487,7 @@ export async function replayDeadLetters(filters) {
 		);
 		const replayRunId = replayRunResult.rows[0].id;
 
-		const candidates = await client.query(
+		const candidates = await client.query<DeadLetterRow>(
 			`
         SELECT
           id,
@@ -547,7 +634,7 @@ export async function replayDeadLetters(filters) {
 
 export async function countPendingDeadLetters() {
 	try {
-		const result = await query(`
+		const result = await query<CountRow>(`
       SELECT COUNT(*)::text AS total
       FROM event_dead_letters
       WHERE status = 'pending_replay'

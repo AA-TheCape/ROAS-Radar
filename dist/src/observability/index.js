@@ -1,16 +1,19 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
+import { AsyncLocalStorage } from "node:async_hooks";
 export const requestContextStorage = new AsyncLocalStorage();
 function normalizeString(value) {
-    return typeof value === 'string' && value.trim() ? value.trim() : null;
+    return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 function hasMeaningfulValue(value) {
-    return normalizeString(typeof value === 'string' ? value : null) !== null;
+    return normalizeString(typeof value === "string" ? value : null) !== null;
 }
 function serializeValue(value) {
     if (value === undefined) {
         return undefined;
     }
-    if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    if (value === null ||
+        typeof value === "string" ||
+        typeof value === "number" ||
+        typeof value === "boolean") {
         return value;
     }
     if (value instanceof Date) {
@@ -21,7 +24,7 @@ function serializeValue(value) {
             .map((entry) => serializeValue(entry))
             .filter((entry) => entry !== undefined);
     }
-    if (typeof value === 'object') {
+    if (typeof value === "object") {
         const serialized = {};
         for (const [key, entry] of Object.entries(value)) {
             const normalized = serializeValue(entry);
@@ -45,12 +48,12 @@ export function parseCloudTraceContext(header) {
     if (!normalized) {
         return {};
     }
-    const [traceAndSpan, options] = normalized.split(';');
-    const [traceId, spanId] = traceAndSpan.split('/');
+    const [traceAndSpan, options] = normalized.split(";");
+    const [traceId, spanId] = traceAndSpan.split("/");
     return {
         traceId: normalizeString(traceId),
         spanId: normalizeString(spanId),
-        traceSampled: options === 'o=1'
+        traceSampled: options === "o=1",
     };
 }
 function writeLog(severity, event, fields, stream) {
@@ -65,37 +68,39 @@ function writeLog(severity, event, fields, stream) {
         timestamp: new Date().toISOString(),
         ...(correlationId ? { correlationId } : {}),
         ...(context ? { requestContext: serializeValue(context) } : {}),
-        ...fields
+        ...fields,
     };
     stream.write(`${JSON.stringify(payload)}\n`);
 }
 export function logInfo(event, fields) {
-    writeLog('INFO', event, toSerializableFields(fields), process.stdout);
+    writeLog("INFO", event, toSerializableFields(fields), process.stdout);
 }
 export function logWarning(event, fields) {
-    writeLog('WARNING', event, toSerializableFields(fields), process.stdout);
+    writeLog("WARNING", event, toSerializableFields(fields), process.stdout);
 }
 export function logError(event, error, fields) {
-    writeLog('ERROR', event, toSerializableFields({
+    writeLog("ERROR", event, toSerializableFields({
         ...fields,
-        errorName: error instanceof Error ? error.name : 'Error',
+        errorName: error instanceof Error ? error.name : "Error",
         errorMessage: error instanceof Error ? error.message : String(error),
-        errorStack: error instanceof Error ? error.stack ?? null : null
+        errorStack: error instanceof Error ? (error.stack ?? null) : null,
     }), process.stderr);
 }
 export function createRequestLoggingMiddleware(service) {
     return (req, res, next) => {
-        const requestId = normalizeString(req.header('x-request-id')) ?? req.header('x-cloud-trace-context')?.split('/')[0] ?? null;
+        const requestId = normalizeString(req.header("x-request-id")) ??
+            req.header("x-cloud-trace-context")?.split("/")[0] ??
+            null;
         const startedAt = Date.now();
         requestContextStorage.run({ requestId }, () => {
-            res.on('finish', () => {
-                logInfo('http_request_completed', {
+            res.on("finish", () => {
+                logInfo("http_request_completed", {
                     service,
                     requestId,
                     method: req.method,
                     path: req.originalUrl,
                     responseStatusCode: res.statusCode,
-                    durationMs: Date.now() - startedAt
+                    durationMs: Date.now() - startedAt,
                 });
             });
             next();
@@ -106,40 +111,79 @@ export function logHttpError(event, error, req, fields = {}) {
     logError(event, error, {
         method: req.method,
         path: req.originalUrl,
-        ...fields
+        ...fields,
     });
 }
 function toBackfillLifecycleStatus(stage) {
     switch (stage) {
-        case 'enqueued':
-            return 'queued';
-        case 'started':
-            return 'running';
-        case 'completed':
-            return 'completed';
-        case 'failed':
-            return 'failed';
+        case "enqueued":
+            return "queued";
+        case "started":
+            return "processing";
+        case "completed":
+            return "completed";
+        case "failed":
+            return "failed";
     }
 }
 export function summarizeOrderAttributionBackfillReport(report) {
     if (!report) {
         return {};
     }
-    const rawRecoveredOrders = report.recoveredOrders;
-    const recoveredOrders = typeof rawRecoveredOrders === 'number' ? rawRecoveredOrders : 0;
+    const rawRecoveredOrders = typeof report.recoveredOrders === "number"
+        ? report.recoveredOrders
+        : report.recovered;
+    const recoveredOrders = typeof rawRecoveredOrders === "number" ? rawRecoveredOrders : 0;
     const rawFailedOrders = report.failedOrders;
-    const failedOrders = typeof rawFailedOrders === 'number' ? rawFailedOrders : 0;
+    const failedOrders = typeof rawFailedOrders === "number" ? rawFailedOrders : 0;
+    const rawFailures = Array.isArray(report.failures)
+        ? report.failures
+        : Array.isArray(report.sampleFailures)
+            ? report.sampleFailures
+            : [];
+    const sampleFailures = rawFailures
+        .filter((failure) => typeof failure === "object" && failure !== null)
+        .map((failure) => ({
+        orderId: typeof failure.orderId === "string" ? failure.orderId : null,
+        code: typeof failure.code === "string" ? failure.code : null,
+        message: typeof failure.message === "string" ? failure.message : null,
+    }));
+    const scannedOrders = typeof report.scannedOrders === "number"
+        ? report.scannedOrders
+        : typeof report.scanned === "number"
+            ? report.scanned
+            : null;
+    const unrecoverableOrders = typeof report.unrecoverableOrders === "number"
+        ? report.unrecoverableOrders
+        : typeof report.unrecoverable === "number"
+            ? report.unrecoverable
+            : null;
+    const writebackCompleted = typeof report.shopifyWritebackCompleted === "number"
+        ? report.shopifyWritebackCompleted
+        : typeof report.writebackCompleted === "number"
+            ? report.writebackCompleted
+            : 0;
     return {
         recoveredOrders,
         failedOrders,
-        recoverableOrders: typeof report.recoverableOrders === 'number' ? report.recoverableOrders : null,
-        scannedOrders: typeof report.scannedOrders === 'number' ? report.scannedOrders : null,
-        dryRun: typeof report.dryRun === 'boolean' ? report.dryRun : null
+        recoverableOrders: typeof report.recoverableOrders === "number"
+            ? report.recoverableOrders
+            : null,
+        scannedOrders,
+        dryRun: typeof report.dryRun === "boolean" ? report.dryRun : null,
+        report: {
+            scanned: scannedOrders ?? 0,
+            recovered: recoveredOrders,
+            unrecoverable: unrecoverableOrders ?? 0,
+            writebackCompleted,
+            failureCount: sampleFailures.length,
+            sampleFailures,
+        },
     };
 }
 export function emitOrderAttributionBackfillJobLifecycleLog(input) {
-    logInfo('order_attribution_backfill_job_lifecycle', {
-        service: process.env.K_SERVICE ?? 'roas-radar',
+    logInfo("order_attribution_backfill_job_lifecycle", {
+        service: process.env.K_SERVICE ?? "roas-radar",
         correlationId: input.jobId,
         stage: input.stage,
         status: toBackfillLifecycleStatus(input.stage),
@@ -150,17 +194,24 @@ export function emitOrderAttributionBackfillJobLifecycleLog(input) {
         completedAt: input.completedAt ?? null,
         options: input.options ?? null,
         ...summarizeOrderAttributionBackfillReport(input.report),
-        errorMessage: input.error instanceof Error ? input.error.message : input.error ? String(input.error) : null
+        code: typeof input.error?.code === "string"
+            ? input.error.code
+            : null,
+        errorMessage: input.error instanceof Error
+            ? input.error.message
+            : input.error
+                ? String(input.error)
+                : null,
     });
 }
 export function buildAttributionBacklogLog(input) {
     return JSON.stringify({
-        severity: 'INFO',
-        event: 'attribution_worker_backlog',
-        message: 'attribution_worker_backlog',
+        severity: "INFO",
+        event: "attribution_worker_backlog",
+        message: "attribution_worker_backlog",
         timestamp: new Date().toISOString(),
-        service: process.env.K_SERVICE ?? 'roas-radar-attribution-worker',
-        ...input
+        service: process.env.K_SERVICE ?? "roas-radar-attribution-worker",
+        ...input,
     });
 }
 export function summarizeAttributionObservation(payload) {
@@ -185,39 +236,43 @@ export function summarizeAttributionObservation(payload) {
         hasCampaign: Boolean(campaign),
         hasContent: Boolean(content),
         hasTerm: Boolean(term),
-        hasClickId: Boolean(clickId)
+        hasClickId: Boolean(clickId),
     };
 }
 export function summarizeDualWriteConsistency(input) {
     return {
         browserOutcome: input.browserOutcome,
         serverOutcome: input.serverOutcome,
-        dualWriteConsistent: input.browserOutcome === input.serverOutcome || input.serverOutcome === 'accepted'
+        dualWriteConsistent: input.browserOutcome === input.serverOutcome ||
+            input.serverOutcome === "accepted",
     };
 }
 export function summarizeResolverOutcome(input) {
     if (!input.winner) {
         return {
-            resolverOutcome: 'unattributed',
+            resolverOutcome: "unattributed",
             touchpointCount: input.touchpoints.length,
-            winnerMatchSource: 'unattributed',
+            winnerMatchSource: "unattributed",
             fallbackUsed: false,
             ga4SkippedDueToPrecedence: Boolean(input.deterministicWinnerExists || input.shopifyHintMatchExists),
             ga4SkippedReason: input.deterministicWinnerExists
-                ? 'deterministic_winner'
+                ? "deterministic_winner"
                 : input.shopifyHintMatchExists
-                    ? 'shopify_hint_fallback'
-                    : 'none',
+                    ? "shopify_hint_fallback"
+                    : "none",
             hasSource: false,
             hasMedium: false,
             hasCampaign: false,
-            hasClickId: false
+            hasClickId: false,
         };
     }
     const winnerMatchSource = input.winner.matchSource ?? input.winner.ingestionSource ?? null;
-    const fallbackUsed = winnerMatchSource === 'shopify_hint_fallback' || winnerMatchSource === 'ga4_fallback';
+    const fallbackUsed = winnerMatchSource === "shopify_hint_fallback" ||
+        winnerMatchSource === "ga4_fallback";
     return {
-        resolverOutcome: input.winner.isDirect ? 'direct_winner' : 'non_direct_winner',
+        resolverOutcome: input.winner.isDirect
+            ? "direct_winner"
+            : "non_direct_winner",
         touchpointCount: input.touchpoints.length,
         winningIngestionSource: input.winner.ingestionSource ?? null,
         winningSessionId: input.winner.sessionId ?? null,
@@ -225,26 +280,29 @@ export function summarizeResolverOutcome(input) {
         fallbackUsed,
         ga4SkippedDueToPrecedence: Boolean(input.deterministicWinnerExists || input.shopifyHintMatchExists),
         ga4SkippedReason: input.deterministicWinnerExists
-            ? 'deterministic_winner'
+            ? "deterministic_winner"
             : input.shopifyHintMatchExists
-                ? 'shopify_hint_fallback'
-                : 'none',
+                ? "shopify_hint_fallback"
+                : "none",
         hasSource: hasMeaningfulValue(input.winner.source),
         hasMedium: hasMeaningfulValue(input.winner.medium),
         hasCampaign: hasMeaningfulValue(input.winner.campaign),
-        hasClickId: hasMeaningfulValue(input.winner.clickIdValue)
+        hasClickId: hasMeaningfulValue(input.winner.clickIdValue),
     };
 }
 function computeLagHours(now, watermarkAfter) {
     if (!watermarkAfter) {
         return null;
     }
-    const latestCompleteHour = new Date(Math.floor(now.getTime() / (60 * 60 * 1000)) * (60 * 60 * 1000) - 60 * 60 * 1000);
+    const latestCompleteHour = new Date(Math.floor(now.getTime() / (60 * 60 * 1000)) * (60 * 60 * 1000) -
+        60 * 60 * 1000);
     const watermarkDate = new Date(watermarkAfter);
-    if (Number.isNaN(latestCompleteHour.getTime()) || Number.isNaN(watermarkDate.getTime())) {
+    if (Number.isNaN(latestCompleteHour.getTime()) ||
+        Number.isNaN(watermarkDate.getTime())) {
         return null;
     }
-    return Math.max(0, Math.round((latestCompleteHour.getTime() - watermarkDate.getTime()) / (60 * 60 * 1000)));
+    return Math.max(0, Math.round((latestCompleteHour.getTime() - watermarkDate.getTime()) /
+        (60 * 60 * 1000)));
 }
 export function summarizeGa4IngestionResult(input) {
     const rows = input.rows ?? [];
@@ -266,7 +324,9 @@ export function summarizeGa4IngestionResult(input) {
         upsertedRows: input.upsertedRows,
         lagHours,
         lagAlertThresholdHours,
-        lagStatus: lagHours !== null && lagHours >= lagAlertThresholdHours ? 'lagging' : 'healthy',
+        lagStatus: lagHours !== null && lagHours >= lagAlertThresholdHours
+            ? "lagging"
+            : "healthy",
         sourcePresentRows,
         mediumPresentRows,
         campaignPresentRows,
@@ -274,7 +334,7 @@ export function summarizeGa4IngestionResult(input) {
         sourceFillRate: rowCount > 0 ? sourcePresentRows / rowCount : 0,
         mediumFillRate: rowCount > 0 ? mediumPresentRows / rowCount : 0,
         campaignFillRate: rowCount > 0 ? campaignPresentRows / rowCount : 0,
-        clickIdFillRate: rowCount > 0 ? clickIdPresentRows / rowCount : 0
+        clickIdFillRate: rowCount > 0 ? clickIdPresentRows / rowCount : 0,
     };
 }
 export const __observabilityTestUtils = {
@@ -285,5 +345,5 @@ export const __observabilityTestUtils = {
     summarizeOrderAttributionBackfillReport,
     summarizeAttributionObservation,
     summarizeDualWriteConsistency,
-    summarizeResolverOutcome
+    summarizeResolverOutcome,
 };

@@ -1,10 +1,10 @@
 export const ATTRIBUTION_MODELS = [
-    'first_touch',
-    'last_touch',
-    'linear',
-    'time_decay',
-    'position_based',
-    'rule_based_weighted'
+    "first_touch",
+    "last_touch",
+    "linear",
+    "time_decay",
+    "position_based",
+    "rule_based_weighted",
 ];
 const DEFAULT_TIME_DECAY_HALF_LIFE_DAYS = 7;
 const DEFAULT_POSITION_BASED_FIRST_WEIGHT = 0.4;
@@ -14,16 +14,16 @@ const DEFAULT_RULE_BASED_WEIGHTS = {
     middleTouchWeight: 0.2,
     lastTouchWeight: 0.5,
     clickIdBonusMultiplier: 1.25,
-    directDiscountMultiplier: 0.5
+    directDiscountMultiplier: 0.5,
 };
 function toPositiveNumber(value, fallback) {
-    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
         return fallback;
     }
     return value;
 }
 function revenueToCents(value) {
-    const numericValue = typeof value === 'number' ? value : Number.parseFloat(value);
+    const numericValue = typeof value === "number" ? value : Number.parseFloat(value);
     if (!Number.isFinite(numericValue) || numericValue < 0) {
         throw new Error(`orderRevenue must be a finite non-negative number, received ${String(value)}`);
     }
@@ -33,10 +33,12 @@ function centsToRevenue(cents) {
     return (cents / 100).toFixed(2);
 }
 function normalizeWeights(rawWeights) {
-    const positiveWeights = rawWeights.map((value) => (Number.isFinite(value) && value > 0 ? value : 0));
+    const positiveWeights = rawWeights.map((value) => Number.isFinite(value) && value > 0 ? value : 0);
     const totalWeight = positiveWeights.reduce((sum, value) => sum + value, 0);
     if (totalWeight <= 0) {
-        return positiveWeights.length === 0 ? [] : positiveWeights.map(() => 1 / positiveWeights.length);
+        return positiveWeights.length === 0
+            ? []
+            : positiveWeights.map(() => 1 / positiveWeights.length);
     }
     return positiveWeights.map((value) => value / totalWeight);
 }
@@ -50,7 +52,7 @@ function allocateRevenueAcrossWeights(totalCents, normalizedWeights) {
         return {
             index,
             wholeCents,
-            remainder: exactCents - wholeCents
+            remainder: exactCents - wholeCents,
         };
     });
     let distributedCents = provisional.reduce((sum, entry) => sum + entry.wholeCents, 0);
@@ -69,7 +71,7 @@ function allocateRevenueAcrossWeights(totalCents, normalizedWeights) {
         distributedCents += 1;
     }
     if (distributedCents !== totalCents) {
-        throw new Error('Revenue allocation failed to conserve cents');
+        throw new Error("Revenue allocation failed to conserve cents");
     }
     return provisional.map((entry) => entry.wholeCents);
 }
@@ -93,11 +95,11 @@ function buildCredits(attributionModel, touchpoints, normalizedWeights, totalRev
         attributionReason: touchpoint.attributionReason,
         creditWeight: normalizedWeights[index] ?? 0,
         revenueCredit: centsToRevenue(creditedCents[index] ?? 0),
-        isPrimary: index === primaryTouchpointIndex
+        isPrimary: index === primaryTouchpointIndex,
     }));
 }
 export function computeSingleWinnerCredits(attributionModel, touchpoints, winnerIndex, totalRevenue) {
-    const winnerWeights = touchpoints.map((_touchpoint, index) => (index === winnerIndex ? 1 : 0));
+    const winnerWeights = touchpoints.map((_touchpoint, index) => index === winnerIndex ? 1 : 0);
     return buildCredits(attributionModel, touchpoints, normalizeWeights(winnerWeights), totalRevenue);
 }
 function firstTouchWeights(touchpoints) {
@@ -111,7 +113,11 @@ function linearWeights(touchpoints) {
     return touchpoints.map(() => 1);
 }
 function timeDecayWeights(touchpoints, orderOccurredAt, halfLifeDays) {
-    const halfLifeMs = toPositiveNumber(halfLifeDays, DEFAULT_TIME_DECAY_HALF_LIFE_DAYS) * 24 * 60 * 60 * 1000;
+    const halfLifeMs = toPositiveNumber(halfLifeDays, DEFAULT_TIME_DECAY_HALF_LIFE_DAYS) *
+        24 *
+        60 *
+        60 *
+        1000;
     return touchpoints.map((touchpoint) => {
         const deltaMs = Math.max(orderOccurredAt.getTime() - touchpoint.occurredAt.getTime(), 0);
         return 0.5 ** (deltaMs / halfLifeMs);
@@ -141,7 +147,7 @@ function positionBasedWeights(touchpoints, firstWeight, lastWeight) {
 function ruleBasedWeights(touchpoints, config) {
     const mergedConfig = {
         ...DEFAULT_RULE_BASED_WEIGHTS,
-        ...config
+        ...config,
     };
     const lastIndex = Math.max(touchpoints.length - 1, 0);
     return touchpoints.map((touchpoint, index) => {
@@ -184,13 +190,15 @@ export function buildUnattributedTouchpoint(orderOccurredAt) {
         term: null,
         clickIdType: null,
         clickIdValue: null,
-        attributionReason: 'unattributed',
+        attributionReason: "unattributed",
         isDirect: true,
-        isForced: true
+        isForced: true,
     };
 }
 export function computeAttributionOutputs(rawTouchpoints, options) {
-    const touchpoints = rawTouchpoints.length > 0 ? rawTouchpoints : [buildUnattributedTouchpoint(options.orderOccurredAt)];
+    const touchpoints = rawTouchpoints.length > 0
+        ? rawTouchpoints
+        : [buildUnattributedTouchpoint(options.orderOccurredAt)];
     const positionFirstWeight = toPositiveNumber(options.positionBasedFirstWeight, DEFAULT_POSITION_BASED_FIRST_WEIGHT);
     const positionLastWeight = toPositiveNumber(options.positionBasedLastWeight, DEFAULT_POSITION_BASED_LAST_WEIGHT);
     const modelWeights = {
@@ -199,7 +207,7 @@ export function computeAttributionOutputs(rawTouchpoints, options) {
         linear: normalizeWeights(linearWeights(touchpoints)),
         time_decay: normalizeWeights(timeDecayWeights(touchpoints, options.orderOccurredAt, toPositiveNumber(options.timeDecayHalfLifeDays, DEFAULT_TIME_DECAY_HALF_LIFE_DAYS))),
         position_based: normalizeWeights(positionBasedWeights(touchpoints, positionFirstWeight, positionLastWeight)),
-        rule_based_weighted: normalizeWeights(ruleBasedWeights(touchpoints, options.ruleBasedWeightConfig))
+        rule_based_weighted: normalizeWeights(ruleBasedWeights(touchpoints, options.ruleBasedWeightConfig)),
     };
     return ATTRIBUTION_MODELS.reduce((outputs, attributionModel) => {
         outputs[attributionModel] = buildCredits(attributionModel, touchpoints, modelWeights[attributionModel], options.orderRevenue);

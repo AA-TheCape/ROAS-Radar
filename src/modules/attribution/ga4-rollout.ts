@@ -1,5 +1,3 @@
-// @ts-nocheck
-
 import type { PoolClient, QueryResult, QueryResultRow } from "pg";
 
 import type {
@@ -27,14 +25,25 @@ type ShadowReportFilters = {
 	endDate: string;
 };
 
-type QueryExecutor =
-	| PoolClient
-	| {
-			query: <T extends QueryResultRow = QueryResultRow>(
-				text: string,
-				params?: unknown[],
-			) => Promise<QueryResult<T>>;
-	  };
+type QueryExecutor = Pick<PoolClient, "query"> | {
+	query: <T extends QueryResultRow = QueryResultRow>(
+		text: string,
+		params?: unknown[],
+	) => Promise<QueryResult<T>>;
+};
+
+function executeQuery<TResult extends QueryResultRow>(
+	client: QueryExecutor,
+	text: string,
+	params?: unknown[],
+): Promise<QueryResult<TResult>> {
+	return (
+		client.query as (
+			queryText: string,
+			values?: unknown[],
+		) => Promise<QueryResult<TResult>>
+	)(text, params);
+}
 
 export type Ga4FallbackShadowReport = {
 	range: ShadowReportFilters;
@@ -255,7 +264,8 @@ export async function fetchGa4FallbackShadowReport(
 	client: QueryExecutor,
 	filters: ShadowReportFilters,
 ): Promise<Ga4FallbackShadowReport> {
-	const result = await client.query<ShadowReportRow>(
+	const result = await executeQuery<ShadowReportRow>(
+		client,
 		`
       SELECT
         COUNT(*)::text AS evaluated_orders,

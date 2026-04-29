@@ -1,54 +1,55 @@
-import { Router } from 'express';
-import { z } from 'zod';
-import { query } from '../../db/pool.js';
-import { isSha256Hex } from '../../shared/privacy.js';
-import { attachAuthContext, requireInternalService } from '../auth/index.js';
+import { Router } from "express";
+import { z } from "zod";
+import { query } from "../../db/pool.js";
+import { isSha256Hex } from "../../shared/privacy.js";
+import { attachAuthContext, requireInternalService } from "../auth/index.js";
 class IdentityReadHttpError extends Error {
     statusCode;
     code;
     details;
     constructor(statusCode, code, message, details) {
         super(message);
-        this.name = 'IdentityReadHttpError';
+        this.name = "IdentityReadHttpError";
         this.statusCode = statusCode;
         this.code = code;
         this.details = details;
     }
 }
 const identityNodeTypes = [
-    'session_id',
-    'checkout_token',
-    'cart_token',
-    'shopify_customer_id',
-    'hashed_email',
-    'phone_hash'
+    "session_id",
+    "checkout_token",
+    "cart_token",
+    "shopify_customer_id",
+    "hashed_email",
+    "phone_hash",
 ];
 const lookupQuerySchema = z
     .object({
     nodeType: z.enum(identityNodeTypes),
-    nodeKey: z.string().trim().min(1)
+    nodeKey: z.string().trim().min(1),
 })
     .superRefine((value, ctx) => {
-    if ((value.nodeType === 'hashed_email' || value.nodeType === 'phone_hash') && !isSha256Hex(value.nodeKey)) {
+    if ((value.nodeType === "hashed_email" || value.nodeType === "phone_hash") &&
+        !isSha256Hex(value.nodeKey)) {
         ctx.addIssue({
             code: z.ZodIssueCode.custom,
-            path: ['nodeKey'],
-            message: `${value.nodeType} lookups require a sha256 hex digest`
+            path: ["nodeKey"],
+            message: `${value.nodeType} lookups require a sha256 hex digest`,
         });
     }
-    if (value.nodeType === 'session_id') {
+    if (value.nodeType === "session_id") {
         const parsed = z.string().uuid().safeParse(value.nodeKey);
         if (!parsed.success) {
             ctx.addIssue({
                 code: z.ZodIssueCode.custom,
-                path: ['nodeKey'],
-                message: 'session_id lookups require a valid UUID'
+                path: ["nodeKey"],
+                message: "session_id lookups require a valid UUID",
             });
         }
     }
 });
 const journeyParamsSchema = z.object({
-    journeyId: z.string().uuid()
+    journeyId: z.string().uuid(),
 });
 function parseInput(schema, input) {
     try {
@@ -56,7 +57,7 @@ function parseInput(schema, input) {
     }
     catch (error) {
         if (error instanceof z.ZodError) {
-            throw new IdentityReadHttpError(400, 'invalid_request', 'Invalid identity lookup request', error.flatten());
+            throw new IdentityReadHttpError(400, "invalid_request", "Invalid identity lookup request", error.flatten());
         }
         throw error;
     }
@@ -71,18 +72,18 @@ function mapJourneySummary(row) {
         authoritativeShopifyCustomerId: row.authoritative_shopify_customer_id,
         primaryIdentifiers: {
             hashedEmail: row.primary_email_hash,
-            phoneHash: row.primary_phone_hash
+            phoneHash: row.primary_phone_hash,
         },
         mergeVersion: row.merge_version,
         mergedIntoJourneyId: row.merged_into_journey_id,
         lookbackWindow: {
             startedAt: row.lookback_window_started_at.toISOString(),
             expiresAt: row.lookback_window_expires_at.toISOString(),
-            lastTouchEligibleAt: row.last_touch_eligible_at.toISOString()
+            lastTouchEligibleAt: row.last_touch_eligible_at.toISOString(),
         },
         createdAt: row.created_at.toISOString(),
         updatedAt: row.updated_at.toISOString(),
-        lastResolvedAt: row.last_resolved_at.toISOString()
+        lastResolvedAt: row.last_resolved_at.toISOString(),
     };
 }
 function mapEdgeRow(row) {
@@ -103,7 +104,7 @@ function mapEdgeRow(row) {
         firstObservedAt: row.first_observed_at.toISOString(),
         lastObservedAt: row.last_observed_at.toISOString(),
         createdAt: row.edge_created_at.toISOString(),
-        updatedAt: row.edge_updated_at.toISOString()
+        updatedAt: row.edge_updated_at.toISOString(),
     };
 }
 function mapSessionRow(row) {
@@ -120,12 +121,12 @@ function mapSessionRow(row) {
             addToCartCount: row.add_to_cart_count,
             checkoutStartedCount: row.checkout_started_count,
             orderCount: row.session_order_count,
-            orderRevenue: Number(row.session_order_revenue)
+            orderRevenue: Number(row.session_order_revenue),
         },
         flags: {
             isFirstSession: row.is_first_session,
             isLastSession: row.is_last_session,
-            isConvertingSession: row.is_converting_session
+            isConvertingSession: row.is_converting_session,
         },
         acquisition: {
             anonymousUserId: row.anonymous_user_id,
@@ -141,8 +142,8 @@ function mapSessionRow(row) {
             wbraid: row.wbraid,
             fbclid: row.fbclid,
             ttclid: row.ttclid,
-            msclkid: row.msclkid
-        }
+            msclkid: row.msclkid,
+        },
     };
 }
 function mapOrderRow(row) {
@@ -162,7 +163,7 @@ function mapOrderRow(row) {
         checkoutToken: row.checkout_token,
         cartToken: row.cart_token,
         sourceName: row.source_name,
-        ingestedAt: row.ingested_at.toISOString()
+        ingestedAt: row.ingested_at.toISOString(),
     };
 }
 async function fetchJourneySummaryById(journeyId) {
@@ -309,12 +310,12 @@ async function fetchJourneyOrders(journeyId) {
 async function buildJourneyResponse(journeyId) {
     const journey = await fetchJourneySummaryById(journeyId);
     if (!journey) {
-        throw new IdentityReadHttpError(404, 'journey_not_found', 'Identity journey was not found');
+        throw new IdentityReadHttpError(404, "journey_not_found", "Identity journey was not found");
     }
     const [edges, sessions, orders] = await Promise.all([
         fetchJourneyEdges(journeyId),
         fetchJourneySessions(journeyId),
-        fetchJourneyOrders(journeyId)
+        fetchJourneyOrders(journeyId),
     ]);
     return {
         journey: mapJourneySummary(journey),
@@ -322,39 +323,39 @@ async function buildJourneyResponse(journeyId) {
             total: edges.length,
             activeCount: edges.filter((edge) => edge.is_active).length,
             ambiguousCount: edges.filter((edge) => edge.is_ambiguous).length,
-            nodes: edges.map(mapEdgeRow)
+            nodes: edges.map(mapEdgeRow),
         },
         timeline: {
             sessions: sessions.map(mapSessionRow),
-            orders: orders.map(mapOrderRow)
-        }
+            orders: orders.map(mapOrderRow),
+        },
     };
 }
 export function createInternalIdentityRouter() {
     const router = Router();
     router.use(attachAuthContext);
     router.use(requireInternalService);
-    router.get('/lookup', async (req, res, next) => {
+    router.get("/lookup", async (req, res, next) => {
         try {
             const { nodeType, nodeKey } = parseInput(lookupQuerySchema, req.query);
             const journey = await fetchJourneySummaryByLookup(nodeType, nodeKey);
             if (!journey) {
-                throw new IdentityReadHttpError(404, 'identity_lookup_not_found', 'No active identity journey matched the supplied identifier');
+                throw new IdentityReadHttpError(404, "identity_lookup_not_found", "No active identity journey matched the supplied identifier");
             }
             const response = await buildJourneyResponse(journey.id);
             res.status(200).json({
                 lookup: {
                     nodeType,
-                    nodeKey
+                    nodeKey,
                 },
-                ...response
+                ...response,
             });
         }
         catch (error) {
             next(error);
         }
     });
-    router.get('/journeys/:journeyId', async (req, res, next) => {
+    router.get("/journeys/:journeyId", async (req, res, next) => {
         try {
             const { journeyId } = parseInput(journeyParamsSchema, req.params);
             const response = await buildJourneyResponse(journeyId);

@@ -1,14 +1,14 @@
-import { Router } from 'express';
-import { z } from 'zod';
-import { query } from '../../db/pool.js';
-import { attachAuthContext, requireAdmin } from '../auth/index.js';
+import { Router } from "express";
+import { z } from "zod";
+import { query } from "../../db/pool.js";
+import { attachAuthContext, requireAdmin } from "../auth/index.js";
 class IdentityAdminHttpError extends Error {
     statusCode;
     code;
     details;
     constructor(statusCode, code, message, details) {
         super(message);
-        this.name = 'IdentityAdminHttpError';
+        this.name = "IdentityAdminHttpError";
         this.statusCode = statusCode;
         this.code = code;
         this.details = details;
@@ -18,22 +18,22 @@ const dateStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const baseHealthQueryObjectSchema = z.object({
     startDate: dateStringSchema,
     endDate: dateStringSchema,
-    source: z.string().trim().min(1).optional()
+    source: z.string().trim().min(1).optional(),
 });
 function withValidDateRange(schema) {
     return schema.superRefine((value, ctx) => {
         if (value.startDate > value.endDate) {
             ctx.addIssue({
                 code: z.ZodIssueCode.custom,
-                message: 'startDate must be on or before endDate',
-                path: ['startDate']
+                message: "startDate must be on or before endDate",
+                path: ["startDate"],
             });
         }
     });
 }
 const baseHealthQuerySchema = withValidDateRange(baseHealthQueryObjectSchema);
 const conflictsQuerySchema = withValidDateRange(baseHealthQueryObjectSchema.extend({
-    limit: z.coerce.number().int().positive().max(100).optional().default(25)
+    limit: z.coerce.number().int().positive().max(100).optional().default(25),
 }));
 function parseInput(schema, input) {
     try {
@@ -41,7 +41,7 @@ function parseInput(schema, input) {
     }
     catch (error) {
         if (error instanceof z.ZodError) {
-            throw new IdentityAdminHttpError(400, 'invalid_request', 'Invalid identity health query parameters', error.flatten());
+            throw new IdentityAdminHttpError(400, "invalid_request", "Invalid identity health query parameters", error.flatten());
         }
         throw error;
     }
@@ -51,8 +51,10 @@ async function fetchIdentityHealthOverview(input) {
         ? `
       AND (runs.evidence_source = $3 OR runs.source_table = $3)
     `
-        : '';
-    const params = input.source ? [input.startDate, input.endDate, input.source] : [input.startDate, input.endDate];
+        : "";
+    const params = input.source
+        ? [input.startDate, input.endDate, input.source]
+        : [input.startDate, input.endDate];
     const summaryResult = await query(`
       SELECT
         COUNT(*)::bigint AS total_ingestions,
@@ -93,7 +95,7 @@ async function fetchIdentityHealthOverview(input) {
         ? `
       AND (sessions.initial_utm_source = $3 OR $3 = 'tracking_sessions')
     `
-        : '';
+        : "";
     const unlinkedSessionsResult = await query(`
       SELECT
         COUNT(*) FILTER (WHERE sessions.identity_journey_id IS NULL)::bigint AS unlinked_sessions,
@@ -114,7 +116,7 @@ async function fetchIdentityHealthOverview(input) {
         )
       )
     `
-        : '';
+        : "";
     const backfillStatusResult = await query(`
       SELECT
         COUNT(*) FILTER (WHERE runs.status = 'processing')::bigint AS active_runs,
@@ -152,25 +154,27 @@ async function fetchIdentityHealthOverview(input) {
         merge_runs: 0,
         rehomed_nodes: 0,
         quarantined_nodes: 0,
-        unresolved_conflicts: 0
+        unresolved_conflicts: 0,
     };
     const unlinkedSessions = unlinkedSessionsResult.rows[0] ?? {
         unlinked_sessions: 0,
-        linked_sessions: 0
+        linked_sessions: 0,
     };
     const backfillStatus = backfillStatusResult.rows[0] ?? {
         active_runs: 0,
         failed_runs: 0,
-        completed_runs: 0
+        completed_runs: 0,
     };
     const latestBackfill = latestBackfillResult.rows[0] ?? null;
-    const latestBackfillOptions = latestBackfill && typeof latestBackfill.options === 'object' && latestBackfill.options !== null
+    const latestBackfillOptions = latestBackfill &&
+        typeof latestBackfill.options === "object" &&
+        latestBackfill.options !== null
         ? latestBackfill.options
         : null;
     return {
         range: {
             startDate: input.startDate,
-            endDate: input.endDate
+            endDate: input.endDate,
         },
         source: input.source ?? null,
         summary: {
@@ -183,7 +187,7 @@ async function fetchIdentityHealthOverview(input) {
             quarantinedNodes: Number(summary.quarantined_nodes),
             unresolvedConflicts: Number(summary.unresolved_conflicts),
             unlinkedSessions: Number(unlinkedSessions.unlinked_sessions),
-            linkedSessions: Number(unlinkedSessions.linked_sessions)
+            linkedSessions: Number(unlinkedSessions.linked_sessions),
         },
         series: seriesResult.rows.map((row) => ({
             date: row.bucket_date,
@@ -192,7 +196,7 @@ async function fetchIdentityHealthOverview(input) {
             conflicts: Number(row.conflict_count),
             mergeRuns: Number(row.merge_runs),
             rehomedNodes: Number(row.rehomed_nodes),
-            quarantinedNodes: Number(row.quarantined_nodes)
+            quarantinedNodes: Number(row.quarantined_nodes),
         })),
         backfill: {
             activeRuns: Number(backfillStatus.active_runs),
@@ -203,18 +207,18 @@ async function fetchIdentityHealthOverview(input) {
                     runId: latestBackfill.id,
                     status: latestBackfill.status,
                     requestedBy: latestBackfill.requested_by,
-                    workerId: latestBackfill.worker_id ?? 'identity-graph-backfill',
+                    workerId: latestBackfill.worker_id ?? "identity-graph-backfill",
                     sources: Array.isArray(latestBackfillOptions?.sources)
-                        ? latestBackfillOptions.sources.filter((value) => typeof value === 'string')
+                        ? latestBackfillOptions.sources.filter((value) => typeof value === "string")
                         : [],
                     startedAt: latestBackfill.started_at.toISOString(),
                     completedAt: latestBackfill.completed_at?.toISOString() ?? null,
                     updatedAt: latestBackfill.updated_at.toISOString(),
                     errorCode: latestBackfill.error_code,
-                    errorMessage: latestBackfill.error_message
+                    errorMessage: latestBackfill.error_message,
                 }
-                : null
-        }
+                : null,
+        },
     };
 }
 async function fetchIdentityConflictDetails(input) {
@@ -222,11 +226,11 @@ async function fetchIdentityConflictDetails(input) {
         ? `
       AND (edge.evidence_source = $3 OR edge.source_table = $3)
     `
-        : '';
+        : "";
     const params = input.source
         ? [input.startDate, input.endDate, input.source, input.limit]
         : [input.startDate, input.endDate, input.limit];
-    const limitPlaceholder = input.source ? '$4' : '$3';
+    const limitPlaceholder = input.source ? "$4" : "$3";
     const result = await query(`
       SELECT
         edge.id::text AS edge_id,
@@ -257,7 +261,7 @@ async function fetchIdentityConflictDetails(input) {
     return {
         range: {
             startDate: input.startDate,
-            endDate: input.endDate
+            endDate: input.endDate,
         },
         source: input.source ?? null,
         conflicts: result.rows.map((row) => ({
@@ -273,15 +277,15 @@ async function fetchIdentityConflictDetails(input) {
             conflictCode: row.conflict_code,
             firstObservedAt: row.first_observed_at.toISOString(),
             lastObservedAt: row.last_observed_at.toISOString(),
-            updatedAt: row.updated_at.toISOString()
-        }))
+            updatedAt: row.updated_at.toISOString(),
+        })),
     };
 }
 export function createIdentityAdminRouter() {
     const router = Router();
     router.use(attachAuthContext);
     router.use(requireAdmin);
-    router.get('/health', async (req, res, next) => {
+    router.get("/health", async (req, res, next) => {
         try {
             const input = parseInput(baseHealthQuerySchema, req.query);
             const response = await fetchIdentityHealthOverview(input);
@@ -291,7 +295,7 @@ export function createIdentityAdminRouter() {
             next(error);
         }
     });
-    router.get('/health/conflicts', async (req, res, next) => {
+    router.get("/health/conflicts", async (req, res, next) => {
         try {
             const input = parseInput(conflictsQuerySchema, req.query);
             const response = await fetchIdentityConflictDetails(input);

@@ -1,92 +1,99 @@
-const CLICK_ID_TYPES = ['gclid', 'gbraid', 'wbraid', 'fbclid', 'ttclid', 'msclkid'];
+const CLICK_ID_TYPES = [
+    "gclid",
+    "gbraid",
+    "wbraid",
+    "fbclid",
+    "ttclid",
+    "msclkid",
+];
 const SOURCE_ALIASES = {
-    google: 'google',
-    google_ads: 'google',
-    googleadwords: 'google',
-    google_adwords: 'google',
-    adwords: 'google',
-    youtube: 'google',
-    bing: 'microsoft',
-    microsoft: 'microsoft',
-    microsoft_ads: 'microsoft',
-    msn: 'microsoft',
-    facebook: 'meta',
-    fb: 'meta',
-    instagram: 'meta',
-    ig: 'meta',
-    meta: 'meta',
-    meta_ads: 'meta',
-    tiktok: 'tiktok',
-    tik_tok: 'tiktok',
-    tt: 'tiktok',
-    email: 'email',
-    e_mail: 'email',
-    newsletter: 'email',
-    klaviyo: 'email',
-    mailchimp: 'email',
-    direct: 'direct',
-    '(direct)': 'direct',
-    referral: 'referral',
-    organic: 'organic',
-    organic_search: 'organic',
-    seo: 'organic',
-    shopify: 'shopify'
+    google: "google",
+    google_ads: "google",
+    googleadwords: "google",
+    google_adwords: "google",
+    adwords: "google",
+    youtube: "google",
+    bing: "microsoft",
+    microsoft: "microsoft",
+    microsoft_ads: "microsoft",
+    msn: "microsoft",
+    facebook: "meta",
+    fb: "meta",
+    instagram: "meta",
+    ig: "meta",
+    meta: "meta",
+    meta_ads: "meta",
+    tiktok: "tiktok",
+    tik_tok: "tiktok",
+    tt: "tiktok",
+    email: "email",
+    e_mail: "email",
+    newsletter: "email",
+    klaviyo: "email",
+    mailchimp: "email",
+    direct: "direct",
+    "(direct)": "direct",
+    referral: "referral",
+    organic: "organic",
+    organic_search: "organic",
+    seo: "organic",
+    shopify: "shopify",
 };
 const MEDIUM_ALIASES = {
-    cpc: 'cpc',
-    ppc: 'cpc',
-    sem: 'cpc',
-    paidsearch: 'cpc',
-    paid_search: 'cpc',
-    paidsocial: 'paid_social',
-    paid_social: 'paid_social',
-    social_paid: 'paid_social',
-    social: 'paid_social',
-    email: 'email',
-    e_mail: 'email',
-    newsletter: 'email',
-    organic: 'organic_search',
-    organic_search: 'organic_search',
-    seo: 'organic_search',
-    referral: 'referral',
-    affiliate: 'affiliate',
-    display: 'display',
-    banner: 'display',
-    programmatic: 'display',
-    sms: 'sms',
-    text: 'sms',
-    direct: 'direct',
-    none: 'direct',
-    '(none)': 'direct'
+    cpc: "cpc",
+    ppc: "cpc",
+    sem: "cpc",
+    paidsearch: "cpc",
+    paid_search: "cpc",
+    paidsocial: "paid_social",
+    paid_social: "paid_social",
+    social_paid: "paid_social",
+    social: "paid_social",
+    email: "email",
+    e_mail: "email",
+    newsletter: "email",
+    organic: "organic_search",
+    organic_search: "organic_search",
+    seo: "organic_search",
+    referral: "referral",
+    affiliate: "affiliate",
+    display: "display",
+    banner: "display",
+    programmatic: "display",
+    sms: "sms",
+    text: "sms",
+    direct: "direct",
+    none: "direct",
+    "(none)": "direct",
 };
 const CLICK_ID_SOURCE_MEDIUM_MAP = {
     gclid: {
-        source: 'google',
-        medium: 'cpc'
+        source: "google",
+        medium: "cpc",
     },
     gbraid: {
-        source: 'google',
-        medium: 'cpc'
+        source: "google",
+        medium: "cpc",
     },
     wbraid: {
-        source: 'google',
-        medium: 'cpc'
+        source: "google",
+        medium: "cpc",
     },
     fbclid: {
-        source: 'meta',
-        medium: 'paid_social'
+        source: "meta",
+        medium: "paid_social",
     },
     ttclid: {
-        source: 'tiktok',
-        medium: 'paid_social'
+        source: "tiktok",
+        medium: "paid_social",
     },
     msclkid: {
-        source: 'microsoft',
-        medium: 'cpc'
-    }
+        source: "microsoft",
+        medium: "cpc",
+    },
 };
-export const CANONICAL_UNKNOWN_VALUE = 'unknown';
-export const CANONICAL_UNMAPPED_VALUE = 'unmapped';
+export const CANONICAL_UNKNOWN_VALUE = "unknown";
+export const CANONICAL_UNMAPPED_VALUE = "unmapped";
 function normalizeNullableString(value) {
     const trimmed = value?.trim();
     return trimmed ? trimmed : null;
@@ -96,10 +103,12 @@ function normalizeLookupKey(value) {
     if (!normalized) {
         return null;
     }
-    return normalized.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    return normalized.replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 }
 function normalizeFreeformDimension(value) {
-    const normalized = normalizeNullableString(value)?.toLowerCase().replace(/\s+/g, ' ');
+    const normalized = normalizeNullableString(value)
+        ?.toLowerCase()
+        .replace(/\s+/g, " ");
     return normalized && normalized.length > 0 ? normalized : null;
 }
 function normalizeClickIdType(value) {
@@ -115,54 +124,54 @@ function resolveCanonicalClickId(input) {
     if (explicitClickIdType && explicitClickIdValue) {
         return {
             clickIdType: explicitClickIdType,
-            clickIdValue: explicitClickIdValue
+            clickIdValue: explicitClickIdValue,
         };
     }
-    const gclid = 'gclid' in input ? normalizeNullableString(input.gclid) : null;
+    const gclid = "gclid" in input ? normalizeNullableString(input.gclid) : null;
     if (gclid) {
         return {
-            clickIdType: 'gclid',
-            clickIdValue: gclid
+            clickIdType: "gclid",
+            clickIdValue: gclid,
         };
     }
-    const gbraid = 'gbraid' in input ? normalizeNullableString(input.gbraid) : null;
+    const gbraid = "gbraid" in input ? normalizeNullableString(input.gbraid) : null;
     if (gbraid) {
         return {
-            clickIdType: 'gbraid',
-            clickIdValue: gbraid
+            clickIdType: "gbraid",
+            clickIdValue: gbraid,
         };
     }
-    const wbraid = 'wbraid' in input ? normalizeNullableString(input.wbraid) : null;
+    const wbraid = "wbraid" in input ? normalizeNullableString(input.wbraid) : null;
     if (wbraid) {
         return {
-            clickIdType: 'wbraid',
-            clickIdValue: wbraid
+            clickIdType: "wbraid",
+            clickIdValue: wbraid,
         };
     }
-    const fbclid = 'fbclid' in input ? normalizeNullableString(input.fbclid) : null;
+    const fbclid = "fbclid" in input ? normalizeNullableString(input.fbclid) : null;
     if (fbclid) {
         return {
-            clickIdType: 'fbclid',
-            clickIdValue: fbclid
+            clickIdType: "fbclid",
+            clickIdValue: fbclid,
         };
     }
-    const ttclid = 'ttclid' in input ? normalizeNullableString(input.ttclid) : null;
+    const ttclid = "ttclid" in input ? normalizeNullableString(input.ttclid) : null;
     if (ttclid) {
         return {
-            clickIdType: 'ttclid',
-            clickIdValue: ttclid
+            clickIdType: "ttclid",
+            clickIdValue: ttclid,
         };
     }
-    const msclkid = 'msclkid' in input ? normalizeNullableString(input.msclkid) : null;
+    const msclkid = "msclkid" in input ? normalizeNullableString(input.msclkid) : null;
     if (msclkid) {
         return {
-            clickIdType: 'msclkid',
-            clickIdValue: msclkid
+            clickIdType: "msclkid",
+            clickIdValue: msclkid,
         };
     }
     return {
         clickIdType: explicitClickIdType,
-        clickIdValue: explicitClickIdValue
+        clickIdValue: explicitClickIdValue,
     };
 }
 function canonicalizeSource(rawSource, clickIdType) {
@@ -194,7 +203,7 @@ export function buildCanonicalTouchpointDimensions(input) {
         content: normalizeFreeformDimension(input.content),
         term: normalizeFreeformDimension(input.term),
         clickIdType: resolvedClickId.clickIdType,
-        clickIdValue: resolvedClickId.clickIdValue
+        clickIdValue: resolvedClickId.clickIdValue,
     };
 }
 export function buildCanonicalSpendDimensions(input) {
@@ -204,6 +213,6 @@ export function buildCanonicalSpendDimensions(input) {
         medium: touchpointDimensions.medium ?? CANONICAL_UNKNOWN_VALUE,
         campaign: touchpointDimensions.campaign ?? CANONICAL_UNKNOWN_VALUE,
         content: touchpointDimensions.content ?? CANONICAL_UNKNOWN_VALUE,
-        term: touchpointDimensions.term ?? CANONICAL_UNKNOWN_VALUE
+        term: touchpointDimensions.term ?? CANONICAL_UNKNOWN_VALUE,
     };
 }

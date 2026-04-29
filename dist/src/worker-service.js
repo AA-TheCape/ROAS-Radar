@@ -1,13 +1,13 @@
-import { randomUUID } from 'node:crypto';
-import { createServer as createHttpServer } from 'node:http';
-import { setTimeout as delay } from 'node:timers/promises';
-import express from 'express';
-import { env } from './config/env.js';
-import { checkDatabaseHealth, pool } from './db/pool.js';
-import { processAttributionQueue } from './modules/attribution/index.js';
-import { processOrderAttributionBackfillRuns } from './modules/attribution/backfill-jobs.js';
-import { assertGa4BigQueryIngestionConfig } from './modules/attribution/ga4-bigquery-config.js';
-import { buildAttributionBacklogLog, logError, logInfo } from './observability/index.js';
+import { randomUUID } from "node:crypto";
+import { createServer as createHttpServer } from "node:http";
+import { setTimeout as delay } from "node:timers/promises";
+import express from "express";
+import { env } from "./config/env.js";
+import { checkDatabaseHealth, pool } from "./db/pool.js";
+import { processOrderAttributionBackfillRuns } from "./modules/attribution/backfill-jobs.js";
+import { assertGa4BigQueryIngestionConfig } from "./modules/attribution/ga4-bigquery-config.js";
+import { processAttributionQueue } from "./modules/attribution/index.js";
+import { buildAttributionBacklogLog, logError, logInfo, } from "./observability/index.js";
 async function emitAttributionBacklogSnapshot(workerId) {
     const result = await pool.query(`
       SELECT
@@ -34,7 +34,7 @@ async function emitAttributionBacklogSnapshot(workerId) {
         workerId,
         pendingJobs: Number(row.pending_jobs),
         oldestJobAgeSeconds: Math.trunc(Number(row.oldest_job_age_seconds)),
-        staleProcessingJobs: Number(row.stale_processing_jobs)
+        staleProcessingJobs: Number(row.stale_processing_jobs),
     })}\n`);
 }
 async function run() {
@@ -45,10 +45,10 @@ async function run() {
     let lastRunAt = null;
     let lastError = null;
     const app = express();
-    app.get('/healthz', (_req, res) => {
+    app.get("/healthz", (_req, res) => {
         res.status(200).json({ ok: true, running, lastRunAt, lastError });
     });
-    app.get('/readyz', async (_req, res) => {
+    app.get("/readyz", async (_req, res) => {
         try {
             const db = await checkDatabaseHealth();
             res.status(200).json({ ok: true, running, lastRunAt, db });
@@ -58,7 +58,7 @@ async function run() {
                 ok: false,
                 running,
                 lastRunAt,
-                lastError: error instanceof Error ? error.message : String(error)
+                lastError: error instanceof Error ? error.message : String(error),
             });
         }
     });
@@ -67,11 +67,11 @@ async function run() {
     const requestStop = () => {
         shuttingDown = true;
     };
-    process.on('SIGINT', requestStop);
-    process.on('SIGTERM', requestStop);
-    logInfo('attribution_worker_service_started', {
+    process.on("SIGINT", requestStop);
+    process.on("SIGTERM", requestStop);
+    logInfo("attribution_worker_service_started", {
         workerId,
-        service: process.env.K_SERVICE ?? 'roas-radar-attribution-worker'
+        service: process.env.K_SERVICE ?? "roas-radar-attribution-worker",
     });
     while (!shuttingDown) {
         running = true;
@@ -80,10 +80,10 @@ async function run() {
                 workerId,
                 limit: env.ATTRIBUTION_JOB_BATCH_SIZE,
                 staleScanLimit: env.ATTRIBUTION_STALE_SCAN_BATCH_SIZE,
-                emitMetrics: true
+                emitMetrics: true,
             });
             await processOrderAttributionBackfillRuns({
-                workerId
+                workerId,
             });
             await emitAttributionBacklogSnapshot(workerId);
             lastRunAt = new Date().toISOString();
@@ -92,9 +92,9 @@ async function run() {
         catch (error) {
             lastRunAt = new Date().toISOString();
             lastError = error instanceof Error ? error.message : String(error);
-            logError('attribution_worker_loop_failed', error, {
+            logError("attribution_worker_loop_failed", error, {
                 workerId,
-                service: process.env.K_SERVICE ?? 'roas-radar-attribution-worker'
+                service: process.env.K_SERVICE ?? "roas-radar-attribution-worker",
             });
         }
         finally {
@@ -109,8 +109,8 @@ async function run() {
     await pool.end();
 }
 run().catch(async (error) => {
-    logError('attribution_worker_service_crashed', error, {
-        service: process.env.K_SERVICE ?? 'roas-radar-attribution-worker'
+    logError("attribution_worker_service_crashed", error, {
+        service: process.env.K_SERVICE ?? "roas-radar-attribution-worker",
     });
     await pool.end().catch(() => undefined);
     process.exit(1);

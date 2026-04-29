@@ -1,17 +1,17 @@
-import { randomUUID } from 'node:crypto';
-import { logInfo, logWarning } from '../../observability/index.js';
-import { hashEmailAddress, hashPhoneNumber, normalizeEmailAddress, normalizePhoneNumber } from '../../shared/privacy.js';
-import { refreshCustomerJourneyForJourneys } from './customer-journey.js';
+import { randomUUID } from "node:crypto";
+import { logInfo, logWarning } from "../../observability/index.js";
+import { hashEmailAddress, hashPhoneNumber, normalizeEmailAddress, normalizePhoneNumber, } from "../../shared/privacy.js";
+import { refreshCustomerJourneyForJourneys } from "./customer-journey.js";
 const IDENTITY_PRECEDENCE = {
     shopify_customer_id: 100,
     hashed_email: 70,
     phone_hash: 60,
     checkout_token: 40,
     cart_token: 30,
-    session_id: 20
+    session_id: 20,
 };
-const ACTIVE_IDENTITY_STATUSES = new Set(['active', 'quarantined']);
-const AUTHORITATIVE_CONFLICT = 'authoritative_shopify_customer_conflict';
+const ACTIVE_IDENTITY_STATUSES = new Set(["active", "quarantined"]);
+const AUTHORITATIVE_CONFLICT = "authoritative_shopify_customer_conflict";
 const HISTORICAL_IDENTITY_LOOKBACK_DAYS = 30;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 export const normalizeIdentityEmail = normalizeEmailAddress;
@@ -23,101 +23,109 @@ export function resolveIdentityStitch(existingIdentities, input) {
     const emailHash = input.emailHash ?? hashIdentityEmail(input.email);
     if (!shopifyCustomerId && !emailHash) {
         return {
-            outcome: 'skipped',
-            reason: 'missing_identifiers',
-            emailHash
+            outcome: "skipped",
+            reason: "missing_identifiers",
+            emailHash,
         };
     }
     const identityByCustomerId = shopifyCustomerId
-        ? existingIdentities.find((identity) => identity.shopify_customer_id === shopifyCustomerId) ?? null
+        ? (existingIdentities.find((identity) => identity.shopify_customer_id === shopifyCustomerId) ?? null)
         : null;
     const identityByEmailHash = emailHash
-        ? existingIdentities.find((identity) => identity.hashed_email === emailHash) ?? null
+        ? (existingIdentities.find((identity) => identity.hashed_email === emailHash) ?? null)
         : null;
-    if (identityByCustomerId && emailHash && identityByCustomerId.hashed_email && identityByCustomerId.hashed_email !== emailHash) {
+    if (identityByCustomerId &&
+        emailHash &&
+        identityByCustomerId.hashed_email &&
+        identityByCustomerId.hashed_email !== emailHash) {
         return {
-            outcome: 'conflict',
-            reason: 'customer_id_conflicts_with_existing_email',
-            emailHash
+            outcome: "conflict",
+            reason: "customer_id_conflicts_with_existing_email",
+            emailHash,
         };
     }
-    if (identityByEmailHash && shopifyCustomerId && identityByEmailHash.shopify_customer_id && identityByEmailHash.shopify_customer_id !== shopifyCustomerId) {
+    if (identityByEmailHash &&
+        shopifyCustomerId &&
+        identityByEmailHash.shopify_customer_id &&
+        identityByEmailHash.shopify_customer_id !== shopifyCustomerId) {
         return {
-            outcome: 'conflict',
-            reason: 'email_hash_conflicts_with_existing_customer_id',
-            emailHash
+            outcome: "conflict",
+            reason: "email_hash_conflicts_with_existing_customer_id",
+            emailHash,
         };
     }
-    if (identityByCustomerId && identityByEmailHash && identityByCustomerId.id !== identityByEmailHash.id) {
+    if (identityByCustomerId &&
+        identityByEmailHash &&
+        identityByCustomerId.id !== identityByEmailHash.id) {
         return {
-            outcome: 'conflict',
-            reason: 'identifiers_resolve_to_different_identities',
-            emailHash
+            outcome: "conflict",
+            reason: "identifiers_resolve_to_different_identities",
+            emailHash,
         };
     }
     const reusedIdentity = identityByCustomerId ?? identityByEmailHash;
     if (reusedIdentity) {
         return {
-            outcome: 'linked',
+            outcome: "linked",
             identityId: reusedIdentity.id,
             emailHash,
             shopifyCustomerId,
-            operation: 'reuse'
+            operation: "reuse",
         };
     }
     return {
-        outcome: 'linked',
+        outcome: "linked",
         identityId: null,
         emailHash,
         shopifyCustomerId,
-        operation: 'create'
+        operation: "create",
     };
 }
 export function buildIdentityEdgeIngestionMetricsLog(result) {
     return JSON.stringify({
-        severity: 'INFO',
-        event: 'identity_edge_ingestion_processed',
-        message: 'identity_edge_ingestion_processed',
+        severity: "INFO",
+        event: "identity_edge_ingestion_processed",
+        message: "identity_edge_ingestion_processed",
         timestamp: new Date().toISOString(),
-        service: process.env.K_SERVICE ?? 'roas-radar-api',
-        ...result
+        service: process.env.K_SERVICE ?? "roas-radar-api",
+        ...result,
     });
 }
 export async function stitchKnownCustomerIdentity(client, input) {
     const emailHash = input.email ? hashIdentityEmail(input.email) : null;
     const graphResult = await ingestIdentityEdges(client, {
         sourceTimestamp: input.sourceTimestamp ?? new Date(),
-        evidenceSource: input.evidenceSource ?? 'shopify_order_webhook',
-        sourceTable: input.sourceTable ?? 'shopify_orders',
+        evidenceSource: input.evidenceSource ?? "shopify_order_webhook",
+        sourceTable: input.sourceTable ?? "shopify_orders",
         sourceRecordId: input.sourceRecordId ?? input.shopifyOrderId,
         idempotencyKey: input.idempotencyKey ??
             [
-                'shopify_order_identity',
+                "shopify_order_identity",
                 input.shopifyOrderId,
-                normalizeNullableString(input.shopifyCustomerId) ?? 'anonymous',
-                emailHash ?? 'no_email',
-                normalizeNullableString(input.checkoutToken) ?? 'no_checkout',
-                normalizeNullableString(input.cartToken) ?? 'no_cart',
-                normalizeSessionIdentifier(input.landingSessionId) ?? 'no_session',
-                input.phoneHash ?? 'no_phone'
-            ].join(':'),
+                normalizeNullableString(input.shopifyCustomerId) ?? "anonymous",
+                emailHash ?? "no_email",
+                normalizeNullableString(input.checkoutToken) ?? "no_checkout",
+                normalizeNullableString(input.cartToken) ?? "no_cart",
+                normalizeSessionIdentifier(input.landingSessionId) ?? "no_session",
+                input.phoneHash ?? "no_phone",
+            ].join(":"),
         sessionId: input.landingSessionId,
         checkoutToken: input.checkoutToken,
         cartToken: input.cartToken,
         shopifyCustomerId: input.shopifyCustomerId,
         email: input.email,
-        phoneHash: input.phoneHash ?? null
+        phoneHash: input.phoneHash ?? null,
     });
     return {
         outcome: graphResult.outcome,
-        reason: graphResult.reason === 'linked'
+        reason: graphResult.reason === "linked"
             ? graphResult.deduplicated
-                ? 'reuse_identity'
-                : 'create_identity'
+                ? "reuse_identity"
+                : "create_identity"
             : graphResult.reason,
         identityId: graphResult.journeyId,
         emailHash: graphResult.emailHash,
-        linkedSessionIds: graphResult.linkedSessionIds
+        linkedSessionIds: graphResult.linkedSessionIds,
     };
 }
 export async function ingestIdentityEdges(client, input) {
@@ -130,27 +138,28 @@ export async function ingestIdentityEdges(client, input) {
             rehomedNodes: 0,
             quarantinedNodes: 0,
             deduplicated: false,
-            outcome: 'skipped'
+            outcome: "skipped",
         };
         emitIdentityIngestionMetrics({
             sourceTable: input.sourceTable,
             evidenceSource: input.evidenceSource,
-            outcome: 'skipped',
+            outcome: "skipped",
             deduplicated: false,
             processedNodes: 0,
             attachedNodes: 0,
             rehomedNodes: 0,
             quarantinedNodes: 0,
-            journeyId: null
+            journeyId: null,
         });
         return {
-            outcome: 'skipped',
-            reason: 'missing_identifiers',
+            outcome: "skipped",
+            reason: "missing_identifiers",
             journeyId: null,
             deduplicated: false,
-            emailHash: normalizedNodes.find((node) => node.nodeType === 'hashed_email')?.nodeKey ?? null,
+            emailHash: normalizedNodes.find((node) => node.nodeType === "hashed_email")
+                ?.nodeKey ?? null,
             linkedSessionIds: [],
-            metrics
+            metrics,
         };
     }
     const registeredIngestion = await registerIdentityEdgeIngestion(client, {
@@ -158,7 +167,7 @@ export async function ingestIdentityEdges(client, input) {
         evidenceSource: input.evidenceSource,
         sourceTable: input.sourceTable,
         sourceRecordId: input.sourceRecordId,
-        sourceTimestamp
+        sourceTimestamp,
     });
     if (registeredIngestion.deduplicated) {
         const linkedSessionIds = registeredIngestion.existingJourneyId
@@ -170,7 +179,9 @@ export async function ingestIdentityEdges(client, input) {
             rehomedNodes: 0,
             quarantinedNodes: 0,
             deduplicated: true,
-            outcome: (registeredIngestion.existingOutcome === 'conflict' ? 'conflict' : 'linked')
+            outcome: (registeredIngestion.existingOutcome === "conflict"
+                ? "conflict"
+                : "linked"),
         };
         emitIdentityIngestionMetrics({
             sourceTable: input.sourceTable,
@@ -181,22 +192,29 @@ export async function ingestIdentityEdges(client, input) {
             attachedNodes: 0,
             rehomedNodes: 0,
             quarantinedNodes: 0,
-            journeyId: registeredIngestion.existingJourneyId
+            journeyId: registeredIngestion.existingJourneyId,
         });
         return {
             outcome: metrics.outcome,
-            reason: metrics.outcome === 'conflict' ? AUTHORITATIVE_CONFLICT : 'linked',
+            reason: metrics.outcome === "conflict" ? AUTHORITATIVE_CONFLICT : "linked",
             journeyId: registeredIngestion.existingJourneyId,
             deduplicated: true,
-            emailHash: normalizedNodes.find((node) => node.nodeType === 'hashed_email')?.nodeKey ?? null,
+            emailHash: normalizedNodes.find((node) => node.nodeType === "hashed_email")
+                ?.nodeKey ?? null,
             linkedSessionIds,
-            metrics
+            metrics,
         };
     }
     const nodeRows = await upsertAndLockIdentityNodes(client, normalizedNodes, sourceTimestamp);
-    const qualifyingIdentityObservedAt = hasQualifyingIdentityNodes(normalizedNodes) ? sourceTimestamp : null;
+    const qualifyingIdentityObservedAt = hasQualifyingIdentityNodes(normalizedNodes)
+        ? sourceTimestamp
+        : null;
     const candidateRows = await loadActiveJourneyCandidates(client, nodeRows.map((row) => row.id));
-    const journeyScores = await loadJourneyScores(client, [...new Set(candidateRows.map((row) => row.journey_id).filter((value) => Boolean(value)))]);
+    const journeyScores = await loadJourneyScores(client, [
+        ...new Set(candidateRows
+            .map((row) => row.journey_id)
+            .filter((value) => Boolean(value))),
+    ]);
     const quarantinedNodeIds = new Set();
     const candidateRowsForResolution = candidateRows.filter((row) => {
         const node = nodeRows.find((nodeRow) => nodeRow.id === row.node_id);
@@ -206,43 +224,45 @@ export async function ingestIdentityEdges(client, input) {
         nodeRows,
         candidateRows: candidateRowsForResolution,
         journeyScores,
-        incomingShopifyCustomerId: normalizedNodes.find((node) => node.nodeType === 'shopify_customer_id')?.nodeKey ?? null,
+        incomingShopifyCustomerId: normalizedNodes.find((node) => node.nodeType === "shopify_customer_id")
+            ?.nodeKey ?? null,
         evidenceSource: input.evidenceSource,
         sourceTable: input.sourceTable,
         sourceRecordId: input.sourceRecordId,
         sourceTimestamp,
-        quarantinedNodeIds
+        quarantinedNodeIds,
     });
-    if (journeyResolution.outcome === 'conflict') {
+    if (journeyResolution.outcome === "conflict") {
         await completeIdentityEdgeIngestion(client, {
             idempotencyKey: input.idempotencyKey,
-            status: 'conflicted',
+            status: "conflicted",
             journeyId: null,
             outcomeReason: AUTHORITATIVE_CONFLICT,
             metrics: {
                 processedNodes: normalizedNodes.length,
                 attachedNodes: 0,
                 rehomedNodes: 0,
-                quarantinedNodes: quarantinedNodeIds.size
-            }
+                quarantinedNodes: quarantinedNodeIds.size,
+            },
         });
         emitIdentityIngestionMetrics({
             sourceTable: input.sourceTable,
             evidenceSource: input.evidenceSource,
-            outcome: 'conflict',
+            outcome: "conflict",
             deduplicated: false,
             processedNodes: normalizedNodes.length,
             attachedNodes: 0,
             rehomedNodes: 0,
             quarantinedNodes: quarantinedNodeIds.size,
-            journeyId: null
+            journeyId: null,
         });
         return {
-            outcome: 'conflict',
+            outcome: "conflict",
             reason: AUTHORITATIVE_CONFLICT,
             journeyId: null,
             deduplicated: false,
-            emailHash: normalizedNodes.find((node) => node.nodeType === 'hashed_email')?.nodeKey ?? null,
+            emailHash: normalizedNodes.find((node) => node.nodeType === "hashed_email")
+                ?.nodeKey ?? null,
             linkedSessionIds: [],
             metrics: {
                 processedNodes: normalizedNodes.length,
@@ -250,8 +270,8 @@ export async function ingestIdentityEdges(client, input) {
                 rehomedNodes: 0,
                 quarantinedNodes: quarantinedNodeIds.size,
                 deduplicated: false,
-                outcome: 'conflict'
-            }
+                outcome: "conflict",
+            },
         };
     }
     const winnerJourneyId = journeyResolution.journeyId;
@@ -262,7 +282,12 @@ export async function ingestIdentityEdges(client, input) {
             continue;
         }
         const activeCandidate = candidateRows.find((row) => row.node_id === node.id && row.edge_id);
-        const desiredEdgeType = node.node_type === 'shopify_customer_id' ? 'authoritative' : activeCandidate?.journey_id && activeCandidate.journey_id !== winnerJourneyId ? 'promoted' : 'deterministic';
+        const desiredEdgeType = node.node_type === "shopify_customer_id"
+            ? "authoritative"
+            : activeCandidate?.journey_id &&
+                activeCandidate.journey_id !== winnerJourneyId
+                ? "promoted"
+                : "deterministic";
         if (!activeCandidate?.edge_id) {
             await insertIdentityEdge(client, {
                 nodeId: node.id,
@@ -272,7 +297,7 @@ export async function ingestIdentityEdges(client, input) {
                 sourceTable: input.sourceTable,
                 sourceRecordId: input.sourceRecordId,
                 sourceTimestamp,
-                conflictCode: null
+                conflictCode: null,
             });
             attachedNodes += 1;
             continue;
@@ -287,22 +312,28 @@ export async function ingestIdentityEdges(client, input) {
             id: newEdgeId,
             nodeId: node.id,
             journeyId: winnerJourneyId,
-            edgeType: 'promoted',
+            edgeType: "promoted",
             evidenceSource: input.evidenceSource,
             sourceTable: input.sourceTable,
             sourceRecordId: input.sourceRecordId,
             sourceTimestamp,
-            conflictCode: null
+            conflictCode: null,
         });
         await linkSupersededIdentityEdge(client, activeCandidate.edge_id, newEdgeId);
         rehomedNodes += 1;
     }
     await refreshJourneyConvenienceFields(client, winnerJourneyId, sourceTimestamp, {
-        authoritativeShopifyCustomerId: normalizedNodes.find((node) => node.nodeType === 'shopify_customer_id')?.nodeKey ?? null,
-        emailHash: normalizedNodes.find((node) => node.nodeType === 'hashed_email')?.nodeKey ?? null,
-        phoneHash: normalizedNodes.find((node) => node.nodeType === 'phone_hash')?.nodeKey ?? null,
-        graphChanged: journeyResolution.created || attachedNodes > 0 || rehomedNodes > 0 || quarantinedNodeIds.size > 0,
-        qualifyingIdentityObservedAt
+        authoritativeShopifyCustomerId: normalizedNodes.find((node) => node.nodeType === "shopify_customer_id")
+            ?.nodeKey ?? null,
+        emailHash: normalizedNodes.find((node) => node.nodeType === "hashed_email")
+            ?.nodeKey ?? null,
+        phoneHash: normalizedNodes.find((node) => node.nodeType === "phone_hash")
+            ?.nodeKey ?? null,
+        graphChanged: journeyResolution.created ||
+            attachedNodes > 0 ||
+            rehomedNodes > 0 ||
+            quarantinedNodeIds.size > 0,
+        qualifyingIdentityObservedAt,
     });
     for (const row of candidateRows) {
         if (!row.journey_id || row.journey_id === winnerJourneyId) {
@@ -311,53 +342,64 @@ export async function ingestIdentityEdges(client, input) {
         await markJourneyMergedIfEmpty(client, row.journey_id, winnerJourneyId, sourceTimestamp);
     }
     await upsertCompatibilityCustomerIdentity(client, winnerJourneyId, {
-        emailHash: normalizedNodes.find((node) => node.nodeType === 'hashed_email')?.nodeKey ?? null,
-        shopifyCustomerId: normalizedNodes.find((node) => node.nodeType === 'shopify_customer_id')?.nodeKey ?? null,
-        sourceTimestamp
+        emailHash: normalizedNodes.find((node) => node.nodeType === "hashed_email")
+            ?.nodeKey ?? null,
+        shopifyCustomerId: normalizedNodes.find((node) => node.nodeType === "shopify_customer_id")
+            ?.nodeKey ?? null,
+        sourceTimestamp,
     });
     const linkedSessionIds = await syncIdentityReferences(client, {
         journeyId: winnerJourneyId,
-        sessionId: normalizedNodes.find((node) => node.nodeType === 'session_id')?.nodeKey ?? null,
-        checkoutToken: normalizedNodes.find((node) => node.nodeType === 'checkout_token')?.nodeKey ?? null,
-        cartToken: normalizedNodes.find((node) => node.nodeType === 'cart_token')?.nodeKey ?? null,
-        shopifyCustomerId: normalizedNodes.find((node) => node.nodeType === 'shopify_customer_id')?.nodeKey ?? null,
-        emailHash: normalizedNodes.find((node) => node.nodeType === 'hashed_email')?.nodeKey ?? null,
-        phoneHash: normalizedNodes.find((node) => node.nodeType === 'phone_hash')?.nodeKey ?? null,
-        qualifyingIdentityObservedAt
+        sessionId: normalizedNodes.find((node) => node.nodeType === "session_id")?.nodeKey ??
+            null,
+        checkoutToken: normalizedNodes.find((node) => node.nodeType === "checkout_token")
+            ?.nodeKey ?? null,
+        cartToken: normalizedNodes.find((node) => node.nodeType === "cart_token")?.nodeKey ??
+            null,
+        shopifyCustomerId: normalizedNodes.find((node) => node.nodeType === "shopify_customer_id")
+            ?.nodeKey ?? null,
+        emailHash: normalizedNodes.find((node) => node.nodeType === "hashed_email")
+            ?.nodeKey ?? null,
+        phoneHash: normalizedNodes.find((node) => node.nodeType === "phone_hash")?.nodeKey ??
+            null,
+        qualifyingIdentityObservedAt,
     });
     await refreshCustomerJourneyForJourneys(client, [
         winnerJourneyId,
-        ...candidateRows.map((row) => row.journey_id).filter((journeyId) => Boolean(journeyId))
+        ...candidateRows
+            .map((row) => row.journey_id)
+            .filter((journeyId) => Boolean(journeyId)),
     ]);
     await completeIdentityEdgeIngestion(client, {
         idempotencyKey: input.idempotencyKey,
-        status: 'completed',
+        status: "completed",
         journeyId: winnerJourneyId,
         outcomeReason: journeyResolution.reasonCode,
         metrics: {
             processedNodes: normalizedNodes.length,
             attachedNodes,
             rehomedNodes,
-            quarantinedNodes: quarantinedNodeIds.size
-        }
+            quarantinedNodes: quarantinedNodeIds.size,
+        },
     });
     emitIdentityIngestionMetrics({
         sourceTable: input.sourceTable,
         evidenceSource: input.evidenceSource,
-        outcome: 'linked',
+        outcome: "linked",
         deduplicated: false,
         processedNodes: normalizedNodes.length,
         attachedNodes,
         rehomedNodes,
         quarantinedNodes: quarantinedNodeIds.size,
-        journeyId: winnerJourneyId
+        journeyId: winnerJourneyId,
     });
     return {
-        outcome: 'linked',
-        reason: 'linked',
+        outcome: "linked",
+        reason: "linked",
         journeyId: winnerJourneyId,
         deduplicated: false,
-        emailHash: normalizedNodes.find((node) => node.nodeType === 'hashed_email')?.nodeKey ?? null,
+        emailHash: normalizedNodes.find((node) => node.nodeType === "hashed_email")
+            ?.nodeKey ?? null,
         linkedSessionIds,
         metrics: {
             processedNodes: normalizedNodes.length,
@@ -365,8 +407,8 @@ export async function ingestIdentityEdges(client, input) {
             rehomedNodes,
             quarantinedNodes: quarantinedNodeIds.size,
             deduplicated: false,
-            outcome: 'linked'
-        }
+            outcome: "linked",
+        },
     };
 }
 async function findExistingIdentities(client, shopifyCustomerId, emailHash) {
@@ -397,12 +439,18 @@ async function registerIdentityEdgeIngestion(client, input) {
       VALUES ($1, $2, $3, $4, $5, 'started', now(), now())
       ON CONFLICT (idempotency_key) DO NOTHING
       RETURNING id
-    `, [input.idempotencyKey, input.evidenceSource, input.sourceTable, input.sourceRecordId, input.sourceTimestamp]);
+    `, [
+        input.idempotencyKey,
+        input.evidenceSource,
+        input.sourceTable,
+        input.sourceRecordId,
+        input.sourceTimestamp,
+    ]);
     if (insertResult.rowCount) {
         return {
             deduplicated: false,
             existingJourneyId: null,
-            existingOutcome: null
+            existingOutcome: null,
         };
     }
     const existingResult = await client.query(`
@@ -419,11 +467,12 @@ async function registerIdentityEdgeIngestion(client, input) {
     if (!existingRun) {
         throw new Error(`identity edge ingestion run disappeared for idempotency key ${input.idempotencyKey}`);
     }
-    if (existingRun.status === 'completed' || existingRun.status === 'conflicted') {
+    if (existingRun.status === "completed" ||
+        existingRun.status === "conflicted") {
         return {
             deduplicated: true,
             existingJourneyId: existingRun.journey_id,
-            existingOutcome: existingRun.outcome_reason
+            existingOutcome: existingRun.outcome_reason,
         };
     }
     await client.query(`
@@ -443,11 +492,17 @@ async function registerIdentityEdgeIngestion(client, input) {
         processed_at = NULL,
         updated_at = now()
       WHERE idempotency_key = $1
-    `, [input.idempotencyKey, input.evidenceSource, input.sourceTable, input.sourceRecordId, input.sourceTimestamp]);
+    `, [
+        input.idempotencyKey,
+        input.evidenceSource,
+        input.sourceTable,
+        input.sourceRecordId,
+        input.sourceTimestamp,
+    ]);
     return {
         deduplicated: false,
         existingJourneyId: null,
-        existingOutcome: null
+        existingOutcome: null,
     };
 }
 async function completeIdentityEdgeIngestion(client, input) {
@@ -472,7 +527,7 @@ async function completeIdentityEdgeIngestion(client, input) {
         input.metrics.processedNodes,
         input.metrics.attachedNodes,
         input.metrics.rehomedNodes,
-        input.metrics.quarantinedNodes
+        input.metrics.quarantinedNodes,
     ]);
 }
 function buildNormalizedIdentityNodes(input) {
@@ -484,22 +539,25 @@ function buildNormalizedIdentityNodes(input) {
     const phoneHash = input.phoneHash ?? hashIdentityPhone(input.phone);
     const candidates = [];
     if (sessionId) {
-        candidates.push({ nodeType: 'session_id', nodeKey: sessionId });
+        candidates.push({ nodeType: "session_id", nodeKey: sessionId });
     }
     if (checkoutToken) {
-        candidates.push({ nodeType: 'checkout_token', nodeKey: checkoutToken });
+        candidates.push({ nodeType: "checkout_token", nodeKey: checkoutToken });
     }
     if (cartToken) {
-        candidates.push({ nodeType: 'cart_token', nodeKey: cartToken });
+        candidates.push({ nodeType: "cart_token", nodeKey: cartToken });
     }
     if (shopifyCustomerId) {
-        candidates.push({ nodeType: 'shopify_customer_id', nodeKey: shopifyCustomerId });
+        candidates.push({
+            nodeType: "shopify_customer_id",
+            nodeKey: shopifyCustomerId,
+        });
     }
     if (hashedEmail) {
-        candidates.push({ nodeType: 'hashed_email', nodeKey: hashedEmail });
+        candidates.push({ nodeType: "hashed_email", nodeKey: hashedEmail });
     }
     if (phoneHash) {
-        candidates.push({ nodeType: 'phone_hash', nodeKey: phoneHash });
+        candidates.push({ nodeType: "phone_hash", nodeKey: phoneHash });
     }
     return dedupeIdentityNodes(candidates);
 }
@@ -544,7 +602,12 @@ async function upsertAndLockIdentityNodes(client, nodes, sourceTimestamp) {
           first_seen_at = LEAST(identity_nodes.first_seen_at, EXCLUDED.first_seen_at),
           last_seen_at = GREATEST(identity_nodes.last_seen_at, EXCLUDED.last_seen_at),
           updated_at = now()
-      `, [node.nodeType, node.nodeKey, node.nodeType === 'shopify_customer_id', sourceTimestamp]);
+      `, [
+            node.nodeType,
+            node.nodeKey,
+            node.nodeType === "shopify_customer_id",
+            sourceTimestamp,
+        ]);
     }
     const result = await client.query(`
       SELECT
@@ -554,7 +617,7 @@ async function upsertAndLockIdentityNodes(client, nodes, sourceTimestamp) {
         is_authoritative,
         is_ambiguous
       FROM identity_nodes
-      WHERE (node_type, node_key) IN (${nodes.map((_, index) => `($${index * 2 + 1}, $${index * 2 + 2})`).join(', ')})
+      WHERE (node_type, node_key) IN (${nodes.map((_, index) => `($${index * 2 + 1}, $${index * 2 + 2})`).join(", ")})
       ORDER BY node_type ASC, node_key ASC
       FOR UPDATE
     `, nodes.flatMap((node) => [node.nodeType, node.nodeKey]));
@@ -582,7 +645,8 @@ async function loadActiveJourneyCandidates(client, nodeIds) {
         ON j.id = e.journey_id
       WHERE n.id = ANY($1::uuid[])
     `, [nodeIds]);
-    return result.rows.filter((row) => row.journey_id === null || ACTIVE_IDENTITY_STATUSES.has(row.edge_type === 'quarantined' ? 'quarantined' : 'active'));
+    return result.rows.filter((row) => row.journey_id === null ||
+        ACTIVE_IDENTITY_STATUSES.has(row.edge_type === "quarantined" ? "quarantined" : "active"));
 }
 async function loadJourneyScores(client, journeyIds) {
     if (journeyIds.length === 0) {
@@ -601,44 +665,53 @@ async function loadJourneyScores(client, journeyIds) {
     return new Map(result.rows.map((row) => [row.journey_id, row]));
 }
 async function resolveWinningJourney(client, input) {
-    const candidateJourneyIds = [...new Set(input.candidateRows.map((row) => row.journey_id).filter((value) => Boolean(value)))];
+    const candidateJourneyIds = [
+        ...new Set(input.candidateRows
+            .map((row) => row.journey_id)
+            .filter((value) => Boolean(value))),
+    ];
     if (candidateJourneyIds.length === 0) {
         const journeyId = await createJourney(client, {
             authoritativeShopifyCustomerId: input.incomingShopifyCustomerId,
-            emailHash: input.nodeRows.find((row) => row.node_type === 'hashed_email')?.node_key ?? null,
-            phoneHash: input.nodeRows.find((row) => row.node_type === 'phone_hash')?.node_key ?? null,
+            emailHash: input.nodeRows.find((row) => row.node_type === "hashed_email")
+                ?.node_key ?? null,
+            phoneHash: input.nodeRows.find((row) => row.node_type === "phone_hash")
+                ?.node_key ?? null,
             sourceTimestamp: input.sourceTimestamp,
             lookbackAnchorTimestamp: input.sourceTimestamp,
             evidenceSource: input.evidenceSource,
             sourceTable: input.sourceTable,
-            sourceRecordId: input.sourceRecordId
+            sourceRecordId: input.sourceRecordId,
         });
         return {
-            outcome: 'linked',
+            outcome: "linked",
             journeyId,
             created: true,
-            reasonCode: 'created_new_journey'
+            reasonCode: "created_new_journey",
         };
     }
     let workingCandidates = input.candidateRows.slice();
     let authoritativeIds = distinctAuthoritativeShopifyIds(workingCandidates);
     const incomingAuthoritativeJourney = input.incomingShopifyCustomerId
-        ? workingCandidates.find((row) => row.authoritative_shopify_customer_id === input.incomingShopifyCustomerId)?.journey_id ?? null
+        ? (workingCandidates.find((row) => row.authoritative_shopify_customer_id ===
+            input.incomingShopifyCustomerId)?.journey_id ?? null)
         : null;
     if (authoritativeIds.length > 1 && incomingAuthoritativeJourney) {
         for (const row of workingCandidates) {
             if (!row.edge_id || row.journey_id === incomingAuthoritativeJourney) {
                 continue;
             }
-            if (row.authoritative_shopify_customer_id === null || row.authoritative_shopify_customer_id === input.incomingShopifyCustomerId) {
+            if (row.authoritative_shopify_customer_id === null ||
+                row.authoritative_shopify_customer_id ===
+                    input.incomingShopifyCustomerId) {
                 continue;
             }
-            if (row.node_type !== 'hashed_email' && row.node_type !== 'phone_hash') {
+            if (row.node_type !== "hashed_email" && row.node_type !== "phone_hash") {
                 continue;
             }
-            const conflictCode = row.node_type === 'phone_hash'
-                ? 'phone_hash_conflicts_across_authoritative_customers'
-                : 'hashed_email_conflicts_across_authoritative_customers';
+            const conflictCode = row.node_type === "phone_hash"
+                ? "phone_hash_conflicts_across_authoritative_customers"
+                : "hashed_email_conflicts_across_authoritative_customers";
             await quarantineIdentityNode(client, {
                 nodeId: row.node_id,
                 currentEdgeId: row.edge_id,
@@ -647,7 +720,7 @@ async function resolveWinningJourney(client, input) {
                 evidenceSource: input.evidenceSource,
                 sourceTable: input.sourceTable,
                 sourceRecordId: input.sourceRecordId,
-                conflictCode
+                conflictCode,
             });
             input.quarantinedNodeIds.add(row.node_id);
         }
@@ -655,69 +728,81 @@ async function resolveWinningJourney(client, input) {
         authoritativeIds = distinctAuthoritativeShopifyIds(workingCandidates);
     }
     if (authoritativeIds.length > 1) {
-        logWarning('identity_edge_ingestion_conflict', {
+        logWarning("identity_edge_ingestion_conflict", {
             reason: AUTHORITATIVE_CONFLICT,
-            authoritativeShopifyCustomerIds: authoritativeIds
+            authoritativeShopifyCustomerIds: authoritativeIds,
         });
         return {
-            outcome: 'conflict'
+            outcome: "conflict",
         };
     }
     if (incomingAuthoritativeJourney) {
         return {
-            outcome: 'linked',
+            outcome: "linked",
             journeyId: incomingAuthoritativeJourney,
             created: false,
-            reasonCode: 'shopify_customer_id_authoritative_winner'
+            reasonCode: "shopify_customer_id_authoritative_winner",
         };
     }
     if (candidateJourneyIds.length === 1) {
         return {
-            outcome: 'linked',
+            outcome: "linked",
             journeyId: candidateJourneyIds[0],
             created: false,
-            reasonCode: 'reused_existing_journey'
+            reasonCode: "reused_existing_journey",
         };
     }
     const selectedJourneyId = selectBestJourneyId(workingCandidates, input.journeyScores);
     if (selectedJourneyId) {
         return {
-            outcome: 'linked',
+            outcome: "linked",
             journeyId: selectedJourneyId,
             created: false,
             reasonCode: input.incomingShopifyCustomerId
-                ? 'shopify_customer_id_authoritative_winner'
-                : 'non_authoritative_precedence_winner'
+                ? "shopify_customer_id_authoritative_winner"
+                : "non_authoritative_precedence_winner",
         };
     }
     const fallbackJourneyId = await createJourney(client, {
         authoritativeShopifyCustomerId: input.incomingShopifyCustomerId,
-        emailHash: input.nodeRows.find((row) => row.node_type === 'hashed_email')?.node_key ?? null,
-        phoneHash: input.nodeRows.find((row) => row.node_type === 'phone_hash')?.node_key ?? null,
+        emailHash: input.nodeRows.find((row) => row.node_type === "hashed_email")
+            ?.node_key ?? null,
+        phoneHash: input.nodeRows.find((row) => row.node_type === "phone_hash")?.node_key ??
+            null,
         sourceTimestamp: input.sourceTimestamp,
         lookbackAnchorTimestamp: input.sourceTimestamp,
         evidenceSource: input.evidenceSource,
         sourceTable: input.sourceTable,
-        sourceRecordId: input.sourceRecordId
+        sourceRecordId: input.sourceRecordId,
     });
     return {
-        outcome: 'linked',
+        outcome: "linked",
         journeyId: fallbackJourneyId,
         created: true,
-        reasonCode: 'created_new_journey'
+        reasonCode: "created_new_journey",
     };
 }
 function distinctAuthoritativeShopifyIds(rows) {
-    return [...new Set(rows.map((row) => row.authoritative_shopify_customer_id).filter((value) => Boolean(value)))];
+    return [
+        ...new Set(rows
+            .map((row) => row.authoritative_shopify_customer_id)
+            .filter((value) => Boolean(value))),
+    ];
 }
 function hasQualifyingIdentityNodes(nodes) {
     return nodes.some((node) => isQualifyingIdentityNodeType(node.nodeType));
 }
 function isQualifyingIdentityNodeType(nodeType) {
-    return nodeType === 'shopify_customer_id' || nodeType === 'hashed_email' || nodeType === 'phone_hash';
+    return (nodeType === "shopify_customer_id" ||
+        nodeType === "hashed_email" ||
+        nodeType === "phone_hash");
 }
 function selectBestJourneyId(rows, journeyScores) {
-    const candidates = [...new Set(rows.map((row) => row.journey_id).filter((value) => Boolean(value)))];
+    const candidates = [
+        ...new Set(rows
+            .map((row) => row.journey_id)
+            .filter((value) => Boolean(value))),
+    ];
     if (candidates.length === 0) {
         return null;
     }
@@ -792,7 +877,7 @@ async function createJourney(client, input) {
         input.evidenceSource,
         input.sourceTable,
         input.sourceRecordId,
-        input.sourceTimestamp
+        input.sourceTimestamp,
     ]);
     return journeyId;
 }
@@ -810,12 +895,12 @@ async function quarantineIdentityNode(client, input) {
         id: newEdgeId,
         nodeId: input.nodeId,
         journeyId: input.currentJourneyId,
-        edgeType: 'quarantined',
+        edgeType: "quarantined",
         evidenceSource: input.evidenceSource,
         sourceTable: input.sourceTable,
         sourceRecordId: input.sourceRecordId,
         sourceTimestamp: input.sourceTimestamp,
-        conflictCode: input.conflictCode
+        conflictCode: input.conflictCode,
     });
     await linkSupersededIdentityEdge(client, input.currentEdgeId, newEdgeId);
 }
@@ -872,7 +957,7 @@ async function insertIdentityEdge(client, input) {
         input.sourceTable,
         input.sourceRecordId,
         input.conflictCode,
-        input.sourceTimestamp
+        input.sourceTimestamp,
     ]);
 }
 async function touchActiveIdentityEdge(client, edgeId, sourceTimestamp) {
@@ -934,7 +1019,7 @@ async function refreshJourneyConvenienceFields(client, journeyId, sourceTimestam
         input.graphChanged,
         input.qualifyingIdentityObservedAt,
         String(HISTORICAL_IDENTITY_LOOKBACK_DAYS),
-        sourceTimestamp
+        sourceTimestamp,
     ]);
 }
 async function markJourneyMergedIfEmpty(client, journeyId, mergedIntoJourneyId, sourceTimestamp) {
@@ -965,7 +1050,7 @@ async function upsertCompatibilityCustomerIdentity(client, journeyId, input) {
     }
     const safelyAssignableFields = await resolveCompatibilityIdentityAssignments(client, journeyId, {
         emailHash: input.emailHash,
-        shopifyCustomerId: input.shopifyCustomerId
+        shopifyCustomerId: input.shopifyCustomerId,
     });
     const existingJourneyRow = await client.query(`
       SELECT id::text AS id
@@ -982,7 +1067,12 @@ async function upsertCompatibilityCustomerIdentity(client, journeyId, input) {
           updated_at = now(),
           last_stitched_at = GREATEST(last_stitched_at, $4)
         WHERE id = $1::uuid
-      `, [journeyId, safelyAssignableFields.emailHash, safelyAssignableFields.shopifyCustomerId, input.sourceTimestamp]);
+      `, [
+            journeyId,
+            safelyAssignableFields.emailHash,
+            safelyAssignableFields.shopifyCustomerId,
+            input.sourceTimestamp,
+        ]);
         return;
     }
     const matchingIdentity = (await findExistingIdentities(client, safelyAssignableFields.shopifyCustomerId, safelyAssignableFields.emailHash))[0] ?? null;
@@ -995,7 +1085,12 @@ async function upsertCompatibilityCustomerIdentity(client, journeyId, input) {
           updated_at = now(),
           last_stitched_at = GREATEST(last_stitched_at, $4)
         WHERE id = $1::uuid
-      `, [matchingIdentity.id, safelyAssignableFields.emailHash, safelyAssignableFields.shopifyCustomerId, input.sourceTimestamp]);
+      `, [
+            matchingIdentity.id,
+            safelyAssignableFields.emailHash,
+            safelyAssignableFields.shopifyCustomerId,
+            input.sourceTimestamp,
+        ]);
         return;
     }
     await client.query(`
@@ -1008,7 +1103,12 @@ async function upsertCompatibilityCustomerIdentity(client, journeyId, input) {
         last_stitched_at
       )
       VALUES ($1::uuid, $2, $3, now(), now(), $4)
-    `, [journeyId, safelyAssignableFields.emailHash, safelyAssignableFields.shopifyCustomerId, input.sourceTimestamp]);
+    `, [
+        journeyId,
+        safelyAssignableFields.emailHash,
+        safelyAssignableFields.shopifyCustomerId,
+        input.sourceTimestamp,
+    ]);
 }
 async function resolveCompatibilityIdentityAssignments(client, journeyId, input) {
     const emailOwnerPromise = input.emailHash
@@ -1027,12 +1127,17 @@ async function resolveCompatibilityIdentityAssignments(client, journeyId, input)
           LIMIT 1
         `, [input.shopifyCustomerId])
         : Promise.resolve({ rows: [] });
-    const [emailOwnerResult, customerOwnerResult] = await Promise.all([emailOwnerPromise, customerOwnerPromise]);
+    const [emailOwnerResult, customerOwnerResult] = await Promise.all([
+        emailOwnerPromise,
+        customerOwnerPromise,
+    ]);
     const emailOwnerId = emailOwnerResult.rows[0]?.id ?? null;
     const customerOwnerId = customerOwnerResult.rows[0]?.id ?? null;
     return {
         emailHash: emailOwnerId && emailOwnerId !== journeyId ? null : input.emailHash,
-        shopifyCustomerId: customerOwnerId && customerOwnerId !== journeyId ? null : input.shopifyCustomerId
+        shopifyCustomerId: customerOwnerId && customerOwnerId !== journeyId
+            ? null
+            : input.shopifyCustomerId,
     };
 }
 async function syncIdentityReferences(client, input) {
@@ -1043,7 +1148,7 @@ async function syncIdentityReferences(client, input) {
         : null;
     const safeOrderRewriteContactHashes = await resolveSafeOrderRewriteContactHashes(client, input.journeyId, {
         emailHash: input.emailHash,
-        phoneHash: input.phoneHash ?? null
+        phoneHash: input.phoneHash ?? null,
     });
     const sessionResult = await client.query(`
       WITH candidate_sessions AS (
@@ -1072,7 +1177,7 @@ async function syncIdentityReferences(client, input) {
         input.checkoutToken,
         input.cartToken,
         lookbackWindow?.lookbackWindowStartedAt ?? null,
-        lookbackWindow?.lookbackWindowExpiresAt ?? null
+        lookbackWindow?.lookbackWindowExpiresAt ?? null,
     ]);
     const sessionIds = sessionResult.rows.map((row) => row.session_id);
     if (sessionIds.length > 0) {
@@ -1140,7 +1245,7 @@ async function syncIdentityReferences(client, input) {
         safeOrderRewriteContactHashes.emailHash,
         compatibilityExists,
         lookbackWindow?.lookbackWindowStartedAt ?? null,
-        lookbackWindow?.lookbackWindowExpiresAt ?? null
+        lookbackWindow?.lookbackWindowExpiresAt ?? null,
     ]);
     if (input.shopifyCustomerId) {
         await client.query(`
@@ -1160,15 +1265,15 @@ async function syncIdentityReferences(client, input) {
 async function resolveSafeOrderRewriteContactHashes(client, journeyId, input) {
     const hashesByType = new Map();
     if (input.emailHash) {
-        hashesByType.set('hashed_email', input.emailHash);
+        hashesByType.set("hashed_email", input.emailHash);
     }
     if (input.phoneHash) {
-        hashesByType.set('phone_hash', input.phoneHash);
+        hashesByType.set("phone_hash", input.phoneHash);
     }
     if (hashesByType.size === 0) {
         return {
             emailHash: null,
-            phoneHash: null
+            phoneHash: null,
         };
     }
     const nodeTypes = [...hashesByType.keys()];
@@ -1188,8 +1293,8 @@ async function resolveSafeOrderRewriteContactHashes(client, journeyId, input) {
     `, [journeyId, nodeTypes, nodeKeys]);
     const safeHashes = new Map(result.rows.map((row) => [row.node_type, row.node_key]));
     return {
-        emailHash: safeHashes.get('hashed_email') ?? null,
-        phoneHash: safeHashes.get('phone_hash') ?? null
+        emailHash: safeHashes.get("hashed_email") ?? null,
+        phoneHash: safeHashes.get("phone_hash") ?? null,
     };
 }
 async function collectJourneySessionIds(client, journeyId) {
@@ -1218,7 +1323,7 @@ async function loadJourneyLookbackWindow(client, journeyId) {
     return {
         lookbackWindowStartedAt: row.lookback_window_started_at,
         lookbackWindowExpiresAt: row.lookback_window_expires_at,
-        lastTouchEligibleAt: row.last_touch_eligible_at
+        lastTouchEligibleAt: row.last_touch_eligible_at,
     };
 }
 async function customerIdentityExists(client, journeyId) {
@@ -1233,7 +1338,7 @@ async function customerIdentityExists(client, journeyId) {
 }
 function emitIdentityIngestionMetrics(input) {
     const payload = buildIdentityEdgeIngestionMetricsLog(input);
-    logInfo('identity_edge_ingestion_processed', JSON.parse(payload));
+    logInfo("identity_edge_ingestion_processed", JSON.parse(payload));
 }
 function normalizeNullableString(value) {
     const normalized = value?.trim();
@@ -1255,12 +1360,13 @@ function normalizeSourceTimestamp(value) {
 }
 function buildHistoricalLookbackWindow(anchorTimestamp) {
     return {
-        lookbackWindowStartedAt: new Date(anchorTimestamp.getTime() - HISTORICAL_IDENTITY_LOOKBACK_DAYS * 24 * 60 * 60 * 1000),
+        lookbackWindowStartedAt: new Date(anchorTimestamp.getTime() -
+            HISTORICAL_IDENTITY_LOOKBACK_DAYS * 24 * 60 * 60 * 1000),
         lookbackWindowExpiresAt: anchorTimestamp,
-        lastTouchEligibleAt: anchorTimestamp
+        lastTouchEligibleAt: anchorTimestamp,
     };
 }
 export const __identityTestUtils = {
     buildNormalizedIdentityNodes,
-    selectBestJourneyId
+    selectBestJourneyId,
 };

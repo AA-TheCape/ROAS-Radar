@@ -1,6 +1,6 @@
-import { env } from '../../config/env.js';
-import { withTransaction } from '../../db/pool.js';
-import { logError, logInfo } from '../../observability/index.js';
+import { env } from "../../config/env.js";
+import { withTransaction } from "../../db/pool.js";
+import { logError, logInfo } from "../../observability/index.js";
 const DEFAULT_RETENTION_BATCH_SIZE = 100;
 const DEFAULT_RETENTION_MAX_BATCHES = 50;
 function normalizePositiveInteger(value, fallback) {
@@ -43,7 +43,7 @@ async function countProtectedRows(client, cutoffAt) {
             )
         ) AS protected_touch_events
     `, [cutoffAt]);
-    return result.rows[0] ?? { protected_sessions: '0', protected_touch_events: '0' };
+    return (result.rows[0] ?? { protected_sessions: "0", protected_touch_events: "0" });
 }
 async function deleteExpiredTouchEvents(client, cutoffAt, batchSize) {
     const result = await client.query(`
@@ -135,14 +135,14 @@ export async function runSessionAttributionRetention(options = {}) {
             deletedTouchEvents += deletedTouchEventsInBatch;
             deletedSessions += deletedSessionsInBatch;
             if (emitLogs) {
-                logInfo('session_attribution_retention_batch_completed', {
+                logInfo("session_attribution_retention_batch_completed", {
                     batchNumber,
                     cutoffAt: cutoffAt.toISOString(),
                     ga4FallbackCutoffAt: ga4FallbackCutoffAt.toISOString(),
                     batchSize,
                     deletedGa4FallbackCandidatesInBatch,
                     deletedTouchEventsInBatch,
-                    deletedSessionsInBatch
+                    deletedSessionsInBatch,
                 });
             }
         }
@@ -155,11 +155,11 @@ export async function runSessionAttributionRetention(options = {}) {
             deletedGa4FallbackCandidates,
             deletedTouchEvents,
             deletedSessions,
-            protectedSessionsSkipped: Number(protectedCounts.protected_sessions ?? '0'),
-            protectedTouchEventsSkipped: Number(protectedCounts.protected_touch_events ?? '0')
+            protectedSessionsSkipped: Number(protectedCounts.protected_sessions ?? "0"),
+            protectedTouchEventsSkipped: Number(protectedCounts.protected_touch_events ?? "0"),
         };
         if (emitLogs) {
-            logInfo('session_attribution_retention_completed', result);
+            logInfo("session_attribution_retention_completed", result);
         }
         return result;
     };
@@ -179,7 +179,7 @@ export async function runSessionAttributionRetention(options = {}) {
             return {
                 deletedGa4FallbackCandidatesInBatch,
                 deletedTouchEventsInBatch,
-                deletedSessionsInBatch
+                deletedSessionsInBatch,
             };
         });
         if (batchResult.deletedGa4FallbackCandidatesInBatch === 0 &&
@@ -188,18 +188,19 @@ export async function runSessionAttributionRetention(options = {}) {
             break;
         }
         batchesRun += 1;
-        deletedGa4FallbackCandidates += batchResult.deletedGa4FallbackCandidatesInBatch;
+        deletedGa4FallbackCandidates +=
+            batchResult.deletedGa4FallbackCandidatesInBatch;
         deletedTouchEvents += batchResult.deletedTouchEventsInBatch;
         deletedSessions += batchResult.deletedSessionsInBatch;
         if (emitLogs) {
-            logInfo('session_attribution_retention_batch_completed', {
+            logInfo("session_attribution_retention_batch_completed", {
                 batchNumber,
                 cutoffAt: cutoffAt.toISOString(),
                 ga4FallbackCutoffAt: ga4FallbackCutoffAt.toISOString(),
                 batchSize,
                 deletedGa4FallbackCandidatesInBatch: batchResult.deletedGa4FallbackCandidatesInBatch,
                 deletedTouchEventsInBatch: batchResult.deletedTouchEventsInBatch,
-                deletedSessionsInBatch: batchResult.deletedSessionsInBatch
+                deletedSessionsInBatch: batchResult.deletedSessionsInBatch,
             });
         }
     }
@@ -212,11 +213,11 @@ export async function runSessionAttributionRetention(options = {}) {
         deletedGa4FallbackCandidates,
         deletedTouchEvents,
         deletedSessions,
-        protectedSessionsSkipped: Number(protectedCounts.protected_sessions ?? '0'),
-        protectedTouchEventsSkipped: Number(protectedCounts.protected_touch_events ?? '0')
+        protectedSessionsSkipped: Number(protectedCounts.protected_sessions ?? "0"),
+        protectedTouchEventsSkipped: Number(protectedCounts.protected_touch_events ?? "0"),
     };
     if (emitLogs) {
-        logInfo('session_attribution_retention_completed', result);
+        logInfo("session_attribution_retention_completed", result);
     }
     return result;
 }
@@ -225,10 +226,10 @@ export async function runSessionAttributionRetentionJob(options = {}) {
         return await runSessionAttributionRetention(options);
     }
     catch (error) {
-        logError('session_attribution_retention_failed', error, {
+        logError("session_attribution_retention_failed", error, {
             batchSize: options.batchSize ?? DEFAULT_RETENTION_BATCH_SIZE,
             maxBatches: options.maxBatches ?? DEFAULT_RETENTION_MAX_BATCHES,
-            hasCustomAsOf: Boolean(options.asOf)
+            hasCustomAsOf: Boolean(options.asOf),
         });
         throw error;
     }

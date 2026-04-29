@@ -1,30 +1,29 @@
-// @ts-nocheck
-import { env } from '../../config/env.js';
-import { query, withTransaction } from '../../db/pool.js';
-import { logError, logInfo } from '../../observability/index.js';
+import { query, withTransaction } from "../../db/pool.js";
+import { logError, logInfo } from "../../observability/index.js";
+const DEFAULT_DEAD_LETTER_REPLAY_MAX_BATCH_SIZE = 100;
 function serializeError(error) {
     if (error instanceof Error) {
-        const extraContext = error;
+        const { name, message, stack, ...extraContext } = error;
         return {
-            message: error.message,
+            message,
             context: {
-                name: error.name,
-                message: error.message,
-                stack: error.stack,
-                ...extraContext
-            }
+                name,
+                message,
+                stack,
+                ...extraContext,
+            },
         };
     }
-    if (typeof error === 'object' && error !== null) {
+    if (typeof error === "object" && error !== null) {
         const context = error;
         return {
-            message: String(context.message ?? 'Unknown error'),
-            context
+            message: String(context.message ?? "Unknown error"),
+            context,
         };
     }
     return {
         message: String(error),
-        context: { value: error }
+        context: { value: error },
     };
 }
 async function ensureDeadLetterTables(client) {
@@ -176,7 +175,8 @@ async function ensureDeadLetterTables(client) {
   `);
 }
 async function requeueSourceRecord(client, deadLetter) {
-    if (deadLetter.source_table === 'shopify_order_writeback_jobs') {
+    if (deadLetter.source_table ===
+        "shopify_order_writeback_jobs") {
         const result = await client.query(`
         UPDATE shopify_order_writeback_jobs
         SET
@@ -189,9 +189,9 @@ async function requeueSourceRecord(client, deadLetter) {
           updated_at = now()
         WHERE id = $1::bigint
       `, [deadLetter.source_record_id]);
-        return result.rowCount ? 'replayed' : 'skipped';
+        return result.rowCount ? "replayed" : "skipped";
     }
-    if (deadLetter.source_table === 'attribution_jobs') {
+    if (deadLetter.source_table === "attribution_jobs") {
         const result = await client.query(`
         UPDATE attribution_jobs
         SET
@@ -204,9 +204,10 @@ async function requeueSourceRecord(client, deadLetter) {
           updated_at = now()
         WHERE id = $1::bigint
       `, [deadLetter.source_record_id]);
-        return result.rowCount ? 'replayed' : 'skipped';
+        return result.rowCount ? "replayed" : "skipped";
     }
-    if (deadLetter.source_table === 'ga4_bigquery_hourly_jobs') {
+    if (deadLetter.source_table ===
+        "ga4_bigquery_hourly_jobs") {
         const result = await client.query(`
         UPDATE ga4_bigquery_hourly_jobs
         SET
@@ -220,16 +221,16 @@ async function requeueSourceRecord(client, deadLetter) {
         WHERE pipeline_name = $1
           AND hour_start = $2::timestamptz
       `, [deadLetter.source_queue_key, deadLetter.source_record_id]);
-        return result.rowCount ? 'replayed' : 'skipped';
+        return result.rowCount ? "replayed" : "skipped";
     }
-    return 'skipped';
+    return "skipped";
 }
 function normalizeReplayFilters(filters) {
     const requestedBy = filters.requestedBy?.trim() || null;
     const fromTime = filters.fromTime ?? filters.windowStart ?? null;
     const toTime = filters.toTime ?? filters.windowEnd ?? null;
-    const limit = Math.max(1, Math.min(filters.limit ?? env.DEAD_LETTER_REPLAY_MAX_BATCH_SIZE, 500));
-    const status = filters.status ?? 'pending_replay';
+    const limit = Math.max(1, Math.min(filters.limit ?? DEFAULT_DEAD_LETTER_REPLAY_MAX_BATCH_SIZE, 500));
+    const status = filters.status ?? "pending_replay";
     const dryRun = filters.dryRun ?? false;
     return {
         requestedBy,
@@ -239,7 +240,7 @@ function normalizeReplayFilters(filters) {
         fromTime,
         toTime,
         limit,
-        dryRun
+        dryRun,
     };
 }
 async function insertReplayRunItem(client, input) {
@@ -253,7 +254,14 @@ async function insertReplayRunItem(client, input) {
         message
       )
       VALUES ($1, $2, $3, $4, $5, $6)
-    `, [input.replayRunId, input.deadLetter.id, input.deadLetter.source_table, input.deadLetter.source_record_id, input.outcome, input.message]);
+    `, [
+        input.replayRunId,
+        input.deadLetter.id,
+        input.deadLetter.source_table,
+        input.deadLetter.source_record_id,
+        input.outcome,
+        input.message,
+    ]);
 }
 export async function recordDeadLetter(client, input) {
     await ensureDeadLetterTables(client);
@@ -307,7 +315,7 @@ export async function recordDeadLetter(client, input) {
         input.sourceQueueKey ?? null,
         serializedError.message,
         JSON.stringify(input.payload ?? {}),
-        JSON.stringify(serializedError.context)
+        JSON.stringify(serializedError.context),
     ]);
 }
 export async function replayDeadLetters(filters) {
@@ -330,7 +338,12 @@ export async function replayDeadLetters(filters) {
         VALUES ($1, $2, $3, $4, $5, $6, $7, now(), $8::jsonb, now())
         RETURNING id
       `, [
-            normalized.eventType || normalized.sourceTable || normalized.fromTime || normalized.toTime ? 'filtered' : 'all_pending',
+            normalized.eventType ||
+                normalized.sourceTable ||
+                normalized.fromTime ||
+                normalized.toTime
+                ? "filtered"
+                : "all_pending",
             normalized.eventType,
             normalized.sourceTable,
             normalized.fromTime,
@@ -345,8 +358,8 @@ export async function replayDeadLetters(filters) {
                 fromTime: normalized.fromTime?.toISOString() ?? null,
                 toTime: normalized.toTime?.toISOString() ?? null,
                 limit: normalized.limit,
-                dryRun: normalized.dryRun
-            })
+                dryRun: normalized.dryRun,
+            }),
         ]);
         const replayRunId = replayRunResult.rows[0].id;
         const candidates = await client.query(`
@@ -365,7 +378,14 @@ export async function replayDeadLetters(filters) {
         ORDER BY last_failed_at ASC, id ASC
         LIMIT $6
         FOR UPDATE SKIP LOCKED
-      `, [normalized.status, normalized.eventType, normalized.sourceTable, normalized.fromTime, normalized.toTime, normalized.limit]);
+      `, [
+            normalized.status,
+            normalized.eventType,
+            normalized.sourceTable,
+            normalized.fromTime,
+            normalized.toTime,
+            normalized.limit,
+        ]);
         let replayedCount = 0;
         let skippedCount = 0;
         let failedCount = 0;
@@ -376,14 +396,14 @@ export async function replayDeadLetters(filters) {
                 await insertReplayRunItem(client, {
                     replayRunId,
                     deadLetter,
-                    outcome: 'dry_run',
-                    message: 'dry run only; source record was not requeued'
+                    outcome: "dry_run",
+                    message: "dry run only; source record was not requeued",
                 });
                 continue;
             }
             try {
                 const outcome = await requeueSourceRecord(client, deadLetter);
-                if (outcome === 'replayed') {
+                if (outcome === "replayed") {
                     replayedCount += 1;
                     await client.query(`
               UPDATE event_dead_letters
@@ -402,7 +422,9 @@ export async function replayDeadLetters(filters) {
                     replayRunId,
                     deadLetter,
                     outcome,
-                    message: outcome === 'replayed' ? 'source record requeued' : 'source record was not found or unsupported'
+                    message: outcome === "replayed"
+                        ? "source record requeued"
+                        : "source record was not found or unsupported",
                 });
             }
             catch (error) {
@@ -411,15 +433,15 @@ export async function replayDeadLetters(filters) {
                 await insertReplayRunItem(client, {
                     replayRunId,
                     deadLetter,
-                    outcome: 'failed',
-                    message: serializedError.message
+                    outcome: "failed",
+                    message: serializedError.message,
                 });
-                logError('dead_letter_replay_failed', error, {
+                logError("dead_letter_replay_failed", error, {
                     replayRunId,
                     deadLetterId: deadLetter.id,
                     eventType: deadLetter.event_type,
                     sourceTable: deadLetter.source_table,
-                    sourceRecordId: deadLetter.source_record_id
+                    sourceRecordId: deadLetter.source_record_id,
                 });
             }
         }
@@ -446,10 +468,10 @@ export async function replayDeadLetters(filters) {
                 replayedCount,
                 skippedCount,
                 failedCount,
-                dryRunCount
-            })
+                dryRunCount,
+            }),
         ]);
-        logInfo('dead_letter_replay_completed', {
+        logInfo("dead_letter_replay_completed", {
             replayRunId,
             requestedBy: normalized.requestedBy,
             dryRun: normalized.dryRun,
@@ -457,7 +479,7 @@ export async function replayDeadLetters(filters) {
             replayedCount,
             skippedCount,
             failedCount,
-            dryRunCount
+            dryRunCount,
         });
         return {
             replayRunId,
@@ -465,7 +487,7 @@ export async function replayDeadLetters(filters) {
             replayedCount,
             skippedCount,
             failedCount,
-            dryRunCount
+            dryRunCount,
         };
     });
 }
@@ -476,10 +498,10 @@ export async function countPendingDeadLetters() {
       FROM event_dead_letters
       WHERE status = 'pending_replay'
     `);
-        return Number(result.rows[0]?.total ?? '0');
+        return Number(result.rows[0]?.total ?? "0");
     }
     catch (error) {
-        logError('dead_letter_count_failed', error, {});
+        logError("dead_letter_count_failed", error, {});
         return 0;
     }
 }

@@ -1,12 +1,20 @@
-// @ts-nocheck
-import { query, withTransaction } from '../../db/pool.js';
-import { logError, logInfo, logWarning, summarizeGa4IngestionResult } from '../../observability/index.js';
-import { assertGa4BigQueryIngestionConfig } from './ga4-bigquery-config.js';
-export const GA4_SESSION_ATTRIBUTION_PIPELINE = 'ga4_session_attribution';
+import crypto from "node:crypto";
+import { query, withTransaction } from "../../db/pool.js";
+import { logError, logInfo, logWarning, summarizeGa4IngestionResult, } from "../../observability/index.js";
+import { assertGa4BigQueryIngestionConfig, } from "./ga4-bigquery-config.js";
+export const GA4_SESSION_ATTRIBUTION_PIPELINE = "ga4_session_attribution";
 const GA4_INGESTION_LAG_ALERT_THRESHOLD_HOURS = 2;
-const ALLOWED_CLICK_ID_KEYS = ['gclid', 'dclid', 'gbraid', 'wbraid', 'fbclid', 'ttclid', 'msclkid'];
+const ALLOWED_CLICK_ID_KEYS = [
+    "gclid",
+    "dclid",
+    "gbraid",
+    "wbraid",
+    "fbclid",
+    "ttclid",
+    "msclkid",
+];
 function normalizeNullableString(value) {
-    if (typeof value !== 'string') {
+    if (typeof value !== "string") {
         return null;
     }
     const trimmed = value.trim();
@@ -43,11 +51,11 @@ function compareIsoAscending(left, right) {
 function normalizeEnabledConfig(config) {
     const resolved = config ?? assertGa4BigQueryIngestionConfig();
     if (!resolved.enabled) {
-        throw new Error('GA4 BigQuery ingestion is disabled');
+        throw new Error("GA4 BigQuery ingestion is disabled");
     }
     return resolved;
 }
-function normalizeHourStartIso(value, fieldName = 'hourStart') {
+function normalizeHourStartIso(value, fieldName = "hourStart") {
     const normalized = normalizeIsoTimestamp(value, fieldName);
     return toHourStart(new Date(normalized)).toISOString();
 }
@@ -64,13 +72,13 @@ export function planGa4SessionAttributionHourlyWindows(input) {
     for (let cursor = new Date(startHour); cursor.getTime() <= latestCompleteHour.getTime(); cursor = addHours(cursor, 1)) {
         windows.push({
             hourStart: cursor.toISOString(),
-            hourEndExclusive: addHours(cursor, 1).toISOString()
+            hourEndExclusive: addHours(cursor, 1).toISOString(),
         });
     }
     return windows;
 }
 function buildDateSuffix(dateIso) {
-    return dateIso.slice(0, 10).replaceAll('-', '');
+    return dateIso.slice(0, 10).replaceAll("-", "");
 }
 export function buildGa4SessionAttributionHourlyQuery(input) {
     const config = normalizeEnabledConfig(input.config);
@@ -81,7 +89,7 @@ export function buildGa4SessionAttributionHourlyQuery(input) {
         end_date_suffix: buildDateSuffix(input.hourEndExclusive),
         ads_metadata_lookback_days: config.googleAdsTransfer.lookbackDays,
         google_ads_customer_ids: config.googleAdsTransfer.customerIds,
-        google_ads_customer_id_count: config.googleAdsTransfer.customerIds.length
+        google_ads_customer_id_count: config.googleAdsTransfer.customerIds.length,
     };
     return {
         params,
@@ -119,7 +127,7 @@ FROM ga4_events e
 LEFT JOIN ads_linked_campaigns
   ON TRUE
 WHERE TRUE
-`.trim()
+`.trim(),
     };
 }
 function normalizeClickIdValue(value) {
@@ -132,19 +140,21 @@ function normalizeClickIdValue(value) {
     return value;
 }
 function extractEventParamValue(param) {
-    if (!param || typeof param !== 'object') {
+    if (!param || typeof param !== "object") {
         return null;
     }
-    if (typeof param.string_value === 'string') {
+    if (typeof param.string_value === "string") {
         return param.string_value;
     }
-    if (typeof param.int_value === 'number' && Number.isFinite(param.int_value)) {
+    if (typeof param.int_value === "number" && Number.isFinite(param.int_value)) {
         return String(Math.trunc(param.int_value));
     }
-    if (typeof param.float_value === 'number' && Number.isFinite(param.float_value)) {
+    if (typeof param.float_value === "number" &&
+        Number.isFinite(param.float_value)) {
         return String(param.float_value);
     }
-    if (typeof param.double_value === 'number' && Number.isFinite(param.double_value)) {
+    if (typeof param.double_value === "number" &&
+        Number.isFinite(param.double_value)) {
         return String(param.double_value);
     }
     return null;
@@ -155,12 +165,13 @@ export function extractAllowedGa4ClickIdsFromEventParams(eventParams) {
     }
     const extracted = {};
     for (const rawEntry of eventParams) {
-        if (!rawEntry || typeof rawEntry !== 'object') {
+        if (!rawEntry || typeof rawEntry !== "object") {
             continue;
         }
         const entry = rawEntry;
         const normalizedKey = normalizeLowercaseString(entry.key);
-        if (!normalizedKey || !ALLOWED_CLICK_ID_KEYS.includes(normalizedKey)) {
+        if (!normalizedKey ||
+            !ALLOWED_CLICK_ID_KEYS.includes(normalizedKey)) {
             continue;
         }
         const clickKey = normalizedKey;
@@ -178,10 +189,12 @@ export function extractAllowedGa4ClickIdsFromEventParams(eventParams) {
 function pickClickId(rawRow) {
     const explicitType = normalizeLowercaseString(rawRow.click_id_type);
     const explicitValue = normalizeClickIdValue(normalizeNullableString(rawRow.click_id_value));
-    if (explicitType && explicitValue && ALLOWED_CLICK_ID_KEYS.includes(explicitType)) {
+    if (explicitType &&
+        explicitValue &&
+        ALLOWED_CLICK_ID_KEYS.includes(explicitType)) {
         return {
             clickIdType: explicitType,
-            clickIdValue: explicitValue
+            clickIdValue: explicitValue,
         };
     }
     for (const key of ALLOWED_CLICK_ID_KEYS) {
@@ -189,7 +202,7 @@ function pickClickId(rawRow) {
         if (value) {
             return {
                 clickIdType: key,
-                clickIdValue: value
+                clickIdValue: value,
             };
         }
     }
@@ -199,41 +212,49 @@ function pickClickId(rawRow) {
         if (value) {
             return {
                 clickIdType: key,
-                clickIdValue: value
+                clickIdValue: value,
             };
         }
     }
     return {
-        clickIdType: explicitType && ALLOWED_CLICK_ID_KEYS.includes(explicitType) ? explicitType : null,
-        clickIdValue: explicitValue
+        clickIdType: explicitType &&
+            ALLOWED_CLICK_ID_KEYS.includes(explicitType)
+            ? explicitType
+            : null,
+        clickIdValue: explicitValue,
     };
 }
 function normalizeMetadataSource(value) {
     const normalized = normalizeLowercaseString(value);
-    if (normalized === 'ga4_raw' || normalized === 'google_ads_transfer' || normalized === 'unresolved') {
+    if (normalized === "ga4_raw" ||
+        normalized === "google_ads_transfer" ||
+        normalized === "unresolved") {
         return normalized;
     }
-    return 'unresolved';
+    return "unresolved";
 }
 function normalizeRawExtractionRow(raw) {
-    if (!raw || typeof raw !== 'object') {
-        throw new Error('GA4 extraction row must be an object');
+    if (!raw || typeof raw !== "object") {
+        throw new Error("GA4 extraction row must be an object");
     }
     const row = raw;
     const clickId = pickClickId(row);
     return {
-        ga4SessionKey: normalizeNullableString(row.ga4_session_key) ?? (() => {
-            throw new Error('ga4_session_key is required');
-        })(),
-        ga4UserKey: normalizeNullableString(row.ga4_user_key) ?? (() => {
-            throw new Error('ga4_user_key is required');
-        })(),
+        ga4SessionKey: normalizeNullableString(row.ga4_session_key) ??
+            (() => {
+                throw new Error("ga4_session_key is required");
+            })(),
+        ga4UserKey: normalizeNullableString(row.ga4_user_key) ??
+            (() => {
+                throw new Error("ga4_user_key is required");
+            })(),
         ga4ClientId: normalizeNullableString(row.ga4_client_id),
-        ga4SessionId: normalizeNullableString(row.ga4_session_id) ?? (() => {
-            throw new Error('ga4_session_id is required');
-        })(),
-        sessionStartedAt: normalizeIsoTimestamp(row.session_started_at, 'session_started_at'),
-        lastEventAt: normalizeIsoTimestamp(row.last_event_at, 'last_event_at'),
+        ga4SessionId: normalizeNullableString(row.ga4_session_id) ??
+            (() => {
+                throw new Error("ga4_session_id is required");
+            })(),
+        sessionStartedAt: normalizeIsoTimestamp(row.session_started_at, "session_started_at"),
+        lastEventAt: normalizeIsoTimestamp(row.last_event_at, "last_event_at"),
         source: normalizeLowercaseString(row.source),
         medium: normalizeLowercaseString(row.medium),
         campaignId: normalizeNullableString(row.campaign_id),
@@ -249,23 +270,25 @@ function normalizeRawExtractionRow(raw) {
         campaignMetadataSource: normalizeMetadataSource(row.campaign_metadata_source),
         accountMetadataSource: normalizeMetadataSource(row.account_metadata_source),
         channelMetadataSource: normalizeMetadataSource(row.channel_metadata_source),
-        sourceExportHour: normalizeIsoTimestamp(row.source_export_hour, 'source_export_hour'),
-        sourceDataset: normalizeNullableString(row.source_dataset) ?? 'ga4_export',
-        sourceTableType: normalizeLowercaseString(row.source_table_type) === 'intraday' ? 'intraday' : 'events'
+        sourceExportHour: normalizeIsoTimestamp(row.source_export_hour, "source_export_hour"),
+        sourceDataset: normalizeNullableString(row.source_dataset) ?? "ga4_export",
+        sourceTableType: normalizeLowercaseString(row.source_table_type) === "intraday"
+            ? "intraday"
+            : "events",
     };
 }
 export async function extractGa4SessionAttributionForHour(input) {
-    const hourStart = normalizeHourStartIso(input.hourStart, 'hourStart');
+    const hourStart = normalizeHourStartIso(input.hourStart, "hourStart");
     const hourEndExclusive = addHours(new Date(hourStart), 1).toISOString();
     const statement = buildGa4SessionAttributionHourlyQuery({
         config: input.config,
         hourStart,
-        hourEndExclusive
+        hourEndExclusive,
     });
     const rows = await input.executor.runQuery(statement);
     return {
         hourStart,
-        rows: rows.map((row) => normalizeRawExtractionRow(row))
+        rows: rows.map((row) => normalizeRawExtractionRow(row)),
     };
 }
 function mapNormalizedRowForPersistence(row) {
@@ -293,7 +316,7 @@ function mapNormalizedRowForPersistence(row) {
         channel_metadata_source: row.channelMetadataSource,
         source_export_hour: row.sourceExportHour,
         source_dataset: row.sourceDataset,
-        source_table_type: row.sourceTableType
+        source_table_type: row.sourceTableType,
     };
 }
 async function readWatermarkHour() {
@@ -363,7 +386,10 @@ export async function markGa4SessionAttributionRunFailed(error) {
         last_run_status = 'failed',
         last_error = EXCLUDED.last_error,
         updated_at = now()
-    `, [GA4_SESSION_ATTRIBUTION_PIPELINE, error instanceof Error ? error.message : String(error)]);
+    `, [
+        GA4_SESSION_ATTRIBUTION_PIPELINE,
+        error instanceof Error ? error.message : String(error),
+    ]);
 }
 async function upsertGa4SessionAttributionRow(client, row) {
     await client.query(`
@@ -448,7 +474,7 @@ async function upsertGa4SessionAttributionRow(client, row) {
         row.channel_metadata_source,
         row.source_export_hour,
         row.source_dataset,
-        row.source_table_type
+        row.source_table_type,
     ]);
 }
 function mapPersistedRowForRead(row) {
@@ -476,7 +502,7 @@ function mapPersistedRowForRead(row) {
         channelMetadataSource: row.channel_metadata_source,
         sourceExportHour: row.source_export_hour.toISOString(),
         sourceDataset: row.source_dataset,
-        sourceTableType: row.source_table_type
+        sourceTableType: row.source_table_type,
     };
 }
 export async function listGa4SessionAttributionRows(db) {
@@ -534,19 +560,23 @@ async function ingestExplicitHours(input) {
         const hourlyResult = await extractGa4SessionAttributionForHour({
             config,
             executor: input.executor,
-            hourStart
+            hourStart,
         });
         hourlyResults.push(hourlyResult);
-        logInfo('ga4_session_attribution_ingestion_hour_completed', {
-            service: process.env.K_SERVICE ?? 'roas-radar',
+        logInfo("ga4_session_attribution_ingestion_hour_completed", {
+            service: process.env.K_SERVICE ?? "roas-radar",
             pipeline: GA4_SESSION_ATTRIBUTION_PIPELINE,
             correlationId,
             hourStart: hourlyResult.hourStart,
-            rowCount: hourlyResult.rows.length
+            rowCount: hourlyResult.rows.length,
         });
     }
-    const rowsToPersist = hourlyResults.flatMap((result) => result.rows).map(mapNormalizedRowForPersistence);
-    const watermarkAfter = explicitHours.length > 0 ? explicitHours[explicitHours.length - 1] : watermarkBeforeDate?.toISOString() ?? null;
+    const rowsToPersist = hourlyResults
+        .flatMap((result) => result.rows)
+        .map(mapNormalizedRowForPersistence);
+    const watermarkAfter = explicitHours.length > 0
+        ? explicitHours[explicitHours.length - 1]
+        : (watermarkBeforeDate?.toISOString() ?? null);
     const upsertedRows = await withTransaction(async (client) => {
         await markRunStarted(client, new Date());
         for (const row of rowsToPersist) {
@@ -563,7 +593,7 @@ async function ingestExplicitHours(input) {
         watermarkAfter: (await getGa4SessionAttributionWatermark({ query })) ?? watermarkAfter,
         processedHours: explicitHours,
         extractedRows: hourlyResults.reduce((sum, hourlyResult) => sum + hourlyResult.rows.length, 0),
-        upsertedRows
+        upsertedRows,
     };
     const summary = summarizeGa4IngestionResult({
         ...result,
@@ -573,22 +603,22 @@ async function ingestExplicitHours(input) {
             source: row.source,
             medium: row.medium,
             campaign: row.campaign,
-            clickIdValue: row.click_id_value
-        }))
+            clickIdValue: row.click_id_value,
+        })),
     });
-    logInfo('ga4_session_attribution_ingestion_completed', {
-        service: process.env.K_SERVICE ?? 'roas-radar',
+    logInfo("ga4_session_attribution_ingestion_completed", {
+        service: process.env.K_SERVICE ?? "roas-radar",
         pipeline: GA4_SESSION_ATTRIBUTION_PIPELINE,
         correlationId,
-        ...summary
+        ...summary,
     });
-    if (summary.lagStatus === 'lagging') {
-        logWarning('ga4_session_attribution_ingestion_lag_alert', {
-            service: process.env.K_SERVICE ?? 'roas-radar',
+    if (summary.lagStatus === "lagging") {
+        logWarning("ga4_session_attribution_ingestion_lag_alert", {
+            service: process.env.K_SERVICE ?? "roas-radar",
             pipeline: GA4_SESSION_ATTRIBUTION_PIPELINE,
             correlationId,
             ...summary,
-            alertable: true
+            alertable: true,
         });
     }
     return result;
@@ -598,15 +628,15 @@ export async function ingestGa4SessionAttributionHours(input) {
     try {
         return await ingestExplicitHours({
             ...input,
-            correlationId
+            correlationId,
         });
     }
     catch (error) {
-        logError('ga4_session_attribution_ingestion_failed', error, {
-            service: process.env.K_SERVICE ?? 'roas-radar',
+        logError("ga4_session_attribution_ingestion_failed", error, {
+            service: process.env.K_SERVICE ?? "roas-radar",
             pipeline: GA4_SESSION_ATTRIBUTION_PIPELINE,
             correlationId,
-            alertable: true
+            alertable: true,
         });
         throw error;
     }
@@ -620,22 +650,22 @@ export async function ingestGa4SessionAttribution(input) {
         const windows = planGa4SessionAttributionHourlyWindows({
             now,
             watermarkHour: watermarkBefore,
-            config
+            config,
         });
         return await ingestExplicitHours({
             ...input,
             config,
             now,
             hourStarts: windows.map((window) => window.hourStart),
-            correlationId
+            correlationId,
         });
     }
     catch (error) {
-        logError('ga4_session_attribution_ingestion_failed', error, {
-            service: process.env.K_SERVICE ?? 'roas-radar',
+        logError("ga4_session_attribution_ingestion_failed", error, {
+            service: process.env.K_SERVICE ?? "roas-radar",
             pipeline: GA4_SESSION_ATTRIBUTION_PIPELINE,
             correlationId,
-            alertable: true
+            alertable: true,
         });
         throw error;
     }

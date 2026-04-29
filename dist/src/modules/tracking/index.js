@@ -1,17 +1,22 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { Router } from 'express';
-import { z } from 'zod';
-import { ATTRIBUTION_SCHEMA_VERSION, MAX_ATTRIBUTION_URL_LENGTH, attributionConsentStateSchema, normalizeAttributionCaptureV1, normalizeAttributionConsentState, normalizeAttributionString, normalizeAttributionUrl } from '../../../packages/attribution-schema/index.js';
-import { env } from '../../config/env.js';
-import { query, withTransaction } from '../../db/pool.js';
-import { logError, logInfo, logWarning, summarizeAttributionObservation, summarizeDualWriteConsistency } from '../../observability/index.js';
-import { buildRawPayloadStorageMetadata, logRawPayloadIntegrityMismatch } from '../../shared/raw-payload-storage.js';
-import { enqueueAttributionForTrackingTouchpoint } from '../attribution/index.js';
-import { ingestIdentityEdges } from '../identity/index.js';
-import { buildCanonicalTouchpointDimensions } from '../marketing-dimensions/index.js';
-import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
-import { formatDateInTimezone, getReportingTimezone } from '../settings/index.js';
-const EVENT_TYPES = ['page_view', 'product_view', 'add_to_cart', 'checkout_started'];
+import { createHash, randomUUID } from "node:crypto";
+import { Router } from "express";
+import { z } from "zod";
+import { ATTRIBUTION_SCHEMA_VERSION, MAX_ATTRIBUTION_URL_LENGTH, attributionConsentStateSchema, normalizeAttributionCaptureV1, normalizeAttributionConsentState, normalizeAttributionString, normalizeAttributionUrl, } from "../../../packages/attribution-schema/index.js";
+import { env } from "../../config/env.js";
+import { query, withTransaction } from "../../db/pool.js";
+import { logError, logInfo, logWarning, summarizeAttributionObservation, summarizeDualWriteConsistency, } from "../../observability/index.js";
+import { buildRawPayloadStorageMetadata, logRawPayloadIntegrityMismatch, } from "../../shared/raw-payload-storage.js";
+import { enqueueAttributionForTrackingTouchpoint } from "../attribution/index.js";
+import { ingestIdentityEdges } from "../identity/index.js";
+import { buildCanonicalTouchpointDimensions } from "../marketing-dimensions/index.js";
+import { refreshDailyReportingMetrics } from "../reporting/aggregates.js";
+import { formatDateInTimezone, getReportingTimezone, } from "../settings/index.js";
+const EVENT_TYPES = [
+    "page_view",
+    "product_view",
+    "add_to_cart",
+    "checkout_started",
+];
 const MAX_TOKEN_LENGTH = 255;
 const MAX_USER_AGENT_LENGTH = 1024;
 const MAX_LANGUAGE_LENGTH = 64;
@@ -23,7 +28,7 @@ class TrackingHttpError extends Error {
     details;
     constructor(statusCode, code, message, details) {
         super(message);
-        this.name = 'TrackingHttpError';
+        this.name = "TrackingHttpError";
         this.statusCode = statusCode;
         this.code = code;
         this.details = details;
@@ -31,15 +36,13 @@ class TrackingHttpError extends Error {
 }
 const rawRequiredStringSchema = z.string();
 const rawOptionalStringSchema = z.union([z.string(), z.null(), z.undefined()]);
-const normalizedRequiredStringSchema = (maxLength) => z
-    .string()
-    .min(1)
-    .max(maxLength);
-const normalizedOptionalStringSchema = (maxLength) => z.union([z.string(), z.null()]).refine((value) => value === null || value.length <= maxLength, {
-    message: `String must contain at most ${maxLength} character(s)`
+const normalizedRequiredStringSchema = (maxLength) => z.string().min(1).max(maxLength);
+const normalizedOptionalStringSchema = (maxLength) => z
+    .union([z.string(), z.null()])
+    .refine((value) => value === null || value.length <= maxLength, {
+    message: `String must contain at most ${maxLength} character(s)`,
 });
-const trackingEventSchema = z
-    .object({
+const trackingEventSchema = z.object({
     eventType: z.enum(EVENT_TYPES),
     occurredAt: rawRequiredStringSchema,
     sessionId: rawRequiredStringSchema,
@@ -53,9 +56,9 @@ const trackingEventSchema = z
         .object({
         userAgent: rawOptionalStringSchema,
         screen: rawOptionalStringSchema,
-        language: rawOptionalStringSchema
+        language: rawOptionalStringSchema,
     })
-        .default({})
+        .default({}),
 });
 const normalizedTrackingEventSchema = z
     .object({
@@ -71,18 +74,17 @@ const normalizedTrackingEventSchema = z
     context: z.object({
         userAgent: normalizedOptionalStringSchema(MAX_USER_AGENT_LENGTH),
         screen: normalizedOptionalStringSchema(MAX_SCREEN_LENGTH),
-        language: normalizedOptionalStringSchema(MAX_LANGUAGE_LENGTH)
-    })
+        language: normalizedOptionalStringSchema(MAX_LANGUAGE_LENGTH),
+    }),
 })
     .superRefine((value, ctx) => {
     validateTrackingTimestamp(value.occurredAt, ctx);
-    validateHttpUrl(value.pageUrl, 'pageUrl', ctx);
+    validateHttpUrl(value.pageUrl, "pageUrl", ctx);
     if (value.referrerUrl) {
-        validateHttpUrl(value.referrerUrl, 'referrerUrl', ctx);
+        validateHttpUrl(value.referrerUrl, "referrerUrl", ctx);
     }
 });
-const attributionCaptureRequestSchema = z
-    .object({
+const attributionCaptureRequestSchema = z.object({
     schema_version: z.literal(ATTRIBUTION_SCHEMA_VERSION),
     roas_radar_session_id: z.string(),
     occurred_at: z.string(),
@@ -101,18 +103,18 @@ const attributionCaptureRequestSchema = z
     fbclid: z.union([z.string(), z.null(), z.undefined()]).optional(),
     ttclid: z.union([z.string(), z.null(), z.undefined()]).optional(),
     msclkid: z.union([z.string(), z.null(), z.undefined()]).optional(),
-    consent_state: attributionConsentStateSchema.optional()
+    consent_state: attributionConsentStateSchema.optional(),
 });
 const sessionBootstrapQuerySchema = z.object({
     pageUrl: rawRequiredStringSchema,
     landingUrl: rawOptionalStringSchema,
-    referrerUrl: rawOptionalStringSchema
+    referrerUrl: rawOptionalStringSchema,
 });
 function logAttributionCaptureObserved(source, payload, fields) {
-    logInfo('attribution_capture_observed', {
+    logInfo("attribution_capture_observed", {
         source,
         ...summarizeAttributionObservation(payload),
-        ...fields
+        ...fields,
     });
 }
 function validateTrackingTimestamp(value, ctx) {
@@ -127,14 +129,14 @@ function validateTrackingTimestamp(value, ctx) {
         ctx.addIssue({
             code: z.ZodIssueCode.custom,
             message: `occurredAt must be within the last ${env.TRACKING_MAX_EVENT_AGE_HOURS} hours`,
-            path: ['occurredAt']
+            path: ["occurredAt"],
         });
     }
     if (occurredAt.getTime() > now + maxFutureSkewMs) {
         ctx.addIssue({
             code: z.ZodIssueCode.custom,
             message: `occurredAt cannot be more than ${env.TRACKING_MAX_FUTURE_SKEW_SECONDS} seconds in the future`,
-            path: ['occurredAt']
+            path: ["occurredAt"],
         });
     }
 }
@@ -145,8 +147,10 @@ function validateHttpUrl(value, field, ctx) {
     catch (error) {
         ctx.addIssue({
             code: z.ZodIssueCode.custom,
-            message: error instanceof Error && error.message === 'invalid_protocol' ? `${field} must use http or https` : `${field} must be a valid URL`,
-            path: [field]
+            message: error instanceof Error && error.message === "invalid_protocol"
+                ? `${field} must use http or https`
+                : `${field} must be a valid URL`,
+            path: [field],
         });
     }
 }
@@ -162,9 +166,9 @@ function normalizeNullableString(value) {
     return normalizeAttributionString(value);
 }
 function resolveRequestIp(req) {
-    const forwardedFor = req.header('x-forwarded-for');
+    const forwardedFor = req.header("x-forwarded-for");
     if (forwardedFor) {
-        return normalizeNullableString(forwardedFor.split(',')[0]);
+        return normalizeNullableString(forwardedFor.split(",")[0]);
     }
     return normalizeNullableString(req.ip);
 }
@@ -173,10 +177,10 @@ function hashIp(value) {
     if (!normalized) {
         return null;
     }
-    return createHash('sha256').update(normalized).digest('hex');
+    return createHash("sha256").update(normalized).digest("hex");
 }
 function hashTrackingFingerprint(input) {
-    return createHash('sha256')
+    return createHash("sha256")
         .update(JSON.stringify({
         sessionId: input.sessionId,
         eventType: input.eventType,
@@ -185,12 +189,12 @@ function hashTrackingFingerprint(input) {
         referrerUrl: input.referrerUrl,
         shopifyCartToken: input.shopifyCartToken,
         shopifyCheckoutToken: input.shopifyCheckoutToken,
-        clientEventId: input.clientEventId
+        clientEventId: input.clientEventId,
     }))
-        .digest('hex');
+        .digest("hex");
 }
 function hashAttributionFingerprint(capture, eventType, ingestionSource) {
-    return createHash('sha256')
+    return createHash("sha256")
         .update(JSON.stringify({
         schemaVersion: capture.schema_version,
         sessionId: capture.roas_radar_session_id,
@@ -211,24 +215,24 @@ function hashAttributionFingerprint(capture, eventType, ingestionSource) {
         fbclid: capture.fbclid,
         ttclid: capture.ttclid,
         msclkid: capture.msclkid,
-        ingestionSource
+        ingestionSource,
     }))
-        .digest('hex');
+        .digest("hex");
 }
 function parseCampaignParameters(pageUrl) {
     const url = new URL(pageUrl);
     return {
-        utm_source: normalizeNullableString(url.searchParams.get('utm_source'))?.toLowerCase() ?? null,
-        utm_medium: normalizeNullableString(url.searchParams.get('utm_medium'))?.toLowerCase() ?? null,
-        utm_campaign: normalizeNullableString(url.searchParams.get('utm_campaign'))?.toLowerCase() ?? null,
-        utm_content: normalizeNullableString(url.searchParams.get('utm_content'))?.toLowerCase() ?? null,
-        utm_term: normalizeNullableString(url.searchParams.get('utm_term'))?.toLowerCase() ?? null,
-        gclid: normalizeNullableString(url.searchParams.get('gclid')),
-        gbraid: normalizeNullableString(url.searchParams.get('gbraid')),
-        wbraid: normalizeNullableString(url.searchParams.get('wbraid')),
-        fbclid: normalizeNullableString(url.searchParams.get('fbclid')),
-        ttclid: normalizeNullableString(url.searchParams.get('ttclid')),
-        msclkid: normalizeNullableString(url.searchParams.get('msclkid'))
+        utm_source: normalizeNullableString(url.searchParams.get("utm_source"))?.toLowerCase() ?? null,
+        utm_medium: normalizeNullableString(url.searchParams.get("utm_medium"))?.toLowerCase() ?? null,
+        utm_campaign: normalizeNullableString(url.searchParams.get("utm_campaign"))?.toLowerCase() ?? null,
+        utm_content: normalizeNullableString(url.searchParams.get("utm_content"))?.toLowerCase() ?? null,
+        utm_term: normalizeNullableString(url.searchParams.get("utm_term"))?.toLowerCase() ?? null,
+        gclid: normalizeNullableString(url.searchParams.get("gclid")),
+        gbraid: normalizeNullableString(url.searchParams.get("gbraid")),
+        wbraid: normalizeNullableString(url.searchParams.get("wbraid")),
+        fbclid: normalizeNullableString(url.searchParams.get("fbclid")),
+        ttclid: normalizeNullableString(url.searchParams.get("ttclid")),
+        msclkid: normalizeNullableString(url.searchParams.get("msclkid")),
     };
 }
 function buildCaptureFromTrackingEvent(input) {
@@ -241,7 +245,7 @@ function buildCaptureFromTrackingEvent(input) {
         landing_url: null,
         referrer_url: input.referrerUrl,
         page_url: input.pageUrl,
-        ...marketingDimensions
+        ...marketingDimensions,
     });
 }
 function sanitizeTrackingInput(input) {
@@ -251,7 +255,9 @@ function sanitizeTrackingInput(input) {
         occurredAt: new Date(input.occurredAt).toISOString(),
         sessionId: input.sessionId,
         pageUrl: normalizeTrackingUrl(input.pageUrl) ?? input.pageUrl,
-        referrerUrl: input.referrerUrl == null ? null : (sanitizedReferrerUrl ?? input.referrerUrl),
+        referrerUrl: input.referrerUrl == null
+            ? null
+            : (sanitizedReferrerUrl ?? input.referrerUrl),
         shopifyCartToken: normalizeNullableString(input.shopifyCartToken),
         shopifyCheckoutToken: normalizeNullableString(input.shopifyCheckoutToken),
         clientEventId: normalizeNullableString(input.clientEventId),
@@ -259,14 +265,14 @@ function sanitizeTrackingInput(input) {
         context: {
             userAgent: normalizeNullableString(input.context.userAgent),
             screen: normalizeNullableString(input.context.screen),
-            language: normalizeNullableString(input.context.language)
-        }
+            language: normalizeNullableString(input.context.language),
+        },
     };
 }
 function normalizeAttributionCaptureRequest(body) {
     return {
         capture: normalizeAttributionCaptureV1(body),
-        consentState: normalizeAttributionConsentState(body.consent_state)
+        consentState: normalizeAttributionConsentState(body.consent_state),
     };
 }
 async function findExistingTrackingEventByClientEventId(clientEventId) {
@@ -307,6 +313,23 @@ async function findExistingAttributionTouchEventByFingerprint(ingestionFingerpri
     `, [ingestionFingerprint]);
     return result.rows[0] ?? null;
 }
+async function ingestIdentityEdgesBestEffort(client, input) {
+    try {
+        await ingestIdentityEdges(client, input);
+    }
+    catch (error) {
+        logWarning("tracking_identity_edge_ingestion_failed", {
+            sourceTable: input.sourceTable,
+            sourceRecordId: input.sourceRecordId,
+            evidenceSource: input.evidenceSource,
+            sessionId: input.sessionId ?? null,
+            checkoutToken: input.checkoutToken ?? null,
+            cartToken: input.cartToken ?? null,
+            errorName: error instanceof Error ? error.name : "Error",
+            errorMessage: error instanceof Error ? error.message : String(error),
+        });
+    }
+}
 async function upsertTrackingSessionForCapture(client, capture, occurredAt, userAgent, ipHash) {
     const canonicalDimensions = buildCanonicalTouchpointDimensions({
         source: capture.utm_source,
@@ -319,7 +342,7 @@ async function upsertTrackingSessionForCapture(client, capture, occurredAt, user
         wbraid: capture.wbraid,
         fbclid: capture.fbclid,
         ttclid: capture.ttclid,
-        msclkid: capture.msclkid
+        msclkid: capture.msclkid,
     });
     await client.query(`
       INSERT INTO tracking_sessions (
@@ -402,7 +425,7 @@ async function upsertTrackingSessionForCapture(client, capture, occurredAt, user
         capture.ttclid,
         capture.msclkid,
         userAgent,
-        ipHash
+        ipHash,
     ]);
 }
 async function upsertSessionAttributionIdentity(client, capture) {
@@ -481,7 +504,7 @@ async function upsertSessionAttributionIdentity(client, capture) {
         capture.wbraid,
         capture.fbclid,
         capture.ttclid,
-        capture.msclkid
+        capture.msclkid,
     ]);
 }
 async function insertTrackingEventForCapture(client, input) {
@@ -568,20 +591,26 @@ async function insertTrackingEventForCapture(client, input) {
             input.ingestionSource,
             rawPayloadJson,
             payloadSizeBytes,
-            payloadHash
+            payloadHash,
         ]);
-        logRawPayloadIntegrityMismatch(rawPayloadMetadata, insertResult.rows[0], {
-            surface: 'tracking_events',
-            operation: 'insert',
-            recordId: insertResult.rows[0].id,
-            fields: {
-                ingestionSource: input.ingestionSource,
-                eventType: input.eventType
-            }
-        });
+        const insertedRow = insertResult.rows[0];
+        if (insertedRow?.persistedRawPayload !== undefined) {
+            logRawPayloadIntegrityMismatch(rawPayloadMetadata, insertedRow, {
+                surface: "tracking_events",
+                operation: "insert",
+                recordId: insertedRow.id,
+                fields: {
+                    ingestionSource: input.ingestionSource,
+                    eventType: input.eventType,
+                },
+            });
+        }
     }
     catch (error) {
-        if (typeof error === 'object' && error !== null && 'code' in error && error.code === '23505') {
+        if (typeof error === "object" &&
+            error !== null &&
+            "code" in error &&
+            error.code === "23505") {
             const existing = await findExistingTrackingEventByFingerprint(input.ingestionFingerprint);
             if (existing) {
                 return existing.id;
@@ -682,24 +711,32 @@ async function insertTrackingBrowserEvent(client, input, rawPayload, ingestionFi
             input.clientEventId,
             input.consentState,
             ingestionFingerprint,
-            'browser',
+            "browser",
             rawPayloadJson,
             payloadSizeBytes,
-            payloadHash
+            payloadHash,
         ]);
-        logRawPayloadIntegrityMismatch(rawPayloadMetadata, insertResult.rows[0], {
-            surface: 'tracking_events',
-            operation: 'insert',
-            recordId: insertResult.rows[0].id,
-            fields: {
-                ingestionSource: 'browser',
-                eventType: input.eventType
-            }
-        });
+        const insertedRow = insertResult.rows[0];
+        if (insertedRow?.persistedRawPayload !== undefined) {
+            logRawPayloadIntegrityMismatch(rawPayloadMetadata, insertedRow, {
+                surface: "tracking_events",
+                operation: "insert",
+                recordId: insertedRow.id,
+                fields: {
+                    ingestionSource: "browser",
+                    eventType: input.eventType,
+                },
+            });
+        }
     }
     catch (error) {
-        if (typeof error === 'object' && error !== null && 'code' in error && error.code === '23505') {
-            const existing = (input.clientEventId ? await findExistingTrackingEventByClientEventId(input.clientEventId) : null) ??
+        if (typeof error === "object" &&
+            error !== null &&
+            "code" in error &&
+            error.code === "23505") {
+            const existing = (input.clientEventId
+                ? await findExistingTrackingEventByClientEventId(input.clientEventId)
+                : null) ??
                 (await findExistingTrackingEventByFingerprint(ingestionFingerprint));
             if (existing) {
                 return existing.id;
@@ -798,29 +835,35 @@ async function insertAttributionTouchEvent(client, input) {
             payloadSizeBytes,
             payloadHash,
             input.shopifyCartToken ?? null,
-            input.shopifyCheckoutToken ?? null
+            input.shopifyCheckoutToken ?? null,
         ]);
-        logRawPayloadIntegrityMismatch(rawPayloadMetadata, result.rows[0], {
-            surface: 'session_attribution_touch_events',
-            operation: 'insert',
-            recordId: result.rows[0].id,
-            fields: {
-                ingestionSource: input.ingestionSource,
-                eventType: input.eventType
-            }
-        });
+        const insertedRow = result.rows[0];
+        if (insertedRow?.persistedRawPayload !== undefined) {
+            logRawPayloadIntegrityMismatch(rawPayloadMetadata, insertedRow, {
+                surface: "session_attribution_touch_events",
+                operation: "insert",
+                recordId: insertedRow.id,
+                fields: {
+                    ingestionSource: input.ingestionSource,
+                    eventType: input.eventType,
+                },
+            });
+        }
         return {
-            id: result.rows[0].id,
-            deduplicated: false
+            id: insertedRow.id,
+            deduplicated: false,
         };
     }
     catch (error) {
-        if (typeof error === 'object' && error !== null && 'code' in error && error.code === '23505') {
+        if (typeof error === "object" &&
+            error !== null &&
+            "code" in error &&
+            error.code === "23505") {
             const existing = await findExistingAttributionTouchEventByFingerprint(input.ingestionFingerprint);
             if (existing) {
                 return {
                     id: existing.id,
-                    deduplicated: true
+                    deduplicated: true,
                 };
             }
         }
@@ -836,7 +879,7 @@ async function ingestAttributionCapture(input, options) {
                 touchEventId: existing.id,
                 capturedAt: existing.captured_at.toISOString(),
                 sessionId: existing.roas_radar_session_id,
-                deduplicated: true
+                deduplicated: true,
             };
         }
     }
@@ -852,7 +895,7 @@ async function ingestAttributionCapture(input, options) {
             ingestionSource: input.ingestionSource,
             ingestionFingerprint,
             shopifyCartToken: input.shopifyCartToken,
-            shopifyCheckoutToken: input.shopifyCheckoutToken
+            shopifyCheckoutToken: input.shopifyCheckoutToken,
         });
         const trackingEventId = await insertTrackingEventForCapture(client, {
             capture: input.capture,
@@ -862,17 +905,17 @@ async function ingestAttributionCapture(input, options) {
             ingestionSource: input.ingestionSource,
             ingestionFingerprint,
             shopifyCartToken: input.shopifyCartToken,
-            shopifyCheckoutToken: input.shopifyCheckoutToken
+            shopifyCheckoutToken: input.shopifyCheckoutToken,
         });
-        await ingestIdentityEdges(client, {
+        await ingestIdentityEdgesBestEffort(client, {
             sourceTimestamp: input.capture.occurred_at,
-            evidenceSource: 'tracking_event',
-            sourceTable: 'tracking_events',
+            evidenceSource: "tracking_event",
+            sourceTable: "tracking_events",
             sourceRecordId: trackingEventId,
             idempotencyKey: `tracking_capture_identity:${ingestionFingerprint}`,
             sessionId: input.capture.roas_radar_session_id,
             checkoutToken: input.shopifyCheckoutToken,
-            cartToken: input.shopifyCartToken
+            cartToken: input.shopifyCartToken,
         });
         return touchEvent;
     });
@@ -880,7 +923,7 @@ async function ingestAttributionCapture(input, options) {
         touchEventId: result.id,
         capturedAt: input.capture.captured_at,
         sessionId: input.capture.roas_radar_session_id,
-        deduplicated: result.deduplicated
+        deduplicated: result.deduplicated,
     };
 }
 async function ingestTrackingEvent(input, rawPayload, requestIp) {
@@ -893,7 +936,7 @@ async function ingestTrackingEvent(input, rawPayload, requestIp) {
                 ingestedAt: existingByClientEventId.ingested_at.toISOString(),
                 sessionId: existingByClientEventId.session_id,
                 deduplicated: true,
-                sanitizedInput: input
+                sanitizedInput: input,
             };
         }
     }
@@ -904,7 +947,7 @@ async function ingestTrackingEvent(input, rawPayload, requestIp) {
             ingestedAt: existingByFingerprint.ingested_at.toISOString(),
             sessionId: existingByFingerprint.session_id,
             deduplicated: true,
-            sanitizedInput: input
+            sanitizedInput: input,
         };
     }
     const derivedCapture = buildCaptureFromTrackingEvent(input);
@@ -912,26 +955,26 @@ async function ingestTrackingEvent(input, rawPayload, requestIp) {
     const eventId = await withTransaction(async (client) => {
         await upsertTrackingSessionForCapture(client, {
             ...derivedCapture,
-            landing_url: input.pageUrl
+            landing_url: input.pageUrl,
         }, new Date(input.occurredAt), input.context.userAgent, ipHash);
         const insertedEventId = await insertTrackingBrowserEvent(client, input, rawPayload, ingestionFingerprint);
-        await ingestIdentityEdges(client, {
+        await ingestIdentityEdgesBestEffort(client, {
             sourceTimestamp: input.occurredAt,
-            evidenceSource: 'tracking_event',
-            sourceTable: 'tracking_events',
+            evidenceSource: "tracking_event",
+            sourceTable: "tracking_events",
             sourceRecordId: insertedEventId,
             idempotencyKey: `tracking_browser_identity:${ingestionFingerprint}`,
             sessionId: input.sessionId,
             checkoutToken: input.shopifyCheckoutToken,
-            cartToken: input.shopifyCartToken
+            cartToken: input.shopifyCartToken,
         });
         await enqueueAttributionForTrackingTouchpoint(client, {
             sessionId: input.sessionId,
             shopifyCheckoutToken: input.shopifyCheckoutToken,
-            shopifyCartToken: input.shopifyCartToken
+            shopifyCartToken: input.shopifyCartToken,
         });
         await refreshDailyReportingMetrics(client, [
-            formatDateInTimezone(new Date(input.occurredAt), await getReportingTimezone(client))
+            formatDateInTimezone(new Date(input.occurredAt), await getReportingTimezone(client)),
         ]);
         return insertedEventId;
     });
@@ -940,7 +983,7 @@ async function ingestTrackingEvent(input, rawPayload, requestIp) {
         ingestedAt: new Date().toISOString(),
         sessionId: input.sessionId,
         deduplicated: false,
-        sanitizedInput: input
+        sanitizedInput: input,
     };
 }
 async function bootstrapSession(rawPayload, pageUrl, landingUrl, referrerUrl, requestIp, userAgent, requestContextSource) {
@@ -954,23 +997,23 @@ async function bootstrapSession(rawPayload, pageUrl, landingUrl, referrerUrl, re
         landing_url: landingUrl ?? pageUrl,
         referrer_url: referrerUrl,
         page_url: pageUrl,
-        ...parseCampaignParameters(landingUrl ?? pageUrl)
+        ...parseCampaignParameters(landingUrl ?? pageUrl),
     });
     await ingestAttributionCapture({
         capture,
         rawPayload,
-        eventType: 'page_view',
-        consentState: 'unknown',
-        ingestionSource: 'request_query',
+        eventType: "page_view",
+        consentState: "unknown",
+        ingestionSource: "request_query",
         requestIp,
-        userAgent
+        userAgent,
     }, { precheckDuplicates: false });
     return {
         sessionId,
         createdAt: now,
         isNewSession: true,
-        requestContextCaptured: requestContextSource !== 'none',
-        requestContextSource
+        requestContextCaptured: requestContextSource !== "none",
+        requestContextSource,
     };
 }
 class InMemoryRateLimiter {
@@ -981,14 +1024,14 @@ class InMemoryRateLimiter {
         if (!existing || existing.resetAt <= now) {
             const nextEntry = {
                 count: 1,
-                resetAt: now + env.TRACKING_RATE_LIMIT_WINDOW_MS
+                resetAt: now + env.TRACKING_RATE_LIMIT_WINDOW_MS,
             };
             this.entries.set(key, nextEntry);
             this.prune(now);
             return {
                 allowed: true,
                 remaining: Math.max(env.TRACKING_RATE_LIMIT_MAX - nextEntry.count, 0),
-                resetAt: nextEntry.resetAt
+                resetAt: nextEntry.resetAt,
             };
         }
         existing.count += 1;
@@ -996,7 +1039,7 @@ class InMemoryRateLimiter {
         return {
             allowed: existing.count <= env.TRACKING_RATE_LIMIT_MAX,
             remaining: Math.max(env.TRACKING_RATE_LIMIT_MAX - existing.count, 0),
-            resetAt: existing.resetAt
+            resetAt: existing.resetAt,
         };
     }
     prune(now) {
@@ -1015,28 +1058,28 @@ function enforceAllowedOrigin(req) {
     if (!env.TRACKING_ALLOWED_ORIGINS.length) {
         return;
     }
-    const origin = req.header('origin');
+    const origin = req.header("origin");
     if (!origin || !env.TRACKING_ALLOWED_ORIGINS.includes(origin)) {
-        throw new TrackingHttpError(403, 'origin_not_allowed', 'Request origin is not allowed', {
-            allowedOrigins: env.TRACKING_ALLOWED_ORIGINS
+        throw new TrackingHttpError(403, "origin_not_allowed", "Request origin is not allowed", {
+            allowedOrigins: env.TRACKING_ALLOWED_ORIGINS,
         });
     }
 }
 function enforceSupportedContentType(req) {
-    if (!req.is(['application/json', 'text/plain'])) {
-        throw new TrackingHttpError(415, 'unsupported_media_type', 'Tracking endpoint requires application/json or text/plain JSON');
+    if (!req.is(["application/json", "text/plain"])) {
+        throw new TrackingHttpError(415, "unsupported_media_type", "Tracking endpoint requires application/json or text/plain JSON");
     }
 }
 function parseTrackingRequestBody(body) {
-    if (typeof body === 'string') {
+    if (typeof body === "string") {
         const trimmed = body.trim();
         if (!trimmed) {
-            throw new TrackingHttpError(400, 'invalid_json', 'Request body must not be empty');
+            throw new TrackingHttpError(400, "invalid_json", "Request body must not be empty");
         }
         try {
             const parsed = JSON.parse(trimmed);
-            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-                throw new TrackingHttpError(400, 'invalid_json', 'Tracking payload must be a JSON object');
+            if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+                throw new TrackingHttpError(400, "invalid_json", "Tracking payload must be a JSON object");
             }
             return parsed;
         }
@@ -1044,11 +1087,11 @@ function parseTrackingRequestBody(body) {
             if (error instanceof TrackingHttpError) {
                 throw error;
             }
-            throw new TrackingHttpError(400, 'invalid_json', 'Request body must be valid JSON');
+            throw new TrackingHttpError(400, "invalid_json", "Request body must be valid JSON");
         }
     }
-    if (!body || typeof body !== 'object' || Array.isArray(body)) {
-        throw new TrackingHttpError(400, 'invalid_json', 'Tracking payload must be a JSON object');
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+        throw new TrackingHttpError(400, "invalid_json", "Tracking payload must be a JSON object");
     }
     return body;
 }
@@ -1067,7 +1110,7 @@ function buildSessionBootstrapRawPayload(req) {
     if (req.query.referrerUrl !== undefined) {
         rawPayload.referrerUrl = req.query.referrerUrl;
     }
-    const referer = req.header('referer');
+    const referer = req.header("referer");
     if (referer !== undefined) {
         rawPayload.referer = referer;
     }
@@ -1075,13 +1118,17 @@ function buildSessionBootstrapRawPayload(req) {
 }
 function enforceRateLimit(req) {
     const requestIp = resolveRequestIp(req);
-    const body = typeof req.body === 'object' && req.body !== null ? req.body : {};
-    const sessionHint = typeof body.sessionId === 'string' ? body.sessionId : 'anonymous';
-    const key = createHash('sha256').update(`${requestIp ?? 'unknown'}:${sessionHint}`).digest('hex');
+    const body = typeof req.body === "object" && req.body !== null
+        ? req.body
+        : {};
+    const sessionHint = typeof body.sessionId === "string" ? body.sessionId : "anonymous";
+    const key = createHash("sha256")
+        .update(`${requestIp ?? "unknown"}:${sessionHint}`)
+        .digest("hex");
     const result = trackingRateLimiter.check(key);
     if (!result.allowed) {
-        throw new TrackingHttpError(429, 'rate_limit_exceeded', 'Too many tracking requests', {
-            retryAfterMs: Math.max(result.resetAt - Date.now(), 0)
+        throw new TrackingHttpError(429, "rate_limit_exceeded", "Too many tracking requests", {
+            retryAfterMs: Math.max(result.resetAt - Date.now(), 0),
         });
     }
 }
@@ -1091,7 +1138,7 @@ function parseAttributionCaptureRequest(body) {
     }
     catch (error) {
         if (error instanceof z.ZodError) {
-            throw new TrackingHttpError(400, 'invalid_request', 'Invalid attribution capture payload', error.flatten());
+            throw new TrackingHttpError(400, "invalid_request", "Invalid attribution capture payload", error.flatten());
         }
         throw error;
     }
@@ -1103,12 +1150,12 @@ function parseTrackingEventRequest(body) {
         normalizedTrackingEventSchema.parse(sanitized);
         return {
             raw,
-            sanitized
+            sanitized,
         };
     }
     catch (error) {
         if (error instanceof z.ZodError) {
-            throw new TrackingHttpError(400, 'invalid_request', 'Invalid tracking payload', error.flatten());
+            throw new TrackingHttpError(400, "invalid_request", "Invalid tracking payload", error.flatten());
         }
         throw error;
     }
@@ -1120,94 +1167,94 @@ async function emitDerivedAttributionFromBrowserEvent(input, rawPayload, request
             rawPayload,
             eventType: input.eventType,
             consentState: input.consentState,
-            ingestionSource: 'server',
+            ingestionSource: "server",
             requestIp,
             userAgent: input.context.userAgent,
             shopifyCartToken: input.shopifyCartToken,
-            shopifyCheckoutToken: input.shopifyCheckoutToken
+            shopifyCheckoutToken: input.shopifyCheckoutToken,
         }, { precheckDuplicates: false });
         return {
             ok: true,
             touchEventId: result.touchEventId,
-            deduplicated: result.deduplicated
+            deduplicated: result.deduplicated,
         };
     }
     catch (error) {
-        logError('tracking_dual_write_server_emit_failed', error, {
+        logError("tracking_dual_write_server_emit_failed", error, {
             sessionId: input.sessionId,
-            eventType: input.eventType
+            eventType: input.eventType,
         });
         return {
             ok: false,
             touchEventId: null,
             deduplicated: false,
-            errorCode: 'server_attribution_emit_failed'
+            errorCode: "server_attribution_emit_failed",
         };
     }
 }
 export function createTrackingRouter() {
     const router = Router();
-    router.get('/session', async (req, res, next) => {
+    router.get("/session", async (req, res, next) => {
         try {
             enforceAllowedOrigin(req);
             const parsedQuery = sessionBootstrapQuerySchema.parse({
                 pageUrl: req.query.pageUrl,
                 landingUrl: req.query.landingUrl,
-                referrerUrl: req.query.referrerUrl
+                referrerUrl: req.query.referrerUrl,
             });
             const rawPayload = buildSessionBootstrapRawPayload(req);
             const normalizedPageUrl = normalizeTrackingUrl(parsedQuery.pageUrl);
             const normalizedLandingUrl = normalizeTrackingUrl(parsedQuery.landingUrl);
-            const headerReferrerUrl = normalizeTrackingUrl(req.header('referer') ?? null);
+            const headerReferrerUrl = normalizeTrackingUrl(req.header("referer") ?? null);
             const normalizedReferrerUrl = normalizeTrackingUrl(parsedQuery.referrerUrl) ?? headerReferrerUrl;
             if (!normalizedPageUrl) {
-                throw new TrackingHttpError(400, 'invalid_request', 'pageUrl must be a valid http(s) URL');
+                throw new TrackingHttpError(400, "invalid_request", "pageUrl must be a valid http(s) URL");
             }
             const requestContextSource = parsedQuery.referrerUrl
-                ? 'query'
+                ? "query"
                 : headerReferrerUrl
-                    ? 'header'
-                    : 'none';
-            const result = await bootstrapSession(rawPayload, normalizedPageUrl, normalizedLandingUrl, normalizedReferrerUrl, resolveRequestIp(req), normalizeNullableString(req.header('user-agent')), requestContextSource);
-            logAttributionCaptureObserved('session_bootstrap', {
+                    ? "header"
+                    : "none";
+            const result = await bootstrapSession(rawPayload, normalizedPageUrl, normalizedLandingUrl, normalizedReferrerUrl, resolveRequestIp(req), normalizeNullableString(req.header("user-agent")), requestContextSource);
+            logAttributionCaptureObserved("session_bootstrap", {
                 roas_radar_session_id: result.sessionId,
                 landing_url: normalizedLandingUrl ?? normalizedPageUrl,
                 referrer_url: normalizedReferrerUrl,
-                page_url: normalizedPageUrl
+                page_url: normalizedPageUrl,
             }, {
                 accepted: true,
                 deduplicated: !result.isNewSession,
                 requestContextCaptured: result.requestContextCaptured,
-                requestContextSource: result.requestContextSource
+                requestContextSource: result.requestContextSource,
             });
             res.status(200).json({
                 ok: true,
                 sessionId: result.sessionId,
                 createdAt: result.createdAt,
-                isNewSession: result.isNewSession
+                isNewSession: result.isNewSession,
             });
         }
         catch (error) {
             if (error instanceof TrackingHttpError) {
-                logWarning('tracking_session_bootstrap_rejected', {
+                logWarning("tracking_session_bootstrap_rejected", {
                     code: error.code,
                     statusCode: error.statusCode,
-                    details: error.details
+                    details: error.details,
                 });
             }
             else if (error instanceof z.ZodError) {
-                next(new TrackingHttpError(400, 'invalid_request', 'Invalid session bootstrap request', error.flatten()));
+                next(new TrackingHttpError(400, "invalid_request", "Invalid session bootstrap request", error.flatten()));
                 return;
             }
             else {
-                logError('tracking_session_bootstrap_failed', error, {
-                    path: req.baseUrl ? `${req.baseUrl}${req.path}` : req.path
+                logError("tracking_session_bootstrap_failed", error, {
+                    path: req.baseUrl ? `${req.baseUrl}${req.path}` : req.path,
                 });
             }
             next(error);
         }
     });
-    router.post('/attribution', async (req, res, next) => {
+    router.post("/attribution", async (req, res, next) => {
         try {
             enforceSupportedContentType(req);
             enforceAllowedOrigin(req);
@@ -1217,47 +1264,47 @@ export function createTrackingRouter() {
             const result = await ingestAttributionCapture({
                 capture: parsed.capture,
                 rawPayload,
-                eventType: 'page_view',
+                eventType: "page_view",
                 consentState: parsed.consentState,
-                ingestionSource: 'server',
+                ingestionSource: "server",
                 requestIp: resolveRequestIp(req),
-                userAgent: normalizeNullableString(req.header('user-agent'))
+                userAgent: normalizeNullableString(req.header("user-agent")),
             }, { precheckDuplicates: true });
-            logAttributionCaptureObserved('attribution_capture', parsed.capture, {
+            logAttributionCaptureObserved("attribution_capture", parsed.capture, {
                 accepted: true,
                 deduplicated: result.deduplicated,
-                touchEventId: result.touchEventId
+                touchEventId: result.touchEventId,
             });
             res.status(200).json({
                 ok: true,
                 sessionId: result.sessionId,
                 touchEventId: result.touchEventId,
                 capturedAt: result.capturedAt,
-                deduplicated: result.deduplicated
+                deduplicated: result.deduplicated,
             });
         }
         catch (error) {
             if (error instanceof TrackingHttpError) {
-                logAttributionCaptureObserved('attribution_capture', req.body, {
+                logAttributionCaptureObserved("attribution_capture", req.body, {
                     accepted: false,
                     rejectionCode: error.code,
-                    statusCode: error.statusCode
+                    statusCode: error.statusCode,
                 });
-                logWarning('tracking_attribution_rejected', {
+                logWarning("tracking_attribution_rejected", {
                     code: error.code,
                     statusCode: error.statusCode,
-                    details: error.details
+                    details: error.details,
                 });
             }
             else {
-                logError('tracking_attribution_failed', error, {
-                    path: req.baseUrl ? `${req.baseUrl}${req.path}` : req.path
+                logError("tracking_attribution_failed", error, {
+                    path: req.baseUrl ? `${req.baseUrl}${req.path}` : req.path,
                 });
             }
             next(error);
         }
     });
-    router.post('/', async (req, res, next) => {
+    router.post("/", async (req, res, next) => {
         try {
             enforceSupportedContentType(req);
             enforceAllowedOrigin(req);
@@ -1267,25 +1314,29 @@ export function createTrackingRouter() {
             const requestIp = resolveRequestIp(req);
             const browserResult = await ingestTrackingEvent(sanitizedInput, rawPayload, requestIp);
             const serverAttributionResult = await emitDerivedAttributionFromBrowserEvent(browserResult.sanitizedInput, rawPayload, requestIp);
-            logAttributionCaptureObserved('browser_event', browserResult.sanitizedInput, {
+            logAttributionCaptureObserved("browser_event", browserResult.sanitizedInput, {
                 accepted: true,
                 deduplicated: browserResult.deduplicated,
-                eventType: sanitizedInput.eventType
+                eventType: sanitizedInput.eventType,
             });
-            logInfo('tracking_dual_write_consistency', {
+            logInfo("tracking_dual_write_consistency", {
                 ...summarizeDualWriteConsistency({
-                    browserOutcome: browserResult.deduplicated ? 'deduplicated' : 'accepted',
+                    browserOutcome: browserResult.deduplicated
+                        ? "deduplicated"
+                        : "accepted",
                     serverOutcome: serverAttributionResult.ok
                         ? serverAttributionResult.deduplicated
-                            ? 'deduplicated'
-                            : 'accepted'
-                        : 'failed'
+                            ? "deduplicated"
+                            : "accepted"
+                        : "failed",
                 }),
                 sessionId: browserResult.sessionId,
                 eventId: browserResult.eventId,
                 eventType: sanitizedInput.eventType,
                 touchEventId: serverAttributionResult.touchEventId,
-                errorCode: serverAttributionResult.ok ? null : serverAttributionResult.errorCode
+                errorCode: serverAttributionResult.ok
+                    ? null
+                    : serverAttributionResult.errorCode,
             });
             res.status(200).json({
                 ok: true,
@@ -1293,20 +1344,20 @@ export function createTrackingRouter() {
                 ingestedAt: browserResult.ingestedAt,
                 sessionId: browserResult.sessionId,
                 deduplicated: browserResult.deduplicated,
-                attribution: serverAttributionResult
+                attribution: serverAttributionResult,
             });
         }
         catch (error) {
             if (error instanceof TrackingHttpError) {
-                logWarning('tracking_ingest_rejected', {
+                logWarning("tracking_ingest_rejected", {
                     code: error.code,
                     statusCode: error.statusCode,
-                    details: error.details
+                    details: error.details,
                 });
             }
             else {
-                logError('tracking_ingest_failed', error, {
-                    path: req.baseUrl ? `${req.baseUrl}${req.path}` : req.path
+                logError("tracking_ingest_failed", error, {
+                    path: req.baseUrl ? `${req.baseUrl}${req.path}` : req.path,
                 });
             }
             next(error);

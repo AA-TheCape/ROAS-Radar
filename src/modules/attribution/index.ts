@@ -1,4 +1,4 @@
-// @ts-nocheck
+import type { PoolClient, QueryResultRow } from "pg";
 
 import { withTransaction } from "../../db/pool.js";
 import {
@@ -13,6 +13,7 @@ import {
 } from "../settings/index.js";
 import {
 	ATTRIBUTION_MODELS,
+	type AttributionCredit,
 	computeAttributionOutputs,
 	computeSingleWinnerCredits,
 } from "./engine.js";
@@ -29,26 +30,108 @@ import {
 	isDirectTouchpoint,
 	selectGa4FallbackWinner,
 	selectLastNonDirectWinner,
+	type AttributionMatchSource,
+	type DeterministicIngestionSource,
+	type ResolvedAttributionTouchpoint,
+	type ResolvedJourney,
 } from "./resolver.js";
 import { extractShopifyHintAttribution } from "./shopify-hints.js";
 const ATTRIBUTION_MODEL_VERSION = 1;
 const ATTRIBUTION_WINDOW_DAYS = 7;
 const JOB_STALE_AFTER_MINUTES = 15;
 const MAX_RETRY_DELAY_SECONDS = 1_800;
-function normalizeNullableString(value) {
+type Queryable = Pick<PoolClient, "query">;
+
+type OrderRow = QueryResultRow & {
+	shopify_order_id: string;
+	total_price: string;
+	processed_at: Date | null;
+	created_at_shopify: Date | null;
+	ingested_at: Date;
+	source_name: string | null;
+	raw_payload: unknown;
+	landing_session_id: string | null;
+	checkout_token: string | null;
+	cart_token: string | null;
+	email_hash: string | null;
+	customer_identity_id: string | null;
+};
+
+type AttributionJobRow = QueryResultRow & {
+	id: number;
+	shopify_order_id: string;
+	attempts: number;
+};
+
+type QueueOrderIdRow = QueryResultRow & {
+	shopify_order_id: string;
+};
+
+type CandidateTouchpointRow = QueryResultRow & {
+	session_id: string | null;
+	source_touch_event_id: string | null;
+	occurred_at: Date;
+	source: string | null;
+	medium: string | null;
+	campaign: string | null;
+	content: string | null;
+	term: string | null;
+	click_id_type: string | null;
+	click_id_value: string | null;
+};
+
+type ExistingAttributionResultRow = QueryResultRow & {
+	match_source: AttributionMatchSource;
+	confidence_score: string;
+};
+
+type EnqueueTrackingTouchpointInput = {
+	sessionId: string;
+	shopifyCheckoutToken?: string | null;
+	shopifyCartToken?: string | null;
+};
+
+type PersistAttributionOptions = {
+	preventDowngrade?: boolean;
+};
+
+type ApplySyntheticAttributionInput = {
+	occurredAt?: Date;
+	source?: string | null;
+	medium?: string | null;
+	campaign?: string | null;
+	content?: string | null;
+	term?: string | null;
+	clickIdType?: string | null;
+	clickIdValue?: string | null;
+	attributionReason: string;
+	matchSource: AttributionMatchSource;
+	confidenceScore?: number;
+	ga4ClientId?: string | null;
+	ga4SessionId?: string | null;
+};
+
+type ProcessAttributionQueueOptions = {
+	workerId: string;
+	limit: number;
+	staleScanLimit?: number;
+	emitMetrics?: boolean;
+};
+
+function normalizeNullableString(value: string | null | undefined): string | null {
 	const normalized = value?.trim();
 	return normalized ? normalized : null;
 }
-export function buildQueueKey(shopifyOrderId) {
+export function buildQueueKey(shopifyOrderId: string): string {
 	return `order:${shopifyOrderId}`;
 }
-export function computeRetryDelaySeconds(attempts) {
+export function computeRetryDelaySeconds(attempts: number): number {
 	const normalizedAttempts = Number.isFinite(attempts)
 		? Math.max(Math.trunc(attempts), 1)
 		: 1;
 	return Math.min(30 * 2 ** (normalizedAttempts - 1), MAX_RETRY_DELAY_SECONDS);
 }
-export function buildProcessingMetricsLog(result) {
+export function buildProcessingMetricsLog(result: Record<string, unknown>): string {
 	return JSON.stringify({
 		severity: "INFO",
 		event: "attribution_queue_run",
@@ -58,7 +141,11 @@ export function buildProcessingMetricsLog(result) {
 		...result,
 	});
 }
-function buildQueueOutcomeLog(workerId, outcome, value) {
+function buildQueueOutcomeLog(
+	workerId: string,
+	outcome: string,
+	value: unknown,
+): string {
 	return JSON.stringify({
 		severity: "INFO",
 		event: "attribution_queue_outcome",
@@ -70,20 +157,23 @@ function buildQueueOutcomeLog(workerId, outcome, value) {
 		value,
 	});
 }
-function buildAttributionCorrelationId(shopifyOrderId) {
+function buildAttributionCorrelationId(shopifyOrderId: string): string {
 	return `attribution:${shopifyOrderId}`;
 }
-async function execute(client, callback) {
+async function execute<TResult>(
+	client: PoolClient | null | undefined,
+	callback: (db: PoolClient) => Promise<TResult>,
+): Promise<TResult> {
 	if (client) {
 		return callback(client);
 	}
 	return withTransaction(callback);
 }
 export async function enqueueAttributionForOrder(
-	shopifyOrderId,
-	requestedReason,
-	client,
-) {
+	shopifyOrderId: string,
+	requestedReason: string,
+	client?: PoolClient | null,
+): Promise<void> {
 	await execute(client, async (db) => {
 		await db.query(
 			`
@@ -124,8 +214,11 @@ export async function enqueueAttributionForOrder(
 		);
 	});
 }
-export async function enqueueAttributionForTrackingTouchpoint(client, input) {
-	const result = await client.query(
+export async function enqueueAttributionForTrackingTouchpoint(
+	client: PoolClient,
+	input: EnqueueTrackingTouchpointInput,
+): Promise<number> {
+	const result = await client.query<QueueOrderIdRow>(
 		`
       SELECT DISTINCT o.shopify_order_id
       FROM shopify_orders o
@@ -155,7 +248,10 @@ export async function enqueueAttributionForTrackingTouchpoint(client, input) {
 	}
 	return result.rowCount ?? result.rows.length;
 }
-async function requeueStaleJobs(client, staleScanLimit) {
+async function requeueStaleJobs(
+	client: PoolClient,
+	staleScanLimit: number,
+): Promise<number> {
 	if (staleScanLimit <= 0) {
 		return 0;
 	}
@@ -186,8 +282,12 @@ async function requeueStaleJobs(client, staleScanLimit) {
 	);
 	return result.rowCount ?? result.rows.length;
 }
-async function claimJobs(client, workerId, limit) {
-	const result = await client.query(
+async function claimJobs(
+	client: PoolClient,
+	workerId: string,
+	limit: number,
+): Promise<AttributionJobRow[]> {
+	const result = await client.query<AttributionJobRow>(
 		`
       WITH candidate_jobs AS (
         SELECT id
@@ -213,8 +313,11 @@ async function claimJobs(client, workerId, limit) {
 	);
 	return result.rows;
 }
-async function fetchOrder(client, shopifyOrderId) {
-	const result = await client.query(
+async function fetchOrder(
+	client: PoolClient,
+	shopifyOrderId: string,
+): Promise<OrderRow | null> {
+	const result = await client.query<OrderRow>(
 		`
       SELECT
         shopify_order_id,
@@ -237,10 +340,26 @@ async function fetchOrder(client, shopifyOrderId) {
 	);
 	return result.rows[0] ?? null;
 }
-function resolveOrderOccurredAt(order) {
+function resolveOrderOccurredAt(order: OrderRow): Date {
 	return order.processed_at ?? order.created_at_shopify ?? order.ingested_at;
 }
-function buildResolvedTouchpointFromValues(input) {
+function buildResolvedTouchpointFromValues(input: {
+	sessionId: string | null;
+	sourceTouchEventId: string | null;
+	occurredAt: Date;
+	source: string | null;
+	medium: string | null;
+	campaign: string | null;
+	content: string | null;
+	term: string | null;
+	clickIdType: string | null;
+	clickIdValue: string | null;
+	attributionReason: string;
+	matchSource: AttributionMatchSource;
+	ingestionSource: DeterministicIngestionSource | null;
+	ga4ClientId?: string | null;
+	ga4SessionId?: string | null;
+}): ResolvedAttributionTouchpoint {
 	const confidenceScore = confidenceScoreForWinner({
 		matchSource: input.matchSource,
 		clickIdValue: input.clickIdValue,
@@ -273,7 +392,11 @@ function buildResolvedTouchpointFromValues(input) {
 		isForced: input.sessionId === null,
 	};
 }
-function buildResolvedTouchpoint(row, ingestionSource, attributionReason) {
+function buildResolvedTouchpoint(
+	row: CandidateTouchpointRow,
+	ingestionSource: DeterministicIngestionSource,
+	attributionReason: string,
+): ResolvedAttributionTouchpoint {
 	return buildResolvedTouchpointFromValues({
 		sessionId: row.session_id,
 		sourceTouchEventId: row.source_touch_event_id,
@@ -290,7 +413,9 @@ function buildResolvedTouchpoint(row, ingestionSource, attributionReason) {
 		ingestionSource,
 	});
 }
-function serializeResolvedTouchpoint(touchpoint) {
+function serializeResolvedTouchpoint(
+	touchpoint: ResolvedAttributionTouchpoint,
+): Record<string, unknown> {
 	return {
 		sessionId: touchpoint.sessionId,
 		sourceTouchEventId: touchpoint.sourceTouchEventId,
@@ -311,8 +436,11 @@ function serializeResolvedTouchpoint(touchpoint) {
 		isDirect: touchpoint.isDirect,
 	};
 }
-async function fetchLandingSessionCandidate(client, landingSessionId) {
-	const result = await client.query(
+async function fetchLandingSessionCandidate(
+	client: PoolClient,
+	landingSessionId: string,
+): Promise<ResolvedAttributionTouchpoint | null> {
+	const result = await client.query<CandidateTouchpointRow>(
 		`
       SELECT
         s.id::text AS session_id,
@@ -382,14 +510,14 @@ async function fetchLandingSessionCandidate(client, landingSessionId) {
 		: null;
 }
 async function fetchLatestTokenCandidate(
-	client,
-	tokenColumn,
-	tokenValue,
-	orderOccurredAt,
-	ingestionSource,
-	attributionReason,
-) {
-	const result = await client.query(
+	client: PoolClient,
+	tokenColumn: "shopify_checkout_token" | "shopify_cart_token",
+	tokenValue: string,
+	orderOccurredAt: Date,
+	ingestionSource: DeterministicIngestionSource,
+	attributionReason: string,
+): Promise<ResolvedAttributionTouchpoint | null> {
+	const result = await client.query<CandidateTouchpointRow>(
 		`
       SELECT
         te.session_id::text AS session_id,
@@ -424,11 +552,15 @@ async function fetchLatestTokenCandidate(
 		? buildResolvedTouchpoint(row, ingestionSource, attributionReason)
 		: null;
 }
-async function fetchIdentityCandidates(client, order, orderOccurredAt) {
+async function fetchIdentityCandidates(
+	client: PoolClient,
+	order: OrderRow,
+	orderOccurredAt: Date,
+): Promise<ResolvedAttributionTouchpoint[]> {
 	if (!order.customer_identity_id) {
 		return [];
 	}
-	const result = await client.query(
+	const result = await client.query<CandidateTouchpointRow>(
 		`
       SELECT
         s.id::text AS session_id,
@@ -498,7 +630,10 @@ async function fetchIdentityCandidates(client, order, orderOccurredAt) {
 		),
 	);
 }
-async function collectDeterministicCandidates(client, order) {
+async function collectDeterministicCandidates(
+	client: PoolClient,
+	order: OrderRow,
+): Promise<ResolvedAttributionTouchpoint[]> {
 	const orderOccurredAt = resolveOrderOccurredAt(order);
 	const candidates = [];
 	if (order.landing_session_id) {
@@ -541,7 +676,9 @@ async function collectDeterministicCandidates(client, order) {
 	);
 	return candidates;
 }
-function resolveShopifyHintFallback(order) {
+function resolveShopifyHintFallback(
+	order: OrderRow,
+): ResolvedAttributionTouchpoint | null {
 	if (normalizeNullableString(order.source_name) !== "web") {
 		return null;
 	}
@@ -565,7 +702,11 @@ function resolveShopifyHintFallback(order) {
 		ingestionSource: null,
 	});
 }
-async function resolveGa4Fallback(client, order, orderOccurredAt) {
+async function resolveGa4Fallback(
+	client: PoolClient,
+	order: OrderRow,
+	orderOccurredAt: Date,
+): Promise<ResolvedAttributionTouchpoint | null> {
 	if (normalizeNullableString(order.source_name) !== "web") {
 		return null;
 	}
@@ -602,7 +743,14 @@ async function resolveGa4Fallback(client, order, orderOccurredAt) {
 		ga4SessionId: normalizeNullableString(winner.ga4SessionId),
 	});
 }
-async function resolveAttributionJourneys(client, order) {
+async function resolveAttributionJourneys(
+	client: PoolClient,
+	order: OrderRow,
+): Promise<{
+	appliedJourney: ResolvedJourney;
+	shadowJourney: ResolvedJourney;
+	rolloutMode: ReturnType<typeof getGa4FallbackRolloutMode>;
+}> {
 	const orderOccurredAt = resolveOrderOccurredAt(order);
 	const touchpoints = dedupeDeterministicCandidates(
 		await collectDeterministicCandidates(client, order),
@@ -636,12 +784,17 @@ async function resolveAttributionJourneys(client, order) {
 		rolloutMode,
 	};
 }
-function selectPrimaryCredit(credits) {
+function selectPrimaryCredit(
+	credits: AttributionCredit[],
+): AttributionCredit | undefined {
 	return (
 		credits.find((credit) => credit.isPrimary) ?? credits[credits.length - 1]
 	);
 }
-function touchpointForCredit(journey, credit) {
+function touchpointForCredit(
+	journey: ResolvedJourney,
+	credit: AttributionCredit,
+): ResolvedAttributionTouchpoint {
 	return (
 		journey.touchpoints[credit.touchpointPosition] ?? {
 			matchSource: "unattributed",
@@ -650,12 +803,12 @@ function touchpointForCredit(journey, credit) {
 	);
 }
 async function shouldPersistSyntheticAttribution(
-	client,
-	shopifyOrderId,
-	matchSource,
-	confidenceScore,
-) {
-	const result = await client.query(
+	client: PoolClient,
+	shopifyOrderId: string,
+	matchSource: AttributionMatchSource,
+	confidenceScore: number,
+): Promise<boolean> {
+	const result = await client.query<ExistingAttributionResultRow>(
 		`
       SELECT match_source, confidence_score::text
       FROM attribution_results
@@ -684,7 +837,12 @@ async function shouldPersistSyntheticAttribution(
 	}
 	return Number.parseFloat(existing.confidence_score) <= confidenceScore;
 }
-async function persistAttribution(client, order, journey, options = {}) {
+async function persistAttribution(
+	client: PoolClient,
+	order: OrderRow,
+	journey: ResolvedJourney,
+	options: PersistAttributionOptions = {},
+): Promise<void> {
 	const orderOccurredAt = resolveOrderOccurredAt(order);
 	const outputs = computeAttributionOutputs(journey.touchpoints, {
 		orderOccurredAt,
@@ -900,10 +1058,13 @@ async function persistAttribution(client, order, journey, options = {}) {
 		],
 	);
 }
-function primaryCreditReason(journey) {
+function primaryCreditReason(journey: ResolvedJourney): string {
 	return journey.winner?.attributionReason ?? "unattributed";
 }
-function emitAttributionResolverOutcomeLog(order, journey) {
+function emitAttributionResolverOutcomeLog(
+	order: OrderRow,
+	journey: ResolvedJourney,
+): void {
 	logInfo("attribution_resolver_outcome", {
 		service: process.env.K_SERVICE ?? "roas-radar-attribution-worker",
 		correlationId: buildAttributionCorrelationId(order.shopify_order_id),
@@ -921,7 +1082,11 @@ function emitAttributionResolverOutcomeLog(order, journey) {
 		}),
 	});
 }
-async function processClaimedJob(client, job, workerId) {
+async function processClaimedJob(
+	client: PoolClient,
+	job: AttributionJobRow,
+	workerId: string,
+): Promise<void> {
 	const order = await fetchOrder(client, job.shopify_order_id);
 	if (!order) {
 		await client.query(
@@ -1002,10 +1167,10 @@ async function processClaimedJob(client, job, workerId) {
 	);
 }
 export async function applySyntheticAttributionForOrder(
-	shopifyOrderId,
-	input,
-	client,
-) {
+	shopifyOrderId: string,
+	input: ApplySyntheticAttributionInput,
+	client?: PoolClient | null,
+): Promise<void> {
 	await execute(client, async (db) => {
 		const order = await fetchOrder(db, shopifyOrderId);
 		if (!order) {
@@ -1052,7 +1217,12 @@ export async function applySyntheticAttributionForOrder(
 		await refreshDailyReportingMetrics(db, [metricDate]);
 	});
 }
-async function markJobForRetry(client, job, workerId, error) {
+async function markJobForRetry(
+	client: PoolClient,
+	job: AttributionJobRow,
+	workerId: string,
+	error: unknown,
+): Promise<void> {
 	await client.query(
 		`
       UPDATE attribution_jobs
@@ -1076,7 +1246,9 @@ async function markJobForRetry(client, job, workerId, error) {
 		],
 	);
 }
-export async function processAttributionQueue(options) {
+export async function processAttributionQueue(
+	options: ProcessAttributionQueueOptions,
+) {
 	const startedAt = Date.now();
 	const result = await withTransaction(async (client) => {
 		const staleJobsEnqueued = await requeueStaleJobs(

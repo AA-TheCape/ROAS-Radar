@@ -1,4 +1,4 @@
-import { query } from '../../db/pool.js';
+import { query } from "../../db/pool.js";
 function toJsonbLiteral(payload) {
     return JSON.stringify(payload === undefined ? null : payload);
 }
@@ -18,7 +18,7 @@ export function buildSearchParamsAuditPayload(searchParams, redactedKeys = []) {
     const payload = {};
     const redacted = new Set(redactedKeys);
     for (const [key, value] of searchParams.entries()) {
-        pushQueryParamValue(payload, key, redacted.has(key) ? '[redacted]' : value);
+        pushQueryParamValue(payload, key, redacted.has(key) ? "[redacted]" : value);
     }
     return Object.keys(payload).length > 0 ? payload : null;
 }
@@ -80,6 +80,6 @@ export async function recordAdSyncApiTransaction(input) {
         input.responseStatus ?? null,
         toJsonbLiteral(input.responsePayload ?? null),
         input.responseReceivedAt ?? null,
-        input.errorMessage ?? null
+        input.errorMessage ?? null,
     ]);
 }

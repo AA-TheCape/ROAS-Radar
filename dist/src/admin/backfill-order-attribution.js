@@ -1,4 +1,4 @@
-import { backfillRecentOrdersWithRecoveredAttribution } from '../modules/attribution/backfill.js';
+import { backfillRecentOrdersWithRecoveredAttribution } from "../modules/attribution/backfill.js";
 function readFlag(name) {
     const prefixed = `--${name}`;
     const index = process.argv.indexOf(prefixed);
@@ -33,14 +33,14 @@ function parseLimit(value) {
 }
 async function run() {
     const report = await backfillRecentOrdersWithRecoveredAttribution({
-        windowStart: parseIsoDate('from', requireFlag('from')),
-        windowEnd: parseIsoDate('to', requireFlag('to')),
-        requestedBy: requireFlag('requested-by'),
-        workerId: readFlag('worker-id')?.trim() || 'order-attribution-backfill',
-        limit: parseLimit(readFlag('limit')),
-        dryRun: process.argv.includes('--dry-run'),
-        onlyWebOrders: !process.argv.includes('--include-non-web-orders'),
-        writeToShopifyWhenAvailable: !process.argv.includes('--skip-shopify-writeback')
+        windowStart: parseIsoDate("from", requireFlag("from")),
+        windowEnd: parseIsoDate("to", requireFlag("to")),
+        requestedBy: requireFlag("requested-by"),
+        workerId: readFlag("worker-id")?.trim() || "order-attribution-backfill",
+        limit: parseLimit(readFlag("limit")),
+        dryRun: process.argv.includes("--dry-run"),
+        onlyWebOrders: !process.argv.includes("--include-non-web-orders"),
+        writeToShopifyWhenAvailable: !process.argv.includes("--skip-shopify-writeback"),
     });
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 }

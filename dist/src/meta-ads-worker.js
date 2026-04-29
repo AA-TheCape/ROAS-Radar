@@ -1,21 +1,21 @@
-import { randomUUID } from 'node:crypto';
-import { setTimeout as delay } from 'node:timers/promises';
-import { env } from './config/env.js';
-import { pool } from './db/pool.js';
-import { processMetaAdsSyncQueue } from './modules/meta-ads/index.js';
+import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
+import { env } from "./config/env.js";
+import { pool } from "./db/pool.js";
+import { processMetaAdsSyncQueue } from "./modules/meta-ads/index.js";
 async function run() {
     const workerId = `meta-ads-worker-${randomUUID()}`;
     let shouldStop = false;
     const requestStop = () => {
         shouldStop = true;
     };
-    process.on('SIGINT', requestStop);
-    process.on('SIGTERM', requestStop);
+    process.on("SIGINT", requestStop);
+    process.on("SIGTERM", requestStop);
     do {
         const result = await processMetaAdsSyncQueue({
             workerId,
             limit: env.META_ADS_SYNC_BATCH_SIZE,
-            emitMetrics: true
+            emitMetrics: true,
         });
         if (!env.META_ADS_WORKER_LOOP) {
             break;
