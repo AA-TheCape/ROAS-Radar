@@ -11,8 +11,14 @@ WITH derived_attribution AS (
     results.shopify_order_id,
     CASE
       WHEN results.attribution_reason = 'shopify_hint_derived' THEN 'deterministic_shopify_hint'
+      WHEN results.attribution_reason IN (
+        'matched_by_landing_session',
+        'matched_by_checkout_token',
+        'matched_by_cart_token',
+        'matched_by_customer_identity'
+      ) THEN 'deterministic_first_party'
       WHEN results.attribution_reason = 'unattributed' THEN 'unattributed'
-      ELSE 'deterministic_first_party'
+      ELSE 'ga4_fallback'
     END AS attribution_tier,
     CASE
       WHEN results.attribution_reason = 'shopify_hint_derived' THEN 'shopify_marketing_hint'
@@ -20,7 +26,8 @@ WITH derived_attribution AS (
       WHEN results.attribution_reason = 'matched_by_checkout_token' THEN 'checkout_token'
       WHEN results.attribution_reason = 'matched_by_cart_token' THEN 'cart_token'
       WHEN results.attribution_reason = 'matched_by_customer_identity' THEN 'stitched_identity_journey'
-      ELSE 'unattributed'
+      WHEN results.attribution_reason = 'unattributed' THEN 'unattributed'
+      ELSE 'ga4_fallback'
     END AS attribution_source,
     results.attributed_at AS attribution_matched_at,
     results.attribution_reason
