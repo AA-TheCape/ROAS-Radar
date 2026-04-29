@@ -65,7 +65,7 @@ function stableJsonValue(value: unknown): unknown {
 }
 
 function stableJsonStringify(value: unknown): string {
-  return JSON.stringify(stableJsonValue(value));
+  return JSON.stringify(stableJsonValue(value)) ?? 'null';
 }
 
 export function summarizeRawPayloadIntegrity(

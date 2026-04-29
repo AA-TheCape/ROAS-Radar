@@ -11,7 +11,11 @@ import {
   computeSingleWinnerCredits,
   type AttributionCredit
 } from './engine.js';
-import { buildOrderAttributionAuditRecord } from './order-attribution-audit.js';
+import {
+  buildAttributionConfidenceLabel,
+  buildAttributionMatchSource,
+  buildOrderAttributionAuditRecord
+} from './order-attribution-audit.js';
 import {
   confidenceScoreForWinner,
   dedupeDeterministicCandidates,
@@ -368,6 +372,8 @@ async function persistAttribution(client: PoolClient, order: OrderRow, journey: 
 
   const matchedAt = new Date();
   const orderAttributionAudit = buildOrderAttributionAuditRecord(journey, matchedAt);
+  const matchSource = buildAttributionMatchSource(journey);
+  const confidenceLabel = buildAttributionConfidenceLabel(journey.confidenceScore);
 
   await client.query('DELETE FROM attribution_order_credits WHERE shopify_order_id = $1', [order.shopify_order_id]);
 
@@ -394,7 +400,9 @@ async function persistAttribution(client: PoolClient, order: OrderRow, journey: 
             revenue_credit,
             is_primary,
             attribution_reason,
-            model_version
+            model_version,
+            match_source,
+            confidence_label
           )
           VALUES (
             $1,
@@ -413,7 +421,9 @@ async function persistAttribution(client: PoolClient, order: OrderRow, journey: 
             $14,
             $15,
             $16,
-            $17
+            $17,
+            $18,
+            $19
           )
         `,
         [
@@ -433,7 +443,9 @@ async function persistAttribution(client: PoolClient, order: OrderRow, journey: 
           credit.revenueCredit,
           credit.isPrimary,
           credit.attributionReason,
-          ATTRIBUTION_MODEL_VERSION
+          ATTRIBUTION_MODEL_VERSION,
+          matchSource,
+          confidenceLabel
         ]
       );
     }
@@ -456,7 +468,9 @@ async function persistAttribution(client: PoolClient, order: OrderRow, journey: 
         attribution_reason,
         attributed_at,
         reprocess_version,
-        model_version
+        model_version,
+        match_source,
+        confidence_label
       )
       VALUES (
         $1,
@@ -473,7 +487,9 @@ async function persistAttribution(client: PoolClient, order: OrderRow, journey: 
         $11,
         $12,
         1,
-        $13
+        $13,
+        $14,
+        $15
       )
       ON CONFLICT (shopify_order_id)
       DO UPDATE SET
@@ -489,7 +505,9 @@ async function persistAttribution(client: PoolClient, order: OrderRow, journey: 
         confidence_score = EXCLUDED.confidence_score,
         attribution_reason = EXCLUDED.attribution_reason,
         attributed_at = EXCLUDED.attributed_at,
-        model_version = EXCLUDED.model_version
+        model_version = EXCLUDED.model_version,
+        match_source = EXCLUDED.match_source,
+        confidence_label = EXCLUDED.confidence_label
     `,
     [
       order.shopify_order_id,
@@ -504,7 +522,9 @@ async function persistAttribution(client: PoolClient, order: OrderRow, journey: 
       journey.confidenceScore,
       primaryCredit.attributionReason,
       matchedAt,
-      ATTRIBUTION_MODEL_VERSION
+      ATTRIBUTION_MODEL_VERSION,
+      matchSource,
+      confidenceLabel
     ]
   );
 

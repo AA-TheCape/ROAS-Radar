@@ -16,6 +16,8 @@ export type OrderAttributionAuditRecord = {
   reason: string | null;
 };
 
+export type AttributionConfidenceLabel = 'high' | 'medium' | 'low';
+
 function mapDeterministicSource(source: DeterministicIngestionSource): string {
   switch (source) {
     case 'landing_session_id':
@@ -81,4 +83,24 @@ export function buildOrderAttributionAuditRecord(
     matchedAt,
     reason: journey.attributionReason
   };
+}
+
+export function buildAttributionMatchSource(
+  journey: Pick<ResolvedJourney, 'attributionReason'>
+): string {
+  return journey.attributionReason;
+}
+
+export function buildAttributionConfidenceLabel(
+  confidenceScore: number
+): AttributionConfidenceLabel {
+  if (confidenceScore >= 0.9) {
+    return 'high';
+  }
+
+  if (confidenceScore >= 0.5) {
+    return 'medium';
+  }
+
+  return 'low';
 }
