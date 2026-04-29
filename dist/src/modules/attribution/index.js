@@ -1,13 +1,12 @@
 import { withTransaction } from '../../db/pool.js';
-import { logError } from '../../observability/index.js';
+import { emitAttributionResolverOutcomeLog, logError } from '../../observability/index.js';
 import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
-import { getReportingTimezone, formatDateInTimezone } from '../settings/index.js';
-import { ATTRIBUTION_MODELS, computeAttributionOutputs, computeSingleWinnerCredits } from './engine.js';
-import { confidenceScoreForWinner, dedupeDeterministicCandidates, isDirectTouchpoint, resolveAttributionTier, selectLastNonDirectWinner } from './resolver.js';
-import { buildOrderAttributionAuditRecord } from './order-attribution-audit.js';
+import { formatDateInTimezone, getReportingTimezone } from '../settings/index.js';
 import { collectDeterministicFirstPartyCandidates, extractAttributionCandidatesForOrder } from './candidate-extraction.js';
+import { ATTRIBUTION_MODELS, computeAttributionOutputs, computeSingleWinnerCredits } from './engine.js';
+import { buildOrderAttributionAuditRecord } from './order-attribution-audit.js';
+import { confidenceScoreForWinner, dedupeDeterministicCandidates, isDirectTouchpoint, resolveAttributionTier, selectLastNonDirectWinner } from './resolver.js';
 const ATTRIBUTION_MODEL_VERSION = 1;
-const ATTRIBUTION_WINDOW_DAYS = 7;
 const JOB_STALE_AFTER_MINUTES = 15;
 const MAX_RETRY_DELAY_SECONDS = 1_800;
 function normalizeNullableString(value) {
@@ -196,41 +195,10 @@ function serializeResolvedTouchpoint(touchpoint) {
     };
 }
 function isSameResolvedTouchpoint(left, right) {
-    return left.sessionId === right.sessionId &&
+    return (left.sessionId === right.sessionId &&
         left.sourceTouchEventId === right.sourceTouchEventId &&
         left.ingestionSource === right.ingestionSource &&
-        left.occurredAt.getTime() === right.occurredAt.getTime();
-}
-async function collectDeterministicCandidates(client, order) {
-    const candidates = await collectDeterministicFirstPartyCandidates(client, {
-        shopifyOrderId: order.shopify_order_id,
-        processedAt: order.processed_at,
-        createdAtShopify: order.created_at_shopify,
-        ingestedAt: order.ingested_at,
-        landingSessionId: order.landing_session_id,
-        checkoutToken: order.checkout_token,
-        cartToken: order.cart_token,
-        emailHash: order.email_hash,
-        customerIdentityId: order.customer_identity_id,
-        sourceName: order.source_name,
-        rawPayload: order.raw_payload
-    });
-    return candidates.map((candidate) => ({
-        sessionId: candidate.sessionId,
-        sourceTouchEventId: candidate.sourceTouchEventId,
-        occurredAt: candidate.occurredAtUtc,
-        source: candidate.source,
-        medium: candidate.medium,
-        campaign: candidate.campaign,
-        content: candidate.content,
-        term: candidate.term,
-        clickIdType: candidate.clickIdType,
-        clickIdValue: candidate.clickIdValue,
-        attributionReason: candidate.attributionReason,
-        ingestionSource: candidate.ingestionSource,
-        isDirect: candidate.isDirect,
-        isForced: candidate.isSynthetic === false
-    }));
+        left.occurredAt.getTime() === right.occurredAt.getTime());
 }
 async function resolveAttributionJourney(client, order) {
     const candidates = await extractAttributionCandidatesForOrder(client, {
@@ -258,7 +226,8 @@ async function persistAttribution(client, order, journey) {
         orderRevenue: order.total_price
     });
     if (journey.winner) {
-        const winnerIndex = journey.touchpoints.findIndex((touchpoint) => isSameResolvedTouchpoint(touchpoint, journey.winner));
+        const winner = journey.winner;
+        const winnerIndex = journey.touchpoints.findIndex((touchpoint) => isSameResolvedTouchpoint(touchpoint, winner));
         if (winnerIndex >= 0) {
             outputs.last_touch = computeSingleWinnerCredits('last_touch', journey.touchpoints, winnerIndex, order.total_price);
         }
@@ -424,6 +393,17 @@ async function persistAttribution(client, order, journey) {
             timeline: journey.touchpoints.map(serializeResolvedTouchpoint)
         })
     ]);
+    emitAttributionResolverOutcomeLog({
+        shopifyOrderId: order.shopify_order_id,
+        orderOccurredAtUtc: journey.orderOccurredAtUtc,
+        tier: journey.tier,
+        attributionReason: journey.attributionReason,
+        confidenceScore: journey.confidenceScore,
+        pipeline: 'realtime_queue',
+        touchpoints: journey.touchpoints,
+        winner: journey.winner,
+        normalizationFailures: journey.normalizationFailures
+    });
 }
 function primaryCreditReason(journey) {
     return journey.winner?.attributionReason ?? 'unattributed';
@@ -488,26 +468,33 @@ export async function applySyntheticAttributionForOrder(shopifyOrderId, input, c
             throw new Error(`Shopify order ${shopifyOrderId} not found`);
         }
         const orderOccurredAt = resolveOrderOccurredAt(order);
+        const normalizedSource = normalizeNullableString(input.source);
+        const normalizedMedium = normalizeNullableString(input.medium);
+        const normalizedCampaign = normalizeNullableString(input.campaign);
+        const normalizedContent = normalizeNullableString(input.content);
+        const normalizedTerm = normalizeNullableString(input.term);
+        const normalizedClickIdType = normalizeNullableString(input.clickIdType);
+        const normalizedClickIdValue = normalizeNullableString(input.clickIdValue);
         const touchpoint = {
             sessionId: null,
             sourceTouchEventId: null,
             occurredAt: input.occurredAt ?? orderOccurredAt,
-            source: normalizeNullableString(input.source),
-            medium: normalizeNullableString(input.medium),
-            campaign: normalizeNullableString(input.campaign),
-            content: normalizeNullableString(input.content),
-            term: normalizeNullableString(input.term),
-            clickIdType: normalizeNullableString(input.clickIdType),
-            clickIdValue: normalizeNullableString(input.clickIdValue),
+            source: normalizedSource,
+            medium: normalizedMedium,
+            campaign: normalizedCampaign,
+            content: normalizedContent,
+            term: normalizedTerm,
+            clickIdType: normalizedClickIdType,
+            clickIdValue: normalizedClickIdValue,
             attributionReason: input.attributionReason,
             ingestionSource: 'customer_identity',
             isDirect: isDirectTouchpoint({
-                source: normalizeNullableString(input.source),
-                medium: normalizeNullableString(input.medium),
-                campaign: normalizeNullableString(input.campaign),
-                content: normalizeNullableString(input.content),
-                term: normalizeNullableString(input.term),
-                clickIdValue: normalizeNullableString(input.clickIdValue)
+                source: normalizedSource,
+                medium: normalizedMedium,
+                campaign: normalizedCampaign,
+                content: normalizedContent,
+                term: normalizedTerm,
+                clickIdValue: normalizedClickIdValue
             }),
             isForced: true
         };
