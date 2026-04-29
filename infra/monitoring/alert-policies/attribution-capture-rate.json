@@ -1,12 +1,12 @@
 {
-  "displayName": "ROAS Radar __ENVIRONMENT__ Attribution Capture Rate",
-  "documentation": {
-    "content": "Attribution capture completeness dropped below the expected floor. Runbook: __RUNBOOK_URL_ATTRIBUTION_COMPLETENESS__",
-    "mimeType": "text/markdown"
-  },
-  "conditions": [
-    {
-      "displayName": "Capture completeness rate drops below 95% for 15 minutes"
-    }
-  ]
+	"displayName": "ROAS Radar __ENVIRONMENT__ Attribution Capture Rate",
+	"documentation": {
+		"content": "Attribution capture completeness dropped below the expected floor. Runbook: __RUNBOOK_URL_ATTRIBUTION_COMPLETENESS__",
+		"mimeType": "text/markdown"
+	},
+	"conditions": [
+		{
+			"displayName": "Capture completeness rate drops below 95% for 15 minutes"
+		}
+	]
 }

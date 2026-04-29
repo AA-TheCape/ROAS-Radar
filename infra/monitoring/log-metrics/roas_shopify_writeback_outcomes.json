@@ -1,5 +1,5 @@
 {
-  "name": "roas_shopify_writeback_outcomes",
-  "description": "Counts Shopify writeback observations from the attribute reconciliation path.",
-  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"shopify_writeback_observed\""
+	"name": "roas_shopify_writeback_outcomes",
+	"description": "Counts Shopify writeback observations from the attribute reconciliation path.",
+	"filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"shopify_writeback_observed\""
 }

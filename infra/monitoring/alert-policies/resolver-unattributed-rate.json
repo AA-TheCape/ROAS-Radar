@@ -1,12 +1,12 @@
 {
-  "displayName": "ROAS Radar __ENVIRONMENT__ Resolver Unattributed Rate",
-  "documentation": {
-    "content": "The deterministic resolver is returning unattributed outcomes too often. Runbook: __RUNBOOK_URL_ATTRIBUTION_COMPLETENESS__",
-    "mimeType": "text/markdown"
-  },
-  "conditions": [
-    {
-      "displayName": "Resolver unattributed rate exceeds 20% for 15 minutes"
-    }
-  ]
+	"displayName": "ROAS Radar __ENVIRONMENT__ Resolver Unattributed Rate",
+	"documentation": {
+		"content": "The deterministic resolver is returning unattributed outcomes too often. Runbook: __RUNBOOK_URL_ATTRIBUTION_COMPLETENESS__",
+		"mimeType": "text/markdown"
+	},
+	"conditions": [
+		{
+			"displayName": "Resolver unattributed rate exceeds 20% for 15 minutes"
+		}
+	]
 }

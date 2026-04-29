@@ -1,18 +1,18 @@
 // @ts-nocheck
 
-import { query, withTransaction } from '../../db/pool.js';
-import { logError, logInfo } from '../../observability/index.js';
+import { query, withTransaction } from "../../db/pool.js";
+import { logError, logInfo } from "../../observability/index.js";
 
-import { recordDeadLetter } from '../dead-letters/index.js';
+import { recordDeadLetter } from "../dead-letters/index.js";
 
-import type { Ga4BigQueryIngestionConfig } from './ga4-bigquery-config.js';
+import type { Ga4BigQueryIngestionConfig } from "./ga4-bigquery-config.js";
 import {
-  GA4_SESSION_ATTRIBUTION_PIPELINE,
-  getGa4SessionAttributionWatermark,
-  ingestGa4SessionAttributionHours,
-  planGa4SessionAttributionHourlyWindows,
-  type Ga4BigQueryExecutor
-} from './ga4-session-attribution.js';
+	GA4_SESSION_ATTRIBUTION_PIPELINE,
+	type Ga4BigQueryExecutor,
+	getGa4SessionAttributionWatermark,
+	ingestGa4SessionAttributionHours,
+	planGa4SessionAttributionHourlyWindows,
+} from "./ga4-session-attribution.js";
 
 const DEFAULT_BATCH_SIZE = 24;
 const DEFAULT_MAX_RETRIES = 5;
@@ -21,62 +21,82 @@ const DEFAULT_MAX_BACKOFF_SECONDS = 1_800;
 const DEFAULT_STALE_LOCK_MINUTES = 30;
 
 function toHourStart(date) {
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), date.getUTCHours()));
+	return new Date(
+		Date.UTC(
+			date.getUTCFullYear(),
+			date.getUTCMonth(),
+			date.getUTCDate(),
+			date.getUTCHours(),
+		),
+	);
 }
 
 function addHours(date, hours) {
-  return new Date(date.getTime() + hours * 60 * 60 * 1000);
+	return new Date(date.getTime() + hours * 60 * 60 * 1000);
 }
 
-function normalizeHourStart(value, fieldName = 'hourStart') {
-  const normalized = typeof value === 'string' ? value.trim() : '';
-  if (!normalized) {
-    throw new Error(`${fieldName} is required`);
-  }
+function normalizeHourStart(value, fieldName = "hourStart") {
+	const normalized = typeof value === "string" ? value.trim() : "";
+	if (!normalized) {
+		throw new Error(`${fieldName} is required`);
+	}
 
-  const parsed = new Date(normalized);
-  if (Number.isNaN(parsed.getTime())) {
-    throw new Error(`Invalid ${fieldName}: ${String(value)}`);
-  }
+	const parsed = new Date(normalized);
+	if (Number.isNaN(parsed.getTime())) {
+		throw new Error(`Invalid ${fieldName}: ${String(value)}`);
+	}
 
-  return toHourStart(parsed).toISOString();
+	return toHourStart(parsed).toISOString();
 }
 
 function normalizePositiveInteger(value, fallback) {
-  if (!Number.isFinite(value)) {
-    return fallback;
-  }
+	if (!Number.isFinite(value)) {
+		return fallback;
+	}
 
-  const normalized = Math.trunc(value);
-  return normalized > 0 ? normalized : fallback;
+	const normalized = Math.trunc(value);
+	return normalized > 0 ? normalized : fallback;
 }
 
-function computeBackoffSeconds(attempts, initialBackoffSeconds, maxBackoffSeconds) {
-  const normalizedAttempts = Math.max(1, Math.trunc(attempts));
-  return Math.min(initialBackoffSeconds * 2 ** (normalizedAttempts - 1), maxBackoffSeconds);
+function computeBackoffSeconds(
+	attempts,
+	initialBackoffSeconds,
+	maxBackoffSeconds,
+) {
+	const normalizedAttempts = Math.max(1, Math.trunc(attempts));
+	return Math.min(
+		initialBackoffSeconds * 2 ** (normalizedAttempts - 1),
+		maxBackoffSeconds,
+	);
 }
 
 export function listHourlyRange(startHour, endHour) {
-  const normalizedStart = normalizeHourStart(startHour, 'startHour');
-  const normalizedEnd = normalizeHourStart(endHour, 'endHour');
+	const normalizedStart = normalizeHourStart(startHour, "startHour");
+	const normalizedEnd = normalizeHourStart(endHour, "endHour");
 
-  if (normalizedStart > normalizedEnd) {
-    throw new Error(`startHour must be less than or equal to endHour: ${normalizedStart} > ${normalizedEnd}`);
-  }
+	if (normalizedStart > normalizedEnd) {
+		throw new Error(
+			`startHour must be less than or equal to endHour: ${normalizedStart} > ${normalizedEnd}`,
+		);
+	}
 
-  const hours = [];
-  for (let cursor = new Date(normalizedStart); cursor.getTime() <= new Date(normalizedEnd).getTime(); cursor = addHours(cursor, 1)) {
-    hours.push(cursor.toISOString());
-  }
+	const hours = [];
+	for (
+		let cursor = new Date(normalizedStart);
+		cursor.getTime() <= new Date(normalizedEnd).getTime();
+		cursor = addHours(cursor, 1)
+	) {
+		hours.push(cursor.toISOString());
+	}
 
-  return hours;
+	return hours;
 }
 
 async function upsertHourlyJob(client, input) {
-  const reviveDeadLettered = Boolean(input.reviveDeadLettered);
+	const reviveDeadLettered = Boolean(input.reviveDeadLettered);
 
-  await client.query(
-    `
+	await client.query(
+		`
       INSERT INTO ga4_bigquery_hourly_jobs (
         pipeline_name,
         hour_start,
@@ -119,36 +139,43 @@ async function upsertHourlyJob(client, input) {
         END,
         updated_at = now()
     `,
-    [input.pipelineName, input.hourStart, input.requestedBy ?? null, reviveDeadLettered]
-  );
+		[
+			input.pipelineName,
+			input.hourStart,
+			input.requestedBy ?? null,
+			reviveDeadLettered,
+		],
+	);
 }
 
 export async function enqueueHours(input) {
-  const hourStarts = Array.from(new Set((input.hourStarts ?? []).map((hour) => normalizeHourStart(hour)))).sort();
-  if (hourStarts.length === 0) {
-    return { hourStarts: [], enqueuedCount: 0 };
-  }
+	const hourStarts = Array.from(
+		new Set((input.hourStarts ?? []).map((hour) => normalizeHourStart(hour))),
+	).sort();
+	if (hourStarts.length === 0) {
+		return { hourStarts: [], enqueuedCount: 0 };
+	}
 
-  await withTransaction(async (client) => {
-    for (const hourStart of hourStarts) {
-      await upsertHourlyJob(client, {
-        pipelineName: input.pipelineName ?? GA4_SESSION_ATTRIBUTION_PIPELINE,
-        hourStart,
-        requestedBy: input.requestedBy ?? null,
-        reviveDeadLettered: input.reviveDeadLettered ?? false
-      });
-    }
-  });
+	await withTransaction(async (client) => {
+		for (const hourStart of hourStarts) {
+			await upsertHourlyJob(client, {
+				pipelineName: input.pipelineName ?? GA4_SESSION_ATTRIBUTION_PIPELINE,
+				hourStart,
+				requestedBy: input.requestedBy ?? null,
+				reviveDeadLettered: input.reviveDeadLettered ?? false,
+			});
+		}
+	});
 
-  return {
-    hourStarts,
-    enqueuedCount: hourStarts.length
-  };
+	return {
+		hourStarts,
+		enqueuedCount: hourStarts.length,
+	};
 }
 
 async function requeueStaleLocks(client, pipelineName, staleLockMinutes) {
-  const result = await client.query(
-    `
+	const result = await client.query(
+		`
       WITH stale_jobs AS (
         SELECT pipeline_name, hour_start
         FROM ga4_bigquery_hourly_jobs
@@ -171,26 +198,35 @@ async function requeueStaleLocks(client, pipelineName, staleLockMinutes) {
         AND jobs.hour_start = stale_jobs.hour_start
       RETURNING jobs.hour_start
     `,
-    [pipelineName, staleLockMinutes]
-  );
+		[pipelineName, staleLockMinutes],
+	);
 
-  return result.rowCount ?? result.rows.length;
+	return result.rowCount ?? result.rows.length;
 }
 
 export async function claimHourlyJobs(input) {
-  return withTransaction(async (client) => {
-    await requeueStaleLocks(
-      client,
-      input.pipelineName ?? GA4_SESSION_ATTRIBUTION_PIPELINE,
-      normalizePositiveInteger(input.staleLockMinutes, DEFAULT_STALE_LOCK_MINUTES)
-    );
+	return withTransaction(async (client) => {
+		await requeueStaleLocks(
+			client,
+			input.pipelineName ?? GA4_SESSION_ATTRIBUTION_PIPELINE,
+			normalizePositiveInteger(
+				input.staleLockMinutes,
+				DEFAULT_STALE_LOCK_MINUTES,
+			),
+		);
 
-    const explicitHours = Array.isArray(input.explicitHourStarts) && input.explicitHourStarts.length > 0
-      ? Array.from(new Set(input.explicitHourStarts.map((hour) => normalizeHourStart(hour)))).sort()
-      : null;
+		const explicitHours =
+			Array.isArray(input.explicitHourStarts) &&
+			input.explicitHourStarts.length > 0
+				? Array.from(
+						new Set(
+							input.explicitHourStarts.map((hour) => normalizeHourStart(hour)),
+						),
+					).sort()
+				: null;
 
-    const result = await client.query(
-      `
+		const result = await client.query(
+			`
         WITH candidate_jobs AS (
           SELECT pipeline_name, hour_start
           FROM ga4_bigquery_hourly_jobs
@@ -226,26 +262,26 @@ export async function claimHourlyJobs(input) {
           jobs.locked_at,
           jobs.locked_by
       `,
-      [
-        input.pipelineName ?? GA4_SESSION_ATTRIBUTION_PIPELINE,
-        Math.max(1, Math.trunc(input.limit ?? DEFAULT_BATCH_SIZE)),
-        explicitHours,
-        input.workerId
-      ]
-    );
+			[
+				input.pipelineName ?? GA4_SESSION_ATTRIBUTION_PIPELINE,
+				Math.max(1, Math.trunc(input.limit ?? DEFAULT_BATCH_SIZE)),
+				explicitHours,
+				input.workerId,
+			],
+		);
 
-    return result.rows.map((row) => ({
-      pipelineName: row.pipeline_name,
-      hourStart: row.hour_start.toISOString(),
-      attempts: row.attempts,
-      requestedBy: row.requested_by
-    }));
-  });
+		return result.rows.map((row) => ({
+			pipelineName: row.pipeline_name,
+			hourStart: row.hour_start.toISOString(),
+			attempts: row.attempts,
+			requestedBy: row.requested_by,
+		}));
+	});
 }
 
 async function markHourlyJobCompleted(client, job, workerId) {
-  await client.query(
-    `
+	await client.query(
+		`
       UPDATE ga4_bigquery_hourly_jobs
       SET
         status = 'completed',
@@ -258,13 +294,13 @@ async function markHourlyJobCompleted(client, job, workerId) {
         AND hour_start = $2::timestamptz
         AND locked_by = $3
     `,
-    [job.pipelineName, job.hourStart, workerId]
-  );
+		[job.pipelineName, job.hourStart, workerId],
+	);
 }
 
 async function markHourlyJobForRetry(client, input) {
-  await client.query(
-    `
+	await client.query(
+		`
       UPDATE ga4_bigquery_hourly_jobs
       SET
         status = 'retry',
@@ -278,30 +314,36 @@ async function markHourlyJobForRetry(client, input) {
         AND hour_start = $2::timestamptz
         AND locked_by = $3
     `,
-    [input.job.pipelineName, input.job.hourStart, input.workerId, input.backoffSeconds, input.errorMessage]
-  );
+		[
+			input.job.pipelineName,
+			input.job.hourStart,
+			input.workerId,
+			input.backoffSeconds,
+			input.errorMessage,
+		],
+	);
 }
 
 async function markHourlyJobDeadLettered(client, input) {
-  const sourceRecordId = input.job.hourStart;
-  const sourceQueueKey = input.job.pipelineName;
+	const sourceRecordId = input.job.hourStart;
+	const sourceQueueKey = input.job.pipelineName;
 
-  await recordDeadLetter(client, {
-    eventType: 'ga4_session_attribution_hour_failed',
-    sourceTable: 'ga4_bigquery_hourly_jobs',
-    sourceRecordId,
-    sourceQueueKey,
-    payload: {
-      pipelineName: input.job.pipelineName,
-      hourStart: input.job.hourStart,
-      workerId: input.workerId,
-      attempts: input.job.attempts
-    },
-    error: input.error
-  });
+	await recordDeadLetter(client, {
+		eventType: "ga4_session_attribution_hour_failed",
+		sourceTable: "ga4_bigquery_hourly_jobs",
+		sourceRecordId,
+		sourceQueueKey,
+		payload: {
+			pipelineName: input.job.pipelineName,
+			hourStart: input.job.hourStart,
+			workerId: input.workerId,
+			attempts: input.job.attempts,
+		},
+		error: input.error,
+	});
 
-  await client.query(
-    `
+	await client.query(
+		`
       UPDATE ga4_bigquery_hourly_jobs
       SET
         status = 'dead_lettered',
@@ -315,130 +357,161 @@ async function markHourlyJobDeadLettered(client, input) {
         AND hour_start = $2::timestamptz
         AND locked_by = $3
     `,
-    [input.job.pipelineName, input.job.hourStart, input.workerId, input.errorMessage]
-  );
+		[
+			input.job.pipelineName,
+			input.job.hourStart,
+			input.workerId,
+			input.errorMessage,
+		],
+	);
 }
 
 async function seedHoursForProcessing(input) {
-  if (input.explicitHourStarts && input.explicitHourStarts.length > 0) {
-    return enqueueHours({
-      pipelineName: input.pipelineName,
-      requestedBy: input.requestedBy,
-      hourStarts: input.explicitHourStarts,
-      reviveDeadLettered: true
-    });
-  }
+	if (input.explicitHourStarts && input.explicitHourStarts.length > 0) {
+		return enqueueHours({
+			pipelineName: input.pipelineName,
+			requestedBy: input.requestedBy,
+			hourStarts: input.explicitHourStarts,
+			reviveDeadLettered: true,
+		});
+	}
 
-  const watermarkHour = await getGa4SessionAttributionWatermark({ query });
-  const windows = planGa4SessionAttributionHourlyWindows({
-    now: input.now ?? new Date(),
-    watermarkHour: watermarkHour ? new Date(watermarkHour) : null,
-    config: input.config
-  });
+	const watermarkHour = await getGa4SessionAttributionWatermark({ query });
+	const windows = planGa4SessionAttributionHourlyWindows({
+		now: input.now ?? new Date(),
+		watermarkHour: watermarkHour ? new Date(watermarkHour) : null,
+		config: input.config,
+	});
 
-  return enqueueHours({
-    pipelineName: input.pipelineName,
-    requestedBy: input.requestedBy,
-    hourStarts: windows.map((window) => window.hourStart),
-    reviveDeadLettered: false
-  });
+	return enqueueHours({
+		pipelineName: input.pipelineName,
+		requestedBy: input.requestedBy,
+		hourStarts: windows.map((window) => window.hourStart),
+		reviveDeadLettered: false,
+	});
 }
 
 export async function processGa4SessionAttributionHourlyJobs(input) {
-  const pipelineName = input.pipelineName ?? GA4_SESSION_ATTRIBUTION_PIPELINE;
-  const batchSize = normalizePositiveInteger(input.batchSize, DEFAULT_BATCH_SIZE);
-  const maxRetries = normalizePositiveInteger(input.maxRetries, DEFAULT_MAX_RETRIES);
-  const initialBackoffSeconds = normalizePositiveInteger(input.initialBackoffSeconds, DEFAULT_INITIAL_BACKOFF_SECONDS);
-  const maxBackoffSeconds = normalizePositiveInteger(input.maxBackoffSeconds, DEFAULT_MAX_BACKOFF_SECONDS);
-  const staleLockMinutes = normalizePositiveInteger(input.staleLockMinutes, DEFAULT_STALE_LOCK_MINUTES);
-  const explicitHourStarts = input.explicitHourStarts?.length
-    ? Array.from(new Set(input.explicitHourStarts.map((hour) => normalizeHourStart(hour)))).sort()
-    : null;
+	const pipelineName = input.pipelineName ?? GA4_SESSION_ATTRIBUTION_PIPELINE;
+	const batchSize = normalizePositiveInteger(
+		input.batchSize,
+		DEFAULT_BATCH_SIZE,
+	);
+	const maxRetries = normalizePositiveInteger(
+		input.maxRetries,
+		DEFAULT_MAX_RETRIES,
+	);
+	const initialBackoffSeconds = normalizePositiveInteger(
+		input.initialBackoffSeconds,
+		DEFAULT_INITIAL_BACKOFF_SECONDS,
+	);
+	const maxBackoffSeconds = normalizePositiveInteger(
+		input.maxBackoffSeconds,
+		DEFAULT_MAX_BACKOFF_SECONDS,
+	);
+	const staleLockMinutes = normalizePositiveInteger(
+		input.staleLockMinutes,
+		DEFAULT_STALE_LOCK_MINUTES,
+	);
+	const explicitHourStarts = input.explicitHourStarts?.length
+		? Array.from(
+				new Set(
+					input.explicitHourStarts.map((hour) => normalizeHourStart(hour)),
+				),
+			).sort()
+		: null;
 
-  const seeded = await seedHoursForProcessing({
-    pipelineName,
-    config: input.config,
-    requestedBy: input.requestedBy,
-    explicitHourStarts,
-    now: input.now ?? new Date()
-  });
+	const seeded = await seedHoursForProcessing({
+		pipelineName,
+		config: input.config,
+		requestedBy: input.requestedBy,
+		explicitHourStarts,
+		now: input.now ?? new Date(),
+	});
 
-  const claimedJobs = await claimHourlyJobs({
-    pipelineName,
-    workerId: input.workerId,
-    limit: batchSize,
-    staleLockMinutes,
-    explicitHourStarts
-  });
+	const claimedJobs = await claimHourlyJobs({
+		pipelineName,
+		workerId: input.workerId,
+		limit: batchSize,
+		staleLockMinutes,
+		explicitHourStarts,
+	});
 
-  let succeededJobs = 0;
-  let retriedJobs = 0;
-  let deadLetteredJobs = 0;
+	let succeededJobs = 0;
+	let retriedJobs = 0;
+	let deadLetteredJobs = 0;
 
-  for (const job of claimedJobs) {
-    try {
-      await ingestGa4SessionAttributionHours({
-        config: input.config,
-        executor: input.executor,
-        now: input.now ?? new Date(),
-        hourStarts: [job.hourStart]
-      });
+	for (const job of claimedJobs) {
+		try {
+			await ingestGa4SessionAttributionHours({
+				config: input.config,
+				executor: input.executor,
+				now: input.now ?? new Date(),
+				hourStarts: [job.hourStart],
+			});
 
-      await withTransaction(async (client) => {
-        await markHourlyJobCompleted(client, job, input.workerId);
-      });
-      succeededJobs += 1;
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message.slice(0, 1000) : String(error).slice(0, 1000);
-      const shouldDeadLetter = job.attempts >= maxRetries;
+			await withTransaction(async (client) => {
+				await markHourlyJobCompleted(client, job, input.workerId);
+			});
+			succeededJobs += 1;
+		} catch (error) {
+			const errorMessage =
+				error instanceof Error
+					? error.message.slice(0, 1000)
+					: String(error).slice(0, 1000);
+			const shouldDeadLetter = job.attempts >= maxRetries;
 
-      logError('ga4_session_attribution_hour_failed', error, {
-        pipelineName,
-        workerId: input.workerId,
-        hourStart: job.hourStart,
-        attempts: job.attempts,
-        shouldDeadLetter
-      });
+			logError("ga4_session_attribution_hour_failed", error, {
+				pipelineName,
+				workerId: input.workerId,
+				hourStart: job.hourStart,
+				attempts: job.attempts,
+				shouldDeadLetter,
+			});
 
-      await withTransaction(async (client) => {
-        if (shouldDeadLetter) {
-          await markHourlyJobDeadLettered(client, {
-            job,
-            workerId: input.workerId,
-            error,
-            errorMessage
-          });
-        } else {
-          await markHourlyJobForRetry(client, {
-            job,
-            workerId: input.workerId,
-            backoffSeconds: computeBackoffSeconds(job.attempts, initialBackoffSeconds, maxBackoffSeconds),
-            errorMessage
-          });
-        }
-      });
+			await withTransaction(async (client) => {
+				if (shouldDeadLetter) {
+					await markHourlyJobDeadLettered(client, {
+						job,
+						workerId: input.workerId,
+						error,
+						errorMessage,
+					});
+				} else {
+					await markHourlyJobForRetry(client, {
+						job,
+						workerId: input.workerId,
+						backoffSeconds: computeBackoffSeconds(
+							job.attempts,
+							initialBackoffSeconds,
+							maxBackoffSeconds,
+						),
+						errorMessage,
+					});
+				}
+			});
 
-      if (shouldDeadLetter) {
-        deadLetteredJobs += 1;
-      } else {
-        retriedJobs += 1;
-      }
-    }
-  }
+			if (shouldDeadLetter) {
+				deadLetteredJobs += 1;
+			} else {
+				retriedJobs += 1;
+			}
+		}
+	}
 
-  const result = {
-    pipelineName,
-    requestedBy: input.requestedBy,
-    workerId: input.workerId,
-    seededHours: seeded.hourStarts,
-    seededHourCount: seeded.enqueuedCount,
-    claimedHourCount: claimedJobs.length,
-    claimedHours: claimedJobs.map((job) => job.hourStart),
-    succeededJobs,
-    retriedJobs,
-    deadLetteredJobs
-  };
+	const result = {
+		pipelineName,
+		requestedBy: input.requestedBy,
+		workerId: input.workerId,
+		seededHours: seeded.hourStarts,
+		seededHourCount: seeded.enqueuedCount,
+		claimedHourCount: claimedJobs.length,
+		claimedHours: claimedJobs.map((job) => job.hourStart),
+		succeededJobs,
+		retriedJobs,
+		deadLetteredJobs,
+	};
 
-  logInfo('ga4_session_attribution_hourly_jobs_completed', result);
-  return result;
+	logInfo("ga4_session_attribution_hourly_jobs_completed", result);
+	return result;
 }

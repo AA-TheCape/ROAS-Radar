@@ -1,28 +1,28 @@
 {
-  "displayName": "ROAS Radar __ENVIRONMENT__ GA4 Ingestion Lag",
-  "documentation": {
-    "content": "GA4 fallback ingestion is behind the hourly freshness threshold. Review `ga4_session_attribution_ingestion_lag_alert` logs and follow the runbook: __RUNBOOK_URL_INGESTION__",
-    "mimeType": "text/markdown"
-  },
-  "combiner": "OR",
-  "enabled": true,
-  "severity": "WARNING",
-  "notificationChannels": __ALERT_NOTIFICATION_CHANNELS__,
-  "conditions": [
-    {
-      "displayName": "Any GA4 ingestion lag alert fires in 15 minutes",
-      "conditionThreshold": {
-        "filter": "metric.type=\"logging.googleapis.com/user/roas_ga4_ingestion_lag_alerts\" resource.type=\"cloud_run_revision\"",
-        "comparison": "COMPARISON_GT",
-        "thresholdValue": 0,
-        "duration": "900s",
-        "aggregations": [
-          { "alignmentPeriod": "900s", "perSeriesAligner": "ALIGN_SUM" }
-        ],
-        "trigger": {
-          "count": 1
-        }
-      }
-    }
-  ]
+	"displayName": "ROAS Radar __ENVIRONMENT__ GA4 Ingestion Lag",
+	"documentation": {
+		"content": "GA4 fallback ingestion is behind the hourly freshness threshold. Review `ga4_session_attribution_ingestion_lag_alert` logs and follow the runbook: __RUNBOOK_URL_INGESTION__",
+		"mimeType": "text/markdown"
+	},
+	"combiner": "OR",
+	"enabled": true,
+	"severity": "WARNING",
+	"notificationChannels": "__ALERT_NOTIFICATION_CHANNELS__",
+	"conditions": [
+		{
+			"displayName": "Any GA4 ingestion lag alert fires in 15 minutes",
+			"conditionThreshold": {
+				"filter": "metric.type=\"logging.googleapis.com/user/roas_ga4_ingestion_lag_alerts\" resource.type=\"cloud_run_revision\"",
+				"comparison": "COMPARISON_GT",
+				"thresholdValue": 0,
+				"duration": "900s",
+				"aggregations": [
+					{ "alignmentPeriod": "900s", "perSeriesAligner": "ALIGN_SUM" }
+				],
+				"trigger": {
+					"count": 1
+				}
+			}
+		}
+	]
 }

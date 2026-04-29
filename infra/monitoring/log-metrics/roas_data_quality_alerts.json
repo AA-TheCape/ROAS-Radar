@@ -1,33 +1,33 @@
 {
-  "name": "roas_data_quality_alerts",
-  "description": "Counts data quality checks that breached their configured alert thresholds.",
-  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"data_quality_alert_triggered\"",
-  "labelExtractors": {
-    "service": "EXTRACT(jsonPayload.service)",
-    "check_key": "EXTRACT(jsonPayload.checkKey)",
-    "severity": "EXTRACT(jsonPayload.severity)"
-  },
-  "metricDescriptor": {
-    "metricKind": "DELTA",
-    "valueType": "INT64",
-    "unit": "1",
-    "displayName": "ROAS Radar Data Quality Alerts",
-    "labels": [
-      {
-        "key": "service",
-        "valueType": "STRING",
-        "description": "Service emitting the data quality alert."
-      },
-      {
-        "key": "check_key",
-        "valueType": "STRING",
-        "description": "Triggered data quality check."
-      },
-      {
-        "key": "severity",
-        "valueType": "STRING",
-        "description": "Alert severity."
-      }
-    ]
-  }
+	"name": "roas_data_quality_alerts",
+	"description": "Counts data quality checks that breached their configured alert thresholds.",
+	"filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"data_quality_alert_triggered\"",
+	"labelExtractors": {
+		"service": "EXTRACT(jsonPayload.service)",
+		"check_key": "EXTRACT(jsonPayload.checkKey)",
+		"severity": "EXTRACT(jsonPayload.severity)"
+	},
+	"metricDescriptor": {
+		"metricKind": "DELTA",
+		"valueType": "INT64",
+		"unit": "1",
+		"displayName": "ROAS Radar Data Quality Alerts",
+		"labels": [
+			{
+				"key": "service",
+				"valueType": "STRING",
+				"description": "Service emitting the data quality alert."
+			},
+			{
+				"key": "check_key",
+				"valueType": "STRING",
+				"description": "Triggered data quality check."
+			},
+			{
+				"key": "severity",
+				"valueType": "STRING",
+				"description": "Alert severity."
+			}
+		]
+	}
 }

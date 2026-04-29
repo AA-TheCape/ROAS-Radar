@@ -1,66 +1,68 @@
-import pg from 'pg';
+import pg from "pg";
 
 const { Client } = pg;
 
 const REQUIRED_INDEXES = {
-  session_lookup: 'session_attribution_touch_events_session_occurred_at_idx',
-  order_lookup: 'order_attribution_links_order_lookup_idx',
-  event_timestamp_lookup: 'session_attribution_touch_events_occurred_at_idx'
+	session_lookup: "session_attribution_touch_events_session_occurred_at_idx",
+	order_lookup: "order_attribution_links_order_lookup_idx",
+	event_timestamp_lookup: "session_attribution_touch_events_occurred_at_idx",
 };
 
 function requireDatabaseUrl() {
-  if (!process.env.DATABASE_URL) {
-    throw new Error('DATABASE_URL is required for attribution query plan verification');
-  }
+	if (!process.env.DATABASE_URL) {
+		throw new Error(
+			"DATABASE_URL is required for attribution query plan verification",
+		);
+	}
 
-  return process.env.DATABASE_URL;
+	return process.env.DATABASE_URL;
 }
 
 function collectPlanNodes(node, names = []) {
-  if (!node || typeof node !== 'object') {
-    return names;
-  }
+	if (!node || typeof node !== "object") {
+		return names;
+	}
 
-  if (typeof node['Index Name'] === 'string') {
-    names.push(node['Index Name']);
-  }
+	if (typeof node["Index Name"] === "string") {
+		names.push(node["Index Name"]);
+	}
 
-  const plans = node.Plans;
+	const plans = node.Plans;
 
-  if (Array.isArray(plans)) {
-    for (const plan of plans) {
-      collectPlanNodes(plan, names);
-    }
-  }
+	if (Array.isArray(plans)) {
+		for (const plan of plans) {
+			collectPlanNodes(plan, names);
+		}
+	}
 
-  return names;
+	return names;
 }
 
 async function explainUsesIndex(client, label, sql, params, expectedIndex) {
-  const result = await client.query(`EXPLAIN (FORMAT JSON) ${sql}`, params);
-  const planRoot = result.rows[0]['QUERY PLAN'][0]?.Plan;
-  const indexNames = collectPlanNodes(planRoot);
+	const result = await client.query(`EXPLAIN (FORMAT JSON) ${sql}`, params);
+	const planRoot = result.rows[0]["QUERY PLAN"][0]?.Plan;
+	const indexNames = collectPlanNodes(planRoot);
 
-  if (!indexNames.includes(expectedIndex)) {
-    throw new Error(
-      `${label} did not use ${expectedIndex}. Planner used: ${indexNames.length > 0 ? indexNames.join(', ') : 'no index'}`
-    );
-  }
+	if (!indexNames.includes(expectedIndex)) {
+		throw new Error(
+			`${label} did not use ${expectedIndex}. Planner used: ${indexNames.length > 0 ? indexNames.join(", ") : "no index"}`,
+		);
+	}
 
-  process.stdout.write(`${label}: ${expectedIndex}\n`);
+	process.stdout.write(`${label}: ${expectedIndex}\n`);
 }
 
 async function main() {
-  const client = new Client({ connectionString: requireDatabaseUrl() });
-  const verificationTag = `plan-${Date.now()}`;
+	const client = new Client({ connectionString: requireDatabaseUrl() });
+	const verificationTag = `plan-${Date.now()}`;
 
-  await client.connect();
+	await client.connect();
 
-  try {
-    await client.query('BEGIN');
+	try {
+		await client.query("BEGIN");
 
-    await client.query(
-      `
+		await client.query(
+			`
         INSERT INTO shopify_orders (
           shopify_order_id,
           shopify_order_number,
@@ -79,11 +81,11 @@ async function main() {
         FROM generate_series(1, 3000) AS gs
         ON CONFLICT (shopify_order_id) DO NOTHING
       `,
-      [verificationTag]
-    );
+			[verificationTag],
+		);
 
-    await client.query(
-      `
+		await client.query(
+			`
         INSERT INTO session_attribution_identities (
           roas_radar_session_id,
           first_captured_at,
@@ -108,11 +110,11 @@ async function main() {
           'launch-' || (gs % 20)::text,
           'gclid-' || gs::text
         FROM generate_series(1, 4000) AS gs
-      `
-    );
+      `,
+		);
 
-    await client.query(
-      `
+		await client.query(
+			`
         INSERT INTO session_attribution_touch_events (
           roas_radar_session_id,
           event_type,
@@ -149,11 +151,11 @@ async function main() {
           LIMIT 4000
         ) AS s
         CROSS JOIN generate_series(1, 40) AS event_idx
-      `
-    );
+      `,
+		);
 
-    await client.query(
-      `
+		await client.query(
+			`
         INSERT INTO order_attribution_links (
           shopify_order_id,
           roas_radar_session_id,
@@ -184,79 +186,81 @@ async function main() {
           LIMIT 3000
         ) AS s
       `,
-      [verificationTag]
-    );
+			[verificationTag],
+		);
 
-    await client.query('ANALYZE session_attribution_identities');
-    await client.query('ANALYZE session_attribution_touch_events');
-    await client.query('ANALYZE order_attribution_links');
+		await client.query("ANALYZE session_attribution_identities");
+		await client.query("ANALYZE session_attribution_touch_events");
+		await client.query("ANALYZE order_attribution_links");
 
-    const sessionLookupResult = await client.query(
-      `
+		const sessionLookupResult = await client.query(
+			`
         SELECT roas_radar_session_id::text
         FROM session_attribution_identities
         ORDER BY last_captured_at DESC, roas_radar_session_id ASC
         LIMIT 1
-      `
-    );
+      `,
+		);
 
-    const sessionId = sessionLookupResult.rows[0]?.roas_radar_session_id;
+		const sessionId = sessionLookupResult.rows[0]?.roas_radar_session_id;
 
-    if (!sessionId) {
-      throw new Error('Unable to select a session for plan verification');
-    }
+		if (!sessionId) {
+			throw new Error("Unable to select a session for plan verification");
+		}
 
-    await explainUsesIndex(
-      client,
-      'session_lookup',
-      `
+		await explainUsesIndex(
+			client,
+			"session_lookup",
+			`
         SELECT id
         FROM session_attribution_touch_events
         WHERE roas_radar_session_id = $1::uuid
         ORDER BY occurred_at DESC
         LIMIT 20
       `,
-      [sessionId],
-      REQUIRED_INDEXES.session_lookup
-    );
+			[sessionId],
+			REQUIRED_INDEXES.session_lookup,
+		);
 
-    await explainUsesIndex(
-      client,
-      'order_lookup',
-      `
+		await explainUsesIndex(
+			client,
+			"order_lookup",
+			`
         SELECT id
         FROM order_attribution_links
         WHERE shopify_order_id = $1
         ORDER BY is_primary DESC, linked_at DESC
       `,
-      [`${verificationTag}-order-3`],
-      REQUIRED_INDEXES.order_lookup
-    );
+			[`${verificationTag}-order-3`],
+			REQUIRED_INDEXES.order_lookup,
+		);
 
-    await explainUsesIndex(
-      client,
-      'event_timestamp_lookup',
-      `
+		await explainUsesIndex(
+			client,
+			"event_timestamp_lookup",
+			`
         SELECT id
         FROM session_attribution_touch_events
         WHERE occurred_at >= now() - interval '6 hours'
         ORDER BY occurred_at DESC
         LIMIT 500
       `,
-      [],
-      REQUIRED_INDEXES.event_timestamp_lookup
-    );
+			[],
+			REQUIRED_INDEXES.event_timestamp_lookup,
+		);
 
-    await client.query('ROLLBACK');
-  } catch (error) {
-    await client.query('ROLLBACK').catch(() => undefined);
-    throw error;
-  } finally {
-    await client.end();
-  }
+		await client.query("ROLLBACK");
+	} catch (error) {
+		await client.query("ROLLBACK").catch(() => undefined);
+		throw error;
+	} finally {
+		await client.end();
+	}
 }
 
 main().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
-  process.exit(1);
+	process.stderr.write(
+		`${error instanceof Error ? error.stack : String(error)}\n`,
+	);
+	process.exit(1);
 });

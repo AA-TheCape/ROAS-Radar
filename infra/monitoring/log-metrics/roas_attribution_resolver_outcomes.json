@@ -1,25 +1,45 @@
 {
-  "name": "roas_attribution_resolver_outcomes",
-  "description": "Counts attribution resolver outcomes, including fallback usage, precedence skips, and winner provenance.",
-  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"attribution_resolver_outcome\"",
-  "labelExtractors": {
-    "service": "EXTRACT(jsonPayload.service)",
-    "winner_match_source": "EXTRACT(jsonPayload.winnerMatchSource)",
-    "resolver_outcome": "EXTRACT(jsonPayload.resolverOutcome)",
-    "fallback_used": "EXTRACT(jsonPayload.fallbackUsed)",
-    "ga4_skipped_reason": "EXTRACT(jsonPayload.ga4SkippedReason)"
-  },
-  "metricDescriptor": {
-    "metricKind": "DELTA",
-    "valueType": "INT64",
-    "unit": "1",
-    "displayName": "ROAS Radar Attribution Resolver Outcomes",
-    "labels": [
-      { "key": "service", "valueType": "STRING", "description": "Service emitting the resolver outcome." },
-      { "key": "winner_match_source", "valueType": "STRING", "description": "Winning attribution provenance." },
-      { "key": "resolver_outcome", "valueType": "STRING", "description": "Resolver outcome classification." },
-      { "key": "fallback_used", "valueType": "STRING", "description": "Whether fallback attribution was used." },
-      { "key": "ga4_skipped_reason", "valueType": "STRING", "description": "Why GA4 fallback was skipped when precedence blocked it." }
-    ]
-  }
+	"name": "roas_attribution_resolver_outcomes",
+	"description": "Counts attribution resolver outcomes, including fallback usage, precedence skips, and winner provenance.",
+	"filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"attribution_resolver_outcome\"",
+	"labelExtractors": {
+		"service": "EXTRACT(jsonPayload.service)",
+		"winner_match_source": "EXTRACT(jsonPayload.winnerMatchSource)",
+		"resolver_outcome": "EXTRACT(jsonPayload.resolverOutcome)",
+		"fallback_used": "EXTRACT(jsonPayload.fallbackUsed)",
+		"ga4_skipped_reason": "EXTRACT(jsonPayload.ga4SkippedReason)"
+	},
+	"metricDescriptor": {
+		"metricKind": "DELTA",
+		"valueType": "INT64",
+		"unit": "1",
+		"displayName": "ROAS Radar Attribution Resolver Outcomes",
+		"labels": [
+			{
+				"key": "service",
+				"valueType": "STRING",
+				"description": "Service emitting the resolver outcome."
+			},
+			{
+				"key": "winner_match_source",
+				"valueType": "STRING",
+				"description": "Winning attribution provenance."
+			},
+			{
+				"key": "resolver_outcome",
+				"valueType": "STRING",
+				"description": "Resolver outcome classification."
+			},
+			{
+				"key": "fallback_used",
+				"valueType": "STRING",
+				"description": "Whether fallback attribution was used."
+			},
+			{
+				"key": "ga4_skipped_reason",
+				"valueType": "STRING",
+				"description": "Why GA4 fallback was skipped when precedence blocked it."
+			}
+		]
+	}
 }

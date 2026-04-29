@@ -1,68 +1,70 @@
-import pg from 'pg';
+import pg from "pg";
 
 const { Client } = pg;
 
 const REQUIRED_INDEXES = {
-  journey_lookup: 'identity_journeys_authoritative_shopify_customer_uidx',
-  node_lookup: 'identity_nodes_hashed_email_lookup_idx',
-  active_edge_lookup: 'identity_edges_active_node_uidx',
-  journey_edge_lookup: 'identity_edges_journey_active_rank_idx',
-  lookback_lookup: 'identity_journeys_lookback_expires_at_idx'
+	journey_lookup: "identity_journeys_authoritative_shopify_customer_uidx",
+	node_lookup: "identity_nodes_hashed_email_lookup_idx",
+	active_edge_lookup: "identity_edges_active_node_uidx",
+	journey_edge_lookup: "identity_edges_journey_active_rank_idx",
+	lookback_lookup: "identity_journeys_lookback_expires_at_idx",
 };
 
 function requireDatabaseUrl() {
-  if (!process.env.DATABASE_URL) {
-    throw new Error('DATABASE_URL is required for identity graph query plan verification');
-  }
+	if (!process.env.DATABASE_URL) {
+		throw new Error(
+			"DATABASE_URL is required for identity graph query plan verification",
+		);
+	}
 
-  return process.env.DATABASE_URL;
+	return process.env.DATABASE_URL;
 }
 
 function collectPlanNodes(node, names = []) {
-  if (!node || typeof node !== 'object') {
-    return names;
-  }
+	if (!node || typeof node !== "object") {
+		return names;
+	}
 
-  if (typeof node['Index Name'] === 'string') {
-    names.push(node['Index Name']);
-  }
+	if (typeof node["Index Name"] === "string") {
+		names.push(node["Index Name"]);
+	}
 
-  const plans = node.Plans;
+	const plans = node.Plans;
 
-  if (Array.isArray(plans)) {
-    for (const plan of plans) {
-      collectPlanNodes(plan, names);
-    }
-  }
+	if (Array.isArray(plans)) {
+		for (const plan of plans) {
+			collectPlanNodes(plan, names);
+		}
+	}
 
-  return names;
+	return names;
 }
 
 async function explainUsesIndex(client, label, sql, params, expectedIndex) {
-  const result = await client.query(`EXPLAIN (FORMAT JSON) ${sql}`, params);
-  const planRoot = result.rows[0]['QUERY PLAN'][0]?.Plan;
-  const indexNames = collectPlanNodes(planRoot);
+	const result = await client.query(`EXPLAIN (FORMAT JSON) ${sql}`, params);
+	const planRoot = result.rows[0]["QUERY PLAN"][0]?.Plan;
+	const indexNames = collectPlanNodes(planRoot);
 
-  if (!indexNames.includes(expectedIndex)) {
-    throw new Error(
-      `${label} did not use ${expectedIndex}. Planner used: ${indexNames.length > 0 ? indexNames.join(', ') : 'no index'}`
-    );
-  }
+	if (!indexNames.includes(expectedIndex)) {
+		throw new Error(
+			`${label} did not use ${expectedIndex}. Planner used: ${indexNames.length > 0 ? indexNames.join(", ") : "no index"}`,
+		);
+	}
 
-  process.stdout.write(`${label}: ${expectedIndex}\n`);
+	process.stdout.write(`${label}: ${expectedIndex}\n`);
 }
 
 async function main() {
-  const client = new Client({ connectionString: requireDatabaseUrl() });
-  const verificationTag = `identity-plan-${Date.now()}`;
+	const client = new Client({ connectionString: requireDatabaseUrl() });
+	const verificationTag = `identity-plan-${Date.now()}`;
 
-  await client.connect();
+	await client.connect();
 
-  try {
-    await client.query('BEGIN');
+	try {
+		await client.query("BEGIN");
 
-    await client.query(
-      `
+		await client.query(
+			`
         INSERT INTO identity_journeys (
           authoritative_shopify_customer_id,
           primary_email_hash,
@@ -94,11 +96,11 @@ async function main() {
           $1 || '-journey-' || gs::text
         FROM generate_series(1, 2500) AS gs
       `,
-      [verificationTag]
-    );
+			[verificationTag],
+		);
 
-    await client.query(
-      `
+		await client.query(
+			`
         INSERT INTO identity_nodes (
           node_type,
           node_key,
@@ -116,11 +118,11 @@ async function main() {
           now() - ((gs % 2) || ' hours')::interval
         FROM generate_series(1, 3000) AS gs
       `,
-      [verificationTag]
-    );
+			[verificationTag],
+		);
 
-    await client.query(
-      `
+		await client.query(
+			`
         INSERT INTO identity_nodes (
           node_type,
           node_key,
@@ -138,11 +140,11 @@ async function main() {
           now()
         FROM generate_series(1, 3000) AS gs
       `,
-      [verificationTag]
-    );
+			[verificationTag],
+		);
 
-    await client.query(
-      `
+		await client.query(
+			`
         INSERT INTO identity_edges (
           node_id,
           journey_id,
@@ -181,32 +183,35 @@ async function main() {
         ) AS journeys
           ON journeys.row_num = ((nodes.row_num - 1) % 2500) + 1
       `,
-      [verificationTag]
-    );
+			[verificationTag],
+		);
 
-    await client.query('ANALYZE identity_journeys');
-    await client.query('ANALYZE identity_nodes');
-    await client.query('ANALYZE identity_edges');
+		await client.query("ANALYZE identity_journeys");
+		await client.query("ANALYZE identity_nodes");
+		await client.query("ANALYZE identity_edges");
 
-    const journeyLookupResult = await client.query(
-      `
+		const journeyLookupResult = await client.query(
+			`
         SELECT authoritative_shopify_customer_id
         FROM identity_journeys
         WHERE authoritative_shopify_customer_id LIKE $1 || '-customer-%'
         ORDER BY authoritative_shopify_customer_id DESC
         LIMIT 1
       `,
-      [verificationTag]
-    );
+			[verificationTag],
+		);
 
-    const authoritativeShopifyCustomerId = journeyLookupResult.rows[0]?.authoritative_shopify_customer_id;
+		const authoritativeShopifyCustomerId =
+			journeyLookupResult.rows[0]?.authoritative_shopify_customer_id;
 
-    if (!authoritativeShopifyCustomerId) {
-      throw new Error('Unable to select an authoritative Shopify customer id for plan verification');
-    }
+		if (!authoritativeShopifyCustomerId) {
+			throw new Error(
+				"Unable to select an authoritative Shopify customer id for plan verification",
+			);
+		}
 
-    const nodeLookupResult = await client.query(
-      `
+		const nodeLookupResult = await client.query(
+			`
         SELECT id, node_key
         FROM identity_nodes
         WHERE node_type = 'hashed_email'
@@ -214,74 +219,78 @@ async function main() {
         ORDER BY node_key DESC
         LIMIT 1
       `,
-      [verificationTag]
-    );
+			[verificationTag],
+		);
 
-    const nodeId = nodeLookupResult.rows[0]?.id;
-    const nodeKey = nodeLookupResult.rows[0]?.node_key;
+		const nodeId = nodeLookupResult.rows[0]?.id;
+		const nodeKey = nodeLookupResult.rows[0]?.node_key;
 
-    if (!nodeId || !nodeKey) {
-      throw new Error('Unable to select an identity node for plan verification');
-    }
+		if (!nodeId || !nodeKey) {
+			throw new Error(
+				"Unable to select an identity node for plan verification",
+			);
+		}
 
-    const journeyIdResult = await client.query(
-      `
+		const journeyIdResult = await client.query(
+			`
         SELECT journey_id
         FROM identity_edges
         WHERE node_id = $1::uuid
           AND is_active = true
       `,
-      [nodeId]
-    );
+			[nodeId],
+		);
 
-    const journeyId = journeyIdResult.rows[0]?.journey_id;
+		const journeyId = journeyIdResult.rows[0]?.journey_id;
 
-    if (!journeyId) {
-      throw new Error('Unable to select an identity journey edge for plan verification');
-    }
+		if (!journeyId) {
+			throw new Error(
+				"Unable to select an identity journey edge for plan verification",
+			);
+		}
 
-    await explainUsesIndex(
-      client,
-      'journey_lookup',
-      `
+		await explainUsesIndex(
+			client,
+			"journey_lookup",
+			`
         SELECT id
         FROM identity_journeys
         WHERE authoritative_shopify_customer_id = $1
       `,
-      [authoritativeShopifyCustomerId],
-      REQUIRED_INDEXES.journey_lookup
-    );
+			[authoritativeShopifyCustomerId],
+			REQUIRED_INDEXES.journey_lookup,
+		);
 
-    await explainUsesIndex(
-      client,
-      'node_lookup',
-      `
+		await explainUsesIndex(
+			client,
+			"node_lookup",
+			`
         SELECT id
         FROM identity_nodes
         WHERE node_type = 'hashed_email'
           AND node_key = $1
       `,
-      [nodeKey],
-      REQUIRED_INDEXES.node_lookup
-    );
+			[nodeKey],
+			REQUIRED_INDEXES.node_lookup,
+		);
 
-    await explainUsesIndex(
-      client,
-      'active_edge_lookup',
-      `
+		await explainUsesIndex(
+			client,
+			"active_edge_lookup",
+			`
         SELECT journey_id
         FROM identity_edges
         WHERE node_id = $1::uuid
           AND is_active = true
       `,
-      [nodeId],
-      REQUIRED_INDEXES.active_edge_lookup
-    );
+			[nodeId],
+			REQUIRED_INDEXES.active_edge_lookup,
+		);
 
-    await explainUsesIndex(
-      client,
-      'journey_edge_lookup',
-      `
+		await explainUsesIndex(
+			client,
+			"journey_edge_lookup",
+			`
         SELECT node_id
         FROM identity_edges
         WHERE journey_id = $1::uuid
@@ -289,34 +298,36 @@ async function main() {
         ORDER BY precedence_rank DESC, last_observed_at DESC
         LIMIT 20
       `,
-      [journeyId],
-      REQUIRED_INDEXES.journey_edge_lookup
-    );
+			[journeyId],
+			REQUIRED_INDEXES.journey_edge_lookup,
+		);
 
-    await explainUsesIndex(
-      client,
-      'lookback_lookup',
-      `
+		await explainUsesIndex(
+			client,
+			"lookback_lookup",
+			`
         SELECT id
         FROM identity_journeys
         WHERE lookback_window_expires_at >= now() - interval '1 day'
         ORDER BY lookback_window_expires_at DESC
         LIMIT 100
       `,
-      [],
-      REQUIRED_INDEXES.lookback_lookup
-    );
+			[],
+			REQUIRED_INDEXES.lookback_lookup,
+		);
 
-    await client.query('ROLLBACK');
-  } catch (error) {
-    await client.query('ROLLBACK').catch(() => undefined);
-    throw error;
-  } finally {
-    await client.end();
-  }
+		await client.query("ROLLBACK");
+	} catch (error) {
+		await client.query("ROLLBACK").catch(() => undefined);
+		throw error;
+	} finally {
+		await client.end();
+	}
 }
 
 main().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
-  process.exit(1);
+	process.stderr.write(
+		`${error instanceof Error ? error.stack : String(error)}\n`,
+	);
+	process.exit(1);
 });

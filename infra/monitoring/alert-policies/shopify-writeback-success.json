@@ -1,12 +1,12 @@
 {
-  "displayName": "ROAS Radar __ENVIRONMENT__ Shopify Writeback Success",
-  "documentation": {
-    "content": "Shopify attribution attribute writeback success fell below the expected floor. Runbook: __RUNBOOK_URL_ATTRIBUTION_COMPLETENESS__",
-    "mimeType": "text/markdown"
-  },
-  "conditions": [
-    {
-      "displayName": "Shopify writeback success rate drops below 90% for 15 minutes"
-    }
-  ]
+	"displayName": "ROAS Radar __ENVIRONMENT__ Shopify Writeback Success",
+	"documentation": {
+		"content": "Shopify attribution attribute writeback success fell below the expected floor. Runbook: __RUNBOOK_URL_ATTRIBUTION_COMPLETENESS__",
+		"mimeType": "text/markdown"
+	},
+	"conditions": [
+		{
+			"displayName": "Shopify writeback success rate drops below 90% for 15 minutes"
+		}
+	]
 }

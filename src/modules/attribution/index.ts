@@ -1,63 +1,92 @@
 // @ts-nocheck
 
-import { withTransaction } from '../../db/pool.js';
-import { logError, logInfo, summarizeResolverOutcome } from '../../observability/index.js';
-import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
-import { formatDateInTimezone, getReportingTimezone } from '../settings/index.js';
-import { ATTRIBUTION_MODELS, computeAttributionOutputs, computeSingleWinnerCredits } from './engine.js';
-import { lookupGa4FallbackCandidates } from './ga4-fallback-candidates.js';
-import { buildJourney, getGa4FallbackRolloutMode, persistGa4FallbackShadowComparison } from './ga4-rollout.js';
-import { confidenceLabelForScore, confidenceScoreForWinner, dedupeDeterministicCandidates, isDirectTouchpoint, selectGa4FallbackWinner, selectLastNonDirectWinner } from './resolver.js';
-import { extractShopifyHintAttribution } from './shopify-hints.js';
+import { withTransaction } from "../../db/pool.js";
+import {
+	logError,
+	logInfo,
+	summarizeResolverOutcome,
+} from "../../observability/index.js";
+import { refreshDailyReportingMetrics } from "../reporting/aggregates.js";
+import {
+	formatDateInTimezone,
+	getReportingTimezone,
+} from "../settings/index.js";
+import {
+	ATTRIBUTION_MODELS,
+	computeAttributionOutputs,
+	computeSingleWinnerCredits,
+} from "./engine.js";
+import { lookupGa4FallbackCandidates } from "./ga4-fallback-candidates.js";
+import {
+	buildJourney,
+	getGa4FallbackRolloutMode,
+	persistGa4FallbackShadowComparison,
+} from "./ga4-rollout.js";
+import {
+	confidenceLabelForScore,
+	confidenceScoreForWinner,
+	dedupeDeterministicCandidates,
+	isDirectTouchpoint,
+	selectGa4FallbackWinner,
+	selectLastNonDirectWinner,
+} from "./resolver.js";
+import { extractShopifyHintAttribution } from "./shopify-hints.js";
 const ATTRIBUTION_MODEL_VERSION = 1;
 const ATTRIBUTION_WINDOW_DAYS = 7;
 const JOB_STALE_AFTER_MINUTES = 15;
 const MAX_RETRY_DELAY_SECONDS = 1_800;
 function normalizeNullableString(value) {
-    const normalized = value?.trim();
-    return normalized ? normalized : null;
+	const normalized = value?.trim();
+	return normalized ? normalized : null;
 }
 export function buildQueueKey(shopifyOrderId) {
-    return `order:${shopifyOrderId}`;
+	return `order:${shopifyOrderId}`;
 }
 export function computeRetryDelaySeconds(attempts) {
-    const normalizedAttempts = Number.isFinite(attempts) ? Math.max(Math.trunc(attempts), 1) : 1;
-    return Math.min(30 * 2 ** (normalizedAttempts - 1), MAX_RETRY_DELAY_SECONDS);
+	const normalizedAttempts = Number.isFinite(attempts)
+		? Math.max(Math.trunc(attempts), 1)
+		: 1;
+	return Math.min(30 * 2 ** (normalizedAttempts - 1), MAX_RETRY_DELAY_SECONDS);
 }
 export function buildProcessingMetricsLog(result) {
-    return JSON.stringify({
-        severity: 'INFO',
-        event: 'attribution_queue_run',
-        message: 'attribution_queue_run',
-        timestamp: new Date().toISOString(),
-        service: process.env.K_SERVICE ?? 'roas-radar-attribution-worker',
-        ...result
-    });
+	return JSON.stringify({
+		severity: "INFO",
+		event: "attribution_queue_run",
+		message: "attribution_queue_run",
+		timestamp: new Date().toISOString(),
+		service: process.env.K_SERVICE ?? "roas-radar-attribution-worker",
+		...result,
+	});
 }
 function buildQueueOutcomeLog(workerId, outcome, value) {
-    return JSON.stringify({
-        severity: 'INFO',
-        event: 'attribution_queue_outcome',
-        message: 'attribution_queue_outcome',
-        timestamp: new Date().toISOString(),
-        service: process.env.K_SERVICE ?? 'roas-radar-attribution-worker',
-        workerId,
-        outcome,
-        value
-    });
+	return JSON.stringify({
+		severity: "INFO",
+		event: "attribution_queue_outcome",
+		message: "attribution_queue_outcome",
+		timestamp: new Date().toISOString(),
+		service: process.env.K_SERVICE ?? "roas-radar-attribution-worker",
+		workerId,
+		outcome,
+		value,
+	});
 }
 function buildAttributionCorrelationId(shopifyOrderId) {
-    return `attribution:${shopifyOrderId}`;
+	return `attribution:${shopifyOrderId}`;
 }
 async function execute(client, callback) {
-    if (client) {
-        return callback(client);
-    }
-    return withTransaction(callback);
+	if (client) {
+		return callback(client);
+	}
+	return withTransaction(callback);
 }
-export async function enqueueAttributionForOrder(shopifyOrderId, requestedReason, client) {
-    await execute(client, async (db) => {
-        await db.query(`
+export async function enqueueAttributionForOrder(
+	shopifyOrderId,
+	requestedReason,
+	client,
+) {
+	await execute(client, async (db) => {
+		await db.query(
+			`
         INSERT INTO attribution_jobs (
           queue_key,
           job_type,
@@ -85,11 +114,19 @@ export async function enqueueAttributionForOrder(shopifyOrderId, requestedReason
           completed_at = NULL,
           last_error = NULL,
           updated_at = now()
-      `, [buildQueueKey(shopifyOrderId), shopifyOrderId, requestedReason, ATTRIBUTION_MODEL_VERSION]);
-    });
+      `,
+			[
+				buildQueueKey(shopifyOrderId),
+				shopifyOrderId,
+				requestedReason,
+				ATTRIBUTION_MODEL_VERSION,
+			],
+		);
+	});
 }
 export async function enqueueAttributionForTrackingTouchpoint(client, input) {
-    const result = await client.query(`
+	const result = await client.query(
+		`
       SELECT DISTINCT o.shopify_order_id
       FROM shopify_orders o
       WHERE o.landing_session_id = $1::uuid
@@ -102,17 +139,28 @@ export async function enqueueAttributionForTrackingTouchpoint(client, input) {
              AND s.customer_identity_id IS NOT NULL
              AND s.customer_identity_id = o.customer_identity_id
          )
-    `, [input.sessionId, input.shopifyCheckoutToken ?? null, input.shopifyCartToken ?? null]);
-    for (const row of result.rows) {
-        await enqueueAttributionForOrder(row.shopify_order_id, 'tracking_touchpoint_updated', client);
-    }
-    return result.rowCount ?? result.rows.length;
+    `,
+		[
+			input.sessionId,
+			input.shopifyCheckoutToken ?? null,
+			input.shopifyCartToken ?? null,
+		],
+	);
+	for (const row of result.rows) {
+		await enqueueAttributionForOrder(
+			row.shopify_order_id,
+			"tracking_touchpoint_updated",
+			client,
+		);
+	}
+	return result.rowCount ?? result.rows.length;
 }
 async function requeueStaleJobs(client, staleScanLimit) {
-    if (staleScanLimit <= 0) {
-        return 0;
-    }
-    const result = await client.query(`
+	if (staleScanLimit <= 0) {
+		return 0;
+	}
+	const result = await client.query(
+		`
       WITH stale_jobs AS (
         SELECT id
         FROM attribution_jobs
@@ -133,11 +181,14 @@ async function requeueStaleJobs(client, staleScanLimit) {
       FROM stale_jobs
       WHERE j.id = stale_jobs.id
       RETURNING j.id
-    `, [JOB_STALE_AFTER_MINUTES, staleScanLimit]);
-    return result.rowCount ?? result.rows.length;
+    `,
+		[JOB_STALE_AFTER_MINUTES, staleScanLimit],
+	);
+	return result.rowCount ?? result.rows.length;
 }
 async function claimJobs(client, workerId, limit) {
-    const result = await client.query(`
+	const result = await client.query(
+		`
       WITH candidate_jobs AS (
         SELECT id
         FROM attribution_jobs
@@ -157,11 +208,14 @@ async function claimJobs(client, workerId, limit) {
       FROM candidate_jobs
       WHERE j.id = candidate_jobs.id
       RETURNING j.id, j.shopify_order_id, j.attempts
-    `, [workerId, Math.max(limit, 0)]);
-    return result.rows;
+    `,
+		[workerId, Math.max(limit, 0)],
+	);
+	return result.rows;
 }
 async function fetchOrder(client, shopifyOrderId) {
-    const result = await client.query(`
+	const result = await client.query(
+		`
       SELECT
         shopify_order_id,
         total_price::text,
@@ -178,85 +232,88 @@ async function fetchOrder(client, shopifyOrderId) {
       FROM shopify_orders
       WHERE shopify_order_id = $1
       LIMIT 1
-    `, [shopifyOrderId]);
-    return result.rows[0] ?? null;
+    `,
+		[shopifyOrderId],
+	);
+	return result.rows[0] ?? null;
 }
 function resolveOrderOccurredAt(order) {
-    return order.processed_at ?? order.created_at_shopify ?? order.ingested_at;
+	return order.processed_at ?? order.created_at_shopify ?? order.ingested_at;
 }
 function buildResolvedTouchpointFromValues(input) {
-    const confidenceScore = confidenceScoreForWinner({
-        matchSource: input.matchSource,
-        clickIdValue: input.clickIdValue
-    });
-    return {
-        sessionId: input.sessionId,
-        sourceTouchEventId: input.sourceTouchEventId,
-        occurredAt: input.occurredAt,
-        source: input.source,
-        medium: input.medium,
-        campaign: input.campaign,
-        content: input.content,
-        term: input.term,
-        clickIdType: input.clickIdType,
-        clickIdValue: input.clickIdValue,
-        attributionReason: input.attributionReason,
-        matchSource: input.matchSource,
-        ingestionSource: input.ingestionSource,
-        confidenceLabel: confidenceLabelForScore(confidenceScore),
-        ga4ClientId: input.ga4ClientId ?? null,
-        ga4SessionId: input.ga4SessionId ?? null,
-        isDirect: isDirectTouchpoint({
-            source: input.source,
-            medium: input.medium,
-            campaign: input.campaign,
-            content: input.content,
-            term: input.term,
-            clickIdValue: input.clickIdValue
-        }),
-        isForced: input.sessionId === null
-    };
+	const confidenceScore = confidenceScoreForWinner({
+		matchSource: input.matchSource,
+		clickIdValue: input.clickIdValue,
+	});
+	return {
+		sessionId: input.sessionId,
+		sourceTouchEventId: input.sourceTouchEventId,
+		occurredAt: input.occurredAt,
+		source: input.source,
+		medium: input.medium,
+		campaign: input.campaign,
+		content: input.content,
+		term: input.term,
+		clickIdType: input.clickIdType,
+		clickIdValue: input.clickIdValue,
+		attributionReason: input.attributionReason,
+		matchSource: input.matchSource,
+		ingestionSource: input.ingestionSource,
+		confidenceLabel: confidenceLabelForScore(confidenceScore),
+		ga4ClientId: input.ga4ClientId ?? null,
+		ga4SessionId: input.ga4SessionId ?? null,
+		isDirect: isDirectTouchpoint({
+			source: input.source,
+			medium: input.medium,
+			campaign: input.campaign,
+			content: input.content,
+			term: input.term,
+			clickIdValue: input.clickIdValue,
+		}),
+		isForced: input.sessionId === null,
+	};
 }
 function buildResolvedTouchpoint(row, ingestionSource, attributionReason) {
-    return buildResolvedTouchpointFromValues({
-        sessionId: row.session_id,
-        sourceTouchEventId: row.source_touch_event_id,
-        occurredAt: row.occurred_at,
-        source: normalizeNullableString(row.source),
-        medium: normalizeNullableString(row.medium),
-        campaign: normalizeNullableString(row.campaign),
-        content: normalizeNullableString(row.content),
-        term: normalizeNullableString(row.term),
-        clickIdType: normalizeNullableString(row.click_id_type),
-        clickIdValue: normalizeNullableString(row.click_id_value),
-        attributionReason,
-        matchSource: ingestionSource,
-        ingestionSource
-    });
+	return buildResolvedTouchpointFromValues({
+		sessionId: row.session_id,
+		sourceTouchEventId: row.source_touch_event_id,
+		occurredAt: row.occurred_at,
+		source: normalizeNullableString(row.source),
+		medium: normalizeNullableString(row.medium),
+		campaign: normalizeNullableString(row.campaign),
+		content: normalizeNullableString(row.content),
+		term: normalizeNullableString(row.term),
+		clickIdType: normalizeNullableString(row.click_id_type),
+		clickIdValue: normalizeNullableString(row.click_id_value),
+		attributionReason,
+		matchSource: ingestionSource,
+		ingestionSource,
+	});
 }
 function serializeResolvedTouchpoint(touchpoint) {
-    return {
-        sessionId: touchpoint.sessionId,
-        sourceTouchEventId: touchpoint.sourceTouchEventId,
-        occurredAt: touchpoint.occurredAt.toISOString(),
-        source: touchpoint.source,
-        medium: touchpoint.medium,
-        campaign: touchpoint.campaign,
-        content: touchpoint.content,
-        term: touchpoint.term,
-        clickIdType: touchpoint.clickIdType,
-        clickIdValue: touchpoint.clickIdValue,
-        attributionReason: touchpoint.attributionReason,
-        matchSource: touchpoint.matchSource,
-        confidenceLabel: touchpoint.confidenceLabel,
-        ingestionSource: touchpoint.ingestionSource,
-        ga4ClientId: touchpoint.ga4ClientId,
-        ga4SessionId: touchpoint.ga4SessionId,
-        isDirect: touchpoint.isDirect
-    };
+	return {
+		sessionId: touchpoint.sessionId,
+		sourceTouchEventId: touchpoint.sourceTouchEventId,
+		occurredAt: touchpoint.occurredAt.toISOString(),
+		source: touchpoint.source,
+		medium: touchpoint.medium,
+		campaign: touchpoint.campaign,
+		content: touchpoint.content,
+		term: touchpoint.term,
+		clickIdType: touchpoint.clickIdType,
+		clickIdValue: touchpoint.clickIdValue,
+		attributionReason: touchpoint.attributionReason,
+		matchSource: touchpoint.matchSource,
+		confidenceLabel: touchpoint.confidenceLabel,
+		ingestionSource: touchpoint.ingestionSource,
+		ga4ClientId: touchpoint.ga4ClientId,
+		ga4SessionId: touchpoint.ga4SessionId,
+		isDirect: touchpoint.isDirect,
+	};
 }
 async function fetchLandingSessionCandidate(client, landingSessionId) {
-    const result = await client.query(`
+	const result = await client.query(
+		`
       SELECT
         s.id::text AS session_id,
         event.id::text AS source_touch_event_id,
@@ -312,12 +369,28 @@ async function fetchLandingSessionCandidate(client, landingSessionId) {
       ) AS event ON TRUE
       WHERE s.id = $1::uuid
       LIMIT 1
-    `, [landingSessionId]);
-    const row = result.rows[0];
-    return row ? buildResolvedTouchpoint(row, 'landing_session_id', 'matched_by_landing_session') : null;
+    `,
+		[landingSessionId],
+	);
+	const row = result.rows[0];
+	return row
+		? buildResolvedTouchpoint(
+				row,
+				"landing_session_id",
+				"matched_by_landing_session",
+			)
+		: null;
 }
-async function fetchLatestTokenCandidate(client, tokenColumn, tokenValue, orderOccurredAt, ingestionSource, attributionReason) {
-    const result = await client.query(`
+async function fetchLatestTokenCandidate(
+	client,
+	tokenColumn,
+	tokenValue,
+	orderOccurredAt,
+	ingestionSource,
+	attributionReason,
+) {
+	const result = await client.query(
+		`
       SELECT
         te.session_id::text AS session_id,
         te.id::text AS source_touch_event_id,
@@ -343,15 +416,20 @@ async function fetchLatestTokenCandidate(client, tokenColumn, tokenValue, orderO
         AND te.occurred_at >= $2 - ($3::int * interval '1 day')
       ORDER BY te.occurred_at DESC, te.id DESC
       LIMIT 1
-    `, [tokenValue, orderOccurredAt, ATTRIBUTION_WINDOW_DAYS]);
-    const row = result.rows[0];
-    return row ? buildResolvedTouchpoint(row, ingestionSource, attributionReason) : null;
+    `,
+		[tokenValue, orderOccurredAt, ATTRIBUTION_WINDOW_DAYS],
+	);
+	const row = result.rows[0];
+	return row
+		? buildResolvedTouchpoint(row, ingestionSource, attributionReason)
+		: null;
 }
 async function fetchIdentityCandidates(client, order, orderOccurredAt) {
-    if (!order.customer_identity_id) {
-        return [];
-    }
-    const result = await client.query(`
+	if (!order.customer_identity_id) {
+		return [];
+	}
+	const result = await client.query(
+		`
       SELECT
         s.id::text AS session_id,
         event.id::text AS source_touch_event_id,
@@ -409,162 +487,248 @@ async function fetchIdentityCandidates(client, order, orderOccurredAt) {
         AND s.first_seen_at <= $2
         AND s.first_seen_at >= $2 - ($3::int * interval '1 day')
       ORDER BY s.first_seen_at ASC, s.id ASC
-    `, [order.customer_identity_id, orderOccurredAt, ATTRIBUTION_WINDOW_DAYS]);
-    return result.rows.map((row) => buildResolvedTouchpoint(row, 'customer_identity', 'matched_by_customer_identity'));
+    `,
+		[order.customer_identity_id, orderOccurredAt, ATTRIBUTION_WINDOW_DAYS],
+	);
+	return result.rows.map((row) =>
+		buildResolvedTouchpoint(
+			row,
+			"customer_identity",
+			"matched_by_customer_identity",
+		),
+	);
 }
 async function collectDeterministicCandidates(client, order) {
-    const orderOccurredAt = resolveOrderOccurredAt(order);
-    const candidates = [];
-    if (order.landing_session_id) {
-        const landingCandidate = await fetchLandingSessionCandidate(client, order.landing_session_id);
-        if (landingCandidate) {
-            candidates.push(landingCandidate);
-        }
-    }
-    if (order.checkout_token) {
-        const checkoutCandidate = await fetchLatestTokenCandidate(client, 'shopify_checkout_token', order.checkout_token, orderOccurredAt, 'checkout_token', 'matched_by_checkout_token');
-        if (checkoutCandidate) {
-            candidates.push(checkoutCandidate);
-        }
-    }
-    if (order.cart_token) {
-        const cartCandidate = await fetchLatestTokenCandidate(client, 'shopify_cart_token', order.cart_token, orderOccurredAt, 'cart_token', 'matched_by_cart_token');
-        if (cartCandidate) {
-            candidates.push(cartCandidate);
-        }
-    }
-    candidates.push(...(await fetchIdentityCandidates(client, order, orderOccurredAt)));
-    return candidates;
+	const orderOccurredAt = resolveOrderOccurredAt(order);
+	const candidates = [];
+	if (order.landing_session_id) {
+		const landingCandidate = await fetchLandingSessionCandidate(
+			client,
+			order.landing_session_id,
+		);
+		if (landingCandidate) {
+			candidates.push(landingCandidate);
+		}
+	}
+	if (order.checkout_token) {
+		const checkoutCandidate = await fetchLatestTokenCandidate(
+			client,
+			"shopify_checkout_token",
+			order.checkout_token,
+			orderOccurredAt,
+			"checkout_token",
+			"matched_by_checkout_token",
+		);
+		if (checkoutCandidate) {
+			candidates.push(checkoutCandidate);
+		}
+	}
+	if (order.cart_token) {
+		const cartCandidate = await fetchLatestTokenCandidate(
+			client,
+			"shopify_cart_token",
+			order.cart_token,
+			orderOccurredAt,
+			"cart_token",
+			"matched_by_cart_token",
+		);
+		if (cartCandidate) {
+			candidates.push(cartCandidate);
+		}
+	}
+	candidates.push(
+		...(await fetchIdentityCandidates(client, order, orderOccurredAt)),
+	);
+	return candidates;
 }
 function resolveShopifyHintFallback(order) {
-    if (normalizeNullableString(order.source_name) !== 'web') {
-        return null;
-    }
-    const hint = extractShopifyHintAttribution(order.raw_payload);
-    if (!hint) {
-        return null;
-    }
-    return buildResolvedTouchpointFromValues({
-        sessionId: null,
-        sourceTouchEventId: null,
-        occurredAt: resolveOrderOccurredAt(order),
-        source: normalizeNullableString(hint.source),
-        medium: normalizeNullableString(hint.medium),
-        campaign: normalizeNullableString(hint.campaign),
-        content: normalizeNullableString(hint.content),
-        term: normalizeNullableString(hint.term),
-        clickIdType: normalizeNullableString(hint.clickIdType),
-        clickIdValue: normalizeNullableString(hint.clickIdValue),
-        attributionReason: 'shopify_hint_derived',
-        matchSource: 'shopify_hint_fallback',
-        ingestionSource: null
-    });
+	if (normalizeNullableString(order.source_name) !== "web") {
+		return null;
+	}
+	const hint = extractShopifyHintAttribution(order.raw_payload);
+	if (!hint) {
+		return null;
+	}
+	return buildResolvedTouchpointFromValues({
+		sessionId: null,
+		sourceTouchEventId: null,
+		occurredAt: resolveOrderOccurredAt(order),
+		source: normalizeNullableString(hint.source),
+		medium: normalizeNullableString(hint.medium),
+		campaign: normalizeNullableString(hint.campaign),
+		content: normalizeNullableString(hint.content),
+		term: normalizeNullableString(hint.term),
+		clickIdType: normalizeNullableString(hint.clickIdType),
+		clickIdValue: normalizeNullableString(hint.clickIdValue),
+		attributionReason: "shopify_hint_derived",
+		matchSource: "shopify_hint_fallback",
+		ingestionSource: null,
+	});
 }
 async function resolveGa4Fallback(client, order, orderOccurredAt) {
-    if (normalizeNullableString(order.source_name) !== 'web') {
-        return null;
-    }
-    const winner = selectGa4FallbackWinner(await lookupGa4FallbackCandidates({
-        orderOccurredAt: orderOccurredAt.toISOString(),
-        customerIdentityId: order.customer_identity_id,
-        emailHash: order.email_hash,
-        transactionId: order.shopify_order_id
-    }, client), orderOccurredAt);
-    if (!winner) {
-        return null;
-    }
-    return buildResolvedTouchpointFromValues({
-        sessionId: null,
-        sourceTouchEventId: null,
-        occurredAt: new Date(winner.occurredAt),
-        source: normalizeNullableString(winner.source),
-        medium: normalizeNullableString(winner.medium),
-        campaign: normalizeNullableString(winner.campaign),
-        content: normalizeNullableString(winner.content),
-        term: normalizeNullableString(winner.term),
-        clickIdType: normalizeNullableString(winner.clickIdType),
-        clickIdValue: normalizeNullableString(winner.clickIdValue),
-        attributionReason: 'ga4_fallback_derived',
-        matchSource: 'ga4_fallback',
-        ingestionSource: null,
-        ga4ClientId: normalizeNullableString(winner.ga4ClientId),
-        ga4SessionId: normalizeNullableString(winner.ga4SessionId)
-    });
+	if (normalizeNullableString(order.source_name) !== "web") {
+		return null;
+	}
+	const winner = selectGa4FallbackWinner(
+		await lookupGa4FallbackCandidates(
+			{
+				orderOccurredAt: orderOccurredAt.toISOString(),
+				customerIdentityId: order.customer_identity_id,
+				emailHash: order.email_hash,
+				transactionId: order.shopify_order_id,
+			},
+			client,
+		),
+		orderOccurredAt,
+	);
+	if (!winner) {
+		return null;
+	}
+	return buildResolvedTouchpointFromValues({
+		sessionId: null,
+		sourceTouchEventId: null,
+		occurredAt: new Date(winner.occurredAt),
+		source: normalizeNullableString(winner.source),
+		medium: normalizeNullableString(winner.medium),
+		campaign: normalizeNullableString(winner.campaign),
+		content: normalizeNullableString(winner.content),
+		term: normalizeNullableString(winner.term),
+		clickIdType: normalizeNullableString(winner.clickIdType),
+		clickIdValue: normalizeNullableString(winner.clickIdValue),
+		attributionReason: "ga4_fallback_derived",
+		matchSource: "ga4_fallback",
+		ingestionSource: null,
+		ga4ClientId: normalizeNullableString(winner.ga4ClientId),
+		ga4SessionId: normalizeNullableString(winner.ga4SessionId),
+	});
 }
 async function resolveAttributionJourneys(client, order) {
-    const orderOccurredAt = resolveOrderOccurredAt(order);
-    const touchpoints = dedupeDeterministicCandidates(await collectDeterministicCandidates(client, order));
-    const deterministicWinner = selectLastNonDirectWinner(touchpoints);
-    const shopifyHintWinner = deterministicWinner ? null : resolveShopifyHintFallback(order);
-    const preGa4Winner = deterministicWinner ?? shopifyHintWinner;
-    const ga4Winner = preGa4Winner ? null : await resolveGa4Fallback(client, order, orderOccurredAt);
-    const rolloutMode = getGa4FallbackRolloutMode();
-    const shadowWinner = preGa4Winner ?? ga4Winner;
-    const appliedWinner = rolloutMode === 'on' ? shadowWinner : preGa4Winner;
-    const appliedConfidenceScore = confidenceScoreForWinner(appliedWinner);
-    const shadowConfidenceScore = confidenceScoreForWinner(shadowWinner);
-    return {
-        appliedJourney: buildJourney(appliedWinner && touchpoints.length === 0 ? [appliedWinner] : touchpoints, appliedWinner, appliedConfidenceScore, confidenceLabelForScore(appliedConfidenceScore)),
-        shadowJourney: buildJourney(shadowWinner && touchpoints.length === 0 ? [shadowWinner] : touchpoints, shadowWinner, shadowConfidenceScore, confidenceLabelForScore(shadowConfidenceScore)),
-        rolloutMode
-    };
+	const orderOccurredAt = resolveOrderOccurredAt(order);
+	const touchpoints = dedupeDeterministicCandidates(
+		await collectDeterministicCandidates(client, order),
+	);
+	const deterministicWinner = selectLastNonDirectWinner(touchpoints);
+	const shopifyHintWinner = deterministicWinner
+		? null
+		: resolveShopifyHintFallback(order);
+	const preGa4Winner = deterministicWinner ?? shopifyHintWinner;
+	const ga4Winner = preGa4Winner
+		? null
+		: await resolveGa4Fallback(client, order, orderOccurredAt);
+	const rolloutMode = getGa4FallbackRolloutMode();
+	const shadowWinner = preGa4Winner ?? ga4Winner;
+	const appliedWinner = rolloutMode === "on" ? shadowWinner : preGa4Winner;
+	const appliedConfidenceScore = confidenceScoreForWinner(appliedWinner);
+	const shadowConfidenceScore = confidenceScoreForWinner(shadowWinner);
+	return {
+		appliedJourney: buildJourney(
+			appliedWinner && touchpoints.length === 0 ? [appliedWinner] : touchpoints,
+			appliedWinner,
+			appliedConfidenceScore,
+			confidenceLabelForScore(appliedConfidenceScore),
+		),
+		shadowJourney: buildJourney(
+			shadowWinner && touchpoints.length === 0 ? [shadowWinner] : touchpoints,
+			shadowWinner,
+			shadowConfidenceScore,
+			confidenceLabelForScore(shadowConfidenceScore),
+		),
+		rolloutMode,
+	};
 }
 function selectPrimaryCredit(credits) {
-    return credits.find((credit) => credit.isPrimary) ?? credits[credits.length - 1];
+	return (
+		credits.find((credit) => credit.isPrimary) ?? credits[credits.length - 1]
+	);
 }
 function touchpointForCredit(journey, credit) {
-    return (journey.touchpoints[credit.touchpointPosition] ?? {
-        matchSource: 'unattributed',
-        confidenceLabel: 'none'
-    });
+	return (
+		journey.touchpoints[credit.touchpointPosition] ?? {
+			matchSource: "unattributed",
+			confidenceLabel: "none",
+		}
+	);
 }
-async function shouldPersistSyntheticAttribution(client, shopifyOrderId, matchSource, confidenceScore) {
-    const result = await client.query(`
+async function shouldPersistSyntheticAttribution(
+	client,
+	shopifyOrderId,
+	matchSource,
+	confidenceScore,
+) {
+	const result = await client.query(
+		`
       SELECT match_source, confidence_score::text
       FROM attribution_results
       WHERE shopify_order_id = $1
       LIMIT 1
-    `, [shopifyOrderId]);
-    const existing = result.rows[0];
-    if (!existing) {
-        return true;
-    }
-    if (existing.match_source === 'landing_session_id' ||
-        existing.match_source === 'checkout_token' ||
-        existing.match_source === 'cart_token' ||
-        existing.match_source === 'customer_identity') {
-        return false;
-    }
-    if (existing.match_source === 'shopify_hint_fallback' && matchSource === 'ga4_fallback') {
-        return false;
-    }
-    return Number.parseFloat(existing.confidence_score) <= confidenceScore;
+    `,
+		[shopifyOrderId],
+	);
+	const existing = result.rows[0];
+	if (!existing) {
+		return true;
+	}
+	if (
+		existing.match_source === "landing_session_id" ||
+		existing.match_source === "checkout_token" ||
+		existing.match_source === "cart_token" ||
+		existing.match_source === "customer_identity"
+	) {
+		return false;
+	}
+	if (
+		existing.match_source === "shopify_hint_fallback" &&
+		matchSource === "ga4_fallback"
+	) {
+		return false;
+	}
+	return Number.parseFloat(existing.confidence_score) <= confidenceScore;
 }
 async function persistAttribution(client, order, journey, options = {}) {
-    const orderOccurredAt = resolveOrderOccurredAt(order);
-    const outputs = computeAttributionOutputs(journey.touchpoints, {
-        orderOccurredAt,
-        orderRevenue: order.total_price
-    });
-    if (journey.winner) {
-        const winnerIndex = journey.touchpoints.findIndex((touchpoint) => touchpoint.sessionId === journey.winner?.sessionId);
-        if (winnerIndex >= 0) {
-            outputs.last_touch = computeSingleWinnerCredits('last_touch', journey.touchpoints, winnerIndex, order.total_price);
-        }
-    }
-    const primaryCredit = selectPrimaryCredit(outputs.last_touch);
-    if (!primaryCredit) {
-        throw new Error(`Failed to compute attribution credits for Shopify order ${order.shopify_order_id}`);
-    }
-    if (options.preventDowngrade &&
-        !(await shouldPersistSyntheticAttribution(client, order.shopify_order_id, journey.winner?.matchSource ?? 'unattributed', journey.confidenceScore))) {
-        return;
-    }
-    await client.query('DELETE FROM attribution_order_credits WHERE shopify_order_id = $1', [order.shopify_order_id]);
-    for (const model of ATTRIBUTION_MODELS) {
-        for (const credit of outputs[model]) {
-            const touchpoint = touchpointForCredit(journey, credit);
-            await client.query(`
+	const orderOccurredAt = resolveOrderOccurredAt(order);
+	const outputs = computeAttributionOutputs(journey.touchpoints, {
+		orderOccurredAt,
+		orderRevenue: order.total_price,
+	});
+	if (journey.winner) {
+		const winnerIndex = journey.touchpoints.findIndex(
+			(touchpoint) => touchpoint.sessionId === journey.winner?.sessionId,
+		);
+		if (winnerIndex >= 0) {
+			outputs.last_touch = computeSingleWinnerCredits(
+				"last_touch",
+				journey.touchpoints,
+				winnerIndex,
+				order.total_price,
+			);
+		}
+	}
+	const primaryCredit = selectPrimaryCredit(outputs.last_touch);
+	if (!primaryCredit) {
+		throw new Error(
+			`Failed to compute attribution credits for Shopify order ${order.shopify_order_id}`,
+		);
+	}
+	if (
+		options.preventDowngrade &&
+		!(await shouldPersistSyntheticAttribution(
+			client,
+			order.shopify_order_id,
+			journey.winner?.matchSource ?? "unattributed",
+			journey.confidenceScore,
+		))
+	) {
+		return;
+	}
+	await client.query(
+		"DELETE FROM attribution_order_credits WHERE shopify_order_id = $1",
+		[order.shopify_order_id],
+	);
+	for (const model of ATTRIBUTION_MODELS) {
+		for (const credit of outputs[model]) {
+			const touchpoint = touchpointForCredit(journey, credit);
+			await client.query(
+				`
           INSERT INTO attribution_order_credits (
             shopify_order_id,
             attribution_model,
@@ -607,30 +771,33 @@ async function persistAttribution(client, order, journey, options = {}) {
             $18,
             $19
           )
-        `, [
-                order.shopify_order_id,
-                credit.attributionModel,
-                credit.touchpointPosition,
-                credit.sessionId,
-                credit.touchpointOccurredAt,
-                normalizeNullableString(credit.source),
-                normalizeNullableString(credit.medium),
-                normalizeNullableString(credit.campaign),
-                normalizeNullableString(credit.content),
-                normalizeNullableString(credit.term),
-                normalizeNullableString(credit.clickIdType),
-                normalizeNullableString(credit.clickIdValue),
-                credit.creditWeight,
-                credit.revenueCredit,
-                credit.isPrimary,
-                credit.attributionReason,
-                touchpoint.matchSource,
-                touchpoint.confidenceLabel,
-                ATTRIBUTION_MODEL_VERSION
-            ]);
-        }
-    }
-    await client.query(`
+        `,
+				[
+					order.shopify_order_id,
+					credit.attributionModel,
+					credit.touchpointPosition,
+					credit.sessionId,
+					credit.touchpointOccurredAt,
+					normalizeNullableString(credit.source),
+					normalizeNullableString(credit.medium),
+					normalizeNullableString(credit.campaign),
+					normalizeNullableString(credit.content),
+					normalizeNullableString(credit.term),
+					normalizeNullableString(credit.clickIdType),
+					normalizeNullableString(credit.clickIdValue),
+					credit.creditWeight,
+					credit.revenueCredit,
+					credit.isPrimary,
+					credit.attributionReason,
+					touchpoint.matchSource,
+					touchpoint.confidenceLabel,
+					ATTRIBUTION_MODEL_VERSION,
+				],
+			);
+		}
+	}
+	await client.query(
+		`
       INSERT INTO attribution_results (
         shopify_order_id,
         session_id,
@@ -692,64 +859,73 @@ async function persistAttribution(client, order, journey, options = {}) {
         ga4_session_id = EXCLUDED.ga4_session_id,
         attributed_at = now(),
         model_version = EXCLUDED.model_version
-    `, [
-        order.shopify_order_id,
-        primaryCredit.sessionId,
-        normalizeNullableString(primaryCredit.source),
-        normalizeNullableString(primaryCredit.medium),
-        normalizeNullableString(primaryCredit.campaign),
-        normalizeNullableString(primaryCredit.content),
-        normalizeNullableString(primaryCredit.term),
-        normalizeNullableString(primaryCredit.clickIdType),
-        normalizeNullableString(primaryCredit.clickIdValue),
-        journey.winner?.matchSource ?? 'unattributed',
-        journey.confidenceScore,
-        journey.confidenceLabel,
-        primaryCredit.attributionReason,
-        journey.winner?.ga4ClientId ?? null,
-        journey.winner?.ga4SessionId ?? null,
-        ATTRIBUTION_MODEL_VERSION
-    ]);
-    await client.query(`
+    `,
+		[
+			order.shopify_order_id,
+			primaryCredit.sessionId,
+			normalizeNullableString(primaryCredit.source),
+			normalizeNullableString(primaryCredit.medium),
+			normalizeNullableString(primaryCredit.campaign),
+			normalizeNullableString(primaryCredit.content),
+			normalizeNullableString(primaryCredit.term),
+			normalizeNullableString(primaryCredit.clickIdType),
+			normalizeNullableString(primaryCredit.clickIdValue),
+			journey.winner?.matchSource ?? "unattributed",
+			journey.confidenceScore,
+			journey.confidenceLabel,
+			primaryCredit.attributionReason,
+			journey.winner?.ga4ClientId ?? null,
+			journey.winner?.ga4SessionId ?? null,
+			ATTRIBUTION_MODEL_VERSION,
+		],
+	);
+	await client.query(
+		`
       UPDATE shopify_orders
       SET
         attribution_snapshot = $2::jsonb,
         attribution_snapshot_updated_at = now()
       WHERE shopify_order_id = $1
-    `, [
-        order.shopify_order_id,
-        JSON.stringify({
-            confidenceScore: journey.confidenceScore,
-            confidenceLabel: journey.confidenceLabel,
-            winner: journey.winner ? serializeResolvedTouchpoint(journey.winner) : null,
-            timeline: journey.touchpoints.map(serializeResolvedTouchpoint)
-        })
-    ]);
+    `,
+		[
+			order.shopify_order_id,
+			JSON.stringify({
+				confidenceScore: journey.confidenceScore,
+				confidenceLabel: journey.confidenceLabel,
+				winner: journey.winner
+					? serializeResolvedTouchpoint(journey.winner)
+					: null,
+				timeline: journey.touchpoints.map(serializeResolvedTouchpoint),
+			}),
+		],
+	);
 }
 function primaryCreditReason(journey) {
-    return journey.winner?.attributionReason ?? 'unattributed';
+	return journey.winner?.attributionReason ?? "unattributed";
 }
 function emitAttributionResolverOutcomeLog(order, journey) {
-    logInfo('attribution_resolver_outcome', {
-        service: process.env.K_SERVICE ?? 'roas-radar-attribution-worker',
-        correlationId: buildAttributionCorrelationId(order.shopify_order_id),
-        shopifyOrderId: order.shopify_order_id,
-        sourceName: normalizeNullableString(order.source_name),
-        confidenceScore: journey.confidenceScore,
-        confidenceLabel: journey.confidenceLabel,
-        attributionReason: primaryCreditReason(journey),
-        ...summarizeResolverOutcome({
-            touchpoints: journey.touchpoints,
-            winner: journey.winner,
-            deterministicWinnerExists: Boolean(journey.winner?.ingestionSource),
-            shopifyHintMatchExists: journey.winner?.matchSource === 'shopify_hint_fallback'
-        })
-    });
+	logInfo("attribution_resolver_outcome", {
+		service: process.env.K_SERVICE ?? "roas-radar-attribution-worker",
+		correlationId: buildAttributionCorrelationId(order.shopify_order_id),
+		shopifyOrderId: order.shopify_order_id,
+		sourceName: normalizeNullableString(order.source_name),
+		confidenceScore: journey.confidenceScore,
+		confidenceLabel: journey.confidenceLabel,
+		attributionReason: primaryCreditReason(journey),
+		...summarizeResolverOutcome({
+			touchpoints: journey.touchpoints,
+			winner: journey.winner,
+			deterministicWinnerExists: Boolean(journey.winner?.ingestionSource),
+			shopifyHintMatchExists:
+				journey.winner?.matchSource === "shopify_hint_fallback",
+		}),
+	});
 }
 async function processClaimedJob(client, job, workerId) {
-    const order = await fetchOrder(client, job.shopify_order_id);
-    if (!order) {
-        await client.query(`
+	const order = await fetchOrder(client, job.shopify_order_id);
+	if (!order) {
+		await client.query(
+			`
         UPDATE attribution_jobs
         SET
           status = 'completed',
@@ -759,33 +935,42 @@ async function processClaimedJob(client, job, workerId) {
           last_error = 'order_not_found',
           updated_at = now()
         WHERE id = $1
-      `, [job.id]);
-        process.stdout.write(`${JSON.stringify({
-            severity: 'WARNING',
-            event: 'attribution_job_skipped',
-            message: 'attribution_job_skipped',
-            timestamp: new Date().toISOString(),
-            workerId,
-            correlationId: buildAttributionCorrelationId(job.shopify_order_id),
-            shopifyOrderId: job.shopify_order_id,
-            reason: 'order_not_found'
-        })}\n`);
-        return;
-    }
-    const { appliedJourney, shadowJourney, rolloutMode } = await resolveAttributionJourneys(client, order);
-    await persistAttribution(client, order, appliedJourney);
-    await persistGa4FallbackShadowComparison(client, {
-        shopifyOrderId: order.shopify_order_id,
-        orderOccurredAt: resolveOrderOccurredAt(order),
-        orderRevenue: order.total_price,
-        rolloutMode,
-        currentJourney: appliedJourney,
-        shadowJourney
-    });
-    emitAttributionResolverOutcomeLog(order, appliedJourney);
-    const metricDate = formatDateInTimezone(resolveOrderOccurredAt(order), await getReportingTimezone(client));
-    await refreshDailyReportingMetrics(client, [metricDate]);
-    await client.query(`
+      `,
+			[job.id],
+		);
+		process.stdout.write(
+			`${JSON.stringify({
+				severity: "WARNING",
+				event: "attribution_job_skipped",
+				message: "attribution_job_skipped",
+				timestamp: new Date().toISOString(),
+				workerId,
+				correlationId: buildAttributionCorrelationId(job.shopify_order_id),
+				shopifyOrderId: job.shopify_order_id,
+				reason: "order_not_found",
+			})}\n`,
+		);
+		return;
+	}
+	const { appliedJourney, shadowJourney, rolloutMode } =
+		await resolveAttributionJourneys(client, order);
+	await persistAttribution(client, order, appliedJourney);
+	await persistGa4FallbackShadowComparison(client, {
+		shopifyOrderId: order.shopify_order_id,
+		orderOccurredAt: resolveOrderOccurredAt(order),
+		orderRevenue: order.total_price,
+		rolloutMode,
+		currentJourney: appliedJourney,
+		shadowJourney,
+	});
+	emitAttributionResolverOutcomeLog(order, appliedJourney);
+	const metricDate = formatDateInTimezone(
+		resolveOrderOccurredAt(order),
+		await getReportingTimezone(client),
+	);
+	await refreshDailyReportingMetrics(client, [metricDate]);
+	await client.query(
+		`
       UPDATE attribution_jobs
       SET
         status = 'completed',
@@ -796,61 +981,80 @@ async function processClaimedJob(client, job, workerId) {
         updated_at = now()
       WHERE id = $1
         AND locked_by = $2
-    `, [job.id, workerId]);
-    process.stdout.write(`${JSON.stringify({
-        severity: 'INFO',
-        event: 'attribution_job_processed',
-        message: 'attribution_job_processed',
-        timestamp: new Date().toISOString(),
-        workerId,
-        correlationId: buildAttributionCorrelationId(job.shopify_order_id),
-        shopifyOrderId: job.shopify_order_id,
-        confidenceScore: appliedJourney.confidenceScore,
-        touchpointCount: appliedJourney.touchpoints.length,
-        attributionReason: primaryCreditReason(appliedJourney),
-        ga4FallbackRolloutMode: rolloutMode,
-        shadowMatchSource: shadowJourney.winner?.matchSource ?? 'unattributed'
-    })}\n`);
+    `,
+		[job.id, workerId],
+	);
+	process.stdout.write(
+		`${JSON.stringify({
+			severity: "INFO",
+			event: "attribution_job_processed",
+			message: "attribution_job_processed",
+			timestamp: new Date().toISOString(),
+			workerId,
+			correlationId: buildAttributionCorrelationId(job.shopify_order_id),
+			shopifyOrderId: job.shopify_order_id,
+			confidenceScore: appliedJourney.confidenceScore,
+			touchpointCount: appliedJourney.touchpoints.length,
+			attributionReason: primaryCreditReason(appliedJourney),
+			ga4FallbackRolloutMode: rolloutMode,
+			shadowMatchSource: shadowJourney.winner?.matchSource ?? "unattributed",
+		})}\n`,
+	);
 }
-export async function applySyntheticAttributionForOrder(shopifyOrderId, input, client) {
-    await execute(client, async (db) => {
-        const order = await fetchOrder(db, shopifyOrderId);
-        if (!order) {
-            throw new Error(`Shopify order ${shopifyOrderId} not found`);
-        }
-        const orderOccurredAt = resolveOrderOccurredAt(order);
-        const confidenceScore = input.confidenceScore ?? (input.matchSource === 'shopify_hint_fallback' ? 0.4 : 0.25);
-        const touchpoint = buildResolvedTouchpointFromValues({
-            sessionId: null,
-            sourceTouchEventId: null,
-            occurredAt: input.occurredAt ?? orderOccurredAt,
-            source: normalizeNullableString(input.source),
-            medium: normalizeNullableString(input.medium),
-            campaign: normalizeNullableString(input.campaign),
-            content: normalizeNullableString(input.content),
-            term: normalizeNullableString(input.term),
-            clickIdType: normalizeNullableString(input.clickIdType),
-            clickIdValue: normalizeNullableString(input.clickIdValue),
-            attributionReason: input.attributionReason,
-            matchSource: input.matchSource,
-            ingestionSource: null,
-            ga4ClientId: normalizeNullableString(input.ga4ClientId),
-            ga4SessionId: normalizeNullableString(input.ga4SessionId)
-        });
-        await persistAttribution(db, order, {
-            touchpoints: [touchpoint],
-            winner: touchpoint,
-            confidenceScore,
-            confidenceLabel: confidenceLabelForScore(confidenceScore)
-        }, {
-            preventDowngrade: true
-        });
-        const metricDate = formatDateInTimezone(orderOccurredAt, await getReportingTimezone(db));
-        await refreshDailyReportingMetrics(db, [metricDate]);
-    });
+export async function applySyntheticAttributionForOrder(
+	shopifyOrderId,
+	input,
+	client,
+) {
+	await execute(client, async (db) => {
+		const order = await fetchOrder(db, shopifyOrderId);
+		if (!order) {
+			throw new Error(`Shopify order ${shopifyOrderId} not found`);
+		}
+		const orderOccurredAt = resolveOrderOccurredAt(order);
+		const confidenceScore =
+			input.confidenceScore ??
+			(input.matchSource === "shopify_hint_fallback" ? 0.4 : 0.25);
+		const touchpoint = buildResolvedTouchpointFromValues({
+			sessionId: null,
+			sourceTouchEventId: null,
+			occurredAt: input.occurredAt ?? orderOccurredAt,
+			source: normalizeNullableString(input.source),
+			medium: normalizeNullableString(input.medium),
+			campaign: normalizeNullableString(input.campaign),
+			content: normalizeNullableString(input.content),
+			term: normalizeNullableString(input.term),
+			clickIdType: normalizeNullableString(input.clickIdType),
+			clickIdValue: normalizeNullableString(input.clickIdValue),
+			attributionReason: input.attributionReason,
+			matchSource: input.matchSource,
+			ingestionSource: null,
+			ga4ClientId: normalizeNullableString(input.ga4ClientId),
+			ga4SessionId: normalizeNullableString(input.ga4SessionId),
+		});
+		await persistAttribution(
+			db,
+			order,
+			{
+				touchpoints: [touchpoint],
+				winner: touchpoint,
+				confidenceScore,
+				confidenceLabel: confidenceLabelForScore(confidenceScore),
+			},
+			{
+				preventDowngrade: true,
+			},
+		);
+		const metricDate = formatDateInTimezone(
+			orderOccurredAt,
+			await getReportingTimezone(db),
+		);
+		await refreshDailyReportingMetrics(db, [metricDate]);
+	});
 }
 async function markJobForRetry(client, job, workerId, error) {
-    await client.query(`
+	await client.query(
+		`
       UPDATE attribution_jobs
       SET
         status = 'retry',
@@ -861,68 +1065,84 @@ async function markJobForRetry(client, job, workerId, error) {
         updated_at = now()
       WHERE id = $1
         AND locked_by = $2
-    `, [
-        job.id,
-        workerId,
-        computeRetryDelaySeconds(job.attempts),
-        error instanceof Error ? error.message.slice(0, 1000) : String(error).slice(0, 1000)
-    ]);
+    `,
+		[
+			job.id,
+			workerId,
+			computeRetryDelaySeconds(job.attempts),
+			error instanceof Error
+				? error.message.slice(0, 1000)
+				: String(error).slice(0, 1000),
+		],
+	);
 }
 export async function processAttributionQueue(options) {
-    const startedAt = Date.now();
-    const result = await withTransaction(async (client) => {
-        const staleJobsEnqueued = await requeueStaleJobs(client, options.staleScanLimit ?? 0);
-        const claimedJobs = await claimJobs(client, options.workerId, options.limit);
-        return {
-            staleJobsEnqueued,
-            claimedJobs
-        };
-    });
-    let succeededJobs = 0;
-    let failedJobs = 0;
-    for (const job of result.claimedJobs) {
-        try {
-            await withTransaction(async (client) => {
-                await processClaimedJob(client, job, options.workerId);
-            });
-            succeededJobs += 1;
-        }
-        catch (error) {
-            failedJobs += 1;
-            logError('attribution_job_failed', error, {
-                workerId: options.workerId,
-                shopifyOrderId: job.shopify_order_id,
-                attempts: job.attempts
-            });
-            await withTransaction(async (client) => {
-                await markJobForRetry(client, job, options.workerId, error);
-            });
-        }
-    }
-    const summary = {
-        workerId: options.workerId,
-        modelVersion: ATTRIBUTION_MODEL_VERSION,
-        staleJobsEnqueued: result.staleJobsEnqueued,
-        claimedJobs: result.claimedJobs.length,
-        succeededJobs,
-        failedJobs,
-        durationMs: Date.now() - startedAt
-    };
-    if (options.emitMetrics) {
-        process.stdout.write(`${buildProcessingMetricsLog(summary)}\n`);
-        process.stdout.write(`${buildQueueOutcomeLog(summary.workerId, 'claimed', summary.claimedJobs)}\n`);
-        process.stdout.write(`${buildQueueOutcomeLog(summary.workerId, 'succeeded', summary.succeededJobs)}\n`);
-        process.stdout.write(`${buildQueueOutcomeLog(summary.workerId, 'failed', summary.failedJobs)}\n`);
-    }
-    return summary;
+	const startedAt = Date.now();
+	const result = await withTransaction(async (client) => {
+		const staleJobsEnqueued = await requeueStaleJobs(
+			client,
+			options.staleScanLimit ?? 0,
+		);
+		const claimedJobs = await claimJobs(
+			client,
+			options.workerId,
+			options.limit,
+		);
+		return {
+			staleJobsEnqueued,
+			claimedJobs,
+		};
+	});
+	let succeededJobs = 0;
+	let failedJobs = 0;
+	for (const job of result.claimedJobs) {
+		try {
+			await withTransaction(async (client) => {
+				await processClaimedJob(client, job, options.workerId);
+			});
+			succeededJobs += 1;
+		} catch (error) {
+			failedJobs += 1;
+			logError("attribution_job_failed", error, {
+				workerId: options.workerId,
+				shopifyOrderId: job.shopify_order_id,
+				attempts: job.attempts,
+			});
+			await withTransaction(async (client) => {
+				await markJobForRetry(client, job, options.workerId, error);
+			});
+		}
+	}
+	const summary = {
+		workerId: options.workerId,
+		modelVersion: ATTRIBUTION_MODEL_VERSION,
+		staleJobsEnqueued: result.staleJobsEnqueued,
+		claimedJobs: result.claimedJobs.length,
+		succeededJobs,
+		failedJobs,
+		durationMs: Date.now() - startedAt,
+	};
+	if (options.emitMetrics) {
+		process.stdout.write(`${buildProcessingMetricsLog(summary)}\n`);
+		process.stdout.write(
+			`${buildQueueOutcomeLog(summary.workerId, "claimed", summary.claimedJobs)}\n`,
+		);
+		process.stdout.write(
+			`${buildQueueOutcomeLog(summary.workerId, "succeeded", summary.succeededJobs)}\n`,
+		);
+		process.stdout.write(
+			`${buildQueueOutcomeLog(summary.workerId, "failed", summary.failedJobs)}\n`,
+		);
+	}
+	return summary;
 }
 export const __attributionTestUtils = {
-    buildQueueKey,
-    computeRetryDelaySeconds,
-    buildProcessingMetricsLog,
-    dedupeDeterministicCandidates,
-    selectLastNonDirectWinner,
-    confidenceScoreForWinner,
-    confidenceLabelForScore,
-    selectGa4FallbackWinner
+	buildQueueKey,
+	computeRetryDelaySeconds,
+	buildProcessingMetricsLog,
+	dedupeDeterministicCandidates,
+	selectLastNonDirectWinner,
+	confidenceScoreForWinner,
+	confidenceLabelForScore,
+	selectGa4FallbackWinner,
 };

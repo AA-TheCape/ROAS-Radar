@@ -1,17 +1,17 @@
 {
-  "name": "roas_attribution_capture_completeness",
-  "description": "Counts attribution capture observations from session bootstrap, browser events, and canonical attribution capture payloads.",
-  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"attribution_capture_observed\"",
-  "labelExtractors": {
-    "service": "EXTRACT(jsonPayload.service)",
-    "source": "EXTRACT(jsonPayload.source)",
-    "capture_status": "EXTRACT(jsonPayload.captureStatus)",
-    "accepted": "EXTRACT(jsonPayload.accepted)"
-  },
-  "metricDescriptor": {
-    "metricKind": "DELTA",
-    "valueType": "INT64",
-    "unit": "1",
-    "displayName": "ROAS Radar Attribution Capture Completeness"
-  }
+	"name": "roas_attribution_capture_completeness",
+	"description": "Counts attribution capture observations from session bootstrap, browser events, and canonical attribution capture payloads.",
+	"filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"attribution_capture_observed\"",
+	"labelExtractors": {
+		"service": "EXTRACT(jsonPayload.service)",
+		"source": "EXTRACT(jsonPayload.source)",
+		"capture_status": "EXTRACT(jsonPayload.captureStatus)",
+		"accepted": "EXTRACT(jsonPayload.accepted)"
+	},
+	"metricDescriptor": {
+		"metricKind": "DELTA",
+		"valueType": "INT64",
+		"unit": "1",
+		"displayName": "ROAS Radar Attribution Capture Completeness"
+	}
 }

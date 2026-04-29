@@ -1,12 +1,12 @@
 {
-  "displayName": "ROAS Radar __ENVIRONMENT__ Client Server Event Mismatch",
-  "documentation": {
-    "content": "Browser `/track` accepts are diverging from the server-side attribution mirror. Runbook: __RUNBOOK_URL_ATTRIBUTION_COMPLETENESS__",
-    "mimeType": "text/markdown"
-  },
-  "conditions": [
-    {
-      "displayName": "Dual-write mismatch rate exceeds 5% for 10 minutes"
-    }
-  ]
+	"displayName": "ROAS Radar __ENVIRONMENT__ Client Server Event Mismatch",
+	"documentation": {
+		"content": "Browser `/track` accepts are diverging from the server-side attribution mirror. Runbook: __RUNBOOK_URL_ATTRIBUTION_COMPLETENESS__",
+		"mimeType": "text/markdown"
+	},
+	"conditions": [
+		{
+			"displayName": "Dual-write mismatch rate exceeds 5% for 10 minutes"
+		}
+	]
 }

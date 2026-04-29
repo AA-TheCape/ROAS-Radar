@@ -1,25 +1,45 @@
 {
-  "name": "roas_ga4_fallback_completeness",
-  "description": "Counts GA4 fallback winner completeness observations for source, medium, campaign, and click-id fill rates.",
-  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"attribution_resolver_outcome\" AND jsonPayload.winnerMatchSource=\"ga4_fallback\"",
-  "labelExtractors": {
-    "service": "EXTRACT(jsonPayload.service)",
-    "has_source": "EXTRACT(jsonPayload.hasSource)",
-    "has_medium": "EXTRACT(jsonPayload.hasMedium)",
-    "has_campaign": "EXTRACT(jsonPayload.hasCampaign)",
-    "has_click_id": "EXTRACT(jsonPayload.hasClickId)"
-  },
-  "metricDescriptor": {
-    "metricKind": "DELTA",
-    "valueType": "INT64",
-    "unit": "1",
-    "displayName": "ROAS Radar GA4 Fallback Completeness",
-    "labels": [
-      { "key": "service", "valueType": "STRING", "description": "Service emitting the completeness observation." },
-      { "key": "has_source", "valueType": "STRING", "description": "Whether source was populated." },
-      { "key": "has_medium", "valueType": "STRING", "description": "Whether medium was populated." },
-      { "key": "has_campaign", "valueType": "STRING", "description": "Whether campaign was populated." },
-      { "key": "has_click_id", "valueType": "STRING", "description": "Whether a supported click id was populated." }
-    ]
-  }
+	"name": "roas_ga4_fallback_completeness",
+	"description": "Counts GA4 fallback winner completeness observations for source, medium, campaign, and click-id fill rates.",
+	"filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"attribution_resolver_outcome\" AND jsonPayload.winnerMatchSource=\"ga4_fallback\"",
+	"labelExtractors": {
+		"service": "EXTRACT(jsonPayload.service)",
+		"has_source": "EXTRACT(jsonPayload.hasSource)",
+		"has_medium": "EXTRACT(jsonPayload.hasMedium)",
+		"has_campaign": "EXTRACT(jsonPayload.hasCampaign)",
+		"has_click_id": "EXTRACT(jsonPayload.hasClickId)"
+	},
+	"metricDescriptor": {
+		"metricKind": "DELTA",
+		"valueType": "INT64",
+		"unit": "1",
+		"displayName": "ROAS Radar GA4 Fallback Completeness",
+		"labels": [
+			{
+				"key": "service",
+				"valueType": "STRING",
+				"description": "Service emitting the completeness observation."
+			},
+			{
+				"key": "has_source",
+				"valueType": "STRING",
+				"description": "Whether source was populated."
+			},
+			{
+				"key": "has_medium",
+				"valueType": "STRING",
+				"description": "Whether medium was populated."
+			},
+			{
+				"key": "has_campaign",
+				"valueType": "STRING",
+				"description": "Whether campaign was populated."
+			},
+			{
+				"key": "has_click_id",
+				"valueType": "STRING",
+				"description": "Whether a supported click id was populated."
+			}
+		]
+	}
 }

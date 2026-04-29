@@ -1,29 +1,32 @@
-import assert from 'node:assert/strict';
-import test from 'node:test';
+import assert from "node:assert/strict";
+import test from "node:test";
 
-import { calculatePerformanceMetrics, compareModelMetrics } from '../src/shared/metrics.js';
+import {
+	calculatePerformanceMetrics,
+	compareModelMetrics,
+} from "../src/shared/metrics.js";
 
 function toSnapshot(value: unknown): string {
-  return JSON.stringify(value, null, 2);
+	return JSON.stringify(value, null, 2);
 }
 
-test('performance metrics snapshot stays stable', () => {
-  const metrics = calculatePerformanceMetrics({
-    visits: 240,
-    orders: 12,
-    attributedRevenue: 1380,
-    spend: 360,
-    clicks: 96,
-    impressions: 4800,
-    newCustomerOrders: 9,
-    returningCustomerOrders: 3,
-    newCustomerRevenue: 1050,
-    returningCustomerRevenue: 330
-  });
+test("performance metrics snapshot stays stable", () => {
+	const metrics = calculatePerformanceMetrics({
+		visits: 240,
+		orders: 12,
+		attributedRevenue: 1380,
+		spend: 360,
+		clicks: 96,
+		impressions: 4800,
+		newCustomerOrders: 9,
+		returningCustomerOrders: 3,
+		newCustomerRevenue: 1050,
+		returningCustomerRevenue: 330,
+	});
 
-  assert.equal(
-    toSnapshot(metrics),
-    `{
+	assert.equal(
+		toSnapshot(metrics),
+		`{
   "visits": 240,
   "orders": 12,
   "attributedRevenue": 1380,
@@ -43,47 +46,47 @@ test('performance metrics snapshot stays stable', () => {
   "returningCustomerRevenue": 330,
   "newCustomerRate": 0.75,
   "returningCustomerRate": 0.25
-}`
-  );
+}`,
+	);
 });
 
-test('model comparison snapshot stays stable', () => {
-  const comparison = compareModelMetrics(
-    {
-      attributionModel: 'last_touch',
-      metrics: calculatePerformanceMetrics({
-        visits: 240,
-        orders: 12,
-        attributedRevenue: 1380,
-        spend: 360,
-        clicks: 96,
-        impressions: 4800,
-        newCustomerOrders: 9,
-        returningCustomerOrders: 3,
-        newCustomerRevenue: 1050,
-        returningCustomerRevenue: 330
-      })
-    },
-    {
-      attributionModel: 'linear',
-      metrics: calculatePerformanceMetrics({
-        visits: 240,
-        orders: 12,
-        attributedRevenue: 1260,
-        spend: 360,
-        clicks: 96,
-        impressions: 4800,
-        newCustomerOrders: 8,
-        returningCustomerOrders: 4,
-        newCustomerRevenue: 940,
-        returningCustomerRevenue: 320
-      })
-    }
-  );
+test("model comparison snapshot stays stable", () => {
+	const comparison = compareModelMetrics(
+		{
+			attributionModel: "last_touch",
+			metrics: calculatePerformanceMetrics({
+				visits: 240,
+				orders: 12,
+				attributedRevenue: 1380,
+				spend: 360,
+				clicks: 96,
+				impressions: 4800,
+				newCustomerOrders: 9,
+				returningCustomerOrders: 3,
+				newCustomerRevenue: 1050,
+				returningCustomerRevenue: 330,
+			}),
+		},
+		{
+			attributionModel: "linear",
+			metrics: calculatePerformanceMetrics({
+				visits: 240,
+				orders: 12,
+				attributedRevenue: 1260,
+				spend: 360,
+				clicks: 96,
+				impressions: 4800,
+				newCustomerOrders: 8,
+				returningCustomerOrders: 4,
+				newCustomerRevenue: 940,
+				returningCustomerRevenue: 320,
+			}),
+		},
+	);
 
-  assert.equal(
-    toSnapshot(comparison),
-    `{
+	assert.equal(
+		toSnapshot(comparison),
+		`{
   "baselineModel": "last_touch",
   "comparisonModel": "linear",
   "deltas": [
@@ -151,6 +154,6 @@ test('model comparison snapshot stays stable', () => {
       "relativeDelta": -0.11111111111111116
     }
   ]
-}`
-  );
+}`,
+	);
 });

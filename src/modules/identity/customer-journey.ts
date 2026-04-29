@@ -1,29 +1,34 @@
-import type { PoolClient } from 'pg';
+import type { PoolClient } from "pg";
 
 type DbClient = PoolClient;
 
 function normalizeJourneyIds(journeyIds: string[]): string[] {
-  return [...new Set(journeyIds.map((journeyId) => journeyId.trim()).filter(Boolean))].sort();
+	return [
+		...new Set(journeyIds.map((journeyId) => journeyId.trim()).filter(Boolean)),
+	].sort();
 }
 
-export async function refreshCustomerJourneyForJourneys(client: DbClient, journeyIds: string[]): Promise<void> {
-  const normalizedJourneyIds = normalizeJourneyIds(journeyIds);
+export async function refreshCustomerJourneyForJourneys(
+	client: DbClient,
+	journeyIds: string[],
+): Promise<void> {
+	const normalizedJourneyIds = normalizeJourneyIds(journeyIds);
 
-  if (normalizedJourneyIds.length === 0) {
-    return;
-  }
+	if (normalizedJourneyIds.length === 0) {
+		return;
+	}
 
-  await client.query('SELECT pg_advisory_xact_lock($1)', [918_440_12]);
-  await client.query(
-    `
+	await client.query("SELECT pg_advisory_xact_lock($1)", [918_440_12]);
+	await client.query(
+		`
       DELETE FROM customer_journey
       WHERE identity_journey_id = ANY($1::uuid[])
     `,
-    [normalizedJourneyIds]
-  );
+		[normalizedJourneyIds],
+	);
 
-  await client.query(
-    `
+	await client.query(
+		`
       WITH scoped_sessions AS (
         SELECT
           s.id AS session_id,
@@ -319,6 +324,6 @@ export async function refreshCustomerJourneyForJourneys(client: DbClient, journe
         now()
       FROM numbered_sessions s
     `,
-    [normalizedJourneyIds]
-  );
+		[normalizedJourneyIds],
+	);
 }

@@ -1,67 +1,76 @@
-import pg from 'pg';
+import pg from "pg";
 
 const { Client } = pg;
 
 const REQUIRED_INDEX_SUFFIXES = {
-  customerIdentityLookup: '_customer_identity_lookup_idx',
-  emailHashLookup: '_email_hash_lookup_idx',
-  transactionLookup: '_transaction_lookup_idx'
+	customerIdentityLookup: "_customer_identity_lookup_idx",
+	emailHashLookup: "_email_hash_lookup_idx",
+	transactionLookup: "_transaction_lookup_idx",
 };
 
 function requireDatabaseUrl() {
-  if (!process.env.DATABASE_URL) {
-    throw new Error('DATABASE_URL is required for GA4 fallback query plan verification');
-  }
+	if (!process.env.DATABASE_URL) {
+		throw new Error(
+			"DATABASE_URL is required for GA4 fallback query plan verification",
+		);
+	}
 
-  return process.env.DATABASE_URL;
+	return process.env.DATABASE_URL;
 }
 
 function collectPlanNodes(node, names = []) {
-  if (!node || typeof node !== 'object') {
-    return names;
-  }
+	if (!node || typeof node !== "object") {
+		return names;
+	}
 
-  if (typeof node['Index Name'] === 'string') {
-    names.push(node['Index Name']);
-  }
+	if (typeof node["Index Name"] === "string") {
+		names.push(node["Index Name"]);
+	}
 
-  const plans = node.Plans;
-  if (Array.isArray(plans)) {
-    for (const plan of plans) {
-      collectPlanNodes(plan, names);
-    }
-  }
+	const plans = node.Plans;
+	if (Array.isArray(plans)) {
+		for (const plan of plans) {
+			collectPlanNodes(plan, names);
+		}
+	}
 
-  return names;
+	return names;
 }
 
-async function explainUsesIndexSuffix(client, label, sql, params, expectedSuffix) {
-  const result = await client.query(`EXPLAIN (FORMAT JSON) ${sql}`, params);
-  const planRoot = result.rows[0]['QUERY PLAN'][0]?.Plan;
-  const indexNames = collectPlanNodes(planRoot);
+async function explainUsesIndexSuffix(
+	client,
+	label,
+	sql,
+	params,
+	expectedSuffix,
+) {
+	const result = await client.query(`EXPLAIN (FORMAT JSON) ${sql}`, params);
+	const planRoot = result.rows[0]["QUERY PLAN"][0]?.Plan;
+	const indexNames = collectPlanNodes(planRoot);
 
-  if (!indexNames.some((indexName) => indexName.endsWith(expectedSuffix))) {
-    throw new Error(
-      `${label} did not use an index ending with ${expectedSuffix}. Planner used: ${
-        indexNames.length > 0 ? indexNames.join(', ') : 'no index'
-      }`
-    );
-  }
+	if (!indexNames.some((indexName) => indexName.endsWith(expectedSuffix))) {
+		throw new Error(
+			`${label} did not use an index ending with ${expectedSuffix}. Planner used: ${
+				indexNames.length > 0 ? indexNames.join(", ") : "no index"
+			}`,
+		);
+	}
 
-  process.stdout.write(`${label}: ${expectedSuffix}\n`);
+	process.stdout.write(`${label}: ${expectedSuffix}\n`);
 }
 
 async function main() {
-  const client = new Client({ connectionString: requireDatabaseUrl() });
-  const verificationTag = `ga4-plan-${Date.now()}`;
-  const emailHash = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+	const client = new Client({ connectionString: requireDatabaseUrl() });
+	const verificationTag = `ga4-plan-${Date.now()}`;
+	const emailHash =
+		"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-  await client.connect();
+	await client.connect();
 
-  try {
-    await client.query('BEGIN');
-    await client.query(
-      `
+	try {
+		await client.query("BEGIN");
+		await client.query(
+			`
         INSERT INTO customer_identities (
           id,
           hashed_email,
@@ -80,17 +89,17 @@ async function main() {
         )
         ON CONFLICT (id) DO NOTHING
       `,
-      [emailHash, verificationTag]
-    );
+			[emailHash, verificationTag],
+		);
 
-    await client.query(
-      `
+		await client.query(
+			`
         SELECT ensure_ga4_fallback_candidate_partition('2026-04-01'::date)
-      `
-    );
+      `,
+		);
 
-    await client.query(
-      `
+		await client.query(
+			`
         INSERT INTO ga4_fallback_candidates (
           candidate_key,
           occurred_at,
@@ -133,16 +142,16 @@ async function main() {
         FROM generate_series(1, 5000) AS gs
         ON CONFLICT (candidate_key, occurred_at) DO NOTHING
       `,
-      [verificationTag, emailHash]
-    );
+			[verificationTag, emailHash],
+		);
 
-    await client.query('ANALYZE customer_identities');
-    await client.query('ANALYZE ga4_fallback_candidates');
+		await client.query("ANALYZE customer_identities");
+		await client.query("ANALYZE ga4_fallback_candidates");
 
-    await explainUsesIndexSuffix(
-      client,
-      'customer_identity_lookup',
-      `
+		await explainUsesIndexSuffix(
+			client,
+			"customer_identity_lookup",
+			`
         SELECT candidate_key
         FROM ga4_fallback_candidates
         WHERE customer_identity_id = $1::uuid
@@ -151,14 +160,14 @@ async function main() {
         ORDER BY occurred_at DESC, ga4_session_id ASC
         LIMIT 20
       `,
-      ['11111111-1111-4111-8111-111111111111', '2026-04-27T12:00:00.000Z'],
-      REQUIRED_INDEX_SUFFIXES.customerIdentityLookup
-    );
+			["11111111-1111-4111-8111-111111111111", "2026-04-27T12:00:00.000Z"],
+			REQUIRED_INDEX_SUFFIXES.customerIdentityLookup,
+		);
 
-    await explainUsesIndexSuffix(
-      client,
-      'email_hash_lookup',
-      `
+		await explainUsesIndexSuffix(
+			client,
+			"email_hash_lookup",
+			`
         SELECT candidate_key
         FROM ga4_fallback_candidates
         WHERE email_hash = $1
@@ -167,14 +176,14 @@ async function main() {
         ORDER BY occurred_at DESC, ga4_session_id ASC
         LIMIT 20
       `,
-      [emailHash, '2026-04-27T12:00:00.000Z'],
-      REQUIRED_INDEX_SUFFIXES.emailHashLookup
-    );
+			[emailHash, "2026-04-27T12:00:00.000Z"],
+			REQUIRED_INDEX_SUFFIXES.emailHashLookup,
+		);
 
-    await explainUsesIndexSuffix(
-      client,
-      'transaction_lookup',
-      `
+		await explainUsesIndexSuffix(
+			client,
+			"transaction_lookup",
+			`
         SELECT candidate_key
         FROM ga4_fallback_candidates
         WHERE transaction_id = $1
@@ -183,20 +192,22 @@ async function main() {
         ORDER BY occurred_at DESC, ga4_session_id ASC
         LIMIT 20
       `,
-      [`${verificationTag}-order-42`, '2026-04-27T12:00:00.000Z'],
-      REQUIRED_INDEX_SUFFIXES.transactionLookup
-    );
+			[`${verificationTag}-order-42`, "2026-04-27T12:00:00.000Z"],
+			REQUIRED_INDEX_SUFFIXES.transactionLookup,
+		);
 
-    await client.query('ROLLBACK');
-  } catch (error) {
-    await client.query('ROLLBACK').catch(() => undefined);
-    throw error;
-  } finally {
-    await client.end();
-  }
+		await client.query("ROLLBACK");
+	} catch (error) {
+		await client.query("ROLLBACK").catch(() => undefined);
+		throw error;
+	} finally {
+		await client.end();
+	}
 }
 
 main().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
-  process.exit(1);
+	process.stderr.write(
+		`${error instanceof Error ? error.stack : String(error)}\n`,
+	);
+	process.exit(1);
 });

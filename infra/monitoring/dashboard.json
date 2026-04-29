@@ -1,18 +1,18 @@
 {
-  "displayName": "__DASHBOARD_DISPLAY_NAME__",
-  "mosaicLayout": {
-    "tiles": [
-      { "widget": { "title": "Capture Rate" } },
-      { "widget": { "title": "Missing Session ID Rate" } },
-      { "widget": { "title": "Dual Write Mismatch Rate" } },
-      { "widget": { "title": "Shopify Writeback Success Rate" } },
-      { "widget": { "title": "Resolver Outcomes" } },
-      { "widget": { "title": "Capture Completeness by Source" } },
-      { "widget": { "title": "GA4 Ingestion Health" } },
-      { "widget": { "title": "GA4 Ingestion Lag Alerts" } },
-      { "widget": { "title": "Hourly GA4 Fallback Outcomes" } },
-      { "widget": { "title": "GA4 Fallback Precedence Skips" } },
-      { "widget": { "title": "GA4 Fallback Completeness" } }
-    ]
-  }
+	"displayName": "__DASHBOARD_DISPLAY_NAME__",
+	"mosaicLayout": {
+		"tiles": [
+			{ "widget": { "title": "Capture Rate" } },
+			{ "widget": { "title": "Missing Session ID Rate" } },
+			{ "widget": { "title": "Dual Write Mismatch Rate" } },
+			{ "widget": { "title": "Shopify Writeback Success Rate" } },
+			{ "widget": { "title": "Resolver Outcomes" } },
+			{ "widget": { "title": "Capture Completeness by Source" } },
+			{ "widget": { "title": "GA4 Ingestion Health" } },
+			{ "widget": { "title": "GA4 Ingestion Lag Alerts" } },
+			{ "widget": { "title": "Hourly GA4 Fallback Outcomes" } },
+			{ "widget": { "title": "GA4 Fallback Precedence Skips" } },
+			{ "widget": { "title": "GA4 Fallback Completeness" } }
+		]
+	}
 }

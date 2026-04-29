@@ -1,28 +1,28 @@
 {
-  "displayName": "ROAS Radar __ENVIRONMENT__ GA4 Ingestion Failures",
-  "documentation": {
-    "content": "GA4 fallback ingestion is failing repeatedly. Review Cloud Run logs for `ga4_session_attribution_ingestion_failed` and follow the runbook: __RUNBOOK_URL_INGESTION__",
-    "mimeType": "text/markdown"
-  },
-  "combiner": "OR",
-  "enabled": true,
-  "severity": "WARNING",
-  "notificationChannels": __ALERT_NOTIFICATION_CHANNELS__,
-  "conditions": [
-    {
-      "displayName": "GA4 ingestion failures exceed 2 in 15 minutes",
-      "conditionThreshold": {
-        "filter": "metric.type=\"logging.googleapis.com/user/roas_ga4_ingestion_failures\" resource.type=\"cloud_run_revision\"",
-        "comparison": "COMPARISON_GT",
-        "thresholdValue": 2,
-        "duration": "900s",
-        "aggregations": [
-          { "alignmentPeriod": "900s", "perSeriesAligner": "ALIGN_SUM" }
-        ],
-        "trigger": {
-          "count": 1
-        }
-      }
-    }
-  ]
+	"displayName": "ROAS Radar __ENVIRONMENT__ GA4 Ingestion Failures",
+	"documentation": {
+		"content": "GA4 fallback ingestion is failing repeatedly. Review Cloud Run logs for `ga4_session_attribution_ingestion_failed` and follow the runbook: __RUNBOOK_URL_INGESTION__",
+		"mimeType": "text/markdown"
+	},
+	"combiner": "OR",
+	"enabled": true,
+	"severity": "WARNING",
+	"notificationChannels": "__ALERT_NOTIFICATION_CHANNELS__",
+	"conditions": [
+		{
+			"displayName": "GA4 ingestion failures exceed 2 in 15 minutes",
+			"conditionThreshold": {
+				"filter": "metric.type=\"logging.googleapis.com/user/roas_ga4_ingestion_failures\" resource.type=\"cloud_run_revision\"",
+				"comparison": "COMPARISON_GT",
+				"thresholdValue": 2,
+				"duration": "900s",
+				"aggregations": [
+					{ "alignmentPeriod": "900s", "perSeriesAligner": "ALIGN_SUM" }
+				],
+				"trigger": {
+					"count": 1
+				}
+			}
+		}
+	]
 }

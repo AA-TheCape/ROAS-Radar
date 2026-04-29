@@ -1,41 +1,47 @@
-import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
-import test from 'node:test';
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import test from "node:test";
 
-process.env.DATABASE_URL ??= 'postgres://postgres:postgres@127.0.0.1:5432/roas_radar';
+process.env.DATABASE_URL ??=
+	"postgres://postgres:postgres@127.0.0.1:5432/roas_radar";
 
-import { resetE2EDatabase } from './e2e-harness.ts';
+import { resetE2EDatabase } from "./e2e-harness.ts";
 
-const EMPTY_JSON_PAYLOAD = '{}';
-const EMPTY_JSON_PAYLOAD_HASH = createHash('sha256').update(EMPTY_JSON_PAYLOAD).digest('hex');
-const EMPTY_JSON_PAYLOAD_SIZE = Buffer.byteLength(EMPTY_JSON_PAYLOAD, 'utf8');
+const EMPTY_JSON_PAYLOAD = "{}";
+const EMPTY_JSON_PAYLOAD_HASH = createHash("sha256")
+	.update(EMPTY_JSON_PAYLOAD)
+	.digest("hex");
+const EMPTY_JSON_PAYLOAD_SIZE = Buffer.byteLength(EMPTY_JSON_PAYLOAD, "utf8");
 
 test.beforeEach(async () => {
-  await resetE2EDatabase();
+	await resetE2EDatabase();
 });
 
 test.after(async () => {
-  await resetE2EDatabase();
-  const { pool } = await import('../src/db/pool.js');
-  await pool.end();
+	await resetE2EDatabase();
+	const { pool } = await import("../src/db/pool.js");
+	await pool.end();
 });
 
-test('identity graph ingestion dual-writes canonical ids onto rollout surfaces', async () => {
-  const sessionId = '123e4567-e89b-42d3-a456-426614174201';
-  const checkoutToken = 'co-dual-write-1';
-  const cartToken = 'ca-dual-write-1';
-  const shopifyCustomerId = 'sc-dual-write-1';
-  const shopifyOrderId = 'so-dual-write-1';
-  const email = 'buyer@example.com';
+test("identity graph ingestion dual-writes canonical ids onto rollout surfaces", async () => {
+	const sessionId = "123e4567-e89b-42d3-a456-426614174201";
+	const checkoutToken = "co-dual-write-1";
+	const cartToken = "ca-dual-write-1";
+	const shopifyCustomerId = "sc-dual-write-1";
+	const shopifyOrderId = "so-dual-write-1";
+	const email = "buyer@example.com";
 
-  const [{ pool, withTransaction }, { ingestIdentityEdges, hashIdentityEmail }] = await Promise.all([
-    import('../src/db/pool.js'),
-    import('../src/modules/identity/index.js')
-  ]);
-  const emailHash = hashIdentityEmail(email);
+	const [
+		{ pool, withTransaction },
+		{ ingestIdentityEdges, hashIdentityEmail },
+	] = await Promise.all([
+		import("../src/db/pool.js"),
+		import("../src/modules/identity/index.js"),
+	]);
+	const emailHash = hashIdentityEmail(email);
 
-  await pool.query(
-    `
+	await pool.query(
+		`
       INSERT INTO tracking_sessions (
         id,
         first_seen_at,
@@ -45,11 +51,11 @@ test('identity graph ingestion dual-writes canonical ids onto rollout surfaces',
       )
       VALUES ($1::uuid, $2::timestamptz, $2::timestamptz, $2::timestamptz, $2::timestamptz)
     `,
-    [sessionId, '2026-04-24T12:00:00.000Z']
-  );
+		[sessionId, "2026-04-24T12:00:00.000Z"],
+	);
 
-  await pool.query(
-    `
+	await pool.query(
+		`
       INSERT INTO tracking_events (
         id,
         session_id,
@@ -79,19 +85,19 @@ test('identity graph ingestion dual-writes canonical ids onto rollout surfaces',
         $7
       )
     `,
-    [
-      sessionId,
-      '2026-04-24T12:05:00.000Z',
-      cartToken,
-      checkoutToken,
-      EMPTY_JSON_PAYLOAD,
-      EMPTY_JSON_PAYLOAD_SIZE,
-      EMPTY_JSON_PAYLOAD_HASH
-    ]
-  );
+		[
+			sessionId,
+			"2026-04-24T12:05:00.000Z",
+			cartToken,
+			checkoutToken,
+			EMPTY_JSON_PAYLOAD,
+			EMPTY_JSON_PAYLOAD_SIZE,
+			EMPTY_JSON_PAYLOAD_HASH,
+		],
+	);
 
-  await pool.query(
-    `
+	await pool.query(
+		`
       INSERT INTO session_attribution_identities (
         roas_radar_session_id,
         first_captured_at,
@@ -109,11 +115,11 @@ test('identity graph ingestion dual-writes canonical ids onto rollout surfaces',
         $2::timestamptz
       )
     `,
-    [sessionId, '2026-04-24T12:00:00.000Z', '2026-05-24T12:00:00.000Z']
-  );
+		[sessionId, "2026-04-24T12:00:00.000Z", "2026-05-24T12:00:00.000Z"],
+	);
 
-  await pool.query(
-    `
+	await pool.query(
+		`
       INSERT INTO shopify_customers (
         shopify_customer_id,
         email,
@@ -123,11 +129,11 @@ test('identity graph ingestion dual-writes canonical ids onto rollout surfaces',
       )
       VALUES ($1, null, $2, $3::timestamptz, $3::timestamptz)
     `,
-    [shopifyCustomerId, emailHash, '2026-04-24T12:10:00.000Z']
-  );
+		[shopifyCustomerId, emailHash, "2026-04-24T12:10:00.000Z"],
+	);
 
-  await pool.query(
-    `
+	await pool.query(
+		`
       INSERT INTO shopify_orders (
         shopify_order_id,
         shopify_customer_id,
@@ -169,53 +175,53 @@ test('identity graph ingestion dual-writes canonical ids onto rollout surfaces',
         $10
       )
     `,
-    [
-      shopifyOrderId,
-      shopifyCustomerId,
-      emailHash,
-      '2026-04-24T12:15:00.000Z',
-      sessionId,
-      checkoutToken,
-      cartToken,
-      EMPTY_JSON_PAYLOAD,
-      EMPTY_JSON_PAYLOAD_SIZE,
-      EMPTY_JSON_PAYLOAD_HASH
-    ]
-  );
+		[
+			shopifyOrderId,
+			shopifyCustomerId,
+			emailHash,
+			"2026-04-24T12:15:00.000Z",
+			sessionId,
+			checkoutToken,
+			cartToken,
+			EMPTY_JSON_PAYLOAD,
+			EMPTY_JSON_PAYLOAD_SIZE,
+			EMPTY_JSON_PAYLOAD_HASH,
+		],
+	);
 
-  const result = await withTransaction((client) =>
-    ingestIdentityEdges(client, {
-      sourceTimestamp: '2026-04-24T12:20:00.000Z',
-      evidenceSource: 'shopify_order_webhook',
-      sourceTable: 'shopify_orders',
-      sourceRecordId: shopifyOrderId,
-      idempotencyKey: 'identity-dual-write-1',
-      sessionId,
-      checkoutToken,
-      cartToken,
-      shopifyCustomerId,
-      email
-    })
-  );
+	const result = await withTransaction((client) =>
+		ingestIdentityEdges(client, {
+			sourceTimestamp: "2026-04-24T12:20:00.000Z",
+			evidenceSource: "shopify_order_webhook",
+			sourceTable: "shopify_orders",
+			sourceRecordId: shopifyOrderId,
+			idempotencyKey: "identity-dual-write-1",
+			sessionId,
+			checkoutToken,
+			cartToken,
+			shopifyCustomerId,
+			email,
+		}),
+	);
 
-  assert.equal(result.outcome, 'linked');
-  assert.equal(result.linkedSessionIds.includes(sessionId), true);
-  const state = await pool.query<{
-    tracking_session_journey_id: string | null;
-    tracking_session_customer_identity_id: string | null;
-    tracking_event_journey_id: string | null;
-    tracking_event_customer_identity_id: string | null;
-    session_identity_journey_id: string | null;
-    session_identity_customer_identity_id: string | null;
-    order_journey_id: string | null;
-    order_customer_identity_id: string | null;
-    customer_journey_id: string | null;
-    customer_customer_identity_id: string | null;
-    compatibility_identity_id: string | null;
-    compatibility_email_hash: string | null;
-    compatibility_shopify_customer_id: string | null;
-  }>(
-    `
+	assert.equal(result.outcome, "linked");
+	assert.equal(result.linkedSessionIds.includes(sessionId), true);
+	const state = await pool.query<{
+		tracking_session_journey_id: string | null;
+		tracking_session_customer_identity_id: string | null;
+		tracking_event_journey_id: string | null;
+		tracking_event_customer_identity_id: string | null;
+		session_identity_journey_id: string | null;
+		session_identity_customer_identity_id: string | null;
+		order_journey_id: string | null;
+		order_customer_identity_id: string | null;
+		customer_journey_id: string | null;
+		customer_customer_identity_id: string | null;
+		compatibility_identity_id: string | null;
+		compatibility_email_hash: string | null;
+		compatibility_shopify_customer_id: string | null;
+	}>(
+		`
       SELECT
         sessions.identity_journey_id::text AS tracking_session_journey_id,
         sessions.customer_identity_id::text AS tracking_session_customer_identity_id,
@@ -243,42 +249,46 @@ test('identity graph ingestion dual-writes canonical ids onto rollout surfaces',
         ON identities.id = sessions.customer_identity_id
       WHERE sessions.id = $1::uuid
     `,
-    [sessionId, shopifyOrderId, shopifyCustomerId]
-  );
+		[sessionId, shopifyOrderId, shopifyCustomerId],
+	);
 
-  assert.equal(state.rowCount, 1);
-  assert.deepEqual(state.rows[0], {
-    tracking_session_journey_id: result.journeyId,
-    tracking_session_customer_identity_id: result.journeyId,
-    tracking_event_journey_id: result.journeyId,
-    tracking_event_customer_identity_id: result.journeyId,
-    session_identity_journey_id: result.journeyId,
-    session_identity_customer_identity_id: result.journeyId,
-    order_journey_id: result.journeyId,
-    order_customer_identity_id: result.journeyId,
-    customer_journey_id: result.journeyId,
-    customer_customer_identity_id: result.journeyId,
-    compatibility_identity_id: result.journeyId,
-    compatibility_email_hash: emailHash,
-    compatibility_shopify_customer_id: shopifyCustomerId
-  });
+	assert.equal(state.rowCount, 1);
+	assert.deepEqual(state.rows[0], {
+		tracking_session_journey_id: result.journeyId,
+		tracking_session_customer_identity_id: result.journeyId,
+		tracking_event_journey_id: result.journeyId,
+		tracking_event_customer_identity_id: result.journeyId,
+		session_identity_journey_id: result.journeyId,
+		session_identity_customer_identity_id: result.journeyId,
+		order_journey_id: result.journeyId,
+		order_customer_identity_id: result.journeyId,
+		customer_journey_id: result.journeyId,
+		customer_customer_identity_id: result.journeyId,
+		compatibility_identity_id: result.journeyId,
+		compatibility_email_hash: emailHash,
+		compatibility_shopify_customer_id: shopifyCustomerId,
+	});
 });
 
-test('identity graph dual-write keeps attribution fallback compatible during rollout', async () => {
-  const sessionId = '123e4567-e89b-42d3-a456-426614174202';
-  const shopifyOrderId = 'so-dual-write-fallback-1';
-  const shopifyCustomerId = 'sc-dual-write-fallback-1';
-  const email = 'fallback@example.com';
+test("identity graph dual-write keeps attribution fallback compatible during rollout", async () => {
+	const sessionId = "123e4567-e89b-42d3-a456-426614174202";
+	const shopifyOrderId = "so-dual-write-fallback-1";
+	const shopifyCustomerId = "sc-dual-write-fallback-1";
+	const email = "fallback@example.com";
 
-  const [{ pool, withTransaction }, { ingestIdentityEdges, hashIdentityEmail }, attributionModule] = await Promise.all([
-    import('../src/db/pool.js'),
-    import('../src/modules/identity/index.js'),
-    import('../src/modules/attribution/index.js')
-  ]);
-  const emailHash = hashIdentityEmail(email);
+	const [
+		{ pool, withTransaction },
+		{ ingestIdentityEdges, hashIdentityEmail },
+		attributionModule,
+	] = await Promise.all([
+		import("../src/db/pool.js"),
+		import("../src/modules/identity/index.js"),
+		import("../src/modules/attribution/index.js"),
+	]);
+	const emailHash = hashIdentityEmail(email);
 
-  await pool.query(
-    `
+	await pool.query(
+		`
       INSERT INTO tracking_sessions (
         id,
         first_seen_at,
@@ -302,11 +312,11 @@ test('identity graph dual-write keeps attribution fallback compatible during rol
         '2026-04-24T12:00:00.000Z'
       )
     `,
-    [sessionId]
-  );
+		[sessionId],
+	);
 
-  await pool.query(
-    `
+	await pool.query(
+		`
       INSERT INTO tracking_events (
         id,
         session_id,
@@ -340,11 +350,16 @@ test('identity graph dual-write keeps attribution fallback compatible during rol
         $4
       )
     `,
-    [sessionId, EMPTY_JSON_PAYLOAD, EMPTY_JSON_PAYLOAD_SIZE, EMPTY_JSON_PAYLOAD_HASH]
-  );
+		[
+			sessionId,
+			EMPTY_JSON_PAYLOAD,
+			EMPTY_JSON_PAYLOAD_SIZE,
+			EMPTY_JSON_PAYLOAD_HASH,
+		],
+	);
 
-  await pool.query(
-    `
+	await pool.query(
+		`
       INSERT INTO shopify_orders (
         shopify_order_id,
         shopify_customer_id,
@@ -380,43 +395,53 @@ test('identity graph dual-write keeps attribution fallback compatible during rol
         $6
       )
     `,
-    [shopifyOrderId, shopifyCustomerId, emailHash, EMPTY_JSON_PAYLOAD, EMPTY_JSON_PAYLOAD_SIZE, EMPTY_JSON_PAYLOAD_HASH]
-  );
+		[
+			shopifyOrderId,
+			shopifyCustomerId,
+			emailHash,
+			EMPTY_JSON_PAYLOAD,
+			EMPTY_JSON_PAYLOAD_SIZE,
+			EMPTY_JSON_PAYLOAD_HASH,
+		],
+	);
 
-  const stitched = await withTransaction((client) =>
-    ingestIdentityEdges(client, {
-      sourceTimestamp: '2026-04-24T12:20:00.000Z',
-      evidenceSource: 'shopify_order_webhook',
-      sourceTable: 'shopify_orders',
-      sourceRecordId: shopifyOrderId,
-      idempotencyKey: 'identity-dual-write-fallback',
-      sessionId,
-      shopifyCustomerId,
-      email
-    })
-  );
+	const stitched = await withTransaction((client) =>
+		ingestIdentityEdges(client, {
+			sourceTimestamp: "2026-04-24T12:20:00.000Z",
+			evidenceSource: "shopify_order_webhook",
+			sourceTable: "shopify_orders",
+			sourceRecordId: shopifyOrderId,
+			idempotencyKey: "identity-dual-write-fallback",
+			sessionId,
+			shopifyCustomerId,
+			email,
+		}),
+	);
 
-  await attributionModule.enqueueAttributionForOrder(shopifyOrderId, 'integration_test');
-  const queueResult = await attributionModule.processAttributionQueue({
-    workerId: 'test-identity-fallback',
-    limit: 10,
-    staleScanLimit: 0,
-    emitMetrics: false
-  });
+	await attributionModule.enqueueAttributionForOrder(
+		shopifyOrderId,
+		"integration_test",
+	);
+	const queueResult = await attributionModule.processAttributionQueue({
+		workerId: "test-identity-fallback",
+		limit: 10,
+		staleScanLimit: 0,
+		emitMetrics: false,
+	});
 
-  assert.equal(stitched.outcome, 'linked');
-  assert.equal(queueResult.succeededJobs, 1);
-  assert.equal(queueResult.failedJobs, 0);
+	assert.equal(stitched.outcome, "linked");
+	assert.equal(queueResult.succeededJobs, 1);
+	assert.equal(queueResult.failedJobs, 0);
 
-  const [attributionResult, orderState] = await Promise.all([
-    pool.query<{
-      session_id: string | null;
-      attributed_source: string | null;
-      attributed_medium: string | null;
-      attributed_campaign: string | null;
-      attribution_reason: string;
-    }>(
-      `
+	const [attributionResult, orderState] = await Promise.all([
+		pool.query<{
+			session_id: string | null;
+			attributed_source: string | null;
+			attributed_medium: string | null;
+			attributed_campaign: string | null;
+			attribution_reason: string;
+		}>(
+			`
         SELECT
           session_id::text AS session_id,
           attributed_source,
@@ -426,32 +451,32 @@ test('identity graph dual-write keeps attribution fallback compatible during rol
         FROM attribution_results
         WHERE shopify_order_id = $1
       `,
-      [shopifyOrderId]
-    ),
-    pool.query<{
-      identity_journey_id: string | null;
-      customer_identity_id: string | null;
-    }>(
-      `
+			[shopifyOrderId],
+		),
+		pool.query<{
+			identity_journey_id: string | null;
+			customer_identity_id: string | null;
+		}>(
+			`
         SELECT
           identity_journey_id::text AS identity_journey_id,
           customer_identity_id::text AS customer_identity_id
         FROM shopify_orders
         WHERE shopify_order_id = $1
       `,
-      [shopifyOrderId]
-    )
-  ]);
+			[shopifyOrderId],
+		),
+	]);
 
-  assert.deepEqual(attributionResult.rows[0], {
-    session_id: sessionId,
-    attributed_source: 'google',
-    attributed_medium: 'cpc',
-    attributed_campaign: 'identity-fallback',
-    attribution_reason: 'matched_by_customer_identity'
-  });
-  assert.deepEqual(orderState.rows[0], {
-    identity_journey_id: stitched.journeyId,
-    customer_identity_id: stitched.journeyId
-  });
+	assert.deepEqual(attributionResult.rows[0], {
+		session_id: sessionId,
+		attributed_source: "google",
+		attributed_medium: "cpc",
+		attributed_campaign: "identity-fallback",
+		attribution_reason: "matched_by_customer_identity",
+	});
+	assert.deepEqual(orderState.rows[0], {
+		identity_journey_id: stitched.journeyId,
+		customer_identity_id: stitched.journeyId,
+	});
 });

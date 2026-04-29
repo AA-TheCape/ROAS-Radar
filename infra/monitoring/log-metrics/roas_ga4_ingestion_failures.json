@@ -1,19 +1,27 @@
 {
-  "name": "roas_ga4_ingestion_failures",
-  "description": "Counts GA4 session attribution ingestion failures.",
-  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"ga4_session_attribution_ingestion_failed\"",
-  "labelExtractors": {
-    "service": "EXTRACT(jsonPayload.service)",
-    "pipeline": "EXTRACT(jsonPayload.pipeline)"
-  },
-  "metricDescriptor": {
-    "metricKind": "DELTA",
-    "valueType": "INT64",
-    "unit": "1",
-    "displayName": "ROAS Radar GA4 Ingestion Failures",
-    "labels": [
-      { "key": "service", "valueType": "STRING", "description": "Service emitting the ingestion failure." },
-      { "key": "pipeline", "valueType": "STRING", "description": "GA4 ingestion pipeline name." }
-    ]
-  }
+	"name": "roas_ga4_ingestion_failures",
+	"description": "Counts GA4 session attribution ingestion failures.",
+	"filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"ga4_session_attribution_ingestion_failed\"",
+	"labelExtractors": {
+		"service": "EXTRACT(jsonPayload.service)",
+		"pipeline": "EXTRACT(jsonPayload.pipeline)"
+	},
+	"metricDescriptor": {
+		"metricKind": "DELTA",
+		"valueType": "INT64",
+		"unit": "1",
+		"displayName": "ROAS Radar GA4 Ingestion Failures",
+		"labels": [
+			{
+				"key": "service",
+				"valueType": "STRING",
+				"description": "Service emitting the ingestion failure."
+			},
+			{
+				"key": "pipeline",
+				"valueType": "STRING",
+				"description": "GA4 ingestion pipeline name."
+			}
+		]
+	}
 }

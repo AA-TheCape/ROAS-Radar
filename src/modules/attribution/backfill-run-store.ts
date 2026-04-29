@@ -1,93 +1,104 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID } from "node:crypto";
 
 import {
-  orderAttributionBackfillEnqueueResponseSchema,
-  orderAttributionBackfillJobResponseSchema,
-  orderAttributionBackfillReportSchema,
-  orderAttributionBackfillSubmittedOptionsSchema,
-  type OrderAttributionBackfillEnqueueResponse,
-  type OrderAttributionBackfillJobResponse,
-  type OrderAttributionBackfillReport,
-  type OrderAttributionBackfillSubmittedOptions
-} from '../../../packages/attribution-schema/index.js';
-import { query, withTransaction } from '../../db/pool.js';
+	type OrderAttributionBackfillEnqueueResponse,
+	type OrderAttributionBackfillJobResponse,
+	type OrderAttributionBackfillReport,
+	type OrderAttributionBackfillSubmittedOptions,
+	orderAttributionBackfillEnqueueResponseSchema,
+	orderAttributionBackfillJobResponseSchema,
+	orderAttributionBackfillReportSchema,
+	orderAttributionBackfillSubmittedOptionsSchema,
+} from "../../../packages/attribution-schema/index.js";
+import { query, withTransaction } from "../../db/pool.js";
 
 type OrderAttributionBackfillRunRow = {
-  id: string;
-  status: 'queued' | 'processing' | 'completed' | 'failed';
-  submitted_at: Date;
-  submitted_by: string;
-  started_at: Date | null;
-  completed_at: Date | null;
-  options: unknown;
-  report: unknown;
-  error_code: string | null;
-  error_message: string | null;
+	id: string;
+	status: "queued" | "processing" | "completed" | "failed";
+	submitted_at: Date;
+	submitted_by: string;
+	started_at: Date | null;
+	completed_at: Date | null;
+	options: unknown;
+	report: unknown;
+	error_code: string | null;
+	error_message: string | null;
 };
 
 export type OrderAttributionBackfillClaimedRun = {
-  id: string;
-  submittedBy: string;
-  options: OrderAttributionBackfillSubmittedOptions;
-  submittedAt: string;
-  startedAt: string | null;
+	id: string;
+	submittedBy: string;
+	options: OrderAttributionBackfillSubmittedOptions;
+	submittedAt: string;
+	startedAt: string | null;
 };
 
 function normalizeErrorCode(error: unknown): string {
-  if (typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string' && error.code.trim()) {
-    return error.code.trim();
-  }
+	if (
+		typeof error === "object" &&
+		error !== null &&
+		"code" in error &&
+		typeof error.code === "string" &&
+		error.code.trim()
+	) {
+		return error.code.trim();
+	}
 
-  if (error instanceof Error && error.name.trim()) {
-    return error.name.trim();
-  }
+	if (error instanceof Error && error.name.trim()) {
+		return error.name.trim();
+	}
 
-  return 'order_attribution_backfill_run_failed';
+	return "order_attribution_backfill_run_failed";
 }
 
 function normalizeErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message.trim()) {
-    return error.message.trim();
-  }
+	if (error instanceof Error && error.message.trim()) {
+		return error.message.trim();
+	}
 
-  if (typeof error === 'string' && error.trim()) {
-    return error.trim();
-  }
+	if (typeof error === "string" && error.trim()) {
+		return error.trim();
+	}
 
-  return 'Order attribution backfill job failed';
+	return "Order attribution backfill job failed";
 }
 
-function mapBackfillRunRow(row: OrderAttributionBackfillRunRow): OrderAttributionBackfillJobResponse {
-  return orderAttributionBackfillJobResponseSchema.parse({
-    ok: true,
-    jobId: row.id,
-    status: row.status,
-    submittedAt: row.submitted_at.toISOString(),
-    submittedBy: row.submitted_by,
-    startedAt: row.started_at?.toISOString() ?? null,
-    completedAt: row.completed_at?.toISOString() ?? null,
-    options: orderAttributionBackfillSubmittedOptionsSchema.parse(row.options),
-    report: row.report == null ? null : orderAttributionBackfillReportSchema.parse(row.report),
-    error:
-      row.error_code && row.error_message
-        ? {
-            code: row.error_code,
-            message: row.error_message
-          }
-        : null
-  });
+function mapBackfillRunRow(
+	row: OrderAttributionBackfillRunRow,
+): OrderAttributionBackfillJobResponse {
+	return orderAttributionBackfillJobResponseSchema.parse({
+		ok: true,
+		jobId: row.id,
+		status: row.status,
+		submittedAt: row.submitted_at.toISOString(),
+		submittedBy: row.submitted_by,
+		startedAt: row.started_at?.toISOString() ?? null,
+		completedAt: row.completed_at?.toISOString() ?? null,
+		options: orderAttributionBackfillSubmittedOptionsSchema.parse(row.options),
+		report:
+			row.report == null
+				? null
+				: orderAttributionBackfillReportSchema.parse(row.report),
+		error:
+			row.error_code && row.error_message
+				? {
+						code: row.error_code,
+						message: row.error_message,
+					}
+				: null,
+	});
 }
 
 export async function enqueueOrderAttributionBackfillRun(
-  options: OrderAttributionBackfillSubmittedOptions,
-  submittedBy: string,
-  now = new Date()
+	options: OrderAttributionBackfillSubmittedOptions,
+	submittedBy: string,
+	now = new Date(),
 ): Promise<OrderAttributionBackfillEnqueueResponse> {
-  const jobId = randomUUID();
-  const submittedAt = now.toISOString();
+	const jobId = randomUUID();
+	const submittedAt = now.toISOString();
 
-  await query(
-    `
+	await query(
+		`
       INSERT INTO order_attribution_backfill_runs (
         id,
         status,
@@ -103,22 +114,24 @@ export async function enqueueOrderAttributionBackfillRun(
         $4::jsonb
       )
     `,
-    [jobId, submittedAt, submittedBy, JSON.stringify(options)]
-  );
+		[jobId, submittedAt, submittedBy, JSON.stringify(options)],
+	);
 
-  return orderAttributionBackfillEnqueueResponseSchema.parse({
-    ok: true,
-    jobId,
-    status: 'queued',
-    submittedAt,
-    submittedBy,
-    options
-  });
+	return orderAttributionBackfillEnqueueResponseSchema.parse({
+		ok: true,
+		jobId,
+		status: "queued",
+		submittedAt,
+		submittedBy,
+		options,
+	});
 }
 
-export async function getOrderAttributionBackfillRun(jobId: string): Promise<OrderAttributionBackfillJobResponse | null> {
-  const result = await query<OrderAttributionBackfillRunRow>(
-    `
+export async function getOrderAttributionBackfillRun(
+	jobId: string,
+): Promise<OrderAttributionBackfillJobResponse | null> {
+	const result = await query<OrderAttributionBackfillRunRow>(
+		`
       SELECT
         id,
         status,
@@ -134,23 +147,23 @@ export async function getOrderAttributionBackfillRun(jobId: string): Promise<Ord
       WHERE id = $1
       LIMIT 1
     `,
-    [jobId]
-  );
+		[jobId],
+	);
 
-  const row = result.rows[0];
-  return row ? mapBackfillRunRow(row) : null;
+	const row = result.rows[0];
+	return row ? mapBackfillRunRow(row) : null;
 }
 
 export async function claimOrderAttributionBackfillRuns(
-  workerId: string,
-  now: Date,
-  limit: number
+	workerId: string,
+	now: Date,
+	limit: number,
 ): Promise<OrderAttributionBackfillClaimedRun[]> {
-  void workerId;
+	void workerId;
 
-  const result = await withTransaction(async (client) =>
-    client.query<OrderAttributionBackfillRunRow>(
-      `
+	const result = await withTransaction(async (client) =>
+		client.query<OrderAttributionBackfillRunRow>(
+			`
         WITH candidates AS (
           SELECT id
           FROM order_attribution_backfill_runs
@@ -182,32 +195,34 @@ export async function claimOrderAttributionBackfillRuns(
           runs.error_code,
           runs.error_message
       `,
-      [now, limit]
-    )
-  );
+			[now, limit],
+		),
+	);
 
-  return result.rows.map((row) => {
-    const options = orderAttributionBackfillSubmittedOptionsSchema.parse(row.options);
+	return result.rows.map((row) => {
+		const options = orderAttributionBackfillSubmittedOptionsSchema.parse(
+			row.options,
+		);
 
-    return {
-      id: row.id,
-      submittedBy: row.submitted_by,
-      submittedAt: row.submitted_at.toISOString(),
-      startedAt: row.started_at?.toISOString() ?? null,
-      options
-    };
-  });
+		return {
+			id: row.id,
+			submittedBy: row.submitted_by,
+			submittedAt: row.submitted_at.toISOString(),
+			startedAt: row.started_at?.toISOString() ?? null,
+			options,
+		};
+	});
 }
 
 export async function markOrderAttributionBackfillRunCompleted(
-  runId: string,
-  report: OrderAttributionBackfillReport,
-  now: Date
+	runId: string,
+	report: OrderAttributionBackfillReport,
+	now: Date,
 ): Promise<void> {
-  const normalizedReport = orderAttributionBackfillReportSchema.parse(report);
+	const normalizedReport = orderAttributionBackfillReportSchema.parse(report);
 
-  await query(
-    `
+	await query(
+		`
       UPDATE order_attribution_backfill_runs
       SET
         status = 'completed',
@@ -218,20 +233,21 @@ export async function markOrderAttributionBackfillRunCompleted(
         updated_at = $2
       WHERE id = $1
     `,
-    [runId, now, JSON.stringify(normalizedReport)]
-  );
+		[runId, now, JSON.stringify(normalizedReport)],
+	);
 }
 
 export async function markOrderAttributionBackfillRunFailed(
-  runId: string,
-  error: unknown,
-  report: OrderAttributionBackfillReport | null,
-  now: Date
+	runId: string,
+	error: unknown,
+	report: OrderAttributionBackfillReport | null,
+	now: Date,
 ): Promise<void> {
-  const normalizedReport = report === null ? null : orderAttributionBackfillReportSchema.parse(report);
+	const normalizedReport =
+		report === null ? null : orderAttributionBackfillReportSchema.parse(report);
 
-  await query(
-    `
+	await query(
+		`
       UPDATE order_attribution_backfill_runs
       SET
         status = 'failed',
@@ -242,6 +258,12 @@ export async function markOrderAttributionBackfillRunFailed(
         updated_at = $2
       WHERE id = $1
     `,
-    [runId, now, normalizedReport === null ? null : JSON.stringify(normalizedReport), normalizeErrorCode(error), normalizeErrorMessage(error)]
-  );
+		[
+			runId,
+			now,
+			normalizedReport === null ? null : JSON.stringify(normalizedReport),
+			normalizeErrorCode(error),
+			normalizeErrorMessage(error),
+		],
+	);
 }
