@@ -6,6 +6,11 @@ import { calculatePerformanceMetrics } from '../../shared/metrics.js';
 import { ATTRIBUTION_MODELS } from '../attribution/engine.js';
 import { attachAuthContext, requireAuthenticated } from '../auth/index.js';
 import { fetchDataQualityReport, resolveRunDate } from '../data-quality/index.js';
+import {
+  buildCampaignResolutionGroupKey,
+  resolveCampaignDisplayMetadata,
+  type CampaignDisplayResolution
+} from './metadata-resolution.js';
 import { getReportingTimezone } from '../settings/index.js';
 
 class ReportingHttpError extends Error {
@@ -114,6 +119,13 @@ type SpendDetailRow = {
   medium: string;
   campaign: string;
   spend: string | number;
+};
+
+type CampaignLabelResponseFields = {
+  campaignDisplayName?: string;
+  campaignEntityId?: string | null;
+  campaignPlatform?: 'google_ads' | 'meta_ads' | null;
+  campaignNameResolutionStatus?: 'resolved' | 'fallback_name' | 'unresolved';
 };
 
 type TimeseriesRow = {
@@ -344,6 +356,19 @@ function countDaysInRange(startDate: string, endDate: string): number {
   return Math.floor((end - start) / 86_400_000) + 1;
 }
 
+function buildCampaignLabelFields(resolution: CampaignDisplayResolution | undefined) {
+  if (!resolution || !resolution.campaignDisplayName) {
+    return {};
+  }
+
+  return {
+    campaignDisplayName: resolution.campaignDisplayName,
+    campaignEntityId: resolution.campaignEntityId,
+    campaignPlatform: resolution.campaignPlatform,
+    campaignNameResolutionStatus: resolution.campaignNameResolutionStatus
+  };
+}
+
 export function createReportingRouter(): Router {
   const router = Router();
 
@@ -418,12 +443,19 @@ export function createReportingRouter(): Router {
         `,
         [input.startDate, input.endDate, ...filters.params, input.limit]
       );
+      const campaignMetadata = await resolveCampaignDisplayMetadata(
+        input.startDate,
+        input.endDate,
+        result.rows.map((row) => row.campaign),
+        input.source
+      );
 
       res.json({
         rows: result.rows.map((row) => {
           const visits = Number(row.visits);
           const orders = Number(row.orders);
           const revenue = Number(row.revenue);
+          const resolution = campaignMetadata.byGroup.get(buildCampaignResolutionGroupKey(row.source, row.medium, row.campaign));
 
           return {
             source: row.source,
@@ -433,7 +465,8 @@ export function createReportingRouter(): Router {
             visits,
             orders,
             revenue,
-            conversionRate: visits > 0 ? orders / visits : 0
+            conversionRate: visits > 0 ? orders / visits : 0,
+            ...buildCampaignLabelFields(resolution)
           };
         }),
         nextCursor: null
@@ -463,6 +496,12 @@ export function createReportingRouter(): Router {
         `,
         [input.startDate, input.endDate, ...filters.params]
       );
+      const campaignMetadata = await resolveCampaignDisplayMetadata(
+        input.startDate,
+        input.endDate,
+        result.rows.map((row) => row.campaign),
+        input.source
+      );
 
       const groupMap = new Map<
         string,
@@ -471,10 +510,12 @@ export function createReportingRouter(): Router {
           medium: string;
           channel: string;
           subtotal: number;
-          campaigns: Array<{
-            campaign: string;
-            spend: number;
-          }>;
+          campaigns: Array<
+            {
+              campaign: string;
+              spend: number;
+            } & CampaignLabelResponseFields
+          >;
         }
       >();
 
@@ -490,7 +531,8 @@ export function createReportingRouter(): Router {
           existingGroup.subtotal += spend;
           existingGroup.campaigns.push({
             campaign: row.campaign,
-            spend
+            spend,
+            ...buildCampaignLabelFields(campaignMetadata.byGroup.get(buildCampaignResolutionGroupKey(row.source, row.medium, row.campaign)))
           });
           continue;
         }
@@ -503,7 +545,8 @@ export function createReportingRouter(): Router {
           campaigns: [
             {
               campaign: row.campaign,
-              spend
+              spend,
+              ...buildCampaignLabelFields(campaignMetadata.byGroup.get(buildCampaignResolutionGroupKey(row.source, row.medium, row.campaign)))
             }
           ]
         });
@@ -559,6 +602,15 @@ export function createReportingRouter(): Router {
         `,
         [input.startDate, input.endDate, ...filters.params]
       );
+      const campaignMetadata =
+        input.groupBy === 'campaign'
+          ? await resolveCampaignDisplayMetadata(
+              input.startDate,
+              input.endDate,
+              result.rows.map((row) => row.bucket),
+              input.source
+            )
+          : null;
 
       const bucketMetrics = result.rows.map((row) => {
         const metrics = calculatePerformanceMetrics({
@@ -575,7 +627,12 @@ export function createReportingRouter(): Router {
           revenue: metrics.attributedRevenue,
           spend: metrics.spend,
           conversionRate: metrics.conversionRate,
-          roas: metrics.roas
+          roas: metrics.roas,
+          ...(
+            input.groupBy === 'campaign'
+              ? buildCampaignLabelFields(campaignMetadata?.byCampaign.get(row.bucket))
+              : {}
+          )
         };
       });
 
@@ -584,7 +641,12 @@ export function createReportingRouter(): Router {
           date: row.bucket,
           visits: row.visits,
           orders: row.orders,
-          revenue: row.revenue
+          revenue: row.revenue,
+          ...(
+            input.groupBy === 'campaign'
+              ? buildCampaignLabelFields(campaignMetadata?.byCampaign.get(row.bucket))
+              : {}
+          )
         })),
         lowestBuckets: [...bucketMetrics]
           .sort(

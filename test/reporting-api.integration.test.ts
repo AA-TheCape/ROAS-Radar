@@ -86,6 +86,339 @@ test('reporting summary reads persisted daily aggregates from PostgreSQL', async
   }
 });
 
+test('reporting campaign-oriented responses enrich display names from metadata lookup rows with deterministic fallback order', async () => {
+  await resetE2EDatabase();
+
+  await pool.query(
+    `
+      INSERT INTO google_ads_connections (
+        id,
+        customer_id,
+        developer_token_encrypted,
+        client_id,
+        client_secret_encrypted,
+        refresh_token_encrypted,
+        status
+      )
+      VALUES (1, 'acct-google', '\\x00'::bytea, 'client', '\\x00'::bytea, '\\x00'::bytea, 'active')
+    `
+  );
+
+  await pool.query(
+    `
+      INSERT INTO google_ads_sync_jobs (id, connection_id, sync_date, status)
+      VALUES (1, 1, '2026-04-10'::date, 'completed')
+    `
+  );
+
+  await pool.query(
+    `
+      INSERT INTO meta_ads_connections (
+        id,
+        ad_account_id,
+        access_token_encrypted,
+        status
+      )
+      VALUES (1, 'acct-meta', '\\x00'::bytea, 'active')
+    `
+  );
+
+  await pool.query(
+    `
+      INSERT INTO meta_ads_sync_jobs (id, connection_id, sync_date, status)
+      VALUES (1, 1, '2026-04-10'::date, 'completed')
+    `
+  );
+
+  await pool.query(
+    `
+      INSERT INTO daily_reporting_metrics (
+        metric_date,
+        attribution_model,
+        source,
+        medium,
+        campaign,
+        content,
+        term,
+        visits,
+        attributed_orders,
+        attributed_revenue,
+        spend,
+        impressions,
+        clicks,
+        new_customer_orders,
+        returning_customer_orders,
+        new_customer_revenue,
+        returning_customer_revenue,
+        last_computed_at
+      ) VALUES
+        ('2026-04-10'::date, 'last_touch', 'google', 'cpc', 'brand-search', 'unknown', 'unknown', 120, 6, '900.00', '500.00', 0, 0, 0, 0, 0, 0, now()),
+        ('2026-04-10'::date, 'last_touch', 'meta', 'paid_social', 'prospecting-us', 'unknown', 'unknown', 80, 3, '420.00', '200.00', 0, 0, 0, 0, 0, 0, now()),
+        ('2026-04-10'::date, 'last_touch', 'google', 'cpc', 'clearance', 'unknown', 'unknown', 30, 1, '100.00', '50.00', 0, 0, 0, 0, 0, 0, now())
+    `
+  );
+
+  await pool.query(
+    `
+      INSERT INTO google_ads_daily_spend (
+        connection_id,
+        sync_job_id,
+        report_date,
+        granularity,
+        entity_key,
+        account_id,
+        account_name,
+        campaign_id,
+        campaign_name,
+        canonical_source,
+        canonical_medium,
+        canonical_campaign,
+        canonical_content,
+        canonical_term,
+        currency,
+        spend,
+        impressions,
+        clicks,
+        raw_payload
+      ) VALUES
+        (1, 1, '2026-04-10'::date, 'campaign', 'brand-search', 'acct-google', 'Google Account', 'cmp_google_1', 'Google Raw Brand Search', 'google', 'cpc', 'brand-search', 'unknown', 'unknown', 'USD', '500.00', 0, 0, '{}'::jsonb),
+        (1, 1, '2026-04-10'::date, 'campaign', 'clearance', 'acct-google', 'Google Account', 'cmp_google_2', NULL, 'google', 'cpc', 'clearance', 'unknown', 'unknown', 'USD', '50.00', 0, 0, '{}'::jsonb)
+    `
+  );
+
+  await pool.query(
+    `
+      INSERT INTO meta_ads_daily_spend (
+        connection_id,
+        sync_job_id,
+        report_date,
+        granularity,
+        entity_key,
+        account_id,
+        account_name,
+        campaign_id,
+        campaign_name,
+        canonical_source,
+        canonical_medium,
+        canonical_campaign,
+        canonical_content,
+        canonical_term,
+        currency,
+        spend,
+        impressions,
+        clicks,
+        raw_payload
+      ) VALUES
+        (1, 1, '2026-04-10'::date, 'campaign', 'prospecting-us', 'acct-meta', 'Meta Account', 'cmp_meta_1', 'Meta Prospecting Raw', 'meta', 'paid_social', 'prospecting-us', 'unknown', 'unknown', 'USD', '200.00', 0, 0, '{}'::jsonb)
+    `
+  );
+
+  await pool.query(
+    `
+      INSERT INTO ad_platform_entity_metadata (
+        platform,
+        account_id,
+        entity_type,
+        entity_id,
+        latest_name,
+        last_seen_at,
+        updated_at
+      ) VALUES
+        ('google_ads', 'acct-google', 'campaign', 'cmp_google_1', 'Google Brand Search Latest', '2026-04-10T08:00:00.000Z', '2026-04-10T08:05:00.000Z')
+    `
+  );
+
+  const server = createServer();
+
+  try {
+    const campaigns = await requestJson(
+      server,
+      '/api/reporting/campaigns?startDate=2026-04-10&endDate=2026-04-10&limit=10'
+    );
+    const spendDetails = await requestJson(
+      server,
+      '/api/reporting/spend-details?startDate=2026-04-10&endDate=2026-04-10'
+    );
+    const timeseries = await requestJson(
+      server,
+      '/api/reporting/timeseries?startDate=2026-04-10&endDate=2026-04-10&groupBy=campaign'
+    );
+
+    assert.equal(campaigns.response.status, 200);
+    assert.deepEqual(campaigns.body, {
+      rows: [
+        {
+          source: 'google',
+          medium: 'cpc',
+          campaign: 'brand-search',
+          content: 'unknown',
+          visits: 120,
+          orders: 6,
+          revenue: 900,
+          conversionRate: 6 / 120,
+          campaignDisplayName: 'Google Brand Search Latest',
+          campaignEntityId: 'cmp_google_1',
+          campaignPlatform: 'google_ads',
+          campaignNameResolutionStatus: 'resolved'
+        },
+        {
+          source: 'meta',
+          medium: 'paid_social',
+          campaign: 'prospecting-us',
+          content: 'unknown',
+          visits: 80,
+          orders: 3,
+          revenue: 420,
+          conversionRate: 3 / 80,
+          campaignDisplayName: 'Meta Prospecting Raw',
+          campaignEntityId: 'cmp_meta_1',
+          campaignPlatform: 'meta_ads',
+          campaignNameResolutionStatus: 'fallback_name'
+        },
+        {
+          source: 'google',
+          medium: 'cpc',
+          campaign: 'clearance',
+          content: 'unknown',
+          visits: 30,
+          orders: 1,
+          revenue: 100,
+          conversionRate: 1 / 30,
+          campaignDisplayName: 'cmp_google_2',
+          campaignEntityId: 'cmp_google_2',
+          campaignPlatform: 'google_ads',
+          campaignNameResolutionStatus: 'unresolved'
+        }
+      ],
+      nextCursor: null
+    });
+
+    assert.equal(spendDetails.response.status, 200);
+    assert.deepEqual(spendDetails.body.groups, [
+      {
+        source: 'google',
+        medium: 'cpc',
+        channel: 'google / cpc',
+        subtotal: 550,
+        campaigns: [
+          {
+            campaign: 'brand-search',
+            spend: 500,
+            campaignDisplayName: 'Google Brand Search Latest',
+            campaignEntityId: 'cmp_google_1',
+            campaignPlatform: 'google_ads',
+            campaignNameResolutionStatus: 'resolved'
+          },
+          {
+            campaign: 'clearance',
+            spend: 50,
+            campaignDisplayName: 'cmp_google_2',
+            campaignEntityId: 'cmp_google_2',
+            campaignPlatform: 'google_ads',
+            campaignNameResolutionStatus: 'unresolved'
+          }
+        ]
+      },
+      {
+        source: 'meta',
+        medium: 'paid_social',
+        channel: 'meta / paid_social',
+        subtotal: 200,
+        campaigns: [
+          {
+            campaign: 'prospecting-us',
+            spend: 200,
+            campaignDisplayName: 'Meta Prospecting Raw',
+            campaignEntityId: 'cmp_meta_1',
+            campaignPlatform: 'meta_ads',
+            campaignNameResolutionStatus: 'fallback_name'
+          }
+        ]
+      }
+    ]);
+
+    assert.equal(timeseries.response.status, 200);
+    assert.deepEqual(timeseries.body, {
+      points: [
+        {
+          date: 'brand-search',
+          visits: 120,
+          orders: 6,
+          revenue: 900,
+          campaignDisplayName: 'Google Brand Search Latest',
+          campaignEntityId: 'cmp_google_1',
+          campaignPlatform: 'google_ads',
+          campaignNameResolutionStatus: 'resolved'
+        },
+        {
+          date: 'clearance',
+          visits: 30,
+          orders: 1,
+          revenue: 100,
+          campaignDisplayName: 'cmp_google_2',
+          campaignEntityId: 'cmp_google_2',
+          campaignPlatform: 'google_ads',
+          campaignNameResolutionStatus: 'unresolved'
+        },
+        {
+          date: 'prospecting-us',
+          visits: 80,
+          orders: 3,
+          revenue: 420,
+          campaignDisplayName: 'Meta Prospecting Raw',
+          campaignEntityId: 'cmp_meta_1',
+          campaignPlatform: 'meta_ads',
+          campaignNameResolutionStatus: 'fallback_name'
+        }
+      ],
+      lowestBuckets: [
+        {
+          bucket: 'clearance',
+          visits: 30,
+          orders: 1,
+          revenue: 100,
+          spend: 50,
+          conversionRate: 1 / 30,
+          roas: 2,
+          campaignDisplayName: 'cmp_google_2',
+          campaignEntityId: 'cmp_google_2',
+          campaignPlatform: 'google_ads',
+          campaignNameResolutionStatus: 'unresolved'
+        },
+        {
+          bucket: 'prospecting-us',
+          visits: 80,
+          orders: 3,
+          revenue: 420,
+          spend: 200,
+          conversionRate: 3 / 80,
+          roas: 2.1,
+          campaignDisplayName: 'Meta Prospecting Raw',
+          campaignEntityId: 'cmp_meta_1',
+          campaignPlatform: 'meta_ads',
+          campaignNameResolutionStatus: 'fallback_name'
+        },
+        {
+          bucket: 'brand-search',
+          visits: 120,
+          orders: 6,
+          revenue: 900,
+          spend: 500,
+          conversionRate: 6 / 120,
+          roas: 1.8,
+          campaignDisplayName: 'Google Brand Search Latest',
+          campaignEntityId: 'cmp_google_1',
+          campaignPlatform: 'google_ads',
+          campaignNameResolutionStatus: 'resolved'
+        }
+      ]
+    });
+  } finally {
+    await closeServer(server);
+    await resetE2EDatabase();
+  }
+});
+
 test('reporting spend details and lowest buckets are scoped to the requested date range', async () => {
   await resetE2EDatabase();
   await pool.query(

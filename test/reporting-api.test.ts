@@ -119,31 +119,38 @@ test('reporting routes reject invalid date ranges before querying aggregates', a
 
 test('reporting campaigns returns campaign rows sorted for dashboard tables', async () => {
   pool.query = (async (text: string, params?: unknown[]) => {
-    assert.match(text, /GROUP BY source, medium, campaign, content/);
-    assert.deepEqual(params, ['2026-04-01', '2026-04-10', 'last_touch', 2]);
+    if (text.includes('FROM daily_reporting_metrics')) {
+      assert.match(text, /GROUP BY source, medium, campaign, content/);
+      assert.deepEqual(params, ['2026-04-01', '2026-04-10', 'last_touch', 2]);
 
-    return {
-      rows: [
-        {
-          source: 'google',
-          medium: 'cpc',
-          campaign: 'spring-sale',
-          content: 'hero-ad-1',
-          visits: '420',
-          orders: '19',
-          revenue: '2110.00'
-        },
-        {
-          source: 'meta',
-          medium: 'paid_social',
-          campaign: 'prospecting-us',
-          content: '',
-          visits: '310',
-          orders: '9',
-          revenue: '880.25'
-        }
-      ]
-    };
+      return {
+        rows: [
+          {
+            source: 'google',
+            medium: 'cpc',
+            campaign: 'spring-sale',
+            content: 'hero-ad-1',
+            visits: '420',
+            orders: '19',
+            revenue: '2110.00'
+          },
+          {
+            source: 'meta',
+            medium: 'paid_social',
+            campaign: 'prospecting-us',
+            content: '',
+            visits: '310',
+            orders: '9',
+            revenue: '880.25'
+          }
+        ]
+      };
+    }
+
+    assert.match(text, /FROM ad_platform_entity_metadata/);
+    assert.deepEqual(params, ['2026-04-01', '2026-04-10', ['spring-sale', 'prospecting-us'], null]);
+
+    return { rows: [] };
   }) as typeof pool.query;
 
   const server = createServer();
@@ -188,32 +195,39 @@ test('reporting campaigns returns campaign rows sorted for dashboard tables', as
 
 test('reporting spend details return channel groups with campaign subtotals in descending order', async () => {
   pool.query = (async (text: string, params?: unknown[]) => {
-    assert.match(text, /GROUP BY source, medium, campaign/);
-    assert.match(text, /AND spend > 0/);
-    assert.deepEqual(params, ['2026-04-01', '2026-04-10', 'last_touch']);
+    if (text.includes('FROM daily_reporting_metrics')) {
+      assert.match(text, /GROUP BY source, medium, campaign/);
+      assert.match(text, /AND spend > 0/);
+      assert.deepEqual(params, ['2026-04-01', '2026-04-10', 'last_touch']);
 
-    return {
-      rows: [
-        {
-          source: 'google',
-          medium: 'cpc',
-          campaign: 'spring-search',
-          spend: '1200.00'
-        },
-        {
-          source: 'google',
-          medium: 'cpc',
-          campaign: 'brand-search',
-          spend: '300.00'
-        },
-        {
-          source: 'meta',
-          medium: 'paid_social',
-          campaign: 'prospecting-us',
-          spend: '900.50'
-        }
-      ]
-    };
+      return {
+        rows: [
+          {
+            source: 'google',
+            medium: 'cpc',
+            campaign: 'spring-search',
+            spend: '1200.00'
+          },
+          {
+            source: 'google',
+            medium: 'cpc',
+            campaign: 'brand-search',
+            spend: '300.00'
+          },
+          {
+            source: 'meta',
+            medium: 'paid_social',
+            campaign: 'prospecting-us',
+            spend: '900.50'
+          }
+        ]
+      };
+    }
+
+    assert.match(text, /FROM ad_platform_entity_metadata/);
+    assert.deepEqual(params, ['2026-04-01', '2026-04-10', ['spring-search', 'brand-search', 'prospecting-us'], null]);
+
+    return { rows: [] };
   }) as typeof pool.query;
 
   const server = createServer();
