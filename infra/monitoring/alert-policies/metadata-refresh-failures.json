@@ -1,0 +1,1 @@
+Added an alert policy that fires when metadata refresh failure events are emitted in Cloud Run logs.
