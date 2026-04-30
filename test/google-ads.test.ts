@@ -129,6 +129,74 @@ test('normalizeSpendSnapshot maps ad groups into Meta-aligned adset fields and e
   assert.equal(rows[4].canonicalContent, 'headline a');
 });
 
+test('buildGoogleAdsMetadataRecords normalizes ids and collapses whitespace for latest names', () => {
+  const rows = __googleAdsTestUtils.buildGoogleAdsMetadataRecords({
+    accountId: ' 1234567890 ',
+    observedAt: new Date('2026-04-11T12:00:00.000Z'),
+    campaignRows: [
+      {
+        campaign: {
+          id: ' cmp_1 ',
+          name: '  Brand    Search  '
+        }
+      }
+    ],
+    adsetRows: [
+      {
+        adGroup: {
+          id: ' adgroup_1 ',
+          name: ' Search   US '
+        }
+      }
+    ],
+    adRows: [
+      {
+        adGroupAd: {
+          ad: {
+            id: ' ad_1 ',
+            name: ' Headline   A '
+          }
+        }
+      },
+      {
+        adGroupAd: {
+          ad: {
+            id: 'ad_1',
+            resourceName: 'customers/1234567890/adGroupAds/1'
+          }
+        }
+      }
+    ]
+  });
+
+  assert.deepEqual(rows, [
+    {
+      platform: 'google_ads',
+      accountId: '1234567890',
+      entityType: 'campaign',
+      entityId: 'cmp_1',
+      latestName: 'Brand Search',
+      lastSeenAt: new Date('2026-04-11T12:00:00.000Z')
+    },
+    {
+      platform: 'google_ads',
+      accountId: '1234567890',
+      entityType: 'adset',
+      entityId: 'adgroup_1',
+      latestName: 'Search US',
+      lastSeenAt: new Date('2026-04-11T12:00:00.000Z')
+    },
+    {
+      platform: 'google_ads',
+      accountId: '1234567890',
+      entityType: 'ad',
+      entityId: 'ad_1',
+      latestName: 'Headline A',
+      lastSeenAt: new Date('2026-04-11T12:00:00.000Z')
+    }
+  ]);
+});
+
 test('formatGoogleAdsError includes API status and details payload', () => {
   const error = __googleAdsTestUtils.createGoogleAdsApiErrorForTest(403, 'Google Ads API request failed', {
     error: {
