@@ -1490,13 +1490,13 @@ async function planIncrementalSyncs(now = new Date()): Promise<number> {
     await suppressHistoricalSyncJobs(row.id, today);
     await recoverStaleCurrentDaySyncJobs(row.id, today);
 
+    const dates = buildPlanningDates(now, row.last_sync_completed_at);
+
+    if (dates.length > 0) {
+      plannedJobs += await enqueueSyncDates(row.id, dates);
+    }
+
     if (row.last_sync_planned_for !== today) {
-      const dates = buildPlanningDates(now, row.last_sync_completed_at);
-
-      if (dates.length > 0) {
-        plannedJobs += await enqueueSyncDates(row.id, dates);
-      }
-
       await query('UPDATE google_ads_connections SET last_sync_planned_for = $2::date, updated_at = now() WHERE id = $1', [
         row.id,
         today
