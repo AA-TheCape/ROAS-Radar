@@ -94,7 +94,7 @@ function buildMetaMalformedAdInsightFixture() {
     }
   };
 
-  delete (row as { ad_id?: string }).ad_id;
+  Reflect.deleteProperty(row, 'ad_id');
 
   return row;
 }
@@ -155,7 +155,7 @@ function buildGoogleMalformedCampaignFixture() {
     }
   };
 
-  delete (row.campaign as { id?: string }).id;
+  Reflect.deleteProperty(row.campaign, 'id');
 
   return row;
 }
@@ -212,7 +212,7 @@ function buildGoogleMalformedAdFixture() {
     }
   };
 
-  delete (row.adGroupAd.ad as { id?: string }).id;
+  Reflect.deleteProperty(row.adGroupAd.ad, 'id');
 
   return row;
 }
