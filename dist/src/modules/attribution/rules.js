@@ -5,6 +5,18 @@ export const VIEW_LOOKBACK_WINDOW_MS = VIEW_LOOKBACK_WINDOW_DAYS * 24 * 60 * 60 
 export function hasClickId(clickIdValue) {
     return Boolean(clickIdValue);
 }
+export function qualifiesSyntheticHintSignal(input) {
+    if (input.clickIdType && input.clickIdValue) {
+        return true;
+    }
+    if (input.source && input.medium) {
+        return true;
+    }
+    if (input.source && input.campaign) {
+        return true;
+    }
+    return false;
+}
 export function isDirectTouchpoint(input) {
     return !input.source && !input.medium && !input.campaign && !input.content && !input.term && !input.clickIdValue;
 }

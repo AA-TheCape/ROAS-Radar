@@ -1,4 +1,9 @@
-import { inferEngagementType, isDirectTouchpoint, isWithinLookbackWindow } from './rules.js';
+import {
+  inferEngagementType,
+  isDirectTouchpoint,
+  isWithinLookbackWindow,
+  qualifiesSyntheticHintSignal
+} from './rules.js';
 
 export const ATTRIBUTION_MODELS = [
   'first_touch',
@@ -329,19 +334,7 @@ function qualifiesSyntheticHint(touchpoint: NormalizedTouchpoint): boolean {
     return false;
   }
 
-  if (touchpoint.clickIdType && touchpoint.clickIdValue) {
-    return true;
-  }
-
-  if (touchpoint.source && touchpoint.medium) {
-    return true;
-  }
-
-  if (touchpoint.source && touchpoint.campaign) {
-    return true;
-  }
-
-  return false;
+  return qualifiesSyntheticHintSignal(touchpoint);
 }
 
 function normalizeTouchpoints(rawTouchpoints: AttributionTouchpoint[], orderOccurredAt: Date): NormalizedTouchpoint[] {

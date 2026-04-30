@@ -1,4 +1,4 @@
-import { inferEngagementType, isDirectTouchpoint, isWithinLookbackWindow } from './rules.js';
+import { inferEngagementType, isDirectTouchpoint, isWithinLookbackWindow, qualifiesSyntheticHintSignal } from './rules.js';
 export const ATTRIBUTION_MODELS = [
     'first_touch',
     'last_touch',
@@ -163,16 +163,7 @@ function qualifiesSyntheticHint(touchpoint) {
     if (touchpoint.evidenceSource !== 'shopify_marketing_hint' || !touchpoint.isSynthetic) {
         return false;
     }
-    if (touchpoint.clickIdType && touchpoint.clickIdValue) {
-        return true;
-    }
-    if (touchpoint.source && touchpoint.medium) {
-        return true;
-    }
-    if (touchpoint.source && touchpoint.campaign) {
-        return true;
-    }
-    return false;
+    return qualifiesSyntheticHintSignal(touchpoint);
 }
 function normalizeTouchpoints(rawTouchpoints, orderOccurredAt) {
     return rawTouchpoints

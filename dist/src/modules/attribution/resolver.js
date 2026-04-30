@@ -1,4 +1,4 @@
-import { CLICK_LOOKBACK_WINDOW_DAYS, hasClickId, isDirectTouchpoint as isCanonicalDirectTouchpoint } from './rules.js';
+import { CLICK_LOOKBACK_WINDOW_DAYS, hasClickId, isDirectTouchpoint as isCanonicalDirectTouchpoint, qualifiesSyntheticHintSignal } from './rules.js';
 export const DETERMINISTIC_INGESTION_SOURCES = [
     'landing_session_id',
     'checkout_token',
@@ -175,6 +175,9 @@ function compareShopifyHintCandidates(left, right) {
     }
     return left.sourceKey.localeCompare(right.sourceKey);
 }
+function qualifiesSyntheticHintCandidate(candidate) {
+    return qualifiesSyntheticHintSignal(candidate);
+}
 function compareGa4FallbackCandidates(left, right) {
     if (right.occurredAtUtc.getTime() !== left.occurredAtUtc.getTime()) {
         return right.occurredAtUtc.getTime() - left.occurredAtUtc.getTime();
@@ -228,7 +231,8 @@ export function resolveAttributionTier(input) {
             normalizationFailures: input.normalizationFailures ?? []
         };
     }
-    const shopifyHintTouchpoints = dedupeTierCandidatesBySourceKey(input.shopifyHint.filter((candidate) => isWithinLookbackWindow(orderOccurredAtUtc, candidate.occurredAtUtc)), compareShopifyHintCandidates);
+    const shopifyHintTouchpoints = dedupeTierCandidatesBySourceKey(input.shopifyHint.filter((candidate) => qualifiesSyntheticHintCandidate(candidate) &&
+        isWithinLookbackWindow(orderOccurredAtUtc, candidate.occurredAtUtc)), compareShopifyHintCandidates);
     const shopifyHintWinnerCandidate = shopifyHintTouchpoints[0] ?? null;
     const shopifyHintWinner = shopifyHintWinnerCandidate ? mapCandidateToResolvedTouchpoint(shopifyHintWinnerCandidate) : null;
     if (shopifyHintWinner) {

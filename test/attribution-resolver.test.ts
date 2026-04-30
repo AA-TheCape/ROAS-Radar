@@ -372,6 +372,47 @@ test('resolveAttributionTier falls back to GA4 only when higher tiers are missin
   assert.equal(resolved.attributionReason, 'ga4_fallback_match');
 });
 
+test('resolveAttributionTier skips ambiguous Shopify hints and allows GA4 fallback to win', async () => {
+  const testUtils = await getTestUtils();
+
+  const resolved = testUtils.resolveAttributionTier({
+    orderOccurredAtUtc: new Date('2026-04-08T12:00:00.000Z'),
+    deterministicFirstParty: [],
+    shopifyHint: [
+      buildTierCandidate('shopify-ambiguous', '2026-04-08T11:30:00.000Z', {
+        sessionId: null,
+        sourceTouchEventId: null,
+        ingestionSource: 'shopify_marketing_hint',
+        attributionReason: 'shopify_hint_derived',
+        confidenceScore: 0.55,
+        source: 'meta',
+        medium: null,
+        campaign: null,
+        clickIdType: null,
+        clickIdValue: null,
+        isSynthetic: true
+      })
+    ],
+    ga4Fallback: [
+      buildTierCandidate('ga4-eligible', '2026-04-08T10:30:00.000Z', {
+        sessionId: null,
+        sourceTouchEventId: null,
+        ingestionSource: 'ga4_fallback',
+        attributionReason: 'ga4_fallback_match',
+        confidenceScore: 0.35,
+        clickIdType: 'gclid',
+        clickIdValue: 'gclid-1',
+        isSynthetic: true
+      })
+    ]
+  });
+
+  assert.equal(resolved.tier, 'ga4_fallback');
+  assert.equal(resolved.winner?.ingestionSource, 'ga4_fallback');
+  assert.equal(resolved.winner?.clickIdType, 'gclid');
+  assert.equal(resolved.touchpoints.length, 1);
+});
+
 test('resolveAttributionTier is deterministic across repeated runs and returns unattributed when nothing qualifies', async () => {
   const testUtils = await getTestUtils();
 

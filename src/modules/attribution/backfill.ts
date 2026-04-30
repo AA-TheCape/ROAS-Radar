@@ -48,6 +48,7 @@ type OrderRow = {
   cart_token: string | null;
   email_hash: string | null;
   customer_identity_id: string | null;
+  identity_journey_id: string | null;
   source_name: string | null;
   raw_payload: unknown;
 };
@@ -284,6 +285,7 @@ async function fetchOrder(client: PoolClient, shopifyOrderId: string): Promise<O
         cart_token,
         email_hash,
         customer_identity_id::text AS customer_identity_id,
+        identity_journey_id::text AS identity_journey_id,
         source_name,
         raw_payload
       FROM shopify_orders
@@ -307,6 +309,7 @@ async function resolveAttributionJourney(client: PoolClient, order: OrderRow): P
     cartToken: order.cart_token,
     emailHash: order.email_hash,
     customerIdentityId: order.customer_identity_id,
+    identityJourneyId: order.identity_journey_id,
     sourceName: order.source_name,
     rawPayload: order.raw_payload
   });

@@ -167,6 +167,7 @@ async function fetchOrder(client, shopifyOrderId) {
         cart_token,
         email_hash,
         customer_identity_id::text,
+        identity_journey_id::text,
         source_name,
         raw_payload
       FROM shopify_orders
@@ -206,6 +207,7 @@ async function resolveAttributionJourney(client, order) {
         cartToken: order.cart_token,
         emailHash: order.email_hash,
         customerIdentityId: order.customer_identity_id,
+        identityJourneyId: order.identity_journey_id,
         sourceName: order.source_name,
         rawPayload: order.raw_payload
     });

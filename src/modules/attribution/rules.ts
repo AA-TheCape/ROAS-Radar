@@ -9,6 +9,28 @@ export function hasClickId(clickIdValue: string | null | undefined): boolean {
   return Boolean(clickIdValue);
 }
 
+export function qualifiesSyntheticHintSignal(input: {
+  source: string | null;
+  medium: string | null;
+  campaign: string | null;
+  clickIdType: string | null;
+  clickIdValue: string | null;
+}): boolean {
+  if (input.clickIdType && input.clickIdValue) {
+    return true;
+  }
+
+  if (input.source && input.medium) {
+    return true;
+  }
+
+  if (input.source && input.campaign) {
+    return true;
+  }
+
+  return false;
+}
+
 export function isDirectTouchpoint(input: {
   source: string | null;
   medium: string | null;

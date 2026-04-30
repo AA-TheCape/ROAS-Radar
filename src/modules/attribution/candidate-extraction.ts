@@ -20,6 +20,7 @@ type SessionCandidateRow = {
   session_id: string;
   source_touch_event_id: string | null;
   occurred_at: Date;
+  attribution_reason: string | null;
   source: string | null;
   medium: string | null;
   campaign: string | null;
@@ -39,6 +40,7 @@ export type AttributionCandidateOrder = {
   cartToken: string | null;
   emailHash?: string | null;
   customerIdentityId?: string | null;
+  identityJourneyId?: string | null;
   sourceName?: string | null;
   rawPayload?: unknown;
 };
@@ -184,7 +186,7 @@ function buildResolvedTouchpoint(
     term: row.term,
     clickIdType: row.click_id_type,
     clickIdValue: row.click_id_value,
-    attributionReason,
+    attributionReason: normalizeNullableString(row.attribution_reason) ?? attributionReason,
     ingestionSource,
     isDirect: isDirectTouchpoint({
       source: row.source,
@@ -208,6 +210,7 @@ async function fetchLandingSessionCandidate(
         s.id::text AS session_id,
         first_event.id::text AS source_touch_event_id,
         s.first_seen_at AS occurred_at,
+        NULL::text AS attribution_reason,
         s.initial_utm_source AS source,
         s.initial_utm_medium AS medium,
         s.initial_utm_campaign AS campaign,
@@ -262,6 +265,7 @@ async function fetchLatestTokenCandidate(
         e.session_id::text AS session_id,
         e.id::text AS source_touch_event_id,
         e.occurred_at,
+        NULL::text AS attribution_reason,
         COALESCE(e.utm_source, s.initial_utm_source) AS source,
         COALESCE(e.utm_medium, s.initial_utm_medium) AS medium,
         COALESCE(e.utm_campaign, s.initial_utm_campaign) AS campaign,
@@ -317,7 +321,7 @@ async function fetchIdentityCandidates(
   order: AttributionCandidateOrder,
   orderOccurredAtUtc: Date
 ): Promise<ResolvedAttributionTouchpoint[]> {
-  if (!order.customerIdentityId && !order.emailHash) {
+  if (!order.customerIdentityId && !order.identityJourneyId) {
     return [];
   }
 
@@ -327,6 +331,19 @@ async function fetchIdentityCandidates(
         s.id::text AS session_id,
         first_event.id::text AS source_touch_event_id,
         s.first_seen_at AS occurred_at,
+        CASE
+          WHEN (
+            ($1::uuid IS NOT NULL AND s.identity_journey_id = $1::uuid)
+            OR EXISTS (
+              SELECT 1
+              FROM shopify_orders o
+              WHERE o.shopify_order_id = $3
+                AND o.identity_journey_id IS NOT NULL
+                AND o.identity_journey_id = s.identity_journey_id
+            )
+          ) THEN 'matched_by_identity_journey'
+          ELSE 'matched_by_customer_identity'
+        END AS attribution_reason,
         s.initial_utm_source AS source,
         s.initial_utm_medium AS medium,
         s.initial_utm_campaign AS campaign,
@@ -358,20 +375,29 @@ async function fetchIdentityCandidates(
         LIMIT 1
       ) AS first_event ON true
       WHERE (
-        ($1::uuid IS NOT NULL AND s.customer_identity_id = $1::uuid)
+        ($1::uuid IS NOT NULL AND s.identity_journey_id = $1::uuid)
+        OR ($2::uuid IS NOT NULL AND s.customer_identity_id = $2::uuid)
         OR EXISTS (
           SELECT 1
           FROM shopify_orders o
-          WHERE o.shopify_order_id = $2
-            AND o.customer_identity_id IS NOT NULL
-            AND o.customer_identity_id = s.customer_identity_id
+          WHERE o.shopify_order_id = $3
+            AND (
+              (o.identity_journey_id IS NOT NULL AND o.identity_journey_id = s.identity_journey_id)
+              OR (o.customer_identity_id IS NOT NULL AND o.customer_identity_id = s.customer_identity_id)
+            )
         )
       )
-        AND s.first_seen_at <= $3
-        AND s.first_seen_at >= $3 - ($4::int * interval '1 day')
+        AND s.first_seen_at <= $4
+        AND s.first_seen_at >= $4 - ($5::int * interval '1 day')
       ORDER BY s.first_seen_at ASC, s.id ASC
     `,
-    [order.customerIdentityId ?? null, order.shopifyOrderId, orderOccurredAtUtc, CLICK_LOOKBACK_WINDOW_DAYS]
+    [
+      order.identityJourneyId ?? null,
+      order.customerIdentityId ?? null,
+      order.shopifyOrderId,
+      orderOccurredAtUtc,
+      CLICK_LOOKBACK_WINDOW_DAYS
+    ]
   );
 
   return result.rows.map((row) =>
