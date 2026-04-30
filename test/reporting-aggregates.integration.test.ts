@@ -144,6 +144,98 @@ test('refreshDailyReportingMetrics includes campaign-only Google spend when no c
   ]);
 });
 
+test('refreshDailyReportingMetrics excludes non-online-store Shopify orders from attributed order metrics', async () => {
+  const metricDate = '2026-04-29';
+
+  await resetIntegrationTables(pool, [
+    'daily_reporting_metrics',
+    'attribution_order_credits',
+    'shopify_orders'
+  ]);
+
+  await pool.query(
+    `
+      INSERT INTO shopify_orders (
+        shopify_order_id,
+        shopify_order_number,
+        currency_code,
+        subtotal_price,
+        total_price,
+        processed_at,
+        source_name,
+        raw_payload
+      ) VALUES
+        ('web-order-1', '18391', 'USD', 90.00, 100.00, $1::timestamptz, 'web', '{}'::jsonb),
+        ('pos-order-1', '18392', 'USD', 45.00, 50.00, $1::timestamptz, 'pos', '{}'::jsonb)
+    `,
+    [`${metricDate}T17:00:00.000Z`]
+  );
+
+  await pool.query(
+    `
+      INSERT INTO attribution_order_credits (
+        shopify_order_id,
+        attribution_model,
+        touchpoint_position,
+        session_id,
+        touchpoint_occurred_at,
+        attributed_source,
+        attributed_medium,
+        attributed_campaign,
+        credit_weight,
+        revenue_credit,
+        is_primary,
+        attribution_reason,
+        model_version
+      ) VALUES
+        ('web-order-1', 'last_touch', 1, NULL, $1::timestamptz, 'facebook', 'paid_social', 'prospecting-us', 1.0, 100.00, true, 'matched_by_checkout_token', 1),
+        ('pos-order-1', 'last_touch', 1, NULL, $1::timestamptz, 'pos', 'offline', 'retail', 1.0, 50.00, true, 'matched_by_checkout_token', 1)
+    `,
+    [`${metricDate}T16:55:00.000Z`]
+  );
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+    await refreshDailyReportingMetrics(client, [metricDate]);
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  const result = await pool.query(
+    `
+      SELECT source, medium, campaign, attributed_orders, attributed_revenue
+      FROM daily_reporting_metrics
+      WHERE metric_date = $1::date
+        AND attribution_model = 'last_touch'
+        AND attributed_orders > 0
+      ORDER BY source ASC, medium ASC, campaign ASC
+    `,
+    [metricDate]
+  );
+
+  assert.deepEqual(result.rows, [
+    {
+      source: 'facebook',
+      medium: 'paid_social',
+      campaign: 'prospecting-us',
+      attributed_orders: '1.00000000',
+      attributed_revenue: '100.00'
+    }
+  ]);
+
+  await resetIntegrationTables(pool, [
+    'daily_reporting_metrics',
+    'attribution_order_credits',
+    'shopify_orders'
+  ]);
+});
+
 test.after(async () => {
   await pool.end();
 });
