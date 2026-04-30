@@ -114,6 +114,7 @@ type StrategyContext = {
   eligibleClicks: NormalizedTouchpoint[];
   eligibleViews: NormalizedTouchpoint[];
   deterministicTouchpoints: NormalizedTouchpoint[];
+  deterministicClicks: NormalizedTouchpoint[];
   hintedFallbackCandidates: NormalizedTouchpoint[];
   orderRevenue: number | string;
   normalizationFailuresCount: number;
@@ -361,7 +362,7 @@ function qualifiesSyntheticHint(touchpoint: NormalizedTouchpoint): boolean {
     return false;
   }
 
-  if (touchpoint.clickIdValue) {
+  if (touchpoint.clickIdType && touchpoint.clickIdValue) {
     return true;
   }
 
@@ -397,6 +398,7 @@ function buildStrategyContext(rawTouchpoints: AttributionTouchpoint[], options: 
   const deterministicTouchpoints = eligibleTouchpoints.filter((touchpoint) =>
     FIRST_PARTY_EVIDENCE_SOURCES.has(touchpoint.evidenceSource)
   );
+  const deterministicClicks = deterministicTouchpoints.filter((touchpoint) => touchpoint.engagementType === 'click');
   const hintedFallbackCandidates = eligibleTouchpoints.filter(qualifiesSyntheticHint);
 
   return {
@@ -404,6 +406,7 @@ function buildStrategyContext(rawTouchpoints: AttributionTouchpoint[], options: 
     eligibleClicks,
     eligibleViews,
     deterministicTouchpoints,
+    deterministicClicks,
     hintedFallbackCandidates,
     orderRevenue: options.orderRevenue,
     normalizationFailuresCount: Math.max(0, Math.trunc(options.normalizationFailuresCount ?? 0))
@@ -435,6 +438,43 @@ function resolveLookbackRule(clickCount: number, viewCount: number): Attribution
   }
 
   return '28d_click';
+}
+
+function summarizePool(touchpoints: readonly NormalizedTouchpoint[]): {
+  touchpointCountConsidered: number;
+  eligibleClickCount: number;
+  eligibleViewCount: number;
+  lookbackRuleApplied: AttributionLookbackRule;
+} {
+  const eligibleClickCount = touchpoints.filter((touchpoint) => touchpoint.engagementType === 'click').length;
+  const eligibleViewCount = touchpoints.filter((touchpoint) => touchpoint.engagementType === 'view').length;
+
+  return {
+    touchpointCountConsidered: touchpoints.length,
+    eligibleClickCount,
+    eligibleViewCount,
+    lookbackRuleApplied: resolveLookbackRule(eligibleClickCount, eligibleViewCount)
+  };
+}
+
+function buildCoreModelResult(
+  touchpoints: NormalizedTouchpoint[],
+  winner: NormalizedTouchpoint | null,
+  options: {
+    directSuppressionApplied?: boolean;
+    lookbackRuleApplied?: AttributionLookbackRule;
+  } = {}
+): StrategyResult {
+  return {
+    touchpoints,
+    weights: buildWinnerWeights(touchpoints, winner?.touchpointId ?? null),
+    allocationStatus: winner ? 'attributed' : 'no_eligible_touches',
+    directSuppressionApplied: options.directSuppressionApplied ?? false,
+    deterministicBlockApplied: false,
+    lookbackRuleApplied:
+      options.lookbackRuleApplied ??
+      summarizePool(touchpoints).lookbackRuleApplied
+  };
 }
 
 function buildCredits(
@@ -479,61 +519,44 @@ type AttributionStrategy = (context: StrategyContext) => StrategyResult;
 
 const attributionStrategies: Record<AttributionModel, AttributionStrategy> = {
   first_touch(context) {
-    const winner = pickWinner(context.eligibleTouchpoints, compareFirstTouchWinner);
-
-    return {
-      touchpoints: context.eligibleTouchpoints,
-      weights: buildWinnerWeights(context.eligibleTouchpoints, winner?.touchpointId ?? null),
-      allocationStatus: winner ? 'attributed' : 'no_eligible_touches',
-      directSuppressionApplied: false,
-      deterministicBlockApplied: false,
-      lookbackRuleApplied: resolveLookbackRule(context.eligibleClicks.length, context.eligibleViews.length)
-    };
+    return buildCoreModelResult(
+      context.deterministicTouchpoints,
+      pickWinner(context.deterministicTouchpoints, compareFirstTouchWinner)
+    );
   },
   last_touch(context) {
-    const winner = pickWinner(context.eligibleTouchpoints, compareLastTouchWinner);
-
-    return {
-      touchpoints: context.eligibleTouchpoints,
-      weights: buildWinnerWeights(context.eligibleTouchpoints, winner?.touchpointId ?? null),
-      allocationStatus: winner ? 'attributed' : 'no_eligible_touches',
-      directSuppressionApplied: false,
-      deterministicBlockApplied: false,
-      lookbackRuleApplied: resolveLookbackRule(context.eligibleClicks.length, context.eligibleViews.length)
-    };
+    return buildCoreModelResult(
+      context.deterministicTouchpoints,
+      pickWinner(context.deterministicTouchpoints, compareLastTouchWinner)
+    );
   },
   last_non_direct(context) {
-    const nonDirectTouchpoints = context.eligibleTouchpoints.filter((touchpoint) => !touchpoint.isDirect);
-    const winnerPool = nonDirectTouchpoints.length > 0 ? nonDirectTouchpoints : context.eligibleTouchpoints;
+    const nonDirectTouchpoints = context.deterministicTouchpoints.filter((touchpoint) => !touchpoint.isDirect);
+    const winnerPool = nonDirectTouchpoints.length > 0 ? nonDirectTouchpoints : context.deterministicTouchpoints;
     const winner = pickWinner(winnerPool, compareLastTouchWinner);
 
-    return {
-      touchpoints: context.eligibleTouchpoints,
-      weights: buildWinnerWeights(context.eligibleTouchpoints, winner?.touchpointId ?? null),
-      allocationStatus: winner ? 'attributed' : 'no_eligible_touches',
-      directSuppressionApplied: nonDirectTouchpoints.length > 0,
-      deterministicBlockApplied: false,
-      lookbackRuleApplied: resolveLookbackRule(context.eligibleClicks.length, context.eligibleViews.length)
-    };
+    return buildCoreModelResult(context.deterministicTouchpoints, winner, {
+      directSuppressionApplied: nonDirectTouchpoints.length > 0
+    });
   },
   linear(context) {
     return {
-      touchpoints: context.eligibleTouchpoints,
-      weights: context.eligibleTouchpoints.map(() => 1),
-      allocationStatus: context.eligibleTouchpoints.length > 0 ? 'attributed' : 'no_eligible_touches',
+      touchpoints: context.deterministicTouchpoints,
+      weights: context.deterministicTouchpoints.map(() => 1),
+      allocationStatus: context.deterministicTouchpoints.length > 0 ? 'attributed' : 'no_eligible_touches',
       directSuppressionApplied: false,
       deterministicBlockApplied: false,
-      lookbackRuleApplied: resolveLookbackRule(context.eligibleClicks.length, context.eligibleViews.length)
+      lookbackRuleApplied: summarizePool(context.deterministicTouchpoints).lookbackRuleApplied
     };
   },
   clicks_only(context) {
-    const nonDirectClicks = context.eligibleClicks.filter((touchpoint) => !touchpoint.isDirect);
-    const winnerPool = nonDirectClicks.length > 0 ? nonDirectClicks : context.eligibleClicks;
+    const nonDirectClicks = context.deterministicClicks.filter((touchpoint) => !touchpoint.isDirect);
+    const winnerPool = nonDirectClicks.length > 0 ? nonDirectClicks : context.deterministicClicks;
     const winner = pickWinner(winnerPool, compareLastTouchWinner);
 
     return {
-      touchpoints: context.eligibleTouchpoints,
-      weights: buildWinnerWeights(context.eligibleTouchpoints, winner?.touchpointId ?? null),
+      touchpoints: context.deterministicTouchpoints,
+      weights: buildWinnerWeights(context.deterministicTouchpoints, winner?.touchpointId ?? null),
       allocationStatus: winner ? 'attributed' : 'no_eligible_touches',
       directSuppressionApplied: nonDirectClicks.length > 0,
       deterministicBlockApplied: false,
@@ -555,12 +578,12 @@ const attributionStrategies: Record<AttributionModel, AttributionStrategy> = {
     const winner = pickWinner(context.hintedFallbackCandidates, compareLastTouchWinner);
 
     return {
-      touchpoints: context.eligibleTouchpoints,
-      weights: buildWinnerWeights(context.eligibleTouchpoints, winner?.touchpointId ?? null),
+      touchpoints: context.hintedFallbackCandidates,
+      weights: buildWinnerWeights(context.hintedFallbackCandidates, winner?.touchpointId ?? null),
       allocationStatus: winner ? 'attributed' : 'unattributed',
       directSuppressionApplied: false,
       deterministicBlockApplied: false,
-      lookbackRuleApplied: resolveLookbackRule(context.eligibleClicks.length, context.eligibleViews.length)
+      lookbackRuleApplied: summarizePool(context.hintedFallbackCandidates).lookbackRuleApplied
     };
   }
 };
@@ -592,6 +615,7 @@ export function executeAttributionModels(
   const context = buildStrategyContext(rawTouchpoints, options);
   const creditsByModel = {} as AttributionModelOutputs;
   const summariesByModel = {} as AttributionModelSummaries;
+  const allEligiblePoolSummary = summarizePool(context.eligibleTouchpoints);
 
   for (const model of ATTRIBUTION_MODELS) {
     creditsByModel[model] = [];
@@ -605,9 +629,9 @@ export function executeAttributionModels(
       totalCreditWeight: 0,
       totalRevenueCredited: '0.00',
       touchpointCountConsidered: 0,
-      eligibleClickCount: context.eligibleClicks.length,
-      eligibleViewCount: context.eligibleViews.length,
-      lookbackRuleApplied: resolveLookbackRule(context.eligibleClicks.length, context.eligibleViews.length),
+      eligibleClickCount: 0,
+      eligibleViewCount: 0,
+      lookbackRuleApplied: allEligiblePoolSummary.lookbackRuleApplied,
       winnerSelectionRule: model,
       directSuppressionApplied: false,
       deterministicBlockApplied: false,
@@ -622,12 +646,10 @@ export function executeAttributionModels(
     const winner = credits.find((credit) => credit.isPrimary) ?? null;
     const totalRevenueCredited = credits.reduce((sum, credit) => sum + Number.parseFloat(credit.revenueCredit), 0);
     const totalCreditWeight = credits.reduce((sum, credit) => sum + credit.creditWeight, 0);
-    const touchpointCountConsidered =
-      model === 'clicks_only'
-        ? context.eligibleClicks.length
-        : model === 'hinted_fallback_only'
-          ? context.hintedFallbackCandidates.length
-          : context.eligibleTouchpoints.length;
+    const poolSummary =
+      model === 'hinted_fallback_only' && strategyResult.allocationStatus === 'blocked_by_deterministic'
+        ? allEligiblePoolSummary
+        : summarizePool(strategyResult.touchpoints);
 
     creditsByModel[model] = credits;
     summariesByModel[model] = {
@@ -639,9 +661,9 @@ export function executeAttributionModels(
       winnerAttributionReason: winner?.attributionReason ?? null,
       totalCreditWeight: Number(totalCreditWeight.toFixed(8)),
       totalRevenueCredited: centsToRevenue(Math.round(totalRevenueCredited * 100)),
-      touchpointCountConsidered,
-      eligibleClickCount: context.eligibleClicks.length,
-      eligibleViewCount: context.eligibleViews.length,
+      touchpointCountConsidered: poolSummary.touchpointCountConsidered,
+      eligibleClickCount: poolSummary.eligibleClickCount,
+      eligibleViewCount: poolSummary.eligibleViewCount,
       lookbackRuleApplied: strategyResult.lookbackRuleApplied,
       winnerSelectionRule: model,
       directSuppressionApplied: strategyResult.directSuppressionApplied,

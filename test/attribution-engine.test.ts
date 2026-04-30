@@ -182,6 +182,95 @@ test('hinted_fallback_only attributes only qualifying synthetic hint rows when d
   assert.equal(result.summariesByModel.hinted_fallback_only.winnerTouchpointId, 'hint-b');
 });
 
+test('hinted_fallback_only ignores ambiguous synthetic hints and ga4 fallback rows when no qualifying hint exists', () => {
+  const result = execute([
+    buildTouchpoint('session-hint-ambiguous', '2026-04-12T00:00:00.000Z', {
+      touchpointId: 'hint-ambiguous',
+      sessionId: null,
+      source: 'meta',
+      medium: null,
+      campaign: null,
+      clickIdType: null,
+      clickIdValue: null,
+      evidenceSource: 'shopify_marketing_hint',
+      isSynthetic: true,
+      isForced: true
+    }),
+    buildTouchpoint('session-hint-direct', '2026-04-13T00:00:00.000Z', {
+      touchpointId: 'hint-direct',
+      sessionId: null,
+      source: null,
+      medium: null,
+      campaign: null,
+      content: null,
+      term: null,
+      clickIdType: null,
+      clickIdValue: null,
+      evidenceSource: 'shopify_marketing_hint',
+      isDirect: true,
+      isSynthetic: true,
+      isForced: true
+    }),
+    buildTouchpoint('session-ga4', '2026-04-14T00:00:00.000Z', {
+      touchpointId: 'ga4-1',
+      sessionId: null,
+      source: 'google',
+      medium: 'cpc',
+      campaign: 'ga4-retargeting',
+      clickIdType: 'gclid',
+      clickIdValue: 'ga4-click',
+      evidenceSource: 'ga4_fallback',
+      attributionReason: 'ga4_fallback_match',
+      isSynthetic: true,
+      isForced: false
+    })
+  ], ['hinted_fallback_only']);
+
+  assert.deepEqual(
+    result.creditsByModel.hinted_fallback_only.map((credit) => credit.revenueCredit),
+    []
+  );
+  assert.equal(result.summariesByModel.hinted_fallback_only.allocationStatus, 'unattributed');
+  assert.equal(result.summariesByModel.hinted_fallback_only.touchpointCountConsidered, 0);
+});
+
+test('core v1 models do not spill fallback evidence into deterministic attribution pools', () => {
+  const result = execute([
+    buildTouchpoint('session-hint', '2026-04-11T00:00:00.000Z', {
+      touchpointId: 'hint-qualifying',
+      sessionId: null,
+      source: 'meta',
+      medium: 'paid_social',
+      campaign: 'prospecting',
+      clickIdType: null,
+      clickIdValue: null,
+      evidenceSource: 'shopify_marketing_hint',
+      isSynthetic: true,
+      isForced: true
+    }),
+    buildTouchpoint('session-ga4', '2026-04-12T00:00:00.000Z', {
+      touchpointId: 'ga4-qualifying',
+      sessionId: null,
+      source: 'google',
+      medium: 'cpc',
+      campaign: 'brand',
+      clickIdType: 'gclid',
+      clickIdValue: 'ga4-click',
+      evidenceSource: 'ga4_fallback',
+      attributionReason: 'ga4_fallback_match',
+      isSynthetic: true,
+      isForced: false
+    })
+  ], ['first_touch', 'last_touch', 'linear', 'clicks_only', 'hinted_fallback_only']);
+
+  assert.equal(result.summariesByModel.first_touch.allocationStatus, 'no_eligible_touches');
+  assert.equal(result.summariesByModel.last_touch.allocationStatus, 'no_eligible_touches');
+  assert.equal(result.summariesByModel.linear.allocationStatus, 'no_eligible_touches');
+  assert.equal(result.summariesByModel.clicks_only.allocationStatus, 'no_eligible_touches');
+  assert.equal(result.summariesByModel.hinted_fallback_only.allocationStatus, 'attributed');
+  assert.equal(result.summariesByModel.hinted_fallback_only.winnerTouchpointId, 'hint-qualifying');
+});
+
 test('model execution can target a single model or multiple models in one batch', () => {
   const touchpoints = [
     buildTouchpoint('session-a', '2026-04-10T00:00:00.000Z'),
