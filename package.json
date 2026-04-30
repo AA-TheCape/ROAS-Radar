@@ -39,6 +39,7 @@
     "test:integration": "node scripts/run-tests.mjs integration",
     "test:attribution": "node scripts/run-attribution-tests.mjs critical",
     "test:attribution:coverage": "node scripts/run-attribution-tests.mjs coverage",
+    "benchmark:northbeam": "tsx scripts/generate-northbeam-benchmark-report.ts",
     "test:dead-letters": "node --import tsx --test test/dead-letter-replay.test.ts"
   },
   "dependencies": {
