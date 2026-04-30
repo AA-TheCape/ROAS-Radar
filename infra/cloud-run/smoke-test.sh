@@ -62,7 +62,7 @@ REPORTING_API_TOKEN=$(gcloud secrets versions access latest \
   --secret=REPORTING_API_TOKEN)
 
 echo "Smoke testing API health for $ENVIRONMENT"
-curl --fail --silent --show-error "$API_URL/healthz" >/dev/null
+curl --fail --silent --show-error "$API_URL/healthz/" >/dev/null
 curl --fail --silent --show-error "$API_URL/readyz" >/dev/null
 
 echo "Smoke testing authenticated reporting route for $ENVIRONMENT"
