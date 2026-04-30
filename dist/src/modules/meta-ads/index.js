@@ -345,10 +345,14 @@ function formatDateInTimeZone(value, timeZone) {
     });
     return formatter.format(value);
 }
+function normalizeMetricActionType(actionType) {
+    const normalized = actionType?.trim();
+    return normalized ? normalized : null;
+}
 function collectMetricActionTypes(entries) {
     const actionTypes = new Set();
     for (const entry of entries) {
-        const actionType = entry.action_type?.trim();
+        const actionType = normalizeMetricActionType(entry.action_type);
         if (actionType) {
             actionTypes.add(actionType);
         }
@@ -385,7 +389,7 @@ function sumMetricValues(entries, actionType) {
     let total = 0;
     let matched = false;
     for (const entry of entries) {
-        if (entry.action_type !== actionType) {
+        if (normalizeMetricActionType(entry.action_type) !== actionType) {
             continue;
         }
         const value = parseNullableMetricDecimal(entry.value);
@@ -404,7 +408,7 @@ function sumMetricCounts(entries, actionType) {
     let total = 0;
     let matched = false;
     for (const entry of entries) {
-        if (entry.action_type !== actionType) {
+        if (normalizeMetricActionType(entry.action_type) !== actionType) {
             continue;
         }
         const value = parseNullableMetricInteger(entry.value);
@@ -421,7 +425,7 @@ function firstMetricFloat(entries, actionType) {
         return null;
     }
     for (const entry of entries) {
-        if (entry.action_type !== actionType) {
+        if (normalizeMetricActionType(entry.action_type) !== actionType) {
             continue;
         }
         const value = parseNullableMetricFloat(entry.value);
@@ -466,8 +470,7 @@ function normalizeCampaignDailyRevenueRecords(adAccountId, rows, options = {}) {
             rawActionValues: [],
             rawActions: [],
             rawPurchaseRoas: [],
-            rawRows: [],
-            availableActionTypes: new Set()
+            rawRows: []
         };
         entry.rawActionValues.push(...rawActionValues);
         entry.rawActions.push(...rawActions);
@@ -482,24 +485,11 @@ function normalizeCampaignDailyRevenueRecords(adAccountId, rows, options = {}) {
         if (!entry.rawDateStop && row.date_stop?.trim()) {
             entry.rawDateStop = row.date_stop.trim();
         }
-        const topLevelActionType = row.action_type?.trim();
-        if (topLevelActionType) {
-            entry.availableActionTypes.add(topLevelActionType);
-        }
-        for (const actionType of collectMetricActionTypes(rawActionValues)) {
-            entry.availableActionTypes.add(actionType);
-        }
-        for (const actionType of collectMetricActionTypes(rawActions)) {
-            entry.availableActionTypes.add(actionType);
-        }
-        for (const actionType of collectMetricActionTypes(rawPurchaseRoas)) {
-            entry.availableActionTypes.add(actionType);
-        }
         grouped.set(key, entry);
     }
     return [...grouped.values()]
         .map((entry) => {
-        const selection = chooseCanonicalPurchaseActionType(entry.availableActionTypes, allowedPurchaseActionTypes);
+        const selection = chooseCanonicalPurchaseActionType(new Set([...collectMetricActionTypes(entry.rawActionValues), ...collectMetricActionTypes(entry.rawActions)]), allowedPurchaseActionTypes);
         return {
             adAccountId,
             reportDate: entry.reportDate,

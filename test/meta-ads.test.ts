@@ -389,6 +389,265 @@ test('fetchCampaignDailyRevenueInsights applies configured fallback action types
   }
 });
 
+test('normalizeCampaignDailyRevenueRecords prefers purchase over lower-priority types and sums duplicate matches', () => {
+  const records = __metaAdsTestUtils.normalizeCampaignDailyRevenueRecords(
+    '123456789',
+    [
+      {
+        campaign_id: 'cmp_priority',
+        campaign_name: 'Priority Campaign',
+        date_start: '2026-04-30',
+        date_stop: '2026-04-30',
+        spend: '12.34',
+        action_values: [
+          { action_type: ' omni_purchase ', value: '5.10' },
+          { action_type: ' purchase ', value: '10.50' }
+        ],
+        actions: [
+          { action_type: 'omni_purchase', value: '1' },
+          { action_type: 'purchase', value: '2' }
+        ],
+        purchase_roas: [{ action_type: 'purchase', value: '1.250000' }]
+      },
+      {
+        campaign_id: 'cmp_priority',
+        campaign_name: 'Priority Campaign',
+        date_start: '2026-04-30',
+        date_stop: '2026-04-30',
+        spend: '0.00',
+        action_values: [{ action_type: 'purchase', value: 4.25 }],
+        actions: [{ action_type: 'purchase', value: '3' }],
+        purchase_roas: [{ action_type: 'purchase', value: '1.500000' }]
+      }
+    ],
+    { currency: 'USD' }
+  );
+
+  assert.deepEqual(records, [
+    {
+      adAccountId: '123456789',
+      reportDate: '2026-04-30',
+      rawDateStart: '2026-04-30',
+      rawDateStop: '2026-04-30',
+      campaignId: 'cmp_priority',
+      campaignName: 'Priority Campaign',
+      currency: 'USD',
+      spend: '12.34',
+      attributedRevenue: '14.75',
+      purchaseCount: 5,
+      purchaseRoas: '1.250000',
+      actionTypeUsed: 'purchase',
+      canonicalSelectionMode: 'priority',
+      actionReportTime: 'conversion',
+      useAccountAttributionSetting: true,
+      rawActionValues: [
+        { action_type: ' omni_purchase ', value: '5.10' },
+        { action_type: ' purchase ', value: '10.50' },
+        { action_type: 'purchase', value: 4.25 }
+      ],
+      rawActions: [
+        { action_type: 'omni_purchase', value: '1' },
+        { action_type: 'purchase', value: '2' },
+        { action_type: 'purchase', value: '3' }
+      ],
+      rawRows: [
+        {
+          campaign_id: 'cmp_priority',
+          campaign_name: 'Priority Campaign',
+          date_start: '2026-04-30',
+          date_stop: '2026-04-30',
+          spend: '12.34',
+          action_values: [
+            { action_type: ' omni_purchase ', value: '5.10' },
+            { action_type: ' purchase ', value: '10.50' }
+          ],
+          actions: [
+            { action_type: 'omni_purchase', value: '1' },
+            { action_type: 'purchase', value: '2' }
+          ],
+          purchase_roas: [{ action_type: 'purchase', value: '1.250000' }]
+        },
+        {
+          campaign_id: 'cmp_priority',
+          campaign_name: 'Priority Campaign',
+          date_start: '2026-04-30',
+          date_stop: '2026-04-30',
+          spend: '0.00',
+          action_values: [{ action_type: 'purchase', value: 4.25 }],
+          actions: [{ action_type: 'purchase', value: '3' }],
+          purchase_roas: [{ action_type: 'purchase', value: '1.500000' }]
+        }
+      ]
+    }
+  ]);
+});
+
+test('normalizeCampaignDailyRevenueRecords falls back through omni, offsite, and configured purchase-like action types', () => {
+  const records = __metaAdsTestUtils.normalizeCampaignDailyRevenueRecords(
+    '123456789',
+    [
+      {
+        campaign_id: 'cmp_omni',
+        campaign_name: 'Omni Campaign',
+        date_start: '2026-04-30',
+        date_stop: '2026-04-30',
+        spend: '5.00',
+        action_values: [{ action_type: 'omni_purchase', value: '8.50' }],
+        actions: [{ action_type: 'omni_purchase', value: '2' }]
+      },
+      {
+        campaign_id: 'cmp_offsite',
+        campaign_name: 'Offsite Campaign',
+        date_start: '2026-04-30',
+        date_stop: '2026-04-30',
+        spend: '6.00',
+        action_values: [{ action_type: 'offsite_conversion.fb_pixel_purchase', value: '9.75' }],
+        actions: [{ action_type: 'offsite_conversion.fb_pixel_purchase', value: '4' }]
+      },
+      {
+        campaign_id: 'cmp_fallback',
+        campaign_name: 'Fallback Campaign',
+        date_start: '2026-04-30',
+        date_stop: '2026-04-30',
+        spend: '7.00',
+        action_values: [{ action_type: 'onsite_conversion.messaging_purchase', value: '11.25' }],
+        actions: [{ action_type: 'onsite_conversion.messaging_purchase', value: '5' }]
+      }
+    ],
+    {
+      currency: 'USD',
+      allowedPurchaseActionTypes: ['purchase', 'omni_purchase', 'onsite_conversion.messaging_purchase']
+    }
+  );
+
+  assert.deepEqual(
+    records.map((record) => ({
+      campaignId: record.campaignId,
+      actionTypeUsed: record.actionTypeUsed,
+      canonicalSelectionMode: record.canonicalSelectionMode,
+      attributedRevenue: record.attributedRevenue,
+      purchaseCount: record.purchaseCount
+    })),
+    [
+      {
+        campaignId: 'cmp_fallback',
+        actionTypeUsed: 'onsite_conversion.messaging_purchase',
+        canonicalSelectionMode: 'fallback',
+        attributedRevenue: '11.25',
+        purchaseCount: 5
+      },
+      {
+        campaignId: 'cmp_offsite',
+        actionTypeUsed: 'offsite_conversion.fb_pixel_purchase',
+        canonicalSelectionMode: 'priority',
+        attributedRevenue: '9.75',
+        purchaseCount: 4
+      },
+      {
+        campaignId: 'cmp_omni',
+        actionTypeUsed: 'omni_purchase',
+        canonicalSelectionMode: 'priority',
+        attributedRevenue: '8.50',
+        purchaseCount: 2
+      }
+    ]
+  );
+});
+
+test('normalizeCampaignDailyRevenueRecords preserves selected action type with null metrics and ignores purchase_roas-only matches', () => {
+  const records = __metaAdsTestUtils.normalizeCampaignDailyRevenueRecords(
+    '123456789',
+    [
+      {
+        campaign_id: 'cmp_null_metrics',
+        campaign_name: 'Null Metrics Campaign',
+        date_start: '2026-04-30',
+        date_stop: '2026-04-30',
+        spend: '8.00',
+        action_values: [
+          { action_type: 'purchase', value: null as never },
+          { action_type: 'purchase', value: '0' }
+        ],
+        actions: [
+          { action_type: 'purchase', value: null as never },
+          { action_type: 'purchase', value: '0' }
+        ],
+        purchase_roas: [{ action_type: 'purchase', value: '0' }]
+      },
+      {
+        campaign_id: 'cmp_missing_actions',
+        campaign_name: 'Missing Actions Campaign',
+        date_start: '2026-04-30',
+        date_stop: '2026-04-30',
+        spend: '9.00',
+        action_values: [{ action_type: 'omni_purchase', value: '15.00' }],
+        purchase_roas: [{ action_type: 'omni_purchase', value: '1.666667' }]
+      },
+      {
+        campaign_id: 'cmp_roas_only',
+        campaign_name: 'ROAS Only Campaign',
+        date_start: '2026-04-30',
+        date_stop: '2026-04-30',
+        spend: '10.00',
+        action_type: 'purchase',
+        purchase_roas: [{ action_type: 'purchase', value: '2.000000' }]
+      }
+    ],
+    { currency: 'USD' }
+  );
+
+  assert.deepEqual(
+    records.map((record) => ({
+      campaignId: record.campaignId,
+      attributedRevenue: record.attributedRevenue,
+      purchaseCount: record.purchaseCount,
+      purchaseRoas: record.purchaseRoas,
+      actionTypeUsed: record.actionTypeUsed,
+      canonicalSelectionMode: record.canonicalSelectionMode,
+      rawActionValues: record.rawActionValues,
+      rawActions: record.rawActions
+    })),
+    [
+      {
+        campaignId: 'cmp_missing_actions',
+        attributedRevenue: '15.00',
+        purchaseCount: null,
+        purchaseRoas: '1.666667',
+        actionTypeUsed: 'omni_purchase',
+        canonicalSelectionMode: 'priority',
+        rawActionValues: [{ action_type: 'omni_purchase', value: '15.00' }],
+        rawActions: []
+      },
+      {
+        campaignId: 'cmp_null_metrics',
+        attributedRevenue: '0.00',
+        purchaseCount: 0,
+        purchaseRoas: '0.000000',
+        actionTypeUsed: 'purchase',
+        canonicalSelectionMode: 'priority',
+        rawActionValues: [
+          { action_type: 'purchase', value: null },
+          { action_type: 'purchase', value: '0' }
+        ],
+        rawActions: [
+          { action_type: 'purchase', value: null },
+          { action_type: 'purchase', value: '0' }
+        ]
+      },
+      {
+        campaignId: 'cmp_roas_only',
+        attributedRevenue: null,
+        purchaseCount: null,
+        purchaseRoas: null,
+        actionTypeUsed: null,
+        canonicalSelectionMode: 'none',
+        rawActionValues: [],
+        rawActions: []
+      }
+    ]
+  );
+});
+
 test('fetchCampaignDailyRevenueInsights retries transient errors and succeeds deterministically on the next page fetch', async () => {
   const previousFetch = globalThis.fetch;
   const page1 = await loadJsonFixture<Record<string, unknown>>('campaign-daily-revenue-live-page-1.json');

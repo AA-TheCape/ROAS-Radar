@@ -642,11 +642,16 @@ function formatDateInTimeZone(value: Date, timeZone: string): string {
   return formatter.format(value);
 }
 
+function normalizeMetricActionType(actionType: string | undefined): string | null {
+  const normalized = actionType?.trim();
+  return normalized ? normalized : null;
+}
+
 function collectMetricActionTypes(entries: MetaAdsActionMetric[]): Set<string> {
   const actionTypes = new Set<string>();
 
   for (const entry of entries) {
-    const actionType = entry.action_type?.trim();
+    const actionType = normalizeMetricActionType(entry.action_type);
 
     if (actionType) {
       actionTypes.add(actionType);
@@ -698,7 +703,7 @@ function sumMetricValues(entries: MetaAdsActionMetric[], actionType: string | nu
   let matched = false;
 
   for (const entry of entries) {
-    if (entry.action_type !== actionType) {
+    if (normalizeMetricActionType(entry.action_type) !== actionType) {
       continue;
     }
 
@@ -724,7 +729,7 @@ function sumMetricCounts(entries: MetaAdsActionMetric[], actionType: string | nu
   let matched = false;
 
   for (const entry of entries) {
-    if (entry.action_type !== actionType) {
+    if (normalizeMetricActionType(entry.action_type) !== actionType) {
       continue;
     }
 
@@ -747,7 +752,7 @@ function firstMetricFloat(entries: MetaAdsActionMetric[], actionType: string | n
   }
 
   for (const entry of entries) {
-    if (entry.action_type !== actionType) {
+    if (normalizeMetricActionType(entry.action_type) !== actionType) {
       continue;
     }
 
@@ -799,7 +804,6 @@ function normalizeCampaignDailyRevenueRecords(
       rawActions: MetaAdsActionMetric[];
       rawPurchaseRoas: MetaAdsActionMetric[];
       rawRows: Record<string, unknown>[];
-      availableActionTypes: Set<string>;
     }
   >();
 
@@ -826,8 +830,7 @@ function normalizeCampaignDailyRevenueRecords(
       rawActionValues: [],
       rawActions: [],
       rawPurchaseRoas: [],
-      rawRows: [],
-      availableActionTypes: new Set<string>()
+      rawRows: []
     };
 
     entry.rawActionValues.push(...rawActionValues);
@@ -847,30 +850,15 @@ function normalizeCampaignDailyRevenueRecords(
       entry.rawDateStop = row.date_stop.trim();
     }
 
-    const topLevelActionType = row.action_type?.trim();
-
-    if (topLevelActionType) {
-      entry.availableActionTypes.add(topLevelActionType);
-    }
-
-    for (const actionType of collectMetricActionTypes(rawActionValues)) {
-      entry.availableActionTypes.add(actionType);
-    }
-
-    for (const actionType of collectMetricActionTypes(rawActions)) {
-      entry.availableActionTypes.add(actionType);
-    }
-
-    for (const actionType of collectMetricActionTypes(rawPurchaseRoas)) {
-      entry.availableActionTypes.add(actionType);
-    }
-
     grouped.set(key, entry);
   }
 
   return [...grouped.values()]
     .map((entry) => {
-      const selection = chooseCanonicalPurchaseActionType(entry.availableActionTypes, allowedPurchaseActionTypes);
+      const selection = chooseCanonicalPurchaseActionType(
+        new Set([...collectMetricActionTypes(entry.rawActionValues), ...collectMetricActionTypes(entry.rawActions)]),
+        allowedPurchaseActionTypes
+      );
 
       return {
         adAccountId,
