@@ -1,0 +1,29 @@
+{
+  "name": "roas_meta_ads_api_latency_ms",
+  "description": "Distribution of Meta Ads API request durations emitted by sync telemetry.",
+  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=(\"meta_ads_api_request_completed\" OR \"meta_ads_api_request_failed\")",
+  "valueExtractor": "EXTRACT(jsonPayload.durationMs)",
+  "labelExtractors": {
+    "service": "EXTRACT(jsonPayload.service)",
+    "transaction_source": "EXTRACT(jsonPayload.transactionSource)",
+    "outcome": "EXTRACT(jsonPayload.outcome)",
+    "status_class": "EXTRACT(jsonPayload.statusClass)"
+  },
+  "metricDescriptor": {
+    "metricKind": "DELTA",
+    "valueType": "DISTRIBUTION",
+    "unit": "ms",
+    "displayName": "ROAS Radar Meta Ads API Latency",
+    "labels": [
+      { "key": "service", "valueType": "STRING", "description": "Service emitting the API request telemetry." },
+      { "key": "transaction_source", "valueType": "STRING", "description": "Meta Ads sync transaction surface." },
+      { "key": "outcome", "valueType": "STRING", "description": "success or error." },
+      { "key": "status_class", "valueType": "STRING", "description": "HTTP status family or network_error." }
+    ]
+  },
+  "bucketOptions": {
+    "explicitBuckets": {
+      "bounds": [100, 250, 500, 1000, 2000, 5000, 10000, 30000]
+    }
+  }
+}
