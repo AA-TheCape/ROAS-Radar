@@ -33,6 +33,36 @@ The order-attribution tier audit columns added in `0037_add_shopify_order_attrib
 
 - `db/rollbacks/0037_add_shopify_order_attribution_tiers.down.sql`
 
+The ad-platform entity metadata lookup table added in `0040_add_ad_platform_entity_metadata.sql` can be rolled back with:
+
+- `db/rollbacks/0040_add_ad_platform_entity_metadata.down.sql`
+
+## Ad Platform Entity Metadata
+
+Migration `0040_add_ad_platform_entity_metadata.sql` adds `ad_platform_entity_metadata` as the canonical latest-name lookup surface for Google Ads and Meta entities.
+
+The table stores one current row per scoped entity key:
+
+- `platform`: `google_ads` or `meta_ads`
+- `account_id`: normalized platform account id
+- `entity_type`: `campaign`, `adset`, or `ad`
+- `entity_id`: native platform entity id
+- `latest_name`: latest known non-blank readable name
+- `last_seen_at`: upstream observation timestamp
+- optional scope columns: `tenant_id`, `workspace_id`
+
+Primary lookup indexes added by the migration:
+
+- exact scoped lookup: `ad_platform_entity_metadata_lookup_idx`
+- entity-centric lookup: `ad_platform_entity_metadata_entity_lookup_idx`
+- uniqueness guardrail: `ad_platform_entity_metadata_scope_key_uidx`
+
+To verify the PostgreSQL planner is using those indexes against a real database, run:
+
+```sh
+npm run db:verify-campaign-metadata-query-plans
+```
+
 ## Session Attribution Capture Schema
 
 Migration `0019_add_session_attribution_capture_tables.sql` adds three additive tables for canonical first-party capture persistence:

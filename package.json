@@ -9,6 +9,7 @@
     "db:migrate": "tsx src/db/migrate.ts",
     "db:migrate:start": "node dist/src/db/migrate.js",
     "db:migrate:check": "node scripts/check-migrations.mjs",
+    "db:verify-campaign-metadata-query-plans": "node scripts/verify-campaign-metadata-query-plans.mjs",
     "loadtest:large-payloads": "node scripts/load-test-large-payloads.mjs",
     "db:verify-raw-payload-query-plans": "node scripts/verify-raw-payload-query-plans.mjs",
     "db:verify-identity-graph-query-plans": "node scripts/verify-identity-graph-query-plans.mjs",
