@@ -48,16 +48,13 @@ promote_environment() {
   fi
 }
 
-promote_environment dev
-
 if [ "$TARGET_ENVIRONMENT" = "dev" ]; then
+  promote_environment dev
   exit 0
 fi
 
 promote_environment staging
 
-if [ "$TARGET_ENVIRONMENT" = "staging" ]; then
-  exit 0
+if [ "$TARGET_ENVIRONMENT" = "production" ]; then
+  promote_environment production
 fi
-
-promote_environment production
