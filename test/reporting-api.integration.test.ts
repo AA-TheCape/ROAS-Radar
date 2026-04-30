@@ -228,10 +228,14 @@ test('reporting orders only returns online store Shopify orders', async () => {
       total_price,
       processed_at,
       source_name,
-      raw_payload
+      raw_payload,
+      payload_source,
+      payload_external_id,
+      payload_size_bytes,
+      payload_hash
     ) VALUES
-      ($1, $2, 'USD', '75.00', '80.00', $3, 'web', '{}'::jsonb),
-      ($4, $5, 'USD', '45.00', '50.00', $6, 'pos', '{}'::jsonb)`,
+      ($1, $2, 'USD', '75.00', '80.00', $3, 'web', '{}'::jsonb, 'shopify_order', $1, 2, '44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a'),
+      ($4, $5, 'USD', '45.00', '50.00', $6, 'pos', '{}'::jsonb, 'shopify_order', $4, 2, '44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a')`,
     [
       'web-order-1',
       '18387',
