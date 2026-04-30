@@ -54,6 +54,7 @@ const oauthCallbackSchema = z.object({
 
 type MetaSpendLevel = (typeof META_SPEND_LEVELS)[number];
 type MetaSpendGranularity = (typeof META_SPEND_GRANULARITIES)[number];
+type MetaAdsMetadataEntityType = 'campaign' | 'adset' | 'ad';
 
 type MetaAdsConnectionRow = {
   id: number;
@@ -152,6 +153,35 @@ type MetaAdsApiErrorBody = {
   };
 };
 
+type MetaAdsMetadataEntityRow = {
+  id?: string;
+  name?: string;
+};
+
+type MetaAdsMetadataRecord = {
+  platform: 'meta_ads';
+  accountId: string;
+  entityType: MetaAdsMetadataEntityType;
+  entityId: string;
+  latestName: string | null;
+  lastSeenAt: Date;
+};
+
+type MetaAdsMetadataSyncFailure = {
+  entityType: MetaAdsMetadataEntityType;
+  stage: 'fetch' | 'upsert';
+  error: string;
+};
+
+type MetaAdsMetadataSyncResult = {
+  fetchedByEntityType: Partial<Record<MetaAdsMetadataEntityType, number>>;
+  processedRows: number;
+  insertedRows: number;
+  updatedRows: number;
+  failedRows: number;
+  failures: MetaAdsMetadataSyncFailure[];
+};
+
 type MetaAdsCreativeMap = Record<string, { creativeId: string | null; creativeName: string | null }>;
 
 type MetaAdsNormalizedSpendRow = {
@@ -224,12 +254,19 @@ class MetaAdsHttpError extends Error {
 class MetaAdsApiError extends Error {
   statusCode: number;
   details: MetaAdsApiErrorBody | null;
+  retryAfterSeconds: number | null;
 
-  constructor(statusCode: number, message: string, details: MetaAdsApiErrorBody | null = null) {
+  constructor(
+    statusCode: number,
+    message: string,
+    details: MetaAdsApiErrorBody | null = null,
+    retryAfterSeconds: number | null = null
+  ) {
     super(message);
     this.name = 'MetaAdsApiError';
     this.statusCode = statusCode;
     this.details = details;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 
@@ -275,6 +312,72 @@ function normalizeRedirectPath(rawValue: string | undefined): string | null {
   }
 
   return trimmed;
+}
+
+function normalizeMetadataIdentifier(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function normalizeMetadataName(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const collapsed = value.trim().replace(/\s+/g, ' ');
+  return collapsed ? collapsed : null;
+}
+
+function getMetaApiErrorCode(error: MetaAdsApiError): number | null {
+  return typeof error.details?.error?.code === 'number' ? error.details.error.code : null;
+}
+
+function isRetryableMetaAdsApiError(error: unknown): error is MetaAdsApiError {
+  if (!(error instanceof MetaAdsApiError)) {
+    return false;
+  }
+
+  if ([429, 500, 502, 503, 504].includes(error.statusCode)) {
+    return true;
+  }
+
+  if (error.statusCode !== 400) {
+    return false;
+  }
+
+  return [4, 17, 32, 613, 80004, 80014, 130429, 131056].includes(getMetaApiErrorCode(error) ?? -1);
+}
+
+function formatMetaAdsError(error: unknown): string {
+  if (error instanceof MetaAdsApiError) {
+    const code = getMetaApiErrorCode(error);
+    const subcode = error.details?.error?.error_subcode;
+    const fragments = [`status=${error.statusCode}`];
+
+    if (typeof code === 'number') {
+      fragments.push(`code=${code}`);
+    }
+
+    if (typeof subcode === 'number') {
+      fragments.push(`subcode=${subcode}`);
+    }
+
+    return `${error.message} (${fragments.join(', ')})`;
+  }
+
+  if (error instanceof MetaAdsHttpError) {
+    return `${error.message} (status=${error.statusCode}, code=${error.code})`;
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
 }
 
 async function getStoredMetaAdsSettings(): Promise<MetaAdsSettingsRow | null> {
@@ -706,6 +809,27 @@ function buildMetaLog(event: string, payload: Record<string, unknown>): string {
   });
 }
 
+function parseRetryAfterSeconds(value: string | null): number | null {
+  if (!value) {
+    return null;
+  }
+
+  const seconds = Number.parseInt(value, 10);
+
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return seconds;
+  }
+
+  const retryAt = Date.parse(value);
+
+  if (Number.isNaN(retryAt)) {
+    return null;
+  }
+
+  const delaySeconds = Math.ceil((retryAt - Date.now()) / 1000);
+  return delaySeconds > 0 ? delaySeconds : 0;
+}
+
 async function metaFetchJson<T>(url: URL, retryCount = 2, audit?: MetaAdsSyncAuditContext): Promise<T> {
   let lastError: unknown;
   const requestUrl = `${url.origin}${url.pathname}`;
@@ -746,7 +870,12 @@ async function metaFetchJson<T>(url: URL, retryCount = 2, audit?: MetaAdsSyncAud
         const errorBody = (json as MetaAdsApiErrorBody) ?? null;
         const errorMessage =
           errorBody?.error?.message ?? `Meta Ads API request failed with status ${response.status}`;
-        throw new MetaAdsApiError(response.status, errorMessage, errorBody);
+        throw new MetaAdsApiError(
+          response.status,
+          errorMessage,
+          errorBody,
+          parseRetryAfterSeconds(response.headers.get('retry-after'))
+        );
       }
 
       return json as T;
@@ -774,15 +903,12 @@ async function metaFetchJson<T>(url: URL, retryCount = 2, audit?: MetaAdsSyncAud
         });
       }
 
-      if (
-        attempt > retryCount ||
-        !(error instanceof MetaAdsApiError) ||
-        ![429, 500, 502, 503, 504].includes(error.statusCode)
-      ) {
+      if (attempt > retryCount || !isRetryableMetaAdsApiError(error)) {
         break;
       }
 
-      await delay(attempt * 500);
+      const retryDelaySeconds = error.retryAfterSeconds ?? Math.min(computeRetryDelaySeconds(attempt), 30);
+      await delay(retryDelaySeconds * 1000);
     }
   }
 
@@ -1212,6 +1338,325 @@ async function fetchCreativeMap(
   return creativeMap;
 }
 
+function getMetaMetadataEdge(entityType: MetaAdsMetadataEntityType): string {
+  switch (entityType) {
+    case 'campaign':
+      return 'campaigns';
+    case 'adset':
+      return 'adsets';
+    case 'ad':
+      return 'ads';
+  }
+}
+
+async function fetchMetaAdsMetadataRows(
+  audit: {
+    connectionId: number;
+    syncJobId: number;
+  },
+  accessToken: string,
+  adAccountId: string,
+  entityType: MetaAdsMetadataEntityType
+): Promise<MetaAdsMetadataEntityRow[]> {
+  const rows: MetaAdsMetadataEntityRow[] = [];
+  let nextUrl: URL | null = new URL(
+    `${META_GRAPH_BASE_URL}/${env.META_ADS_API_VERSION}/act_${adAccountId}/${getMetaMetadataEdge(entityType)}`
+  );
+
+  nextUrl.searchParams.set('access_token', accessToken);
+  nextUrl.searchParams.set('fields', 'id,name');
+  nextUrl.searchParams.set('limit', '500');
+
+  while (nextUrl) {
+    const page: {
+      data?: MetaAdsMetadataEntityRow[];
+      paging?: { next?: string };
+    } = await metaFetchJson(nextUrl, 2, {
+      connectionId: audit.connectionId,
+      syncJobId: audit.syncJobId,
+      transactionSource: `meta_ads_${entityType}_metadata`,
+      sourceMetadata: {
+        adAccountId,
+        entityType
+      }
+    });
+
+    rows.push(...(page.data ?? []));
+    nextUrl = page.paging?.next ? new URL(page.paging.next) : null;
+  }
+
+  return rows;
+}
+
+function buildMetaAdsMetadataRecords(params: {
+  accountId: string;
+  observedAt: Date;
+  campaignRows: MetaAdsMetadataEntityRow[];
+  adsetRows: MetaAdsMetadataEntityRow[];
+  adRows: MetaAdsMetadataEntityRow[];
+}): MetaAdsMetadataRecord[] {
+  const normalizedAccountId = normalizeMetadataIdentifier(params.accountId);
+
+  if (!normalizedAccountId) {
+    return [];
+  }
+
+  const records = new Map<string, MetaAdsMetadataRecord>();
+
+  const upsertRecord = (
+    entityType: MetaAdsMetadataEntityType,
+    entityId: string | null | undefined,
+    latestName: string | null | undefined
+  ) => {
+    const normalizedEntityId = normalizeMetadataIdentifier(entityId);
+
+    if (!normalizedEntityId) {
+      return;
+    }
+
+    const normalizedName = normalizeMetadataName(latestName);
+    const mapKey = `${entityType}:${normalizedEntityId}`;
+    const existing = records.get(mapKey);
+
+    if (!existing) {
+      records.set(mapKey, {
+        platform: 'meta_ads',
+        accountId: normalizedAccountId,
+        entityType,
+        entityId: normalizedEntityId,
+        latestName: normalizedName,
+        lastSeenAt: params.observedAt
+      });
+      return;
+    }
+
+    existing.lastSeenAt = params.observedAt;
+
+    if (normalizedName) {
+      existing.latestName = normalizedName;
+    }
+  };
+
+  for (const row of params.campaignRows) {
+    upsertRecord('campaign', row.id, row.name);
+  }
+
+  for (const row of params.adsetRows) {
+    upsertRecord('adset', row.id, row.name);
+  }
+
+  for (const row of params.adRows) {
+    upsertRecord('ad', row.id, row.name);
+  }
+
+  return [...records.values()];
+}
+
+async function upsertMetaAdsMetadataRecord(
+  client: PoolClient,
+  record: MetaAdsMetadataRecord
+): Promise<'inserted' | 'updated' | 'skipped'> {
+  const updateResult = await client.query(
+    `
+      UPDATE ad_platform_entity_metadata
+      SET
+        latest_name = CASE
+          WHEN $7::text IS NOT NULL AND $7::text <> '' THEN $7
+          ELSE latest_name
+        END,
+        last_seen_at = GREATEST(last_seen_at, $8::timestamptz),
+        updated_at = now()
+      WHERE platform = $1
+        AND account_id = $2
+        AND entity_type = $3
+        AND entity_id = $4
+        AND COALESCE(tenant_id, '') = COALESCE($5, '')
+        AND COALESCE(workspace_id, '') = COALESCE($6, '')
+        AND (
+          (($7::text IS NOT NULL AND $7::text <> '') AND latest_name IS DISTINCT FROM $7)
+          OR last_seen_at < $8::timestamptz
+        )
+      RETURNING id
+    `,
+    [record.platform, record.accountId, record.entityType, record.entityId, null, null, record.latestName, record.lastSeenAt.toISOString()]
+  );
+
+  if ((updateResult.rowCount ?? 0) > 0) {
+    return 'updated';
+  }
+
+  if (!record.latestName) {
+    return 'skipped';
+  }
+
+  try {
+    await client.query(
+      `
+        INSERT INTO ad_platform_entity_metadata (
+          tenant_id,
+          workspace_id,
+          platform,
+          account_id,
+          entity_type,
+          entity_id,
+          latest_name,
+          last_seen_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz)
+      `,
+      [null, null, record.platform, record.accountId, record.entityType, record.entityId, record.latestName, record.lastSeenAt.toISOString()]
+    );
+
+    return 'inserted';
+  } catch (error) {
+    const code = (error as { code?: string } | null)?.code;
+
+    if (code !== '23505') {
+      throw error;
+    }
+  }
+
+  const retryResult = await client.query(
+    `
+      UPDATE ad_platform_entity_metadata
+      SET
+        latest_name = CASE
+          WHEN $7::text IS NOT NULL AND $7::text <> '' THEN $7
+          ELSE latest_name
+        END,
+        last_seen_at = GREATEST(last_seen_at, $8::timestamptz),
+        updated_at = now()
+      WHERE platform = $1
+        AND account_id = $2
+        AND entity_type = $3
+        AND entity_id = $4
+        AND COALESCE(tenant_id, '') = COALESCE($5, '')
+        AND COALESCE(workspace_id, '') = COALESCE($6, '')
+        AND (
+          (($7::text IS NOT NULL AND $7::text <> '') AND latest_name IS DISTINCT FROM $7)
+          OR last_seen_at < $8::timestamptz
+        )
+      RETURNING id
+    `,
+    [record.platform, record.accountId, record.entityType, record.entityId, null, null, record.latestName, record.lastSeenAt.toISOString()]
+  );
+
+  return (retryResult.rowCount ?? 0) > 0 ? 'updated' : 'skipped';
+}
+
+async function syncMetaAdsMetadata(params: {
+  client: PoolClient;
+  connection: MetaAdsConnectionRow;
+  accessToken: string;
+  syncJobId: number;
+  observedAt: Date;
+}): Promise<MetaAdsMetadataSyncResult> {
+  const failures: MetaAdsMetadataSyncFailure[] = [];
+  const fetchedByEntityType: Partial<Record<MetaAdsMetadataEntityType, number>> = {};
+  const metadataRowGroups = await Promise.all([
+    (async () => {
+      try {
+        const rows = await fetchMetaAdsMetadataRows(
+          { connectionId: params.connection.id, syncJobId: params.syncJobId },
+          params.accessToken,
+          params.connection.ad_account_id,
+          'campaign'
+        );
+        fetchedByEntityType.campaign = rows.length;
+        return rows;
+      } catch (error) {
+        failures.push({
+          entityType: 'campaign',
+          stage: 'fetch',
+          error: formatMetaAdsError(error)
+        });
+        return [];
+      }
+    })(),
+    (async () => {
+      try {
+        const rows = await fetchMetaAdsMetadataRows(
+          { connectionId: params.connection.id, syncJobId: params.syncJobId },
+          params.accessToken,
+          params.connection.ad_account_id,
+          'adset'
+        );
+        fetchedByEntityType.adset = rows.length;
+        return rows;
+      } catch (error) {
+        failures.push({
+          entityType: 'adset',
+          stage: 'fetch',
+          error: formatMetaAdsError(error)
+        });
+        return [];
+      }
+    })(),
+    (async () => {
+      try {
+        const rows = await fetchMetaAdsMetadataRows(
+          { connectionId: params.connection.id, syncJobId: params.syncJobId },
+          params.accessToken,
+          params.connection.ad_account_id,
+          'ad'
+        );
+        fetchedByEntityType.ad = rows.length;
+        return rows;
+      } catch (error) {
+        failures.push({
+          entityType: 'ad',
+          stage: 'fetch',
+          error: formatMetaAdsError(error)
+        });
+        return [];
+      }
+    })()
+  ]);
+
+  const [campaignRows, adsetRows, adRows] = metadataRowGroups;
+  const metadataRecords = buildMetaAdsMetadataRecords({
+    accountId: params.connection.ad_account_id,
+    observedAt: params.observedAt,
+    campaignRows,
+    adsetRows,
+    adRows
+  });
+
+  if (metadataRecords.length === 0 && failures.length > 0) {
+    throw new MetaAdsHttpError(502, 'meta_ads_metadata_sync_failed', 'Meta Ads metadata sync failed for all entity types');
+  }
+
+  let insertedRows = 0;
+  let updatedRows = 0;
+
+  for (const record of metadataRecords) {
+    try {
+      const outcome = await upsertMetaAdsMetadataRecord(params.client, record);
+
+      if (outcome === 'inserted') {
+        insertedRows += 1;
+      } else if (outcome === 'updated') {
+        updatedRows += 1;
+      }
+    } catch (error) {
+      failures.push({
+        entityType: record.entityType,
+        stage: 'upsert',
+        error: formatMetaAdsError(error)
+      });
+    }
+  }
+
+  return {
+    fetchedByEntityType,
+    processedRows: metadataRecords.length,
+    insertedRows,
+    updatedRows,
+    failedRows: failures.length,
+    failures
+  };
+}
+
 async function persistDailySpendSnapshot(
   client: PoolClient,
   params: {
@@ -1478,6 +1923,43 @@ async function markSyncJobFailed(job: MetaAdsSyncJobRow, error: unknown): Promis
   );
 }
 
+function logMetaAdsMetadataSync(job: MetaAdsSyncJobRow, metadataSyncResult: MetaAdsMetadataSyncResult): void {
+  process.stdout.write(
+    `${buildMetaLog('meta_ads_metadata_sync', {
+      severity: metadataSyncResult.failures.length > 0 ? 'WARNING' : 'INFO',
+      jobId: job.id,
+      connectionId: job.connection_id,
+      adAccountId: job.ad_account_id,
+      syncDate: job.sync_date,
+      fetchedByEntityType: metadataSyncResult.fetchedByEntityType,
+      processedRows: metadataSyncResult.processedRows,
+      insertedRows: metadataSyncResult.insertedRows,
+      updatedRows: metadataSyncResult.updatedRows,
+      failedRows: metadataSyncResult.failedRows
+    })}\n`
+  );
+
+  if (metadataSyncResult.failures.length === 0) {
+    return;
+  }
+
+  process.stderr.write(
+    `${buildMetaLog('meta_ads_metadata_sync_partial_failure', {
+      severity: 'WARNING',
+      jobId: job.id,
+      connectionId: job.connection_id,
+      adAccountId: job.ad_account_id,
+      syncDate: job.sync_date,
+      fetchedByEntityType: metadataSyncResult.fetchedByEntityType,
+      processedRows: metadataSyncResult.processedRows,
+      insertedRows: metadataSyncResult.insertedRows,
+      updatedRows: metadataSyncResult.updatedRows,
+      failedRows: metadataSyncResult.failedRows,
+      failures: metadataSyncResult.failures
+    })}\n`
+  );
+}
+
 async function processSyncJob(job: MetaAdsSyncJobRow): Promise<void> {
   await query(
     `
@@ -1495,6 +1977,7 @@ async function processSyncJob(job: MetaAdsSyncJobRow): Promise<void> {
   let connection = await getUsableMetaAdsConnection();
 
   try {
+    const metadataObservedAt = new Date();
     const rowsByLevel = {
       // Keep the decoded API responses in audit storage before row-level normalization.
       account: await fetchInsightsForLevel(
@@ -1538,7 +2021,7 @@ async function processSyncJob(job: MetaAdsSyncJobRow): Promise<void> {
       connection.access_token,
       adIds
     );
-    await withTransaction(async (client) => {
+    const metadataSyncResult = await withTransaction(async (client) => {
       await persistDailySpendSnapshot(client, {
         connectionId: job.connection_id,
         syncJobId: job.id,
@@ -1547,7 +2030,17 @@ async function processSyncJob(job: MetaAdsSyncJobRow): Promise<void> {
         rowsByLevel,
         creativeMap
       });
+
+      return syncMetaAdsMetadata({
+        client,
+        connection,
+        accessToken: connection.access_token,
+        syncJobId: job.id,
+        observedAt: metadataObservedAt
+      });
     });
+
+    logMetaAdsMetadataSync(job, metadataSyncResult);
 
     await markSyncJobSucceeded(job.id, job.connection_id);
   } catch (error) {
@@ -1600,7 +2093,7 @@ async function processSyncJob(job: MetaAdsSyncJobRow): Promise<void> {
           adIds
         );
 
-        await withTransaction(async (client) => {
+        const metadataSyncResult = await withTransaction(async (client) => {
           await persistDailySpendSnapshot(client, {
             connectionId: job.connection_id,
             syncJobId: job.id,
@@ -1609,8 +2102,17 @@ async function processSyncJob(job: MetaAdsSyncJobRow): Promise<void> {
             rowsByLevel,
             creativeMap
           });
+
+          return syncMetaAdsMetadata({
+            client,
+            connection,
+            accessToken: connection.access_token,
+            syncJobId: job.id,
+            observedAt: new Date()
+          });
         });
 
+        logMetaAdsMetadataSync(job, metadataSyncResult);
         await markSyncJobSucceeded(job.id, job.connection_id);
         return;
       } catch (retryError) {
@@ -1834,6 +2336,7 @@ export function createMetaAdsAdminRouter(): Router {
 
 export const __metaAdsTestUtils = {
   normalizeMetaAdAccountId,
+  normalizeMetadataName,
   buildMetaAdsAuthorizationUrl,
   buildMetaAdsRedirectUri,
   calculateTokenExpiresAt,
@@ -1844,5 +2347,14 @@ export const __metaAdsTestUtils = {
   listDateRangeInclusive,
   normalizeInsightRows,
   rollupNormalizedSpendRows,
-  rollupPersistableSpendRows
+  rollupPersistableSpendRows,
+  buildMetaAdsMetadataRecords,
+  formatMetaAdsError,
+  isRetryableMetaAdsApiError,
+  createMetaAdsApiErrorForTest: (
+    statusCode: number,
+    message: string,
+    details: MetaAdsApiErrorBody | null = null,
+    retryAfterSeconds: number | null = null
+  ) => new MetaAdsApiError(statusCode, message, details, retryAfterSeconds)
 };
