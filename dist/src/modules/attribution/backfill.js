@@ -6,7 +6,7 @@ import { applyShopifyOrderWriteback } from '../shopify/writeback.js';
 import { extractAttributionCandidatesForOrder } from './candidate-extraction.js';
 import { buildEmptyOrderAttributionBackfillProgress, parseOrderAttributionBackfillProgress } from './backfill-progress.js';
 import { ATTRIBUTION_MODELS, computeAttributionOutputs, computeSingleWinnerCredits } from './engine.js';
-import { buildOrderAttributionAuditRecord } from './order-attribution-audit.js';
+import { buildAttributionConfidenceLabel, buildAttributionMatchSource, buildOrderAttributionAuditRecord } from './order-attribution-audit.js';
 import { resolveAttributionTier } from './resolver.js';
 const ATTRIBUTION_MODEL_VERSION = 1;
 const MAX_PREVIEW_ORDERS = 25;
@@ -180,6 +180,8 @@ async function persistAttribution(client, order, journey) {
     }
     const matchedAt = new Date();
     const orderAttributionAudit = buildOrderAttributionAuditRecord(journey, matchedAt);
+    const matchSource = buildAttributionMatchSource(journey);
+    const confidenceLabel = buildAttributionConfidenceLabel(journey.confidenceScore);
     await client.query('DELETE FROM attribution_order_credits WHERE shopify_order_id = $1', [order.shopify_order_id]);
     for (const model of ATTRIBUTION_MODELS) {
         for (const credit of outputs[model]) {
@@ -201,7 +203,9 @@ async function persistAttribution(client, order, journey) {
             revenue_credit,
             is_primary,
             attribution_reason,
-            model_version
+            model_version,
+            match_source,
+            confidence_label
           )
           VALUES (
             $1,
@@ -220,7 +224,9 @@ async function persistAttribution(client, order, journey) {
             $14,
             $15,
             $16,
-            $17
+            $17,
+            $18,
+            $19
           )
         `, [
                 order.shopify_order_id,
@@ -239,7 +245,9 @@ async function persistAttribution(client, order, journey) {
                 credit.revenueCredit,
                 credit.isPrimary,
                 credit.attributionReason,
-                ATTRIBUTION_MODEL_VERSION
+                ATTRIBUTION_MODEL_VERSION,
+                matchSource,
+                confidenceLabel
             ]);
         }
     }
@@ -259,7 +267,9 @@ async function persistAttribution(client, order, journey) {
         attribution_reason,
         attributed_at,
         reprocess_version,
-        model_version
+        model_version,
+        match_source,
+        confidence_label
       )
       VALUES (
         $1,
@@ -276,7 +286,9 @@ async function persistAttribution(client, order, journey) {
         $11,
         $12,
         1,
-        $13
+        $13,
+        $14,
+        $15
       )
       ON CONFLICT (shopify_order_id)
       DO UPDATE SET
@@ -292,7 +304,9 @@ async function persistAttribution(client, order, journey) {
         confidence_score = EXCLUDED.confidence_score,
         attribution_reason = EXCLUDED.attribution_reason,
         attributed_at = EXCLUDED.attributed_at,
-        model_version = EXCLUDED.model_version
+        model_version = EXCLUDED.model_version,
+        match_source = EXCLUDED.match_source,
+        confidence_label = EXCLUDED.confidence_label
     `, [
         order.shopify_order_id,
         primaryCredit.sessionId,
@@ -306,7 +320,9 @@ async function persistAttribution(client, order, journey) {
         journey.confidenceScore,
         primaryCredit.attributionReason,
         matchedAt,
-        ATTRIBUTION_MODEL_VERSION
+        ATTRIBUTION_MODEL_VERSION,
+        matchSource,
+        confidenceLabel
     ]);
     await client.query(`
       UPDATE shopify_orders

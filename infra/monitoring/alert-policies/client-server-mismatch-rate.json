@@ -4,9 +4,21 @@
     "content": "Browser `/track` accepts are diverging from the server-side attribution mirror. Runbook: __RUNBOOK_URL_ATTRIBUTION_COMPLETENESS__",
     "mimeType": "text/markdown"
   },
+  "combiner": "OR",
+  "enabled": true,
+  "severity": "WARNING",
+  "notificationChannels": __ALERT_NOTIFICATION_CHANNELS__,
+  "alertStrategy": {
+    "notificationRateLimit": {
+      "period": "3600s"
+    }
+  },
   "conditions": [
     {
-      "displayName": "Dual-write mismatch rate exceeds 5% for 10 minutes"
+      "displayName": "Dual-write consistency mismatch is emitted",
+      "conditionMatchedLog": {
+        "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"tracking_dual_write_consistency\" AND jsonPayload.consistencyStatus=\"mismatched\""
+      }
     }
   ]
 }

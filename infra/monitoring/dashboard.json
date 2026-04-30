@@ -6,6 +6,169 @@
       {
         "xPos": 0,
         "yPos": 0,
+        "width": 12,
+        "height": 2,
+        "widget": {
+          "title": "ROAS Radar observability",
+          "text": {
+            "content": "# __DASHBOARD_DISPLAY_NAME__\nDeploy-time dashboard for ingestion, attribution, API latency, and background job health.",
+            "format": "MARKDOWN"
+          }
+        }
+      },
+      {
+        "xPos": 0,
+        "yPos": 2,
+        "width": 4,
+        "height": 4,
+        "widget": {
+          "title": "API latency p95 (10m)",
+          "scorecard": {
+            "timeSeriesQuery": {
+              "timeSeriesFilter": {
+                "filter": "metric.type=\"logging.googleapis.com/user/roas_api_latency_ms\" resource.type=\"cloud_run_revision\"",
+                "aggregation": {
+                  "alignmentPeriod": "600s",
+                  "perSeriesAligner": "ALIGN_PERCENTILE_95",
+                  "crossSeriesReducer": "REDUCE_MEAN"
+                }
+              },
+              "unitOverride": "ms"
+            },
+            "sparkChartView": {
+              "sparkChartType": "SPARK_LINE"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 4,
+        "yPos": 2,
+        "width": 4,
+        "height": 4,
+        "widget": {
+          "title": "Ingestion errors (10m)",
+          "scorecard": {
+            "timeSeriesQuery": {
+              "timeSeriesFilter": {
+                "filter": "metric.type=\"logging.googleapis.com/user/roas_ingestion_errors\" resource.type=\"cloud_run_revision\"",
+                "aggregation": {
+                  "alignmentPeriod": "600s",
+                  "perSeriesAligner": "ALIGN_SUM",
+                  "crossSeriesReducer": "REDUCE_SUM"
+                }
+              },
+              "unitOverride": "1"
+            },
+            "sparkChartView": {
+              "sparkChartType": "SPARK_BAR"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 8,
+        "yPos": 2,
+        "width": 4,
+        "height": 4,
+        "widget": {
+          "title": "Attribution failures (15m)",
+          "scorecard": {
+            "timeSeriesQuery": {
+              "timeSeriesFilter": {
+                "filter": "metric.type=\"logging.googleapis.com/user/roas_attribution_failures\" resource.type=\"cloud_run_revision\"",
+                "aggregation": {
+                  "alignmentPeriod": "900s",
+                  "perSeriesAligner": "ALIGN_SUM",
+                  "crossSeriesReducer": "REDUCE_SUM"
+                }
+              },
+              "unitOverride": "1"
+            },
+            "sparkChartView": {
+              "sparkChartType": "SPARK_BAR"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 0,
+        "yPos": 6,
+        "width": 4,
+        "height": 4,
+        "widget": {
+          "title": "Data quality alerts (10m)",
+          "scorecard": {
+            "timeSeriesQuery": {
+              "timeSeriesFilter": {
+                "filter": "metric.type=\"logging.googleapis.com/user/roas_data_quality_alerts\" resource.type=\"cloud_run_revision\"",
+                "aggregation": {
+                  "alignmentPeriod": "600s",
+                  "perSeriesAligner": "ALIGN_SUM",
+                  "crossSeriesReducer": "REDUCE_SUM"
+                }
+              },
+              "unitOverride": "1"
+            },
+            "sparkChartView": {
+              "sparkChartType": "SPARK_BAR"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 4,
+        "yPos": 6,
+        "width": 4,
+        "height": 4,
+        "widget": {
+          "title": "Order backfill failures (15m)",
+          "scorecard": {
+            "timeSeriesQuery": {
+              "timeSeriesFilter": {
+                "filter": "metric.type=\"logging.googleapis.com/user/roas_order_attribution_backfill_jobs\" resource.type=\"cloud_run_revision\" metric.labels.stage=\"failed\"",
+                "aggregation": {
+                  "alignmentPeriod": "900s",
+                  "perSeriesAligner": "ALIGN_SUM",
+                  "crossSeriesReducer": "REDUCE_SUM"
+                }
+              },
+              "unitOverride": "1"
+            },
+            "sparkChartView": {
+              "sparkChartType": "SPARK_BAR"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 8,
+        "yPos": 6,
+        "width": 4,
+        "height": 4,
+        "widget": {
+          "title": "Capture completeness",
+          "scorecard": {
+            "timeSeriesQuery": {
+              "timeSeriesFilter": {
+                "filter": "metric.type=\"logging.googleapis.com/user/roas_attribution_capture_completeness\" resource.type=\"cloud_run_revision\"",
+                "aggregation": {
+                  "alignmentPeriod": "600s",
+                  "perSeriesAligner": "ALIGN_SUM",
+                  "crossSeriesReducer": "REDUCE_SUM"
+                }
+              },
+              "unitOverride": "1"
+            },
+            "sparkChartView": {
+              "sparkChartType": "SPARK_BAR"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 0,
+        "yPos": 10,
         "width": 6,
         "height": 4,
         "widget": {
@@ -21,7 +184,7 @@
                       "perSeriesAligner": "ALIGN_SUM",
                       "crossSeriesReducer": "REDUCE_SUM",
                       "groupByFields": [
-                        "metric.label.attribution_tier"
+                        "metric.labels.attribution_tier"
                       ]
                     }
                   }
@@ -39,7 +202,7 @@
       },
       {
         "xPos": 6,
-        "yPos": 0,
+        "yPos": 10,
         "width": 6,
         "height": 4,
         "widget": {
@@ -55,7 +218,7 @@
                       "perSeriesAligner": "ALIGN_SUM",
                       "crossSeriesReducer": "REDUCE_SUM",
                       "groupByFields": [
-                        "metric.label.fallthrough_stage"
+                        "metric.labels.fallthrough_stage"
                       ]
                     }
                   }
@@ -73,7 +236,7 @@
       },
       {
         "xPos": 0,
-        "yPos": 4,
+        "yPos": 14,
         "width": 6,
         "height": 4,
         "widget": {
@@ -104,7 +267,7 @@
       },
       {
         "xPos": 6,
-        "yPos": 4,
+        "yPos": 14,
         "width": 6,
         "height": 4,
         "widget": {
@@ -120,7 +283,7 @@
                       "perSeriesAligner": "ALIGN_SUM",
                       "crossSeriesReducer": "REDUCE_SUM",
                       "groupByFields": [
-                        "metric.label.first_normalization_failure_reason"
+                        "metric.labels.first_normalization_failure_reason"
                       ]
                     }
                   }
@@ -138,7 +301,7 @@
       },
       {
         "xPos": 0,
-        "yPos": 8,
+        "yPos": 18,
         "width": 6,
         "height": 4,
         "widget": {
@@ -154,7 +317,7 @@
                       "perSeriesAligner": "ALIGN_SUM",
                       "crossSeriesReducer": "REDUCE_SUM",
                       "groupByFields": [
-                        "metric.label.pipeline"
+                        "metric.labels.pipeline"
                       ]
                     }
                   }
@@ -172,7 +335,7 @@
       },
       {
         "xPos": 6,
-        "yPos": 8,
+        "yPos": 18,
         "width": 6,
         "height": 4,
         "widget": {
@@ -188,8 +351,8 @@
                       "perSeriesAligner": "ALIGN_SUM",
                       "crossSeriesReducer": "REDUCE_SUM",
                       "groupByFields": [
-                        "metric.label.source",
-                        "metric.label.capture_status"
+                        "metric.labels.source",
+                        "metric.labels.capture_status"
                       ]
                     }
                   }

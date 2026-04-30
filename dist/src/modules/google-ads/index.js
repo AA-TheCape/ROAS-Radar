@@ -16,6 +16,7 @@ const GOOGLE_ADS_OAUTH_STATE_TTL_MINUTES = 10;
 const GOOGLE_ADS_SYNC_JOB_STATUSES = ['pending', 'processing', 'retry', 'completed', 'failed'];
 const GOOGLE_ADS_SPEND_GRANULARITIES = ['account', 'campaign', 'adset', 'ad', 'creative'];
 const GOOGLE_ADS_SYNC_TIME_ZONE = 'America/Los_Angeles';
+const GOOGLE_ADS_STALE_PROCESSING_TIMEOUT_MINUTES = 90;
 const oauthStartQuerySchema = z.object({
     customerId: z.string().min(1),
     loginCustomerId: z.string().optional(),
@@ -356,16 +357,9 @@ function listDateRangeInclusive(startDate, endDate) {
     }
     return dates;
 }
-function buildPlanningDates(now = new Date(), lastSyncCompletedAt = null) {
+function buildPlanningDates(now = new Date(), _lastSyncCompletedAt = null) {
     const currentBusinessDate = parseDateOnly(formatDateInTimeZone(now, GOOGLE_ADS_SYNC_TIME_ZONE));
-    const lookbackDays = lastSyncCompletedAt
-        ? env.GOOGLE_ADS_SYNC_LOOKBACK_DAYS
-        : env.GOOGLE_ADS_SYNC_INITIAL_LOOKBACK_DAYS;
-    const firstDate = new Date(currentBusinessDate.getTime() - (lookbackDays - 1) * 24 * 60 * 60 * 1000);
-    if (currentBusinessDate.getTime() < firstDate.getTime()) {
-        return [];
-    }
-    return listDateRangeInclusive(formatDateOnly(firstDate), formatDateOnly(currentBusinessDate));
+    return [formatDateOnly(currentBusinessDate)];
 }
 function buildReconciliationWindow(now = new Date(), lastSyncCompletedAt = null) {
     const dates = buildPlanningDates(now, lastSyncCompletedAt);
@@ -977,6 +971,42 @@ async function runReconciliation(params) {
     ]);
     return enqueuedJobs;
 }
+async function suppressHistoricalSyncJobs(connectionId, currentBusinessDate) {
+    const result = await query(`
+      UPDATE google_ads_sync_jobs
+      SET
+        status = 'completed',
+        completed_at = now(),
+        locked_at = NULL,
+        locked_by = NULL,
+        updated_at = now(),
+        last_error = 'automatically suppressed historical sync job'
+      WHERE connection_id = $1
+        AND sync_date < $2::date
+        AND status IN ('pending', 'retry', 'failed', 'processing')
+    `, [connectionId, currentBusinessDate]);
+    return result.rowCount ?? 0;
+}
+async function recoverStaleCurrentDaySyncJobs(connectionId, currentBusinessDate) {
+    const result = await query(`
+      UPDATE google_ads_sync_jobs
+      SET
+        status = 'retry',
+        available_at = now(),
+        locked_at = NULL,
+        locked_by = NULL,
+        updated_at = now(),
+        last_error = CASE
+          WHEN last_error IS NULL OR last_error = '' THEN 'automatically recovered stale current-day sync job'
+          ELSE last_error
+        END
+      WHERE connection_id = $1
+        AND sync_date = $2::date
+        AND status = 'processing'
+        AND locked_at <= now() - ($3::int * interval '1 minute')
+    `, [connectionId, currentBusinessDate, GOOGLE_ADS_STALE_PROCESSING_TIMEOUT_MINUTES]);
+    return result.rowCount ?? 0;
+}
 async function planIncrementalSyncs(now = new Date()) {
     const result = await query(`
       SELECT
@@ -989,6 +1019,8 @@ async function planIncrementalSyncs(now = new Date()) {
     let plannedJobs = 0;
     const today = formatDateInTimeZone(now, GOOGLE_ADS_SYNC_TIME_ZONE);
     for (const row of result.rows) {
+        await suppressHistoricalSyncJobs(row.id, today);
+        await recoverStaleCurrentDaySyncJobs(row.id, today);
         if (row.last_sync_planned_for !== today) {
             const dates = buildPlanningDates(now, row.last_sync_completed_at);
             if (dates.length > 0) {

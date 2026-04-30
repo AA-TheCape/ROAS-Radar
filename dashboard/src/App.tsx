@@ -1646,58 +1646,6 @@ function App() {
     }
   }
 
-  const currentUser = authState.user;
-  const isAdmin = currentUser?.isAdmin ?? false;
-  const activeNavKey = currentPage;
-  const shellNavItems: AppShellNavItem[] =
-    currentPage === 'order-details'
-      ? [
-          ...(isAdmin
-            ? AUTHENTICATED_NAV_ITEMS
-            : AUTHENTICATED_NAV_ITEMS.filter((item) => item.key !== 'identity-health')),
-          {
-            key: 'order-details',
-            label: 'Order details',
-            shortLabel: 'Order',
-            description: 'Contextual drill-in for a selected attributed Shopify order.'
-          }
-        ]
-      : isAdmin
-        ? AUTHENTICATED_NAV_ITEMS
-        : AUTHENTICATED_NAV_ITEMS.filter((item) => item.key !== 'identity-health');
-  const breadcrumbs: AppShellBreadcrumb[] =
-    currentPage === 'dashboard'
-      ? [
-          { label: 'Authenticated app' },
-          { label: 'Dashboard', current: true }
-        ]
-      : currentPage === 'identity-health'
-        ? [
-            { label: 'Authenticated app' },
-            { label: 'Identity health', current: true }
-          ]
-      : currentPage === 'settings'
-        ? [
-            { label: 'Authenticated app' },
-            { label: 'Settings', current: true }
-          ]
-        : [
-            { label: 'Authenticated app' },
-            { label: 'Dashboard', onClick: closeOrderDetails },
-            { label: selectedOrderId ? `Order ${selectedOrderId}` : 'Order details', current: true }
-          ];
-  const shellHeaderActions = (
-    <>
-      {currentPage === 'order-details' ? (
-        <Button type="button" tone="ghost" onClick={closeOrderDetails}>
-          Back to dashboard
-        </Button>
-      ) : null}
-      <Button type="button" onClick={() => void handleLogout()}>
-        Logout
-      </Button>
-    </>
-  );
   const handleAppNavigation = useCallback(
     (key: string) => {
       if (key === 'order-details') {
@@ -1792,6 +1740,57 @@ function App() {
   }
 
   const authenticatedUser = authState.user;
+  const isAdmin = authenticatedUser.isAdmin;
+  const activeNavKey = currentPage;
+  const shellNavItems: AppShellNavItem[] =
+    currentPage === 'order-details'
+      ? [
+          ...(isAdmin
+            ? AUTHENTICATED_NAV_ITEMS
+            : AUTHENTICATED_NAV_ITEMS.filter((item) => item.key !== 'identity-health')),
+          {
+            key: 'order-details',
+            label: 'Order details',
+            shortLabel: 'Order',
+            description: 'Contextual drill-in for a selected attributed Shopify order.'
+          }
+        ]
+      : isAdmin
+        ? AUTHENTICATED_NAV_ITEMS
+        : AUTHENTICATED_NAV_ITEMS.filter((item) => item.key !== 'identity-health');
+  const breadcrumbs: AppShellBreadcrumb[] =
+    currentPage === 'dashboard'
+      ? [
+          { label: 'Authenticated app' },
+          { label: 'Dashboard', current: true }
+        ]
+      : currentPage === 'identity-health'
+        ? [
+            { label: 'Authenticated app' },
+            { label: 'Identity health', current: true }
+          ]
+      : currentPage === 'settings'
+        ? [
+            { label: 'Authenticated app' },
+            { label: 'Settings', current: true }
+          ]
+        : [
+            { label: 'Authenticated app' },
+            { label: 'Dashboard', onClick: closeOrderDetails },
+            { label: selectedOrderId ? `Order ${selectedOrderId}` : 'Order details', current: true }
+          ];
+  const shellHeaderActions = (
+    <>
+      {currentPage === 'order-details' ? (
+        <Button type="button" tone="ghost" onClick={closeOrderDetails}>
+          Back to dashboard
+        </Button>
+      ) : null}
+      <Button type="button" onClick={() => void handleLogout()}>
+        Logout
+      </Button>
+    </>
+  );
 
   return (
     <AuthenticatedAppShell

@@ -635,7 +635,8 @@ export function createReportingRouter(): Router {
             LIMIT 1
           ) c
             ON TRUE
-          WHERE timezone($${filters.params.length + 3}::text, COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at)) >= $1::date
+          WHERE COALESCE(o.source_name, '') = 'web'
+            AND timezone($${filters.params.length + 3}::text, COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at)) >= $1::date
             AND timezone($${filters.params.length + 3}::text, COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at)) < ($2::date + interval '1 day')
             ${filters.sql}
           ORDER BY COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) DESC, o.shopify_order_id DESC

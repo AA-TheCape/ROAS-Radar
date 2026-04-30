@@ -61,3 +61,15 @@ export function buildOrderAttributionAuditRecord(journey, matchedAt) {
         reason: journey.attributionReason
     };
 }
+export function buildAttributionMatchSource(journey) {
+    return journey.attributionReason;
+}
+export function buildAttributionConfidenceLabel(confidenceScore) {
+    if (confidenceScore >= 0.9) {
+        return 'high';
+    }
+    if (confidenceScore >= 0.5) {
+        return 'medium';
+    }
+    return 'low';
+}
