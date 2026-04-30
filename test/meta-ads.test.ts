@@ -56,6 +56,63 @@ test('buildPlanningDates only keeps the current business date in window after an
   assert.deepEqual(dates, ['2026-04-11']);
 });
 
+test('buildOrderValueWindow limits hourly revenue sync to the active operational window with no historical backfill', () => {
+  const window = __metaAdsTestUtils.buildOrderValueWindow(new Date('2026-04-30T15:10:00.000Z'));
+
+  assert.deepEqual(window, {
+    startDate: '2026-04-29',
+    endDate: '2026-04-30',
+    dates: ['2026-04-29', '2026-04-30']
+  });
+});
+
+test('startMetaAdsOrderValueScheduler schedules hourly ticks and avoids overlapping runs', async () => {
+  const triggerSources: string[] = [];
+  const intervalCalls: number[] = [];
+  const pendingResolvers: Array<() => void> = [];
+  let intervalHandler: (() => void) | undefined;
+  let clearedTimer: unknown = null;
+
+  const stop = __metaAdsTestUtils.startMetaAdsOrderValueScheduler({
+    intervalMs: 3_600_000,
+    triggerImmediately: false,
+    setIntervalFn: ((handler: () => void, intervalMs: number) => {
+      intervalHandler = handler;
+      intervalCalls.push(intervalMs);
+      return 77 as ReturnType<typeof setInterval>;
+    }) as typeof setInterval,
+    clearIntervalFn: ((timer: ReturnType<typeof setInterval>) => {
+      clearedTimer = timer;
+    }) as typeof clearInterval,
+    runner: ({ triggerSource } = {}) =>
+      new Promise((resolve) => {
+        triggerSources.push(triggerSource ?? 'missing');
+        pendingResolvers.push(resolve);
+      })
+  });
+
+  assert.deepEqual(intervalCalls, [3_600_000]);
+
+  intervalHandler?.();
+  intervalHandler?.();
+
+  assert.deepEqual(triggerSources, ['application_scheduler']);
+
+  pendingResolvers.shift()?.();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  intervalHandler?.();
+
+  assert.deepEqual(triggerSources, ['application_scheduler', 'application_scheduler']);
+
+  pendingResolvers.shift()?.();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  stop();
+
+  assert.equal(clearedTimer, 77);
+});
+
 test('rollupPersistableSpendRows collapses duplicate campaign-level entities before persistence', () => {
   const rolled = __metaAdsTestUtils.rollupPersistableSpendRows([
     {

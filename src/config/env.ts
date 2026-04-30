@@ -108,6 +108,10 @@ const envSchema = z.object({
   META_ADS_TOKEN_REFRESH_LEEWAY_HOURS: integerString.default(24),
   META_ADS_WORKER_LOOP: booleanString.default(true),
   META_ADS_WORKER_POLL_INTERVAL_MS: integerString.default(60_000),
+  META_ADS_ORDER_VALUE_SYNC_ENABLED: booleanString.default(true),
+  META_ADS_ORDER_VALUE_SYNC_INTERVAL_MS: integerString.default(60 * 60 * 1000),
+  META_ADS_ORDER_VALUE_WINDOW_DAYS: integerString.default(2),
+  DEFAULT_ORGANIZATION_ID: integerString.default(1),
 
   GOOGLE_ADS_APP_BASE_URL: z.string().optional().default('http://localhost:8080'),
   GOOGLE_ADS_CLIENT_ID: z.string().optional().default(''),

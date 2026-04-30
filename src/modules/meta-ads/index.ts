@@ -12,6 +12,7 @@ import {
   logRawPayloadIntegrityMismatch,
   type RawPayloadIntegrityRow
 } from '../../shared/raw-payload-storage.js';
+import { logError, logInfo } from '../../observability/index.js';
 import { attachAuthContext, requireAdmin } from '../auth/index.js';
 import {
   buildSearchParamsAuditPayload,
@@ -236,6 +237,44 @@ export type MetaAdsQueueProcessOptions = {
   workerId?: string;
   emitMetrics?: boolean;
   now?: Date;
+};
+
+export type MetaAdsOrderValueSyncResult = {
+  runId: number | null;
+  triggerSource: string;
+  windowStartDate: string;
+  windowEndDate: string;
+  attemptedConnections: number;
+  succeededConnections: number;
+  failedConnections: number;
+  recordsReceived: number;
+  rawRowsPersisted: number;
+  aggregateRowsUpserted: number;
+};
+
+type MetaAdsOrderValueSyncRunRow = {
+  id: number;
+  connection_id: number;
+};
+
+type MetaAdsOrderValueSyncAccumulator = {
+  recordsReceived: number;
+  rawRowsPersisted: number;
+  aggregateRowsUpserted: number;
+  errors: Array<{
+    code: string;
+    message: string;
+    adAccountId: string;
+  }>;
+};
+
+type MetaAdsOrderValueSchedulerOptions = {
+  intervalMs?: number;
+  triggerImmediately?: boolean;
+  now?: () => Date;
+  setIntervalFn?: typeof setInterval;
+  clearIntervalFn?: typeof clearInterval;
+  runner?: (options?: { now?: Date; triggerSource?: string }) => Promise<MetaAdsOrderValueSyncResult>;
 };
 
 export type MetaAdsQueueProcessResult = {
@@ -591,6 +630,48 @@ function buildIncrementalPlanningDates(
   }
 
   return buildPlanningDates(now, lastSyncCompletedAt);
+}
+
+function buildOrderValueWindow(now = new Date()): {
+  startDate: string;
+  endDate: string;
+  dates: string[];
+} {
+  const endDate = formatDateInTimeZone(now, META_ADS_SYNC_TIME_ZONE);
+  const windowDays = Math.max(1, env.META_ADS_ORDER_VALUE_WINDOW_DAYS);
+  const start = parseDateOnly(endDate);
+  start.setUTCDate(start.getUTCDate() - (windowDays - 1));
+  const startDate = formatDateOnly(start);
+
+  return {
+    startDate,
+    endDate,
+    dates: listDateRangeInclusive(startDate, endDate)
+  };
+}
+
+function normalizeSyncErrorCode(error: unknown): string {
+  if (typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string' && error.code.trim()) {
+    return error.code.trim();
+  }
+
+  if (error instanceof Error && error.name.trim()) {
+    return error.name.trim();
+  }
+
+  return 'meta_ads_order_value_sync_failed';
+}
+
+function normalizeSyncErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message.trim();
+  }
+
+  if (typeof error === 'string' && error.trim()) {
+    return error.trim();
+  }
+
+  return 'Meta Ads order value sync failed';
 }
 
 function buildInsightsEntityId(level: MetaSpendLevel, row: MetaAdsInsightRow): string {
@@ -1386,6 +1467,32 @@ async function enqueueSyncDates(connectionId: number, dates: string[]): Promise<
   return enqueuedJobs;
 }
 
+async function ensureSyncJobsByDate(connectionId: number, dates: string[]): Promise<Map<string, number>> {
+  const syncJobsByDate = new Map<string, number>();
+
+  for (const date of dates) {
+    const result = await query<{ id: number; sync_date: string }>(
+      `
+        INSERT INTO meta_ads_sync_jobs (connection_id, sync_date, status, available_at, completed_at, updated_at)
+        VALUES ($1, $2::date, 'completed', now(), now(), now())
+        ON CONFLICT (connection_id, sync_date)
+        DO UPDATE SET
+          updated_at = now()
+        RETURNING id, sync_date::text
+      `,
+      [connectionId, date]
+    );
+
+    const row = result.rows[0];
+
+    if (row) {
+      syncJobsByDate.set(row.sync_date, row.id);
+    }
+  }
+
+  return syncJobsByDate;
+}
+
 async function planIncrementalSyncs(now = new Date()): Promise<number> {
   const result = await query<{
     id: number;
@@ -1546,6 +1653,460 @@ export async function fetchCampaignDailyRevenueInsights(
     useAccountAttributionSetting: params.useAccountAttributionSetting ?? true,
     allowedPurchaseActionTypes: params.allowedPurchaseActionTypes
   });
+}
+
+async function createMetaAdsOrderValueSyncRun(params: {
+  connectionId: number;
+  triggerSource: string;
+  windowStartDate: string;
+  windowEndDate: string;
+}): Promise<number> {
+  const result = await query<MetaAdsOrderValueSyncRunRow>(
+    `
+      INSERT INTO meta_ads_order_value_sync_runs (
+        connection_id,
+        trigger_source,
+        status,
+        window_start_date,
+        window_end_date,
+        started_at,
+        updated_at
+      )
+      VALUES ($1, $2, 'running', $3::date, $4::date, now(), now())
+      RETURNING id, connection_id
+    `,
+    [params.connectionId, params.triggerSource, params.windowStartDate, params.windowEndDate]
+  );
+
+  return result.rows[0].id;
+}
+
+async function completeMetaAdsOrderValueSyncRun(
+  runId: number,
+  accumulator: MetaAdsOrderValueSyncAccumulator,
+  failedConnections: number
+): Promise<void> {
+  const status =
+    accumulator.errors.length === 0 ? 'completed' : failedConnections > 0 && accumulator.recordsReceived > 0 ? 'partial_failure' : 'failed';
+
+  await query(
+    `
+      UPDATE meta_ads_order_value_sync_runs
+      SET
+        status = $2,
+        completed_at = now(),
+        records_received = $3,
+        raw_rows_persisted = $4,
+        aggregate_rows_upserted = $5,
+        error_count = $6,
+        error_details = $7::jsonb,
+        updated_at = now()
+      WHERE id = $1
+    `,
+    [
+      runId,
+      status,
+      accumulator.recordsReceived,
+      accumulator.rawRowsPersisted,
+      accumulator.aggregateRowsUpserted,
+      accumulator.errors.length,
+      JSON.stringify(accumulator.errors)
+    ]
+  );
+}
+
+async function persistOrderValueRawRows(
+  client: PoolClient,
+  params: {
+    connectionId: number;
+    syncRunId: number;
+    syncJobsByDate: Map<string, number>;
+    rows: MetaAdsRevenueInsightRow[];
+  }
+): Promise<Map<string, number[]>> {
+  const rawRecordIdsByAggregateKey = new Map<string, number[]>();
+
+  for (const row of params.rows) {
+    const reportDate = row.date_start?.trim();
+    const campaignId = row.campaign_id?.trim();
+
+    if (!reportDate || !campaignId) {
+      continue;
+    }
+
+    const actionType = row.action_type?.trim() || null;
+    const syncJobId = params.syncJobsByDate.get(reportDate) ?? null;
+    const insert = await client.query<{ id: number }>(
+      `
+        INSERT INTO meta_ads_order_value_raw_records (
+          connection_id,
+          sync_run_id,
+          sync_job_id,
+          report_date,
+          campaign_id,
+          campaign_name,
+          action_type,
+          raw_payload
+        )
+        VALUES ($1, $2, $3, $4::date, $5, $6, $7, $8::jsonb)
+        RETURNING id
+      `,
+      [
+        params.connectionId,
+        params.syncRunId,
+        syncJobId,
+        reportDate,
+        campaignId,
+        row.campaign_name?.trim() || null,
+        actionType,
+        JSON.stringify(row)
+      ]
+    );
+
+    const key = `${reportDate}:${campaignId}`;
+    const ids = rawRecordIdsByAggregateKey.get(key) ?? [];
+    ids.push(insert.rows[0].id);
+    rawRecordIdsByAggregateKey.set(key, ids);
+  }
+
+  return rawRecordIdsByAggregateKey;
+}
+
+async function upsertOrderValueAggregates(
+  client: PoolClient,
+  params: {
+    connectionId: number;
+    syncJobsByDate: Map<string, number>;
+    records: MetaAdsCampaignDailyRevenueRecord[];
+    rawRecordIdsByAggregateKey: Map<string, number[]>;
+    organizationId: number;
+  }
+): Promise<number> {
+  let upsertedRows = 0;
+
+  for (const record of params.records) {
+    const syncJobId = params.syncJobsByDate.get(record.reportDate);
+
+    if (!syncJobId) {
+      continue;
+    }
+
+    const key = `${record.reportDate}:${record.campaignId}`;
+    const rawRevenueRecordIds = params.rawRecordIdsByAggregateKey.get(key) ?? [];
+    const rawRecordLookup = await client.query<{ id: number }>(
+      `
+        SELECT id
+        FROM meta_ads_raw_spend_records
+        WHERE connection_id = $1
+          AND report_date = $2::date
+          AND level = 'campaign'
+          AND entity_id = $3
+        LIMIT 1
+      `,
+      [params.connectionId, record.reportDate, record.campaignId]
+    );
+
+    await client.query(
+      `
+        INSERT INTO meta_ads_order_value_aggregates (
+          organization_id,
+          meta_connection_id,
+          sync_job_id,
+          raw_record_id,
+          ad_account_id,
+          report_date,
+          raw_date_start,
+          raw_date_stop,
+          campaign_id,
+          campaign_name,
+          attributed_revenue,
+          purchase_count,
+          spend,
+          purchase_roas,
+          currency,
+          canonical_action_type,
+          canonical_selection_mode,
+          raw_action_values,
+          raw_actions,
+          raw_revenue_record_ids,
+          source_synced_at,
+          action_report_time,
+          use_account_attribution_setting,
+          updated_at
+        )
+        VALUES (
+          $1, $2, $3, $4, $5, $6::date, $7::date, $8::date, $9, $10, $11::numeric, $12, $13::numeric,
+          $14::numeric, $15, $16, $17, $18::jsonb, $19::jsonb, $20::jsonb, now(), $21, $22, now()
+        )
+        ON CONFLICT (
+          organization_id,
+          ad_account_id,
+          report_date,
+          campaign_id,
+          action_report_time,
+          use_account_attribution_setting
+        )
+        DO UPDATE SET
+          meta_connection_id = EXCLUDED.meta_connection_id,
+          sync_job_id = EXCLUDED.sync_job_id,
+          raw_record_id = EXCLUDED.raw_record_id,
+          raw_date_start = EXCLUDED.raw_date_start,
+          raw_date_stop = EXCLUDED.raw_date_stop,
+          campaign_name = EXCLUDED.campaign_name,
+          attributed_revenue = EXCLUDED.attributed_revenue,
+          purchase_count = EXCLUDED.purchase_count,
+          spend = EXCLUDED.spend,
+          purchase_roas = EXCLUDED.purchase_roas,
+          currency = EXCLUDED.currency,
+          canonical_action_type = EXCLUDED.canonical_action_type,
+          canonical_selection_mode = EXCLUDED.canonical_selection_mode,
+          raw_action_values = EXCLUDED.raw_action_values,
+          raw_actions = EXCLUDED.raw_actions,
+          raw_revenue_record_ids = EXCLUDED.raw_revenue_record_ids,
+          source_synced_at = EXCLUDED.source_synced_at,
+          updated_at = now()
+      `,
+      [
+        params.organizationId,
+        params.connectionId,
+        syncJobId,
+        rawRecordLookup.rows[0]?.id ?? null,
+        record.adAccountId,
+        record.reportDate,
+        record.rawDateStart,
+        record.rawDateStop,
+        record.campaignId,
+        record.campaignName,
+        record.attributedRevenue,
+        record.purchaseCount,
+        record.spend,
+        record.purchaseRoas,
+        record.currency,
+        record.actionTypeUsed,
+        record.canonicalSelectionMode,
+        JSON.stringify(record.rawActionValues),
+        JSON.stringify(record.rawActions),
+        JSON.stringify(rawRevenueRecordIds),
+        record.actionReportTime,
+        record.useAccountAttributionSetting
+      ]
+    );
+
+    upsertedRows += 1;
+  }
+
+  return upsertedRows;
+}
+
+export async function runMetaAdsOrderValueSync(options: {
+  now?: Date;
+  triggerSource?: string;
+} = {}): Promise<MetaAdsOrderValueSyncResult> {
+  const now = options.now ?? new Date();
+  const triggerSource = options.triggerSource ?? 'application_scheduler';
+  const window = buildOrderValueWindow(now);
+  const organizationId = env.DEFAULT_ORGANIZATION_ID;
+  const result = await query<MetaAdsConnectionRow>(
+    `
+      SELECT
+        id,
+        ad_account_id,
+        pgp_sym_decrypt(access_token_encrypted, $1) AS access_token,
+        token_type,
+        granted_scopes,
+        token_expires_at,
+        last_refreshed_at,
+        last_sync_planned_for::text,
+        status,
+        account_name,
+        account_currency
+      FROM meta_ads_connections
+      WHERE status = 'active'
+      ORDER BY updated_at DESC
+    `,
+    [(await getResolvedMetaAdsConfig()).encryptionKey]
+  );
+  let attemptedConnections = 0;
+  let succeededConnections = 0;
+  let failedConnections = 0;
+  let aggregateRowsUpserted = 0;
+  let rawRowsPersisted = 0;
+  let recordsReceived = 0;
+  let lastRunId: number | null = null;
+
+  for (const baseConnection of result.rows) {
+    attemptedConnections += 1;
+    const accumulator: MetaAdsOrderValueSyncAccumulator = {
+      recordsReceived: 0,
+      rawRowsPersisted: 0,
+      aggregateRowsUpserted: 0,
+      errors: []
+    };
+    const runId = await createMetaAdsOrderValueSyncRun({
+      connectionId: baseConnection.id,
+      triggerSource,
+      windowStartDate: window.startDate,
+      windowEndDate: window.endDate
+    });
+
+    lastRunId = runId;
+
+    try {
+      const connection = shouldRefreshToken(baseConnection.token_expires_at)
+        ? await refreshMetaAdsConnectionToken(baseConnection)
+        : baseConnection;
+      const syncJobsByDate = await ensureSyncJobsByDate(connection.id, window.dates);
+
+      const rawRows: MetaAdsRevenueInsightRow[] = [];
+      let nextUrl: URL | null = new URL(`${META_GRAPH_BASE_URL}/${env.META_ADS_API_VERSION}/act_${connection.ad_account_id}/insights`);
+      nextUrl.searchParams.set(
+        'fields',
+        'campaign_id,campaign_name,date_start,date_stop,spend,actions,action_values,purchase_roas'
+      );
+      nextUrl.searchParams.set('access_token', connection.access_token);
+      nextUrl.searchParams.set('level', 'campaign');
+      nextUrl.searchParams.set('time_increment', '1');
+      nextUrl.searchParams.set('action_breakdowns', 'action_type');
+      nextUrl.searchParams.set('use_account_attribution_setting', 'true');
+      nextUrl.searchParams.set('action_report_time', 'conversion');
+      nextUrl.searchParams.set('limit', '500');
+      nextUrl.searchParams.set('time_range', JSON.stringify({ since: window.startDate, until: window.endDate }));
+
+      while (nextUrl) {
+        const payload = await metaFetchJson<unknown>(nextUrl, 2, {
+          connectionId: connection.id,
+          syncJobId: syncJobsByDate.get(window.endDate) ?? [...syncJobsByDate.values()][0] ?? 0,
+          transactionSource: 'meta_ads_hourly_order_value_sync',
+          sourceMetadata: {
+            adAccountId: connection.ad_account_id,
+            windowStartDate: window.startDate,
+            windowEndDate: window.endDate,
+            triggerSource
+          }
+        });
+        const page = parseRevenueInsightsPage(payload);
+
+        rawRows.push(...(page.data ?? []));
+        nextUrl = page.paging?.next ? new URL(page.paging.next) : null;
+      }
+
+      const records = normalizeCampaignDailyRevenueRecords(connection.ad_account_id, rawRows, {
+        currency: connection.account_currency,
+        actionReportTime: 'conversion',
+        useAccountAttributionSetting: true
+      });
+
+      accumulator.recordsReceived = records.length;
+
+      await withTransaction(async (client) => {
+        const rawRecordIdsByAggregateKey = await persistOrderValueRawRows(client, {
+          connectionId: connection.id,
+          syncRunId: runId,
+          syncJobsByDate,
+          rows: rawRows
+        });
+
+        accumulator.rawRowsPersisted = rawRows.length;
+        accumulator.aggregateRowsUpserted = await upsertOrderValueAggregates(client, {
+          connectionId: connection.id,
+          syncJobsByDate,
+          records,
+          rawRecordIdsByAggregateKey,
+          organizationId
+        });
+      });
+
+      await completeMetaAdsOrderValueSyncRun(runId, accumulator, 0);
+      succeededConnections += 1;
+      recordsReceived += accumulator.recordsReceived;
+      rawRowsPersisted += accumulator.rawRowsPersisted;
+      aggregateRowsUpserted += accumulator.aggregateRowsUpserted;
+    } catch (error) {
+      accumulator.errors.push({
+        code: normalizeSyncErrorCode(error),
+        message: normalizeSyncErrorMessage(error),
+        adAccountId: baseConnection.ad_account_id
+      });
+      await completeMetaAdsOrderValueSyncRun(runId, accumulator, 1);
+      failedConnections += 1;
+      logError('meta_ads_order_value_sync_connection_failed', error, {
+        connectionId: baseConnection.id,
+        adAccountId: baseConnection.ad_account_id,
+        triggerSource,
+        windowStartDate: window.startDate,
+        windowEndDate: window.endDate,
+        syncRunId: runId
+      });
+    }
+  }
+
+  const syncResult: MetaAdsOrderValueSyncResult = {
+    runId: lastRunId,
+    triggerSource,
+    windowStartDate: window.startDate,
+    windowEndDate: window.endDate,
+    attemptedConnections,
+    succeededConnections,
+    failedConnections,
+    recordsReceived,
+    rawRowsPersisted,
+    aggregateRowsUpserted
+  };
+
+  logInfo('meta_ads_order_value_sync_completed', syncResult);
+
+  return syncResult;
+}
+
+export function startMetaAdsOrderValueScheduler(options: MetaAdsOrderValueSchedulerOptions = {}): () => void {
+  if (!env.META_ADS_ORDER_VALUE_SYNC_ENABLED) {
+    return () => undefined;
+  }
+
+  const intervalMs = options.intervalMs ?? env.META_ADS_ORDER_VALUE_SYNC_INTERVAL_MS;
+  const runner = options.runner ?? runMetaAdsOrderValueSync;
+  const now = options.now ?? (() => new Date());
+  const setIntervalFn = options.setIntervalFn ?? setInterval;
+  const clearIntervalFn = options.clearIntervalFn ?? clearInterval;
+  const triggerImmediately = options.triggerImmediately ?? true;
+  let running = false;
+
+  const tick = async (triggerSource: string) => {
+    if (running) {
+      logInfo('meta_ads_order_value_sync_skipped', {
+        reason: 'run_already_in_progress',
+        triggerSource
+      });
+      return;
+    }
+
+    running = true;
+
+    try {
+      await runner({
+        now: now(),
+        triggerSource
+      });
+    } catch (error) {
+      logError('meta_ads_order_value_sync_failed', error, {
+        triggerSource
+      });
+    } finally {
+      running = false;
+    }
+  };
+
+  if (triggerImmediately) {
+    void tick('application_startup');
+  }
+
+  const timer = setIntervalFn(() => {
+    void tick('application_scheduler');
+  }, intervalMs);
+
+  return () => {
+    clearIntervalFn(timer);
+  };
 }
 
 async function fetchCreativeMap(
@@ -2224,11 +2785,14 @@ export const __metaAdsTestUtils = {
   shouldRefreshToken,
   buildPlanningDates,
   buildIncrementalPlanningDates,
+  buildOrderValueWindow,
   listDateRangeInclusive,
   chooseCanonicalPurchaseActionType,
   normalizeCampaignDailyRevenueRecords,
   normalizeInsightRows,
   rollupNormalizedSpendRows,
   rollupPersistableSpendRows,
-  fetchCampaignDailyRevenueInsights
+  fetchCampaignDailyRevenueInsights,
+  startMetaAdsOrderValueScheduler,
+  upsertOrderValueAggregates
 };
