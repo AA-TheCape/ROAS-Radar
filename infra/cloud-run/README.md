@@ -210,3 +210,13 @@ Keep request parser limits below the Cloud Run hard request-body ceiling. Cloud 
 ## Staging Verification
 
 After deploying staging or production, run the smoke-test helper:
+
+`sh infra/cloud-run/smoke-test.sh <staging|production>`
+
+The smoke helper now gates rollout promotion on `/api/reporting/meta-order-value` instead of the generic reporting summary endpoint. The check validates:
+
+- unauthenticated access is rejected with `401`
+- authenticated access succeeds with a bounded `startDate` and `endDate` query
+- the response includes the expected JSON contract surface: `scope.organizationId`, `range`, `pagination`, `totals`, and `rows`
+
+Capture the smoke-test output and the exact date window used as rollout evidence before staging sign-off and before production promotion.

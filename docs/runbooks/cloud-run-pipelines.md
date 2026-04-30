@@ -40,9 +40,13 @@ For staged releases, prefer:
 
 1. `sh infra/cloud-run/promote.sh staging`
 2. Validate `sh infra/cloud-run/smoke-test.sh staging`
-3. Confirm the Meta scheduler is active in non-prod with `sh infra/cloud-run/scheduler.sh staging meta-ads status`
-4. After non-prod validation, `sh infra/cloud-run/promote.sh production`
-5. Confirm the production scheduler with `sh infra/cloud-run/scheduler.sh production meta-ads status`
+3. Confirm the smoke log shows `/api/reporting/meta-order-value` returning `401` without auth and succeeding with the reporting bearer token for the bounded `startDate` and `endDate` query
+4. Confirm the Meta scheduler is active in non-prod with `sh infra/cloud-run/scheduler.sh staging meta-ads status`
+5. After non-prod validation, `sh infra/cloud-run/promote.sh production`
+6. Validate `sh infra/cloud-run/smoke-test.sh production` and retain the same Meta order value smoke evidence for production promotion records
+7. Confirm the production scheduler with `sh infra/cloud-run/scheduler.sh production meta-ads status`
+
+Do not sign off staging or continue to production unless the smoke evidence includes the authenticated Meta order value response contract check.
 
 ## Meta Scheduler Controls
 

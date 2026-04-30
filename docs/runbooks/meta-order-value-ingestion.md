@@ -14,6 +14,11 @@
 3. Confirm whether the issue is isolated to one `jsonPayload.adAccountId`, one `jsonPayload.triggerSource`, or all Meta order-value sync runs.
 4. Inspect `jsonPayload.apiRequestErrorCount`, `jsonPayload.apiRequestRetryCount`, `jsonPayload.anomalyTypes`, and any anomaly `jsonPayload.details` payloads before retrying jobs.
 
+## Release Gate
+
+- Treat `sh infra/cloud-run/smoke-test.sh <environment>` as a required release gate for staging sign-off and production promotion.
+- The recorded smoke evidence must show `/api/reporting/meta-order-value` rejecting unauthenticated access, succeeding with the reporting bearer token, and returning the expected JSON contract for the bounded smoke date range.
+
 ## Likely Causes
 
 - expired or revoked Meta access token causing 401 or 403 responses
