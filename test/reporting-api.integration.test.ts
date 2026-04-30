@@ -286,11 +286,21 @@ test('reporting orders only returns online store Shopify orders', async () => {
         {
           shopifyOrderId: 'web-order-1',
           processedAt: '2026-04-10T13:00:00.000Z',
+          orderOccurredAtUtc: '2026-04-10T13:00:00.000Z',
           totalPrice: 80,
           source: 'facebook',
           medium: 'paid_social',
           campaign: 'prospecting-us',
-          attributionReason: 'matched_by_checkout_token'
+          attributionReason: 'unattributed',
+          primaryCreditAttributionReason: 'matched_by_checkout_token',
+          attributionTier: 'unattributed',
+          attributionTierLabel: 'Unattributed',
+          attributionTierDescription:
+            'No eligible first-party, Shopify hint, or GA4 fallback match qualified, or the required timing data could not be normalized.',
+          attributionSource: null,
+          attributionMatchedAt: null,
+          confidenceScore: null,
+          sessionId: null
         }
       ]
     });
