@@ -101,6 +101,7 @@ import {
 } from './components/AuthenticatedUi';
 
 const ReportingDashboard = lazy(() => import('./components/ReportingDashboard'));
+const MetaOrderValueView = lazy(() => import('./components/MetaOrderValueView'));
 const OrderDetailsView = lazy(() => import('./components/OrderDetailsView'));
 const SettingsAdminView = lazy(() => import('./components/SettingsAdminView'));
 const IdentityGraphHealthView = lazy(() => import('./components/IdentityGraphHealthView'));
@@ -168,13 +169,18 @@ type SettingsForm = {
   reportingTimezone: string;
 };
 
-type AppPage = 'dashboard' | 'identity-health' | 'settings' | 'order-details';
+type AppPage = 'dashboard' | 'meta-order-value' | 'identity-health' | 'settings' | 'order-details';
 
 const AUTHENTICATED_NAV_ITEMS: AppShellNavItem[] = [
   {
     key: 'dashboard',
     label: 'Dashboard',
     description: 'Summary metrics, campaign performance, time-based revenue trends, and attributed order rows.'
+  },
+  {
+    key: 'meta-order-value',
+    label: 'Meta order value',
+    description: 'Campaign-day Meta attributed revenue, spend, ROAS, and canonical action-type breakdowns.'
   },
   {
     key: 'identity-health',
@@ -1764,6 +1770,11 @@ function App() {
           { label: 'Authenticated app' },
           { label: 'Dashboard', current: true }
         ]
+      : currentPage === 'meta-order-value'
+        ? [
+            { label: 'Authenticated app' },
+            { label: 'Meta order value', current: true }
+          ]
       : currentPage === 'identity-health'
         ? [
             { label: 'Authenticated app' },
@@ -1835,6 +1846,19 @@ function App() {
             spendDetailsSection={dashboard.spendDetails}
             onOpenOrderDetails={(shopifyOrderId) => void openOrderDetails(shopifyOrderId)}
           />
+        </Suspense>
+      ) : null}
+
+      {currentPage === 'meta-order-value' ? (
+        <Suspense
+          fallback={
+            <AuthenticatedViewFallback
+              title="Meta order value"
+              description="Loading Meta-attributed revenue totals, date controls, and campaign-day rows."
+            />
+          }
+        >
+          <MetaOrderValueView reportingTimezone={reportingTimezone} />
         </Suspense>
       ) : null}
 

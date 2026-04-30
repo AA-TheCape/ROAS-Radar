@@ -148,6 +148,75 @@ export type OrdersResponse = {
   rows: OrderRow[];
 };
 
+export type MetaOrderValueSortBy =
+  | 'reportDate'
+  | 'campaignName'
+  | 'attributedRevenue'
+  | 'purchaseCount'
+  | 'spend'
+  | 'roas'
+  | 'actionType';
+
+export type MetaOrderValueSortDirection = 'asc' | 'desc';
+
+export type MetaOrderValueRow = {
+  date: string;
+  campaignId: string;
+  campaignName: string | null;
+  attributedRevenue: number | null;
+  purchaseCount: number | null;
+  spend: number;
+  roas: number | null;
+  calculatedRoas: number | null;
+  canonicalActionType: string | null;
+  canonicalSelectionMode: 'priority' | 'fallback' | 'none';
+  currency: string | null;
+};
+
+export type MetaOrderValueResponse = {
+  scope: {
+    organizationId: number;
+  };
+  range: {
+    startDate: string;
+    endDate: string;
+  };
+  filters: {
+    campaignIds: string[];
+    campaignSearch: string | null;
+    actionType: string | null;
+  };
+  sort: {
+    by: MetaOrderValueSortBy;
+    direction: MetaOrderValueSortDirection;
+  };
+  pagination: {
+    limit: number;
+    offset: number;
+    returned: number;
+    totalRows: number;
+    hasMore: boolean;
+  };
+  totals: {
+    attributedRevenue: number;
+    purchaseCount: number;
+    spend: number;
+    roas: number | null;
+  };
+  rows: MetaOrderValueRow[];
+};
+
+export type MetaOrderValueQuery = {
+  startDate: string;
+  endDate: string;
+  campaignSearch?: string;
+  actionType?: string;
+  sortBy?: MetaOrderValueSortBy;
+  sortDirection?: MetaOrderValueSortDirection;
+  limit?: number;
+  offset?: number;
+};
+
 export type OrderDetailLineItem = {
   shopifyLineItemId: string;
   shopifyProductId: string | null;
@@ -624,6 +693,39 @@ function buildIdentityHealthSearchParams(filters: IdentityHealthFilters, extras:
   return params;
 }
 
+function buildMetaOrderValueSearchParams(query: MetaOrderValueQuery): URLSearchParams {
+  const params = new URLSearchParams({
+    startDate: query.startDate,
+    endDate: query.endDate
+  });
+
+  if (query.campaignSearch?.trim()) {
+    params.set('campaignSearch', query.campaignSearch.trim());
+  }
+
+  if (query.actionType?.trim()) {
+    params.set('actionType', query.actionType.trim());
+  }
+
+  if (query.sortBy) {
+    params.set('sortBy', query.sortBy);
+  }
+
+  if (query.sortDirection) {
+    params.set('sortDirection', query.sortDirection);
+  }
+
+  if (typeof query.limit === 'number') {
+    params.set('limit', `${query.limit}`);
+  }
+
+  if (typeof query.offset === 'number') {
+    params.set('offset', `${query.offset}`);
+  }
+
+  return params;
+}
+
 function buildHeaders(includeJsonBody: boolean): Record<string, string> {
   const headers: Record<string, string> = {
     'x-roas-radar-tenant-id': TENANT_ID
@@ -735,6 +837,12 @@ export function fetchTimeseries(filters: ReportingFilters, groupBy: TimeseriesGr
 export function fetchOrders(filters: ReportingFilters, limit = 10) {
   return requestJson<OrdersResponse>('/api/reporting/orders', {
     searchParams: buildSearchParams(filters, { limit: `${limit}` })
+  });
+}
+
+export function fetchMetaOrderValue(query: MetaOrderValueQuery) {
+  return requestJson<MetaOrderValueResponse>('/api/reporting/meta-order-value', {
+    searchParams: buildMetaOrderValueSearchParams(query)
   });
 }
 
