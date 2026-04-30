@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 process.env.DATABASE_URL ??= 'postgres://postgres:postgres@localhost:5432/roas_radar_test';
 process.env.META_ADS_APP_ID = 'meta-app-id';
@@ -12,6 +15,12 @@ process.env.META_ADS_SYNC_LOOKBACK_DAYS = '3';
 process.env.META_ADS_SYNC_INITIAL_LOOKBACK_DAYS = '5';
 
 const { __metaAdsTestUtils } = await import('../src/modules/meta-ads/index.js');
+const fixturesDirectory = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'meta-ads');
+
+async function loadJsonFixture<T>(filename: string): Promise<T> {
+  const fixture = await readFile(path.join(fixturesDirectory, filename), 'utf8');
+  return JSON.parse(fixture) as T;
+}
 
 test('buildPlanningDates uses the initial lookback before the first successful sync', () => {
   const dates = __metaAdsTestUtils.buildPlanningDates(new Date('2026-04-11T12:00:00.000Z'), null);
@@ -188,4 +197,274 @@ test('rollupPersistableSpendRows collapses duplicate campaign-level entities bef
       }
     }
   ]);
+});
+
+test('fetchCampaignDailyRevenueInsights requests the contract query params, handles pagination, and normalizes live fixture rows', async () => {
+  const previousFetch = globalThis.fetch;
+  const requestUrls: URL[] = [];
+  const page1 = await loadJsonFixture<Record<string, unknown>>('campaign-daily-revenue-live-page-1.json');
+  const page2 = await loadJsonFixture<Record<string, unknown>>('campaign-daily-revenue-live-page-2.json');
+
+  try {
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url);
+      requestUrls.push(url);
+
+      if (url.searchParams.get('after') === 'page-2') {
+        return new Response(JSON.stringify(page2), { status: 200 });
+      }
+
+      return new Response(JSON.stringify(page1), { status: 200 });
+    }) as typeof globalThis.fetch;
+
+    const records = await __metaAdsTestUtils.fetchCampaignDailyRevenueInsights({
+      accessToken: 'meta-token',
+      adAccountId: '123456789',
+      startDate: '2026-04-28',
+      endDate: '2026-04-28',
+      currency: 'USD'
+    });
+
+    assert.equal(requestUrls.length, 2);
+    assert.match(requestUrls[0]?.pathname ?? '', /^\/v\d+\.\d+\/act_123456789\/insights$/);
+    assert.equal(
+      requestUrls[0]?.searchParams.get('fields'),
+      'campaign_id,campaign_name,date_start,date_stop,spend,actions,action_values,purchase_roas'
+    );
+    assert.equal(requestUrls[0]?.searchParams.get('level'), 'campaign');
+    assert.equal(requestUrls[0]?.searchParams.get('time_increment'), '1');
+    assert.equal(requestUrls[0]?.searchParams.get('action_breakdowns'), 'action_type');
+    assert.equal(requestUrls[0]?.searchParams.get('use_account_attribution_setting'), 'true');
+    assert.equal(requestUrls[0]?.searchParams.get('action_report_time'), 'conversion');
+    assert.equal(requestUrls[0]?.searchParams.get('time_range'), '{"since":"2026-04-28","until":"2026-04-28"}');
+
+    assert.deepEqual(records, [
+      {
+        adAccountId: '123456789',
+        reportDate: '2026-04-28',
+        rawDateStart: '2026-04-28',
+        rawDateStop: '2026-04-28',
+        campaignId: 'cmp_live_1',
+        campaignName: 'Live Campaign One',
+        currency: 'USD',
+        spend: '12.34',
+        attributedRevenue: '45.67',
+        purchaseCount: 3,
+        purchaseRoas: '3.701135',
+        actionTypeUsed: 'purchase',
+        canonicalSelectionMode: 'priority',
+        actionReportTime: 'conversion',
+        useAccountAttributionSetting: true,
+        rawActionValues: [
+          {
+            action_type: 'omni_purchase',
+            value: '39.50'
+          },
+          {
+            action_type: 'purchase',
+            value: '45.67'
+          }
+        ],
+        rawActions: [
+          {
+            action_type: 'omni_purchase',
+            value: '2'
+          },
+          {
+            action_type: 'purchase',
+            value: '3'
+          }
+        ],
+        rawRows: [
+          page1.data?.[0],
+          page1.data?.[1]
+        ]
+      },
+      {
+        adAccountId: '123456789',
+        reportDate: '2026-04-28',
+        rawDateStart: '2026-04-28',
+        rawDateStop: '2026-04-28',
+        campaignId: 'cmp_live_2',
+        campaignName: 'Live Campaign Two',
+        currency: 'USD',
+        spend: '22.00',
+        attributedRevenue: '88.80',
+        purchaseCount: 4,
+        purchaseRoas: '4.036364',
+        actionTypeUsed: 'offsite_conversion.fb_pixel_purchase',
+        canonicalSelectionMode: 'priority',
+        actionReportTime: 'conversion',
+        useAccountAttributionSetting: true,
+        rawActionValues: [
+          {
+            action_type: 'offsite_conversion.fb_pixel_purchase',
+            value: '88.80'
+          }
+        ],
+        rawActions: [
+          {
+            action_type: 'offsite_conversion.fb_pixel_purchase',
+            value: '4'
+          }
+        ],
+        rawRows: [page2.data?.[0]]
+      },
+      {
+        adAccountId: '123456789',
+        reportDate: '2026-04-28',
+        rawDateStart: '2026-04-28',
+        rawDateStop: '2026-04-28',
+        campaignId: 'cmp_live_3',
+        campaignName: 'Live Campaign Three',
+        currency: 'USD',
+        spend: '19.25',
+        attributedRevenue: null,
+        purchaseCount: null,
+        purchaseRoas: null,
+        actionTypeUsed: null,
+        canonicalSelectionMode: 'none',
+        actionReportTime: 'conversion',
+        useAccountAttributionSetting: true,
+        rawActionValues: [],
+        rawActions: [
+          {
+            action_type: 'link_click',
+            value: '10'
+          }
+        ],
+        rawRows: [page2.data?.[1]]
+      }
+    ]);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test('fetchCampaignDailyRevenueInsights applies configured fallback action types and keeps the selected type when one metric array is missing it', async () => {
+  const previousFetch = globalThis.fetch;
+  const sandboxPage = await loadJsonFixture<Record<string, unknown>>('campaign-daily-revenue-sandbox.json');
+
+  try {
+    globalThis.fetch = (async () => new Response(JSON.stringify(sandboxPage), { status: 200 })) as typeof globalThis.fetch;
+
+    const records = await __metaAdsTestUtils.fetchCampaignDailyRevenueInsights({
+      accessToken: 'meta-token',
+      adAccountId: '123456789',
+      startDate: '2026-04-29',
+      endDate: '2026-04-29',
+      currency: 'USD',
+      allowedPurchaseActionTypes: ['purchase', 'omni_purchase', 'onsite_conversion.messaging_purchase']
+    });
+
+    assert.deepEqual(records, [
+      {
+        adAccountId: '123456789',
+        reportDate: '2026-04-29',
+        rawDateStart: '2026-04-29',
+        rawDateStop: '2026-04-29',
+        campaignId: 'cmp_sandbox_1',
+        campaignName: 'Sandbox Campaign One',
+        currency: 'USD',
+        spend: '5.00',
+        attributedRevenue: '12.00',
+        purchaseCount: null,
+        purchaseRoas: '2.400000',
+        actionTypeUsed: 'onsite_conversion.messaging_purchase',
+        canonicalSelectionMode: 'fallback',
+        actionReportTime: 'conversion',
+        useAccountAttributionSetting: true,
+        rawActionValues: [
+          {
+            action_type: 'onsite_conversion.messaging_purchase',
+            value: '12.00'
+          }
+        ],
+        rawActions: [],
+        rawRows: [sandboxPage.data?.[0]]
+      }
+    ]);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test('fetchCampaignDailyRevenueInsights retries transient errors and succeeds deterministically on the next page fetch', async () => {
+  const previousFetch = globalThis.fetch;
+  const page1 = await loadJsonFixture<Record<string, unknown>>('campaign-daily-revenue-live-page-1.json');
+  let attempts = 0;
+
+  try {
+    globalThis.fetch = (async () => {
+      attempts += 1;
+
+      if (attempts === 1) {
+        return new Response(
+          JSON.stringify({
+            error: {
+              message: 'Too many calls',
+              code: 429
+            }
+          }),
+          { status: 429 }
+        );
+      }
+
+      return new Response(JSON.stringify({ ...page1, paging: {} }), { status: 200 });
+    }) as typeof globalThis.fetch;
+
+    const records = await __metaAdsTestUtils.fetchCampaignDailyRevenueInsights({
+      accessToken: 'meta-token',
+      adAccountId: '123456789',
+      startDate: '2026-04-28',
+      endDate: '2026-04-28',
+      currency: 'USD'
+    });
+
+    assert.equal(attempts, 2);
+    assert.equal(records.length, 1);
+    assert.equal(records[0]?.campaignId, 'cmp_live_1');
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test('fetchCampaignDailyRevenueInsights does not retry non-transient API errors', async () => {
+  const previousFetch = globalThis.fetch;
+  let attempts = 0;
+
+  try {
+    globalThis.fetch = (async () => {
+      attempts += 1;
+
+      return new Response(
+        JSON.stringify({
+          error: {
+            message: 'Bad request',
+            code: 100
+          }
+        }),
+        { status: 400 }
+      );
+    }) as typeof globalThis.fetch;
+
+    await assert.rejects(
+      __metaAdsTestUtils.fetchCampaignDailyRevenueInsights({
+        accessToken: 'meta-token',
+        adAccountId: '123456789',
+        startDate: '2026-04-28',
+        endDate: '2026-04-28',
+        currency: 'USD'
+      }),
+      (error: unknown) => {
+        assert.equal(error instanceof Error, true);
+        assert.equal((error as Error).message, 'Bad request');
+        return true;
+      }
+    );
+
+    assert.equal(attempts, 1);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
 });

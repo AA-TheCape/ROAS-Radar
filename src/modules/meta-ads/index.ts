@@ -26,7 +26,41 @@ const META_GRAPH_BASE_URL = 'https://graph.facebook.com';
 const META_SYNC_JOB_STATUSES = ['pending', 'processing', 'retry', 'completed', 'failed'] as const;
 const META_SPEND_LEVELS = ['account', 'campaign', 'adset', 'ad'] as const;
 const META_SPEND_GRANULARITIES = ['account', 'campaign', 'adset', 'ad', 'creative'] as const;
+const META_ACTION_REPORT_TIMES = ['conversion', 'impression', 'mixed'] as const;
 const META_ADS_SYNC_TIME_ZONE = 'America/Los_Angeles';
+const META_PURCHASE_ACTION_TYPE_PRIORITY = ['purchase', 'omni_purchase', 'offsite_conversion.fb_pixel_purchase'] as const;
+
+const metaAdsActionMetricSchema = z
+  .object({
+    action_type: z.string().optional(),
+    value: z.union([z.string(), z.number()]).optional()
+  })
+  .passthrough();
+
+const metaAdsRevenueInsightRowSchema = z
+  .object({
+    date_start: z.string().optional(),
+    date_stop: z.string().optional(),
+    campaign_id: z.string().optional(),
+    campaign_name: z.string().optional(),
+    spend: z.string().optional(),
+    actions: z.array(metaAdsActionMetricSchema).optional(),
+    action_values: z.array(metaAdsActionMetricSchema).optional(),
+    purchase_roas: z.array(metaAdsActionMetricSchema).optional(),
+    action_type: z.string().optional()
+  })
+  .passthrough();
+
+const metaAdsRevenueInsightsPageSchema = z
+  .object({
+    data: z.array(metaAdsRevenueInsightRowSchema).optional(),
+    paging: z
+      .object({
+        next: z.string().optional()
+      })
+      .optional()
+  })
+  .passthrough();
 
 const oauthStartQuerySchema = z.object({
   redirectPath: z.string().optional()
@@ -54,6 +88,8 @@ const oauthCallbackSchema = z.object({
 
 type MetaSpendLevel = (typeof META_SPEND_LEVELS)[number];
 type MetaSpendGranularity = (typeof META_SPEND_GRANULARITIES)[number];
+type MetaAdsActionReportTime = (typeof META_ACTION_REPORT_TIMES)[number];
+type MetaPurchaseActionTypePriority = (typeof META_PURCHASE_ACTION_TYPE_PRIORITY)[number];
 
 type MetaAdsConnectionRow = {
   id: number;
@@ -128,6 +164,10 @@ type MetaAdsInsightRow = {
   clicks?: string;
   objective?: string;
 };
+
+type MetaAdsActionMetric = z.infer<typeof metaAdsActionMetricSchema>;
+type MetaAdsRevenueInsightRow = z.infer<typeof metaAdsRevenueInsightRowSchema>;
+type MetaAdsRevenueInsightsPage = z.infer<typeof metaAdsRevenueInsightsPageSchema>;
 
 type MetaAdsTokenResponse = {
   access_token: string;
@@ -205,6 +245,44 @@ export type MetaAdsQueueProcessResult = {
   succeededJobs: number;
   failedJobs: number;
   durationMs: number;
+};
+
+export type MetaAdsCampaignDailyRevenuePullOptions = {
+  accessToken: string;
+  adAccountId: string;
+  startDate: string;
+  endDate: string;
+  currency?: string | null;
+  actionReportTime?: MetaAdsActionReportTime;
+  useAccountAttributionSetting?: boolean;
+  allowedPurchaseActionTypes?: readonly string[];
+  retryCount?: number;
+  pageLimit?: number;
+  audit?: {
+    connectionId: number;
+    syncJobId: number;
+  };
+};
+
+export type MetaAdsCampaignDailyRevenueRecord = {
+  adAccountId: string;
+  reportDate: string;
+  rawDateStart: string;
+  rawDateStop: string | null;
+  campaignId: string;
+  campaignName: string | null;
+  currency: string | null;
+  spend: string;
+  attributedRevenue: string | null;
+  purchaseCount: number | null;
+  purchaseRoas: string | null;
+  actionTypeUsed: string | null;
+  canonicalSelectionMode: 'priority' | 'fallback' | 'none';
+  actionReportTime: MetaAdsActionReportTime;
+  useAccountAttributionSetting: boolean;
+  rawActionValues: MetaAdsActionMetric[];
+  rawActions: MetaAdsActionMetric[];
+  rawRows: Record<string, unknown>[];
 };
 
 class MetaAdsHttpError extends Error {
@@ -538,6 +616,21 @@ function parseMetricDecimal(value: string | undefined): string {
   return Number.isFinite(parsed) ? parsed.toFixed(2) : '0.00';
 }
 
+function parseNullableMetricDecimal(value: string | number | undefined): string | null {
+  const normalized = typeof value === 'number' ? value : Number.parseFloat(value ?? '');
+  return Number.isFinite(normalized) ? normalized.toFixed(2) : null;
+}
+
+function parseNullableMetricFloat(value: string | number | undefined): string | null {
+  const normalized = typeof value === 'number' ? value : Number.parseFloat(value ?? '');
+  return Number.isFinite(normalized) ? normalized.toFixed(6) : null;
+}
+
+function parseNullableMetricInteger(value: string | number | undefined): number | null {
+  const normalized = typeof value === 'number' ? value : Number.parseInt(value ?? '', 10);
+  return Number.isFinite(normalized) ? normalized : null;
+}
+
 function formatDateInTimeZone(value: Date, timeZone: string): string {
   const formatter = new Intl.DateTimeFormat('en-CA', {
     timeZone,
@@ -547,6 +640,260 @@ function formatDateInTimeZone(value: Date, timeZone: string): string {
   });
 
   return formatter.format(value);
+}
+
+function collectMetricActionTypes(entries: MetaAdsActionMetric[]): Set<string> {
+  const actionTypes = new Set<string>();
+
+  for (const entry of entries) {
+    const actionType = entry.action_type?.trim();
+
+    if (actionType) {
+      actionTypes.add(actionType);
+    }
+  }
+
+  return actionTypes;
+}
+
+function chooseCanonicalPurchaseActionType(
+  availableActionTypes: Iterable<string>,
+  allowedPurchaseActionTypes: readonly string[]
+): {
+  actionTypeUsed: string | null;
+  canonicalSelectionMode: 'priority' | 'fallback' | 'none';
+} {
+  const available = new Set([...availableActionTypes].filter(Boolean));
+
+  for (const actionType of META_PURCHASE_ACTION_TYPE_PRIORITY) {
+    if (available.has(actionType)) {
+      return {
+        actionTypeUsed: actionType,
+        canonicalSelectionMode: 'priority'
+      };
+    }
+  }
+
+  for (const actionType of allowedPurchaseActionTypes) {
+    if (available.has(actionType)) {
+      return {
+        actionTypeUsed: actionType,
+        canonicalSelectionMode: 'fallback'
+      };
+    }
+  }
+
+  return {
+    actionTypeUsed: null,
+    canonicalSelectionMode: 'none'
+  };
+}
+
+function sumMetricValues(entries: MetaAdsActionMetric[], actionType: string | null): string | null {
+  if (!actionType) {
+    return null;
+  }
+
+  let total = 0;
+  let matched = false;
+
+  for (const entry of entries) {
+    if (entry.action_type !== actionType) {
+      continue;
+    }
+
+    const value = parseNullableMetricDecimal(entry.value);
+
+    if (value === null) {
+      continue;
+    }
+
+    total += Number(value);
+    matched = true;
+  }
+
+  return matched ? total.toFixed(2) : null;
+}
+
+function sumMetricCounts(entries: MetaAdsActionMetric[], actionType: string | null): number | null {
+  if (!actionType) {
+    return null;
+  }
+
+  let total = 0;
+  let matched = false;
+
+  for (const entry of entries) {
+    if (entry.action_type !== actionType) {
+      continue;
+    }
+
+    const value = parseNullableMetricInteger(entry.value);
+
+    if (value === null) {
+      continue;
+    }
+
+    total += value;
+    matched = true;
+  }
+
+  return matched ? total : null;
+}
+
+function firstMetricFloat(entries: MetaAdsActionMetric[], actionType: string | null): string | null {
+  if (!actionType) {
+    return null;
+  }
+
+  for (const entry of entries) {
+    if (entry.action_type !== actionType) {
+      continue;
+    }
+
+    const value = parseNullableMetricFloat(entry.value);
+
+    if (value !== null) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function parseRevenueInsightsPage(payload: unknown): MetaAdsRevenueInsightsPage {
+  const parsed = metaAdsRevenueInsightsPageSchema.safeParse(payload);
+
+  if (!parsed.success) {
+    throw new MetaAdsHttpError(502, 'meta_ads_invalid_insights_response', 'Meta Ads insights response was malformed', {
+      issues: parsed.error.issues
+    });
+  }
+
+  return parsed.data;
+}
+
+function normalizeCampaignDailyRevenueRecords(
+  adAccountId: string,
+  rows: MetaAdsRevenueInsightRow[],
+  options: {
+    currency?: string | null;
+    actionReportTime?: MetaAdsActionReportTime;
+    useAccountAttributionSetting?: boolean;
+    allowedPurchaseActionTypes?: readonly string[];
+  } = {}
+): MetaAdsCampaignDailyRevenueRecord[] {
+  const allowedPurchaseActionTypes = options.allowedPurchaseActionTypes?.length
+    ? [...options.allowedPurchaseActionTypes]
+    : [...META_PURCHASE_ACTION_TYPE_PRIORITY];
+  const grouped = new Map<
+    string,
+    {
+      reportDate: string;
+      rawDateStart: string;
+      rawDateStop: string | null;
+      campaignId: string;
+      campaignName: string | null;
+      spend: string;
+      rawActionValues: MetaAdsActionMetric[];
+      rawActions: MetaAdsActionMetric[];
+      rawPurchaseRoas: MetaAdsActionMetric[];
+      rawRows: Record<string, unknown>[];
+      availableActionTypes: Set<string>;
+    }
+  >();
+
+  for (const row of rows) {
+    const reportDate = row.date_start?.trim();
+    const campaignId = row.campaign_id?.trim();
+
+    if (!reportDate || !campaignId) {
+      continue;
+    }
+
+    const key = `${reportDate}:${campaignId}`;
+    const rawActionValues = row.action_values ?? [];
+    const rawActions = row.actions ?? [];
+    const rawPurchaseRoas = row.purchase_roas ?? [];
+    const spend = parseMetricDecimal(row.spend);
+    const entry = grouped.get(key) ?? {
+      reportDate,
+      rawDateStart: reportDate,
+      rawDateStop: row.date_stop?.trim() || null,
+      campaignId,
+      campaignName: row.campaign_name?.trim() || null,
+      spend,
+      rawActionValues: [],
+      rawActions: [],
+      rawPurchaseRoas: [],
+      rawRows: [],
+      availableActionTypes: new Set<string>()
+    };
+
+    entry.rawActionValues.push(...rawActionValues);
+    entry.rawActions.push(...rawActions);
+    entry.rawPurchaseRoas.push(...rawPurchaseRoas);
+    entry.rawRows.push(row as Record<string, unknown>);
+
+    if (!entry.campaignName && row.campaign_name?.trim()) {
+      entry.campaignName = row.campaign_name.trim();
+    }
+
+    if (entry.spend === '0.00' && spend !== '0.00') {
+      entry.spend = spend;
+    }
+
+    if (!entry.rawDateStop && row.date_stop?.trim()) {
+      entry.rawDateStop = row.date_stop.trim();
+    }
+
+    const topLevelActionType = row.action_type?.trim();
+
+    if (topLevelActionType) {
+      entry.availableActionTypes.add(topLevelActionType);
+    }
+
+    for (const actionType of collectMetricActionTypes(rawActionValues)) {
+      entry.availableActionTypes.add(actionType);
+    }
+
+    for (const actionType of collectMetricActionTypes(rawActions)) {
+      entry.availableActionTypes.add(actionType);
+    }
+
+    for (const actionType of collectMetricActionTypes(rawPurchaseRoas)) {
+      entry.availableActionTypes.add(actionType);
+    }
+
+    grouped.set(key, entry);
+  }
+
+  return [...grouped.values()]
+    .map((entry) => {
+      const selection = chooseCanonicalPurchaseActionType(entry.availableActionTypes, allowedPurchaseActionTypes);
+
+      return {
+        adAccountId,
+        reportDate: entry.reportDate,
+        rawDateStart: entry.rawDateStart,
+        rawDateStop: entry.rawDateStop,
+        campaignId: entry.campaignId,
+        campaignName: entry.campaignName,
+        currency: options.currency ?? null,
+        spend: entry.spend,
+        attributedRevenue: sumMetricValues(entry.rawActionValues, selection.actionTypeUsed),
+        purchaseCount: sumMetricCounts(entry.rawActions, selection.actionTypeUsed),
+        purchaseRoas: firstMetricFloat(entry.rawPurchaseRoas, selection.actionTypeUsed),
+        actionTypeUsed: selection.actionTypeUsed,
+        canonicalSelectionMode: selection.canonicalSelectionMode,
+        actionReportTime: options.actionReportTime ?? 'conversion',
+        useAccountAttributionSetting: options.useAccountAttributionSetting ?? true,
+        rawActionValues: entry.rawActionValues,
+        rawActions: entry.rawActions,
+        rawRows: entry.rawRows
+      };
+    })
+    .sort((left, right) => left.reportDate.localeCompare(right.reportDate) || left.campaignId.localeCompare(right.campaignId));
 }
 
 function normalizeInsightRows(
@@ -1163,6 +1510,54 @@ async function fetchInsightsForLevel(
   }
 
   return rows;
+}
+
+export async function fetchCampaignDailyRevenueInsights(
+  params: MetaAdsCampaignDailyRevenuePullOptions
+): Promise<MetaAdsCampaignDailyRevenueRecord[]> {
+  const rows: MetaAdsRevenueInsightRow[] = [];
+  let nextUrl: URL | null = new URL(`${META_GRAPH_BASE_URL}/${env.META_ADS_API_VERSION}/act_${params.adAccountId}/insights`);
+
+  nextUrl.searchParams.set(
+    'fields',
+    'campaign_id,campaign_name,date_start,date_stop,spend,actions,action_values,purchase_roas'
+  );
+  nextUrl.searchParams.set('access_token', params.accessToken);
+  nextUrl.searchParams.set('level', 'campaign');
+  nextUrl.searchParams.set('time_increment', '1');
+  nextUrl.searchParams.set('action_breakdowns', 'action_type');
+  nextUrl.searchParams.set('use_account_attribution_setting', String(params.useAccountAttributionSetting ?? true));
+  nextUrl.searchParams.set('action_report_time', params.actionReportTime ?? 'conversion');
+  nextUrl.searchParams.set('limit', String(params.pageLimit ?? 500));
+  nextUrl.searchParams.set('time_range', JSON.stringify({ since: params.startDate, until: params.endDate }));
+
+  while (nextUrl) {
+    const payload = await metaFetchJson<unknown>(nextUrl, params.retryCount ?? 2, params.audit
+      ? {
+          connectionId: params.audit.connectionId,
+          syncJobId: params.audit.syncJobId,
+          transactionSource: 'meta_ads_campaign_revenue_insights',
+          sourceMetadata: {
+            adAccountId: params.adAccountId,
+            startDate: params.startDate,
+            endDate: params.endDate,
+            actionReportTime: params.actionReportTime ?? 'conversion',
+            useAccountAttributionSetting: params.useAccountAttributionSetting ?? true
+          }
+        }
+      : undefined);
+    const page = parseRevenueInsightsPage(payload);
+
+    rows.push(...(page.data ?? []));
+    nextUrl = page.paging?.next ? new URL(page.paging.next) : null;
+  }
+
+  return normalizeCampaignDailyRevenueRecords(params.adAccountId, rows, {
+    currency: params.currency ?? null,
+    actionReportTime: params.actionReportTime ?? 'conversion',
+    useAccountAttributionSetting: params.useAccountAttributionSetting ?? true,
+    allowedPurchaseActionTypes: params.allowedPurchaseActionTypes
+  });
 }
 
 async function fetchCreativeMap(
@@ -1842,7 +2237,10 @@ export const __metaAdsTestUtils = {
   buildPlanningDates,
   buildIncrementalPlanningDates,
   listDateRangeInclusive,
+  chooseCanonicalPurchaseActionType,
+  normalizeCampaignDailyRevenueRecords,
   normalizeInsightRows,
   rollupNormalizedSpendRows,
-  rollupPersistableSpendRows
+  rollupPersistableSpendRows,
+  fetchCampaignDailyRevenueInsights
 };

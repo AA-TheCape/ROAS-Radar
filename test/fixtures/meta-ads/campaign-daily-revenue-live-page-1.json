@@ -1,0 +1,59 @@
+{
+  "data": [
+    {
+      "campaign_id": "cmp_live_1",
+      "campaign_name": "Live Campaign One",
+      "date_start": "2026-04-28",
+      "date_stop": "2026-04-28",
+      "spend": "12.34",
+      "action_type": "omni_purchase",
+      "actions": [
+        {
+          "action_type": "omni_purchase",
+          "value": "2"
+        }
+      ],
+      "action_values": [
+        {
+          "action_type": "omni_purchase",
+          "value": "39.50"
+        }
+      ],
+      "purchase_roas": [
+        {
+          "action_type": "omni_purchase",
+          "value": "3.200000"
+        }
+      ]
+    },
+    {
+      "campaign_id": "cmp_live_1",
+      "campaign_name": "Live Campaign One",
+      "date_start": "2026-04-28",
+      "date_stop": "2026-04-28",
+      "spend": "12.34",
+      "action_type": "purchase",
+      "actions": [
+        {
+          "action_type": "purchase",
+          "value": "3"
+        }
+      ],
+      "action_values": [
+        {
+          "action_type": "purchase",
+          "value": "45.67"
+        }
+      ],
+      "purchase_roas": [
+        {
+          "action_type": "purchase",
+          "value": "3.701135"
+        }
+      ]
+    }
+  ],
+  "paging": {
+    "next": "https://graph.facebook.com/v99.0/act_123456789/insights?after=page-2"
+  }
+}
