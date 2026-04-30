@@ -1,10 +1,11 @@
+import { CLICK_LOOKBACK_WINDOW_DAYS, hasClickId, isDirectTouchpoint as isCanonicalDirectTouchpoint } from './rules.js';
 export const DETERMINISTIC_INGESTION_SOURCES = [
     'landing_session_id',
     'checkout_token',
     'cart_token',
     'customer_identity'
 ];
-export const ATTRIBUTION_TIER_LOOKBACK_WINDOW_DAYS = 7;
+export const ATTRIBUTION_TIER_LOOKBACK_WINDOW_DAYS = CLICK_LOOKBACK_WINDOW_DAYS;
 const INGESTION_SOURCE_PRECEDENCE = {
     landing_session_id: 0,
     checkout_token: 1,
@@ -20,9 +21,6 @@ function ingestionSourcePrecedence(source) {
     }
     return INGESTION_SOURCE_PRECEDENCE[source];
 }
-function hasClickId(touchpoint) {
-    return Boolean(touchpoint.clickIdValue);
-}
 function compareDatesDescending(left, right) {
     return right.getTime() - left.getTime();
 }
@@ -36,12 +34,7 @@ function compareLexical(left, right) {
     return (left ?? '').localeCompare(right ?? '');
 }
 export function isDirectTouchpoint(touchpoint) {
-    return !touchpoint.source &&
-        !touchpoint.medium &&
-        !touchpoint.campaign &&
-        !touchpoint.content &&
-        !touchpoint.term &&
-        !touchpoint.clickIdValue;
+    return isCanonicalDirectTouchpoint(touchpoint);
 }
 function compareDedupPriority(left, right) {
     const sourceComparison = compareIngestionSource(left.ingestionSource, right.ingestionSource);
@@ -52,7 +45,7 @@ function compareDedupPriority(left, right) {
     if (occurredAtComparison !== 0) {
         return occurredAtComparison;
     }
-    const clickIdComparison = Number(hasClickId(right)) - Number(hasClickId(left));
+    const clickIdComparison = Number(hasClickId(right.clickIdValue)) - Number(hasClickId(left.clickIdValue));
     if (clickIdComparison !== 0) {
         return clickIdComparison;
     }
@@ -67,7 +60,7 @@ function compareWinnerPriority(left, right) {
     if (sourceComparison !== 0) {
         return sourceComparison;
     }
-    const clickIdComparison = Number(hasClickId(right)) - Number(hasClickId(left));
+    const clickIdComparison = Number(hasClickId(right.clickIdValue)) - Number(hasClickId(left.clickIdValue));
     if (clickIdComparison !== 0) {
         return clickIdComparison;
     }
@@ -82,7 +75,7 @@ function compareTimelineOrder(left, right) {
     if (sourceComparison !== 0) {
         return sourceComparison;
     }
-    const clickIdComparison = Number(hasClickId(right)) - Number(hasClickId(left));
+    const clickIdComparison = Number(hasClickId(right.clickIdValue)) - Number(hasClickId(left.clickIdValue));
     if (clickIdComparison !== 0) {
         return clickIdComparison;
     }
@@ -91,12 +84,23 @@ function compareTimelineOrder(left, right) {
 export function dedupeDeterministicCandidates(candidates) {
     const deduped = new Map();
     for (const candidate of candidates) {
-        if (!candidate.sessionId) {
+        const normalizedCandidate = {
+            ...candidate,
+            isDirect: isCanonicalDirectTouchpoint({
+                source: candidate.source,
+                medium: candidate.medium,
+                campaign: candidate.campaign,
+                content: candidate.content,
+                term: candidate.term,
+                clickIdValue: candidate.clickIdValue
+            })
+        };
+        if (!normalizedCandidate.sessionId) {
             continue;
         }
-        const existing = deduped.get(candidate.sessionId);
-        if (!existing || compareDedupPriority(candidate, existing) < 0) {
-            deduped.set(candidate.sessionId, candidate);
+        const existing = deduped.get(normalizedCandidate.sessionId);
+        if (!existing || compareDedupPriority(normalizedCandidate, existing) < 0) {
+            deduped.set(normalizedCandidate.sessionId, normalizedCandidate);
         }
     }
     return Array.from(deduped.values()).sort(compareTimelineOrder);
@@ -141,8 +145,16 @@ function mapCandidateToResolvedTouchpoint(candidate) {
         clickIdType: candidate.clickIdType,
         clickIdValue: candidate.clickIdValue,
         attributionReason: candidate.attributionReason,
+        engagementType: 'click',
         ingestionSource: candidate.ingestionSource,
-        isDirect: candidate.isDirect,
+        isDirect: isCanonicalDirectTouchpoint({
+            source: candidate.source,
+            medium: candidate.medium,
+            campaign: candidate.campaign,
+            content: candidate.content,
+            term: candidate.term,
+            clickIdValue: candidate.clickIdValue
+        }),
         isForced: candidate.isSynthetic
     };
 }

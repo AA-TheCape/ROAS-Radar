@@ -924,7 +924,7 @@ test('out-of-window and future-dated candidates are excluded so in-window direct
     await insertCustomerIdentity(pool, customerIdentityId);
 
     const oldPaidSessionId = await insertTrackingSession(pool, {
-      firstSeenAt: '2026-03-20T09:00:00.000Z',
+      firstSeenAt: '2026-03-05T09:00:00.000Z',
       landingPage: 'https://store.example/products/widget?utm_source=google&utm_medium=cpc&utm_campaign=old-paid',
       customerIdentityId,
       utmSource: 'google',
@@ -934,7 +934,7 @@ test('out-of-window and future-dated candidates are excluded so in-window direct
     await insertTrackingEvent(pool, {
       sessionId: oldPaidSessionId,
       eventType: 'page_view',
-      occurredAt: '2026-03-20T09:00:00.000Z',
+      occurredAt: '2026-03-05T09:00:00.000Z',
       pageUrl: 'https://store.example/products/widget?utm_source=google&utm_medium=cpc&utm_campaign=old-paid',
       utmSource: 'google',
       utmMedium: 'cpc',

@@ -119,6 +119,77 @@ test('clicks_only excludes view-only candidates even when they are newer', () =>
   assert.equal(result.summariesByModel.clicks_only.lookbackRuleApplied, '28d_click');
 });
 
+test('engine keeps 28-day clicks while excluding views outside the 7-day window', () => {
+  const result = execute([
+    buildTouchpoint('session-click', '2026-04-03T00:00:00.000Z'),
+    buildTouchpoint('session-view-old', '2026-04-21T00:00:00.000Z', {
+      clickIdType: null,
+      clickIdValue: null,
+      engagementType: 'view'
+    })
+  ], ['first_touch', 'linear']);
+
+  assert.deepEqual(
+    result.creditsByModel.first_touch.map((credit) => credit.revenueCredit),
+    ['100.00']
+  );
+  assert.equal(result.summariesByModel.first_touch.touchpointCountConsidered, 1);
+  assert.equal(result.summariesByModel.first_touch.lookbackRuleApplied, '28d_click');
+  assert.deepEqual(
+    result.creditsByModel.linear.map((credit) => credit.revenueCredit),
+    ['100.00']
+  );
+});
+
+test('engine excludes ambiguous touches without explicit click or view evidence', () => {
+  const result = execute([
+    buildTouchpoint('session-ambiguous', '2026-04-29T00:00:00.000Z', {
+      source: 'newsletter',
+      medium: 'email',
+      campaign: 'april-blast',
+      clickIdType: null,
+      clickIdValue: null,
+      engagementType: null
+    })
+  ], ['first_touch', 'linear']);
+
+  assert.deepEqual(result.creditsByModel.first_touch, []);
+  assert.equal(result.summariesByModel.first_touch.allocationStatus, 'no_eligible_touches');
+  assert.equal(result.summariesByModel.linear.allocationStatus, 'no_eligible_touches');
+});
+
+test('engine recomputes click-id-only touches as non-direct before last-non-direct suppression', () => {
+  const result = execute([
+    buildTouchpoint('session-click-id-only', '2026-04-27T00:00:00.000Z', {
+      source: null,
+      medium: null,
+      campaign: null,
+      clickIdType: 'fbclid',
+      clickIdValue: 'fbclid-123',
+      isDirect: true
+    }),
+    buildTouchpoint('session-direct', '2026-04-29T00:00:00.000Z', {
+      source: null,
+      medium: null,
+      campaign: null,
+      clickIdType: null,
+      clickIdValue: null,
+      isDirect: true
+    })
+  ], ['last_non_direct', 'clicks_only']);
+
+  assert.deepEqual(
+    result.creditsByModel.last_non_direct.map((credit) => credit.revenueCredit),
+    ['100.00', '0.00']
+  );
+  assert.equal(result.creditsByModel.last_non_direct[0]?.isDirect, false);
+  assert.equal(result.summariesByModel.last_non_direct.directSuppressionApplied, true);
+  assert.deepEqual(
+    result.creditsByModel.clicks_only.map((credit) => credit.revenueCredit),
+    ['100.00', '0.00']
+  );
+});
+
 test('hinted_fallback_only is blocked when deterministic evidence is present', () => {
   const result = execute([
     buildTouchpoint('session-deterministic', '2026-04-10T00:00:00.000Z', {

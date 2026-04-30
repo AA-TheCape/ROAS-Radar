@@ -214,6 +214,27 @@ async function resolveAttributionJourney(client, order) {
 function selectPrimaryCredit(credits) {
     return credits.find((credit) => credit.isPrimary) ?? credits[credits.length - 1];
 }
+function selectPersistedPrimaryTouchpoint(outputs, journey) {
+    const persistedCredit = selectPrimaryCredit(outputs.last_non_direct) ??
+        selectPrimaryCredit(outputs.hinted_fallback_only);
+    if (persistedCredit) {
+        return persistedCredit;
+    }
+    if (!journey.winner) {
+        return null;
+    }
+    return {
+        sessionId: journey.winner.sessionId,
+        source: journey.winner.source,
+        medium: journey.winner.medium,
+        campaign: journey.winner.campaign,
+        content: journey.winner.content,
+        term: journey.winner.term,
+        clickIdType: journey.winner.clickIdType,
+        clickIdValue: journey.winner.clickIdValue,
+        attributionReason: journey.winner.attributionReason
+    };
+}
 async function persistAttribution(client, order, journey) {
     const orderOccurredAt = journey.orderOccurredAtUtc ?? resolveOrderOccurredAt(order);
     const execution = executeAttributionModels(journey.touchpoints, {
@@ -223,7 +244,7 @@ async function persistAttribution(client, order, journey) {
         normalizationFailuresCount: journey.normalizationFailures.length
     });
     const outputs = execution.creditsByModel;
-    const primaryCredit = selectPrimaryCredit(outputs.last_touch);
+    const primaryCredit = selectPersistedPrimaryTouchpoint(outputs, journey);
     const matchedAt = new Date();
     const orderAttributionAudit = buildOrderAttributionAuditRecord(journey, matchedAt);
     const matchSource = buildAttributionMatchSource(journey);
@@ -321,7 +342,7 @@ async function persistAttribution(client, order, journey) {
       VALUES (
         $1,
         $2::uuid,
-        'last_touch',
+        'last_non_direct',
         $3,
         $4,
         $5,

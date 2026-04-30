@@ -1,3 +1,4 @@
+import { inferEngagementType, isDirectTouchpoint, isWithinLookbackWindow } from './rules.js';
 export const ATTRIBUTION_MODELS = [
     'first_touch',
     'last_touch',
@@ -6,8 +7,6 @@ export const ATTRIBUTION_MODELS = [
     'clicks_only',
     'hinted_fallback_only'
 ];
-const CLICK_LOOKBACK_WINDOW_MS = 28 * 24 * 60 * 60 * 1000;
-const VIEW_LOOKBACK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const EVIDENCE_SOURCE_PRECEDENCE = {
     landing_session_id: 0,
     checkout_token: 1,
@@ -91,15 +90,6 @@ function inferEvidenceSource(touchpoint) {
             return touchpoint.isForced ? 'shopify_marketing_hint' : 'customer_identity';
     }
 }
-function inferEngagementType(touchpoint) {
-    if (touchpoint.engagementType === 'click' || touchpoint.engagementType === 'view') {
-        return touchpoint.engagementType;
-    }
-    if (touchpoint.engagementType === 'unknown') {
-        return 'unknown';
-    }
-    return touchpoint.clickIdValue ? 'click' : 'click';
-}
 function stableTouchpointId(touchpoint, fallbackIndex) {
     const explicitId = normalizeNullableString(touchpoint.touchpointId);
     if (explicitId) {
@@ -169,19 +159,6 @@ function compareFirstTouchWinner(left, right) {
     }
     return compareLexical(left.touchpointId, right.touchpointId);
 }
-function isWithinLookbackWindow(orderOccurredAt, touchpoint) {
-    const deltaMs = orderOccurredAt.getTime() - touchpoint.occurredAt.getTime();
-    if (deltaMs < 0) {
-        return false;
-    }
-    if (touchpoint.engagementType === 'click') {
-        return deltaMs <= CLICK_LOOKBACK_WINDOW_MS;
-    }
-    if (touchpoint.engagementType === 'view') {
-        return deltaMs <= VIEW_LOOKBACK_WINDOW_MS;
-    }
-    return false;
-}
 function qualifiesSyntheticHint(touchpoint) {
     if (touchpoint.evidenceSource !== 'shopify_marketing_hint' || !touchpoint.isSynthetic) {
         return false;
@@ -203,11 +180,22 @@ function normalizeTouchpoints(rawTouchpoints, orderOccurredAt) {
         ...touchpoint,
         touchpointId: stableTouchpointId(touchpoint, index),
         evidenceSource: inferEvidenceSource(touchpoint),
-        engagementType: inferEngagementType(touchpoint),
+        engagementType: inferEngagementType({
+            engagementType: touchpoint.engagementType,
+            clickIdValue: touchpoint.clickIdValue
+        }),
+        isDirect: isDirectTouchpoint({
+            source: touchpoint.source,
+            medium: touchpoint.medium,
+            campaign: touchpoint.campaign,
+            content: touchpoint.content,
+            term: touchpoint.term,
+            clickIdValue: touchpoint.clickIdValue
+        }),
         isSynthetic: Boolean(touchpoint.isSynthetic ?? touchpoint.isForced)
     }))
         .filter((touchpoint) => Number.isFinite(touchpoint.occurredAt.getTime()))
-        .filter((touchpoint) => isWithinLookbackWindow(orderOccurredAt, touchpoint))
+        .filter((touchpoint) => isWithinLookbackWindow(orderOccurredAt, touchpoint.occurredAt, touchpoint.engagementType))
         .sort(compareTimelineOrder);
 }
 function buildStrategyContext(rawTouchpoints, options) {

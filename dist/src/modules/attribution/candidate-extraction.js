@@ -1,7 +1,7 @@
 import { buildCanonicalTouchpointDimensions } from '../marketing-dimensions/index.js';
 import { extractShopifyHintAttribution } from '../shopify/attribution-hints.js';
 import { confidenceScoreForWinner, dedupeDeterministicCandidates, isDirectTouchpoint } from './resolver.js';
-const ATTRIBUTION_WINDOW_DAYS = 7;
+import { CLICK_LOOKBACK_WINDOW_DAYS } from './rules.js';
 function normalizeNullableString(value) {
     const normalized = value?.trim();
     return normalized ? normalized : null;
@@ -161,7 +161,7 @@ async function fetchLatestTokenCandidate(client, tokenColumn, token, orderOccurr
         AND e.occurred_at >= $2 - ($3::int * interval '1 day')
       ORDER BY e.occurred_at DESC, e.id DESC
       LIMIT 1
-    `, [token, orderOccurredAtUtc, ATTRIBUTION_WINDOW_DAYS]);
+    `, [token, orderOccurredAtUtc, CLICK_LOOKBACK_WINDOW_DAYS]);
     const row = result.rows[0];
     return row ? buildResolvedTouchpoint(row, ingestionSource, attributionReason, true) : null;
 }
@@ -217,7 +217,7 @@ async function fetchIdentityCandidates(client, order, orderOccurredAtUtc) {
         AND s.first_seen_at <= $3
         AND s.first_seen_at >= $3 - ($4::int * interval '1 day')
       ORDER BY s.first_seen_at ASC, s.id ASC
-    `, [order.customerIdentityId ?? null, order.shopifyOrderId, orderOccurredAtUtc, ATTRIBUTION_WINDOW_DAYS]);
+    `, [order.customerIdentityId ?? null, order.shopifyOrderId, orderOccurredAtUtc, CLICK_LOOKBACK_WINDOW_DAYS]);
     return result.rows.map((row) => buildResolvedTouchpoint(row, 'customer_identity', 'matched_by_customer_identity', false));
 }
 function mapDeterministicCandidate(candidate) {

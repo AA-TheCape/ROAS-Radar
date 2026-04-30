@@ -1,3 +1,5 @@
+import { inferEngagementType, isDirectTouchpoint, isWithinLookbackWindow } from './rules.js';
+
 export const ATTRIBUTION_MODELS = [
   'first_touch',
   'last_touch',
@@ -129,9 +131,6 @@ type StrategyResult = {
   lookbackRuleApplied: AttributionLookbackRule;
 };
 
-const CLICK_LOOKBACK_WINDOW_MS = 28 * 24 * 60 * 60 * 1000;
-const VIEW_LOOKBACK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
-
 const EVIDENCE_SOURCE_PRECEDENCE: Record<AttributionEvidenceSource, number> = {
   landing_session_id: 0,
   checkout_token: 1,
@@ -236,18 +235,6 @@ function inferEvidenceSource(touchpoint: AttributionTouchpoint): AttributionEvid
   }
 }
 
-function inferEngagementType(touchpoint: AttributionTouchpoint): AttributionEngagementType {
-  if (touchpoint.engagementType === 'click' || touchpoint.engagementType === 'view') {
-    return touchpoint.engagementType;
-  }
-
-  if (touchpoint.engagementType === 'unknown') {
-    return 'unknown';
-  }
-
-  return touchpoint.clickIdValue ? 'click' : 'click';
-}
-
 function stableTouchpointId(touchpoint: AttributionTouchpoint, fallbackIndex: number): string {
   const explicitId = normalizeNullableString(touchpoint.touchpointId);
   if (explicitId) {
@@ -337,26 +324,6 @@ function compareFirstTouchWinner(left: NormalizedTouchpoint, right: NormalizedTo
   return compareLexical(left.touchpointId, right.touchpointId);
 }
 
-function isWithinLookbackWindow(
-  orderOccurredAt: Date,
-  touchpoint: Pick<NormalizedTouchpoint, 'occurredAt' | 'engagementType'>
-): boolean {
-  const deltaMs = orderOccurredAt.getTime() - touchpoint.occurredAt.getTime();
-  if (deltaMs < 0) {
-    return false;
-  }
-
-  if (touchpoint.engagementType === 'click') {
-    return deltaMs <= CLICK_LOOKBACK_WINDOW_MS;
-  }
-
-  if (touchpoint.engagementType === 'view') {
-    return deltaMs <= VIEW_LOOKBACK_WINDOW_MS;
-  }
-
-  return false;
-}
-
 function qualifiesSyntheticHint(touchpoint: NormalizedTouchpoint): boolean {
   if (touchpoint.evidenceSource !== 'shopify_marketing_hint' || !touchpoint.isSynthetic) {
     return false;
@@ -383,11 +350,22 @@ function normalizeTouchpoints(rawTouchpoints: AttributionTouchpoint[], orderOccu
       ...touchpoint,
       touchpointId: stableTouchpointId(touchpoint, index),
       evidenceSource: inferEvidenceSource(touchpoint),
-      engagementType: inferEngagementType(touchpoint),
+      engagementType: inferEngagementType({
+        engagementType: touchpoint.engagementType,
+        clickIdValue: touchpoint.clickIdValue
+      }),
+      isDirect: isDirectTouchpoint({
+        source: touchpoint.source,
+        medium: touchpoint.medium,
+        campaign: touchpoint.campaign,
+        content: touchpoint.content,
+        term: touchpoint.term,
+        clickIdValue: touchpoint.clickIdValue
+      }),
       isSynthetic: Boolean(touchpoint.isSynthetic ?? touchpoint.isForced)
     }))
     .filter((touchpoint) => Number.isFinite(touchpoint.occurredAt.getTime()))
-    .filter((touchpoint) => isWithinLookbackWindow(orderOccurredAt, touchpoint))
+    .filter((touchpoint) => isWithinLookbackWindow(orderOccurredAt, touchpoint.occurredAt, touchpoint.engagementType))
     .sort(compareTimelineOrder);
 }
 

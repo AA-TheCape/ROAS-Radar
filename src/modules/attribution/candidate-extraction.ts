@@ -12,8 +12,7 @@ import {
   type DeterministicIngestionSource,
   type ResolvedAttributionTouchpoint
 } from './resolver.js';
-
-const ATTRIBUTION_WINDOW_DAYS = 7;
+import { CLICK_LOOKBACK_WINDOW_DAYS } from './rules.js';
 
 type OrderTimestampSource = 'processed_at' | 'created_at_shopify' | 'ingested_at';
 
@@ -306,7 +305,7 @@ async function fetchLatestTokenCandidate(
       ORDER BY e.occurred_at DESC, e.id DESC
       LIMIT 1
     `,
-    [token, orderOccurredAtUtc, ATTRIBUTION_WINDOW_DAYS]
+    [token, orderOccurredAtUtc, CLICK_LOOKBACK_WINDOW_DAYS]
   );
 
   const row = result.rows[0];
@@ -372,7 +371,7 @@ async function fetchIdentityCandidates(
         AND s.first_seen_at >= $3 - ($4::int * interval '1 day')
       ORDER BY s.first_seen_at ASC, s.id ASC
     `,
-    [order.customerIdentityId ?? null, order.shopifyOrderId, orderOccurredAtUtc, ATTRIBUTION_WINDOW_DAYS]
+    [order.customerIdentityId ?? null, order.shopifyOrderId, orderOccurredAtUtc, CLICK_LOOKBACK_WINDOW_DAYS]
   );
 
   return result.rows.map((row) =>
