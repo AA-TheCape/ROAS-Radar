@@ -28,6 +28,7 @@
 - [Attribution Schema V1](attribution-schema-v1.md): shared attribution contract, normalization rules, DB mappings, Shopify keys, rollout expectations, and how canonical attribution fields relate to raw-source storage.
 - [Raw Payload Persistence Contract](raw-payload-persistence-contract.md): exact-as-received JSONB contract for Shopify, Meta Ads, and Google Ads raw-source ingestion surfaces.
 - [Meta Attributed Revenue Contract V1](meta-attributed-revenue-contract-v1.md): canonical Meta campaign-day attributed revenue extraction, selection priority, and normalized aggregate-table semantics.
+- [Meta Order Value Read API](meta-order-value-read-api.md): authenticated dashboard read contract for Meta order value totals, rows, tenant scope, and pagination.
 - [Operational Attribution Contracts](operational-attribution-contracts.md): resolver precedence, Shopify writeback lifecycle, retention rules, and incident-routing links.
 - [Shopify App Setup](shopify-app-setup.md): Shopify app install flow, OAuth, and webhook provisioning.
 - [Visitor Identity Stitching](visitor-identity-stitching.md): deterministic identity-linking behavior for Shopify customers, orders, and tracked sessions.

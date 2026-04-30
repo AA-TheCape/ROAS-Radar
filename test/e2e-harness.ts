@@ -17,6 +17,8 @@ async function getPool() {
 export async function resetE2EDatabase(): Promise<void> {
   const pool = await getPool();
   await resetIntegrationTables(pool, [
+    'app_sessions',
+    'app_users',
     'ad_sync_api_transactions',
     'meta_ads_order_value_raw_records',
     'meta_ads_order_value_sync_runs',

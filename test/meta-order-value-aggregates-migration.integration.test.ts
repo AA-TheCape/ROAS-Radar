@@ -12,6 +12,7 @@ const EXPECTED_INDEXES = [
   'meta_ads_order_value_aggregates_connection_report_date_idx',
   'meta_ads_order_value_aggregates_dedupe_key',
   'meta_ads_order_value_aggregates_org_account_report_date_idx',
+  'meta_ads_order_value_aggregates_org_report_date_campaign_idx',
   'meta_ads_order_value_aggregates_sync_job_idx'
 ] as const;
 
