@@ -6,6 +6,9 @@ import {
   ORDER_ATTRIBUTION_BACKFILL_MAX_LIMIT,
   normalizeAttributionCaptureV1,
   normalizeAttributionConsentState,
+  normalizeAttributionHintInputV1,
+  normalizeAttributionOrderInputV1,
+  normalizeAttributionTouchpointInputV1,
   normalizeOrderAttributionBackfillRequest,
   orderAttributionBackfillEnqueueResponseSchema,
   orderAttributionBackfillJobResponseSchema
@@ -225,4 +228,74 @@ test('order attribution backfill job responses accept queued and processing payl
   assert.equal(processingJob.startedAt, '2026-04-25T12:35:00.000Z');
   assert.equal(processingJob.completedAt, null);
   assert.equal(processingJob.error, null);
+});
+
+test('attribution v1 order, touchpoint, and hint schemas normalize canonical preprocessing records', () => {
+  const order = normalizeAttributionOrderInputV1({
+    schema_version: 1,
+    order_id: 'shopify-order-1',
+    order_platform: 'shopify',
+    order_occurred_at_utc: '2026-04-30T12:00:00Z',
+    order_timestamp_source: 'processed_at',
+    currency_code: 'usd',
+    subtotal_amount: '100.0',
+    total_amount: 120,
+    landing_session_id: '123e4567-e89b-42d3-a456-426614174000',
+    checkout_token: ' checkout-1 ',
+    cart_token: null,
+    shopify_customer_id: 'customer-1',
+    email_hash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    source_name: 'web',
+    identity_journey_id: '123e4567-e89b-42d3-a456-426614174111',
+    raw_order_ref: {
+      source: 'shopify_orders.raw_payload'
+    }
+  });
+
+  const hint = normalizeAttributionHintInputV1({
+    hint_source_system: 'shopify_order',
+    hint_type: 'landing_site',
+    source: 'Google',
+    medium: 'CPC',
+    campaign: 'Brand',
+    content: null,
+    term: null,
+    click_id_type: 'gclid',
+    click_id_value: 'ABC123',
+    hint_confidence_score: '0.55',
+    hint_confidence_label: 'medium',
+    raw_hint_keys: ['utm_source', 'gclid']
+  });
+
+  const touchpoint = normalizeAttributionTouchpointInputV1({
+    schema_version: 1,
+    touchpoint_id: 'event:1',
+    session_id: '123e4567-e89b-42d3-a456-426614174000',
+    identity_journey_id: '123e4567-e89b-42d3-a456-426614174111',
+    touchpoint_occurred_at_utc: '2026-04-30T11:00:00Z',
+    touchpoint_captured_at_utc: '2026-04-30T11:00:01Z',
+    touchpoint_source_kind: 'session_event',
+    ingestion_source: 'browser',
+    source: 'Google',
+    medium: 'CPC',
+    campaign: 'Brand',
+    content: null,
+    term: null,
+    click_id_type: 'gclid',
+    click_id_value: 'ABC123',
+    evidence_source: 'checkout_token',
+    is_direct: false,
+    engagement_type: 'click',
+    is_synthetic: false,
+    is_eligible: true,
+    ineligibility_reason: null,
+    attribution_reason: 'matched_by_checkout_token',
+    attribution_hint: hint
+  });
+
+  assert.equal(order.currency_code, 'USD');
+  assert.equal(order.total_amount, '120.00');
+  assert.equal(hint.source, 'google');
+  assert.equal(touchpoint.source, 'google');
+  assert.equal(touchpoint.touchpoint_occurred_at_utc, '2026-04-30T11:00:00.000Z');
 });

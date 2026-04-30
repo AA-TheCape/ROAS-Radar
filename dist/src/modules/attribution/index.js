@@ -6,6 +6,7 @@ import { collectDeterministicFirstPartyCandidates, extractAttributionCandidatesF
 import { ATTRIBUTION_MODELS, computeAttributionOutputs, computeSingleWinnerCredits } from './engine.js';
 import { buildAttributionConfidenceLabel, buildAttributionMatchSource, buildOrderAttributionAuditRecord } from './order-attribution-audit.js';
 import { confidenceScoreForWinner, dedupeDeterministicCandidates, isDirectTouchpoint, resolveAttributionTier, selectLastNonDirectWinner } from './resolver.js';
+import { loadAttributionPreprocessingSnapshot, preprocessAttributionOrders, preprocessAttributionSnapshot } from './preprocessing.js';
 const ATTRIBUTION_MODEL_VERSION = 1;
 const JOB_STALE_AFTER_MINUTES = 15;
 const MAX_RETRY_DELAY_SECONDS = 1_800;
@@ -603,5 +604,7 @@ export const __attributionTestUtils = {
     confidenceScoreForWinner,
     resolveAttributionTier,
     collectDeterministicFirstPartyCandidates,
-    extractAttributionCandidatesForOrder
+    extractAttributionCandidatesForOrder,
+    preprocessAttributionSnapshot
 };
+export { loadAttributionPreprocessingSnapshot, preprocessAttributionOrders, preprocessAttributionSnapshot };

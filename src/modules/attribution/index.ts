@@ -25,6 +25,11 @@ import {
   type ResolvedJourney,
   type ResolvedAttributionTouchpoint
 } from './resolver.js';
+import {
+  loadAttributionPreprocessingSnapshot,
+  preprocessAttributionOrders,
+  preprocessAttributionSnapshot
+} from './preprocessing.js';
 
 const ATTRIBUTION_MODEL_VERSION = 1;
 const JOB_STALE_AFTER_MINUTES = 15;
@@ -800,5 +805,8 @@ export const __attributionTestUtils = {
   confidenceScoreForWinner,
   resolveAttributionTier,
   collectDeterministicFirstPartyCandidates,
-  extractAttributionCandidatesForOrder
+  extractAttributionCandidatesForOrder,
+  preprocessAttributionSnapshot
 };
+
+export { loadAttributionPreprocessingSnapshot, preprocessAttributionOrders, preprocessAttributionSnapshot };
