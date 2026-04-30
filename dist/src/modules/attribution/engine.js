@@ -1,26 +1,30 @@
 export const ATTRIBUTION_MODELS = [
     'first_touch',
     'last_touch',
+    'last_non_direct',
     'linear',
-    'time_decay',
-    'position_based',
-    'rule_based_weighted'
+    'clicks_only',
+    'hinted_fallback_only'
 ];
-const DEFAULT_TIME_DECAY_HALF_LIFE_DAYS = 7;
-const DEFAULT_POSITION_BASED_FIRST_WEIGHT = 0.4;
-const DEFAULT_POSITION_BASED_LAST_WEIGHT = 0.4;
-const DEFAULT_RULE_BASED_WEIGHTS = {
-    firstTouchWeight: 0.3,
-    middleTouchWeight: 0.2,
-    lastTouchWeight: 0.5,
-    clickIdBonusMultiplier: 1.25,
-    directDiscountMultiplier: 0.5
+const CLICK_LOOKBACK_WINDOW_MS = 28 * 24 * 60 * 60 * 1000;
+const VIEW_LOOKBACK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const EVIDENCE_SOURCE_PRECEDENCE = {
+    landing_session_id: 0,
+    checkout_token: 1,
+    cart_token: 2,
+    customer_identity: 3,
+    shopify_marketing_hint: 4,
+    ga4_fallback: 5
 };
-function toPositiveNumber(value, fallback) {
-    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
-        return fallback;
-    }
-    return value;
+const FIRST_PARTY_EVIDENCE_SOURCES = new Set([
+    'landing_session_id',
+    'checkout_token',
+    'cart_token',
+    'customer_identity'
+]);
+function normalizeNullableString(value) {
+    const normalized = value?.trim();
+    return normalized ? normalized : null;
 }
 function revenueToCents(value) {
     const numericValue = typeof value === 'number' ? value : Number.parseFloat(value);
@@ -36,7 +40,7 @@ function normalizeWeights(rawWeights) {
     const positiveWeights = rawWeights.map((value) => (Number.isFinite(value) && value > 0 ? value : 0));
     const totalWeight = positiveWeights.reduce((sum, value) => sum + value, 0);
     if (totalWeight <= 0) {
-        return positiveWeights.length === 0 ? [] : positiveWeights.map(() => 1 / positiveWeights.length);
+        return positiveWeights.map(() => 0);
     }
     return positiveWeights.map((value) => value / totalWeight);
 }
@@ -73,13 +77,184 @@ function allocateRevenueAcrossWeights(totalCents, normalizedWeights) {
     }
     return provisional.map((entry) => entry.wholeCents);
 }
+function inferEvidenceSource(touchpoint) {
+    const rawEvidenceSource = touchpoint.evidenceSource ?? touchpoint.ingestionSource ?? null;
+    switch (rawEvidenceSource) {
+        case 'landing_session_id':
+        case 'checkout_token':
+        case 'cart_token':
+        case 'customer_identity':
+        case 'shopify_marketing_hint':
+        case 'ga4_fallback':
+            return rawEvidenceSource;
+        default:
+            return touchpoint.isForced ? 'shopify_marketing_hint' : 'customer_identity';
+    }
+}
+function inferEngagementType(touchpoint) {
+    if (touchpoint.engagementType === 'click' || touchpoint.engagementType === 'view') {
+        return touchpoint.engagementType;
+    }
+    if (touchpoint.engagementType === 'unknown') {
+        return 'unknown';
+    }
+    return touchpoint.clickIdValue ? 'click' : 'click';
+}
+function stableTouchpointId(touchpoint, fallbackIndex) {
+    const explicitId = normalizeNullableString(touchpoint.touchpointId);
+    if (explicitId) {
+        return explicitId;
+    }
+    const eventId = normalizeNullableString(touchpoint.sourceTouchEventId);
+    if (eventId) {
+        return eventId;
+    }
+    const sessionId = normalizeNullableString(touchpoint.sessionId);
+    if (sessionId) {
+        return `session:${sessionId}:${touchpoint.occurredAt.toISOString()}:${fallbackIndex}`;
+    }
+    return `touchpoint:${touchpoint.occurredAt.toISOString()}:${fallbackIndex}`;
+}
+function compareLexical(left, right) {
+    return (left ?? '').localeCompare(right ?? '');
+}
+function compareTimelineOrder(left, right) {
+    const occurredAtComparison = left.occurredAt.getTime() - right.occurredAt.getTime();
+    if (occurredAtComparison !== 0) {
+        return occurredAtComparison;
+    }
+    const evidenceComparison = EVIDENCE_SOURCE_PRECEDENCE[left.evidenceSource] - EVIDENCE_SOURCE_PRECEDENCE[right.evidenceSource];
+    if (evidenceComparison !== 0) {
+        return evidenceComparison;
+    }
+    if (left.engagementType !== right.engagementType) {
+        return left.engagementType === 'click' ? -1 : 1;
+    }
+    if (Boolean(left.clickIdValue) !== Boolean(right.clickIdValue)) {
+        return Number(Boolean(right.clickIdValue)) - Number(Boolean(left.clickIdValue));
+    }
+    return compareLexical(left.touchpointId, right.touchpointId);
+}
+function compareLastTouchWinner(left, right) {
+    const occurredAtComparison = right.occurredAt.getTime() - left.occurredAt.getTime();
+    if (occurredAtComparison !== 0) {
+        return occurredAtComparison;
+    }
+    const evidenceComparison = EVIDENCE_SOURCE_PRECEDENCE[left.evidenceSource] - EVIDENCE_SOURCE_PRECEDENCE[right.evidenceSource];
+    if (evidenceComparison !== 0) {
+        return evidenceComparison;
+    }
+    if (left.engagementType !== right.engagementType) {
+        return left.engagementType === 'click' ? -1 : 1;
+    }
+    if (Boolean(left.clickIdValue) !== Boolean(right.clickIdValue)) {
+        return Number(Boolean(right.clickIdValue)) - Number(Boolean(left.clickIdValue));
+    }
+    return compareLexical(left.touchpointId, right.touchpointId);
+}
+function compareFirstTouchWinner(left, right) {
+    const occurredAtComparison = left.occurredAt.getTime() - right.occurredAt.getTime();
+    if (occurredAtComparison !== 0) {
+        return occurredAtComparison;
+    }
+    const evidenceComparison = EVIDENCE_SOURCE_PRECEDENCE[left.evidenceSource] - EVIDENCE_SOURCE_PRECEDENCE[right.evidenceSource];
+    if (evidenceComparison !== 0) {
+        return evidenceComparison;
+    }
+    if (left.engagementType !== right.engagementType) {
+        return left.engagementType === 'click' ? -1 : 1;
+    }
+    if (Boolean(left.clickIdValue) !== Boolean(right.clickIdValue)) {
+        return Number(Boolean(right.clickIdValue)) - Number(Boolean(left.clickIdValue));
+    }
+    return compareLexical(left.touchpointId, right.touchpointId);
+}
+function isWithinLookbackWindow(orderOccurredAt, touchpoint) {
+    const deltaMs = orderOccurredAt.getTime() - touchpoint.occurredAt.getTime();
+    if (deltaMs < 0) {
+        return false;
+    }
+    if (touchpoint.engagementType === 'click') {
+        return deltaMs <= CLICK_LOOKBACK_WINDOW_MS;
+    }
+    if (touchpoint.engagementType === 'view') {
+        return deltaMs <= VIEW_LOOKBACK_WINDOW_MS;
+    }
+    return false;
+}
+function qualifiesSyntheticHint(touchpoint) {
+    if (touchpoint.evidenceSource !== 'shopify_marketing_hint' || !touchpoint.isSynthetic) {
+        return false;
+    }
+    if (touchpoint.clickIdValue) {
+        return true;
+    }
+    if (touchpoint.source && touchpoint.medium) {
+        return true;
+    }
+    if (touchpoint.source && touchpoint.campaign) {
+        return true;
+    }
+    return false;
+}
+function normalizeTouchpoints(rawTouchpoints, orderOccurredAt) {
+    return rawTouchpoints
+        .map((touchpoint, index) => ({
+        ...touchpoint,
+        touchpointId: stableTouchpointId(touchpoint, index),
+        evidenceSource: inferEvidenceSource(touchpoint),
+        engagementType: inferEngagementType(touchpoint),
+        isSynthetic: Boolean(touchpoint.isSynthetic ?? touchpoint.isForced)
+    }))
+        .filter((touchpoint) => Number.isFinite(touchpoint.occurredAt.getTime()))
+        .filter((touchpoint) => isWithinLookbackWindow(orderOccurredAt, touchpoint))
+        .sort(compareTimelineOrder);
+}
+function buildStrategyContext(rawTouchpoints, options) {
+    const eligibleTouchpoints = normalizeTouchpoints(rawTouchpoints, options.orderOccurredAt);
+    const eligibleClicks = eligibleTouchpoints.filter((touchpoint) => touchpoint.engagementType === 'click');
+    const eligibleViews = eligibleTouchpoints.filter((touchpoint) => touchpoint.engagementType === 'view');
+    const deterministicTouchpoints = eligibleTouchpoints.filter((touchpoint) => FIRST_PARTY_EVIDENCE_SOURCES.has(touchpoint.evidenceSource));
+    const hintedFallbackCandidates = eligibleTouchpoints.filter(qualifiesSyntheticHint);
+    return {
+        eligibleTouchpoints,
+        eligibleClicks,
+        eligibleViews,
+        deterministicTouchpoints,
+        hintedFallbackCandidates,
+        orderRevenue: options.orderRevenue,
+        normalizationFailuresCount: Math.max(0, Math.trunc(options.normalizationFailuresCount ?? 0))
+    };
+}
+function buildZeroWeights(length) {
+    return Array.from({ length }, () => 0);
+}
+function buildWinnerWeights(touchpoints, winnerId) {
+    return touchpoints.map((touchpoint) => (winnerId && touchpoint.touchpointId === winnerId ? 1 : 0));
+}
+function pickWinner(touchpoints, comparator) {
+    return touchpoints.slice().sort(comparator)[0] ?? null;
+}
+function resolveLookbackRule(clickCount, viewCount) {
+    if (clickCount > 0 && viewCount > 0) {
+        return 'mixed';
+    }
+    if (viewCount > 0) {
+        return '7d_view';
+    }
+    return '28d_click';
+}
 function buildCredits(attributionModel, touchpoints, normalizedWeights, totalRevenue) {
     const totalCents = revenueToCents(totalRevenue);
-    const creditedCents = allocateRevenueAcrossWeights(totalCents, normalizedWeights);
+    const hasAttributedWeight = normalizedWeights.some((weight) => weight > 0);
+    const creditedCents = hasAttributedWeight
+        ? allocateRevenueAcrossWeights(totalCents, normalizedWeights)
+        : normalizedWeights.map(() => 0);
     const highestCreditCents = creditedCents.reduce((max, value) => Math.max(max, value), 0);
-    const primaryTouchpointIndex = creditedCents.findIndex((value) => value === highestCreditCents);
+    const primaryTouchpointIndex = highestCreditCents > 0 ? creditedCents.findIndex((value) => value === highestCreditCents) : -1;
     return touchpoints.map((touchpoint, index) => ({
         attributionModel,
+        touchpointId: touchpoint.touchpointId,
         touchpointPosition: index,
         sessionId: touchpoint.sessionId,
         touchpointOccurredAt: touchpoint.occurredAt,
@@ -91,118 +266,175 @@ function buildCredits(attributionModel, touchpoints, normalizedWeights, totalRev
         clickIdType: touchpoint.clickIdType,
         clickIdValue: touchpoint.clickIdValue,
         attributionReason: touchpoint.attributionReason,
+        evidenceSource: touchpoint.evidenceSource,
+        engagementType: touchpoint.engagementType,
+        isDirect: touchpoint.isDirect,
+        isSynthetic: touchpoint.isSynthetic,
         creditWeight: normalizedWeights[index] ?? 0,
         revenueCredit: centsToRevenue(creditedCents[index] ?? 0),
         isPrimary: index === primaryTouchpointIndex
     }));
 }
-export function computeSingleWinnerCredits(attributionModel, touchpoints, winnerIndex, totalRevenue) {
-    const winnerWeights = touchpoints.map((_touchpoint, index) => (index === winnerIndex ? 1 : 0));
-    return buildCredits(attributionModel, touchpoints, normalizeWeights(winnerWeights), totalRevenue);
-}
-function firstTouchWeights(touchpoints) {
-    return touchpoints.map((_touchpoint, index) => (index === 0 ? 1 : 0));
-}
-function lastTouchWeights(touchpoints) {
-    const lastIndex = Math.max(touchpoints.length - 1, 0);
-    return touchpoints.map((_touchpoint, index) => (index === lastIndex ? 1 : 0));
-}
-function linearWeights(touchpoints) {
-    return touchpoints.map(() => 1);
-}
-function timeDecayWeights(touchpoints, orderOccurredAt, halfLifeDays) {
-    const halfLifeMs = toPositiveNumber(halfLifeDays, DEFAULT_TIME_DECAY_HALF_LIFE_DAYS) * 24 * 60 * 60 * 1000;
-    return touchpoints.map((touchpoint) => {
-        const deltaMs = Math.max(orderOccurredAt.getTime() - touchpoint.occurredAt.getTime(), 0);
-        return 0.5 ** (deltaMs / halfLifeMs);
-    });
-}
-function positionBasedWeights(touchpoints, firstWeight, lastWeight) {
-    if (touchpoints.length <= 1) {
-        return [1];
+const attributionStrategies = {
+    first_touch(context) {
+        const winner = pickWinner(context.eligibleTouchpoints, compareFirstTouchWinner);
+        return {
+            touchpoints: context.eligibleTouchpoints,
+            weights: buildWinnerWeights(context.eligibleTouchpoints, winner?.touchpointId ?? null),
+            allocationStatus: winner ? 'attributed' : 'no_eligible_touches',
+            directSuppressionApplied: false,
+            deterministicBlockApplied: false,
+            lookbackRuleApplied: resolveLookbackRule(context.eligibleClicks.length, context.eligibleViews.length)
+        };
+    },
+    last_touch(context) {
+        const winner = pickWinner(context.eligibleTouchpoints, compareLastTouchWinner);
+        return {
+            touchpoints: context.eligibleTouchpoints,
+            weights: buildWinnerWeights(context.eligibleTouchpoints, winner?.touchpointId ?? null),
+            allocationStatus: winner ? 'attributed' : 'no_eligible_touches',
+            directSuppressionApplied: false,
+            deterministicBlockApplied: false,
+            lookbackRuleApplied: resolveLookbackRule(context.eligibleClicks.length, context.eligibleViews.length)
+        };
+    },
+    last_non_direct(context) {
+        const nonDirectTouchpoints = context.eligibleTouchpoints.filter((touchpoint) => !touchpoint.isDirect);
+        const winnerPool = nonDirectTouchpoints.length > 0 ? nonDirectTouchpoints : context.eligibleTouchpoints;
+        const winner = pickWinner(winnerPool, compareLastTouchWinner);
+        return {
+            touchpoints: context.eligibleTouchpoints,
+            weights: buildWinnerWeights(context.eligibleTouchpoints, winner?.touchpointId ?? null),
+            allocationStatus: winner ? 'attributed' : 'no_eligible_touches',
+            directSuppressionApplied: nonDirectTouchpoints.length > 0,
+            deterministicBlockApplied: false,
+            lookbackRuleApplied: resolveLookbackRule(context.eligibleClicks.length, context.eligibleViews.length)
+        };
+    },
+    linear(context) {
+        return {
+            touchpoints: context.eligibleTouchpoints,
+            weights: context.eligibleTouchpoints.map(() => 1),
+            allocationStatus: context.eligibleTouchpoints.length > 0 ? 'attributed' : 'no_eligible_touches',
+            directSuppressionApplied: false,
+            deterministicBlockApplied: false,
+            lookbackRuleApplied: resolveLookbackRule(context.eligibleClicks.length, context.eligibleViews.length)
+        };
+    },
+    clicks_only(context) {
+        const nonDirectClicks = context.eligibleClicks.filter((touchpoint) => !touchpoint.isDirect);
+        const winnerPool = nonDirectClicks.length > 0 ? nonDirectClicks : context.eligibleClicks;
+        const winner = pickWinner(winnerPool, compareLastTouchWinner);
+        return {
+            touchpoints: context.eligibleTouchpoints,
+            weights: buildWinnerWeights(context.eligibleTouchpoints, winner?.touchpointId ?? null),
+            allocationStatus: winner ? 'attributed' : 'no_eligible_touches',
+            directSuppressionApplied: nonDirectClicks.length > 0,
+            deterministicBlockApplied: false,
+            lookbackRuleApplied: '28d_click'
+        };
+    },
+    hinted_fallback_only(context) {
+        if (context.deterministicTouchpoints.length > 0) {
+            return {
+                touchpoints: context.eligibleTouchpoints,
+                weights: buildZeroWeights(context.eligibleTouchpoints.length),
+                allocationStatus: 'blocked_by_deterministic',
+                directSuppressionApplied: false,
+                deterministicBlockApplied: true,
+                lookbackRuleApplied: resolveLookbackRule(context.eligibleClicks.length, context.eligibleViews.length)
+            };
+        }
+        const winner = pickWinner(context.hintedFallbackCandidates, compareLastTouchWinner);
+        return {
+            touchpoints: context.eligibleTouchpoints,
+            weights: buildWinnerWeights(context.eligibleTouchpoints, winner?.touchpointId ?? null),
+            allocationStatus: winner ? 'attributed' : 'unattributed',
+            directSuppressionApplied: false,
+            deterministicBlockApplied: false,
+            lookbackRuleApplied: resolveLookbackRule(context.eligibleClicks.length, context.eligibleViews.length)
+        };
     }
-    if (touchpoints.length === 2) {
-        return [1, 1];
+};
+function validateRequestedModels(models) {
+    if (!models || models.length === 0) {
+        return [...ATTRIBUTION_MODELS];
     }
-    const normalizedFirstWeight = Math.min(Math.max(firstWeight, 0), 1);
-    const normalizedLastWeight = Math.min(Math.max(lastWeight, 0), 1);
-    const remainingWeight = Math.max(1 - normalizedFirstWeight - normalizedLastWeight, 0);
-    const middleWeight = remainingWeight / Math.max(touchpoints.length - 2, 1);
-    return touchpoints.map((_touchpoint, index) => {
-        if (index === 0) {
-            return normalizedFirstWeight;
+    const uniqueModels = Array.from(new Set(models));
+    for (const model of uniqueModels) {
+        if (!ATTRIBUTION_MODELS.includes(model)) {
+            throw new Error(`Unsupported attribution model: ${model}`);
         }
-        if (index === touchpoints.length - 1) {
-            return normalizedLastWeight;
-        }
-        return middleWeight;
-    });
+    }
+    return uniqueModels;
 }
-function ruleBasedWeights(touchpoints, config) {
-    const mergedConfig = {
-        ...DEFAULT_RULE_BASED_WEIGHTS,
-        ...config
-    };
-    const lastIndex = Math.max(touchpoints.length - 1, 0);
-    return touchpoints.map((touchpoint, index) => {
-        let positionWeight = mergedConfig.middleTouchWeight;
-        if (touchpoints.length === 1) {
-            positionWeight = 1;
-        }
-        else if (index === 0) {
-            positionWeight = mergedConfig.firstTouchWeight;
-        }
-        else if (index === lastIndex) {
-            positionWeight = mergedConfig.lastTouchWeight;
-        }
-        let multiplier = 1;
-        if (touchpoint.clickIdValue) {
-            multiplier *= mergedConfig.clickIdBonusMultiplier;
-        }
-        if (touchpoint.isDirect) {
-            multiplier *= mergedConfig.directDiscountMultiplier;
-        }
-        const normalizedSource = touchpoint.source?.trim().toLowerCase() ?? null;
-        const normalizedMedium = touchpoint.medium?.trim().toLowerCase() ?? null;
-        if (normalizedSource && config?.sourceWeights?.[normalizedSource]) {
-            multiplier *= config.sourceWeights[normalizedSource];
-        }
-        if (normalizedMedium && config?.mediumWeights?.[normalizedMedium]) {
-            multiplier *= config.mediumWeights[normalizedMedium];
-        }
-        return positionWeight * multiplier;
-    });
-}
-export function buildUnattributedTouchpoint(orderOccurredAt) {
+export function executeAttributionModels(rawTouchpoints, options) {
+    if (!(options.orderOccurredAt instanceof Date) || Number.isNaN(options.orderOccurredAt.getTime())) {
+        throw new Error('orderOccurredAt must be a valid Date');
+    }
+    const models = validateRequestedModels(options.attributionModels);
+    const context = buildStrategyContext(rawTouchpoints, options);
+    const creditsByModel = {};
+    const summariesByModel = {};
+    for (const model of ATTRIBUTION_MODELS) {
+        creditsByModel[model] = [];
+        summariesByModel[model] = {
+            attributionModel: model,
+            allocationStatus: 'unattributed',
+            winnerTouchpointId: null,
+            winnerSessionId: null,
+            winnerEvidenceSource: null,
+            winnerAttributionReason: null,
+            totalCreditWeight: 0,
+            totalRevenueCredited: '0.00',
+            touchpointCountConsidered: 0,
+            eligibleClickCount: context.eligibleClicks.length,
+            eligibleViewCount: context.eligibleViews.length,
+            lookbackRuleApplied: resolveLookbackRule(context.eligibleClicks.length, context.eligibleViews.length),
+            winnerSelectionRule: model,
+            directSuppressionApplied: false,
+            deterministicBlockApplied: false,
+            normalizationFailuresCount: context.normalizationFailuresCount
+        };
+    }
+    for (const model of models) {
+        const strategyResult = attributionStrategies[model](context);
+        const normalizedWeights = normalizeWeights(strategyResult.weights);
+        const credits = buildCredits(model, strategyResult.touchpoints, normalizedWeights, context.orderRevenue);
+        const winner = credits.find((credit) => credit.isPrimary) ?? null;
+        const totalRevenueCredited = credits.reduce((sum, credit) => sum + Number.parseFloat(credit.revenueCredit), 0);
+        const totalCreditWeight = credits.reduce((sum, credit) => sum + credit.creditWeight, 0);
+        const touchpointCountConsidered = model === 'clicks_only'
+            ? context.eligibleClicks.length
+            : model === 'hinted_fallback_only'
+                ? context.hintedFallbackCandidates.length
+                : context.eligibleTouchpoints.length;
+        creditsByModel[model] = credits;
+        summariesByModel[model] = {
+            attributionModel: model,
+            allocationStatus: strategyResult.allocationStatus,
+            winnerTouchpointId: winner?.touchpointId ?? null,
+            winnerSessionId: winner?.sessionId ?? null,
+            winnerEvidenceSource: winner?.evidenceSource ?? null,
+            winnerAttributionReason: winner?.attributionReason ?? null,
+            totalCreditWeight: Number(totalCreditWeight.toFixed(8)),
+            totalRevenueCredited: centsToRevenue(Math.round(totalRevenueCredited * 100)),
+            touchpointCountConsidered,
+            eligibleClickCount: context.eligibleClicks.length,
+            eligibleViewCount: context.eligibleViews.length,
+            lookbackRuleApplied: strategyResult.lookbackRuleApplied,
+            winnerSelectionRule: model,
+            directSuppressionApplied: strategyResult.directSuppressionApplied,
+            deterministicBlockApplied: strategyResult.deterministicBlockApplied,
+            normalizationFailuresCount: context.normalizationFailuresCount
+        };
+    }
     return {
-        sessionId: null,
-        occurredAt: orderOccurredAt,
-        source: null,
-        medium: null,
-        campaign: null,
-        content: null,
-        term: null,
-        clickIdType: null,
-        clickIdValue: null,
-        attributionReason: 'unattributed',
-        isDirect: true,
-        isForced: true
+        models,
+        creditsByModel,
+        summariesByModel
     };
 }
 export function computeAttributionOutputs(rawTouchpoints, options) {
-    const touchpoints = rawTouchpoints.length > 0 ? rawTouchpoints : [buildUnattributedTouchpoint(options.orderOccurredAt)];
-    const positionFirstWeight = toPositiveNumber(options.positionBasedFirstWeight, DEFAULT_POSITION_BASED_FIRST_WEIGHT);
-    const positionLastWeight = toPositiveNumber(options.positionBasedLastWeight, DEFAULT_POSITION_BASED_LAST_WEIGHT);
-    const modelWeights = {
-        first_touch: normalizeWeights(firstTouchWeights(touchpoints)),
-        last_touch: normalizeWeights(lastTouchWeights(touchpoints)),
-        linear: normalizeWeights(linearWeights(touchpoints)),
-        time_decay: normalizeWeights(timeDecayWeights(touchpoints, options.orderOccurredAt, toPositiveNumber(options.timeDecayHalfLifeDays, DEFAULT_TIME_DECAY_HALF_LIFE_DAYS))),
-        position_based: normalizeWeights(positionBasedWeights(touchpoints, positionFirstWeight, positionLastWeight)),
-        rule_based_weighted: normalizeWeights(ruleBasedWeights(touchpoints, options.ruleBasedWeightConfig))
-    };
-    return ATTRIBUTION_MODELS.reduce((outputs, attributionModel) => {
-        outputs[attributionModel] = buildCredits(attributionModel, touchpoints, modelWeights[attributionModel], options.orderRevenue);
-        return outputs;
-    }, {});
+    return executeAttributionModels(rawTouchpoints, options).creditsByModel;
 }

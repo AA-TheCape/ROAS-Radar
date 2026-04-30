@@ -7,8 +7,7 @@ import { formatDateInTimezone, getReportingTimezone } from '../settings/index.js
 import { collectDeterministicFirstPartyCandidates, extractAttributionCandidatesForOrder } from './candidate-extraction.js';
 import {
   ATTRIBUTION_MODELS,
-  computeAttributionOutputs,
-  computeSingleWinnerCredits,
+  executeAttributionModels,
   type AttributionCredit
 } from './engine.js';
 import {
@@ -319,18 +318,6 @@ function serializeResolvedTouchpoint(touchpoint: ResolvedAttributionTouchpoint) 
   };
 }
 
-function isSameResolvedTouchpoint(
-  left: ResolvedAttributionTouchpoint,
-  right: ResolvedAttributionTouchpoint
-): boolean {
-  return (
-    left.sessionId === right.sessionId &&
-    left.sourceTouchEventId === right.sourceTouchEventId &&
-    left.ingestionSource === right.ingestionSource &&
-    left.occurredAt.getTime() === right.occurredAt.getTime()
-  );
-}
-
 async function resolveAttributionJourney(client: PoolClient, order: OrderRow): Promise<ResolvedJourney> {
   const candidates = await extractAttributionCandidatesForOrder(client, {
     shopifyOrderId: order.shopify_order_id,
@@ -355,25 +342,15 @@ function selectPrimaryCredit(credits: AttributionCredit[]): AttributionCredit | 
 
 async function persistAttribution(client: PoolClient, order: OrderRow, journey: ResolvedJourney): Promise<void> {
   const orderOccurredAt = journey.orderOccurredAtUtc ?? resolveOrderOccurredAt(order);
-  const outputs = computeAttributionOutputs(journey.touchpoints, {
+  const execution = executeAttributionModels(journey.touchpoints, {
     orderOccurredAt,
-    orderRevenue: order.total_price
+    orderRevenue: order.total_price,
+    attributionModels: ATTRIBUTION_MODELS,
+    normalizationFailuresCount: journey.normalizationFailures.length
   });
-
-  if (journey.winner) {
-    const winner = journey.winner;
-    const winnerIndex = journey.touchpoints.findIndex((touchpoint) => isSameResolvedTouchpoint(touchpoint, winner));
-
-    if (winnerIndex >= 0) {
-      outputs.last_touch = computeSingleWinnerCredits('last_touch', journey.touchpoints, winnerIndex, order.total_price);
-    }
-  }
+  const outputs = execution.creditsByModel;
 
   const primaryCredit = selectPrimaryCredit(outputs.last_touch);
-
-  if (!primaryCredit) {
-    throw new Error(`Failed to compute attribution credits for Shopify order ${order.shopify_order_id}`);
-  }
 
   const matchedAt = new Date();
   const orderAttributionAudit = buildOrderAttributionAuditRecord(journey, matchedAt);
@@ -516,16 +493,16 @@ async function persistAttribution(client: PoolClient, order: OrderRow, journey: 
     `,
     [
       order.shopify_order_id,
-      primaryCredit.sessionId,
-      normalizeNullableString(primaryCredit.source),
-      normalizeNullableString(primaryCredit.medium),
-      normalizeNullableString(primaryCredit.campaign),
-      normalizeNullableString(primaryCredit.content),
-      normalizeNullableString(primaryCredit.term),
-      normalizeNullableString(primaryCredit.clickIdType),
-      normalizeNullableString(primaryCredit.clickIdValue),
+      primaryCredit?.sessionId ?? null,
+      normalizeNullableString(primaryCredit?.source),
+      normalizeNullableString(primaryCredit?.medium),
+      normalizeNullableString(primaryCredit?.campaign),
+      normalizeNullableString(primaryCredit?.content),
+      normalizeNullableString(primaryCredit?.term),
+      normalizeNullableString(primaryCredit?.clickIdType),
+      normalizeNullableString(primaryCredit?.clickIdValue),
       journey.confidenceScore,
-      primaryCredit.attributionReason,
+      primaryCredit?.attributionReason ?? journey.attributionReason,
       matchedAt,
       ATTRIBUTION_MODEL_VERSION,
       matchSource,
