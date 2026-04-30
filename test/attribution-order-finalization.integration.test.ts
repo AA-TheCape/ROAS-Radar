@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { Pool } from 'pg';
 
+import { buildRawPayloadFixture, resetIntegrationTables } from './integration-test-helpers.js';
+
 process.env.DATABASE_URL ??= 'postgres://postgres:postgres@127.0.0.1:5432/roas_radar';
 process.env.REPORTING_API_TOKEN = 'test-reporting-token';
 process.env.SHOPIFY_APP_API_SECRET ??= 'test-app-secret';
@@ -159,6 +161,7 @@ async function insertTrackingSession(pool: Pool, input: TrackingSessionInput): P
 }
 
 async function insertTrackingEvent(pool: Pool, input: TrackingEventInput): Promise<string> {
+  const rawPayloadFixture = buildRawPayloadFixture({});
   const result = await pool.query<{ id: string }>(
     `
       INSERT INTO tracking_events (
@@ -180,6 +183,8 @@ async function insertTrackingEvent(pool: Pool, input: TrackingEventInput): Promi
         msclkid,
         shopify_checkout_token,
         shopify_cart_token,
+        payload_size_bytes,
+        payload_hash,
         raw_payload
       )
       VALUES (
@@ -201,7 +206,9 @@ async function insertTrackingEvent(pool: Pool, input: TrackingEventInput): Promi
         $16,
         $17,
         $18,
-        '{}'::jsonb
+        $19,
+        $20,
+        $21::jsonb
       )
       RETURNING id::text
     `,
@@ -223,7 +230,10 @@ async function insertTrackingEvent(pool: Pool, input: TrackingEventInput): Promi
       input.ttclid ?? null,
       input.msclkid ?? null,
       input.shopifyCheckoutToken ?? null,
-      input.shopifyCartToken ?? null
+      input.shopifyCartToken ?? null,
+      rawPayloadFixture.payloadSizeBytes,
+      rawPayloadFixture.payloadHash,
+      rawPayloadFixture.rawPayloadJson
     ]
   );
 
@@ -231,6 +241,9 @@ async function insertTrackingEvent(pool: Pool, input: TrackingEventInput): Promi
 }
 
 async function insertShopifyOrder(pool: Pool, input: ShopifyOrderInput): Promise<void> {
+  const rawPayloadJson = input.rawPayload ?? JSON.stringify({ id: input.shopifyOrderId });
+  const orderFixture = buildRawPayloadFixture(JSON.parse(rawPayloadJson) as Record<string, unknown>, input.shopifyOrderId);
+
   await pool.query(
     `
       INSERT INTO shopify_orders (
@@ -244,6 +257,9 @@ async function insertShopifyOrder(pool: Pool, input: ShopifyOrderInput): Promise
         cart_token,
         customer_identity_id,
         source_name,
+        payload_external_id,
+        payload_size_bytes,
+        payload_hash,
         raw_payload,
         ingested_at
       )
@@ -258,7 +274,10 @@ async function insertShopifyOrder(pool: Pool, input: ShopifyOrderInput): Promise
         $7,
         $8::uuid,
         $9,
-        $10::jsonb,
+        $10,
+        $11,
+        $12,
+        $13::jsonb,
         now()
       )
     `,
@@ -272,7 +291,10 @@ async function insertShopifyOrder(pool: Pool, input: ShopifyOrderInput): Promise
       input.cartToken ?? null,
       input.customerIdentityId ?? null,
       input.sourceName ?? 'web',
-      input.rawPayload ?? JSON.stringify({ id: input.shopifyOrderId })
+      orderFixture.payloadExternalId,
+      orderFixture.payloadSizeBytes,
+      orderFixture.payloadHash,
+      orderFixture.rawPayloadJson
     ]
   );
 }
@@ -339,28 +361,50 @@ async function fetchOrderSnapshot(shopifyOrderId: string) {
   return result.rows[0].attribution_snapshot;
 }
 
+async function fetchOrderAttributionAudit(shopifyOrderId: string) {
+  const { pool } = await getModules();
+  const result = await pool.query<{
+    attribution_tier: string | null;
+    attribution_source: string | null;
+    attribution_matched_at: Date | null;
+    attribution_reason: string | null;
+  }>(
+    `
+      SELECT
+        attribution_tier,
+        attribution_source,
+        attribution_matched_at,
+        attribution_reason
+      FROM shopify_orders
+      WHERE shopify_order_id = $1
+    `,
+    [shopifyOrderId]
+  );
+
+  assert.equal(result.rowCount, 1);
+  return result.rows[0];
+}
+
 async function resetIntegrationDatabase() {
   const { pool } = await getModules();
 
-  await pool.query(`
-    TRUNCATE TABLE
-      attribution_jobs,
-      shopify_order_writeback_jobs,
-      attribution_order_credits,
-      attribution_results,
-      daily_reporting_metrics,
-      order_attribution_links,
-      session_attribution_touch_events,
-      session_attribution_identities,
-      shopify_order_line_items,
-      shopify_orders,
-      shopify_webhook_receipts,
-      tracking_events,
-      tracking_sessions,
-      shopify_customers,
-      customer_identities
-    RESTART IDENTITY CASCADE
-  `);
+  await resetIntegrationTables(pool, [
+    'attribution_jobs',
+    'shopify_order_writeback_jobs',
+    'attribution_order_credits',
+    'attribution_results',
+    'daily_reporting_metrics',
+    'order_attribution_links',
+    'session_attribution_touch_events',
+    'session_attribution_identities',
+    'shopify_order_line_items',
+    'shopify_orders',
+    'shopify_webhook_receipts',
+    'tracking_events',
+    'tracking_sessions',
+    'shopify_customers',
+    'customer_identities'
+  ]);
 }
 
 test('order finalization persists a deterministic last non-direct winner snapshot with source touch event auditability', async () => {
@@ -368,6 +412,8 @@ test('order finalization persists a deterministic last non-direct winner snapsho
   const { pool, enqueueAttributionForOrder, processAttributionQueue } = await getModules();
 
   try {
+    const emptyRawPayloadFixture = buildRawPayloadFixture({});
+    const orderRawPayloadFixture = buildRawPayloadFixture({ id: 'order-finalization-1' }, 'order-finalization-1');
     const paidSessionResult = await pool.query<{ id: string }>(
       `
         INSERT INTO tracking_sessions (
@@ -407,6 +453,8 @@ test('order finalization persists a deterministic last non-direct winner snapsho
           utm_medium,
           utm_campaign,
           gclid,
+          payload_size_bytes,
+          payload_hash,
           raw_payload
         )
         VALUES (
@@ -419,11 +467,18 @@ test('order finalization persists a deterministic last non-direct winner snapsho
           'cpc',
           'brand-search',
           'gclid-123',
-          '{}'::jsonb
+          $2,
+          $3,
+          $4::jsonb
         )
         RETURNING id::text
       `,
-      [paidSessionId]
+      [
+        paidSessionId,
+        emptyRawPayloadFixture.payloadSizeBytes,
+        emptyRawPayloadFixture.payloadHash,
+        emptyRawPayloadFixture.rawPayloadJson
+      ]
     );
     const paidEventId = paidEventResult.rows[0].id;
 
@@ -452,6 +507,8 @@ test('order finalization persists a deterministic last non-direct winner snapsho
           occurred_at,
           page_url,
           shopify_checkout_token,
+          payload_size_bytes,
+          payload_hash,
           raw_payload
         )
         VALUES (
@@ -460,10 +517,17 @@ test('order finalization persists a deterministic last non-direct winner snapsho
           '2026-04-03T09:00:00.000Z',
           'https://store.example/checkout',
           'checkout-direct-1',
-          '{}'::jsonb
+          $2,
+          $3,
+          $4::jsonb
         )
       `,
-      [directSessionId]
+      [
+        directSessionId,
+        emptyRawPayloadFixture.payloadSizeBytes,
+        emptyRawPayloadFixture.payloadHash,
+        emptyRawPayloadFixture.rawPayloadJson
+      ]
     );
 
     await pool.query(
@@ -477,6 +541,9 @@ test('order finalization persists a deterministic last non-direct winner snapsho
           landing_session_id,
           checkout_token,
           source_name,
+          payload_external_id,
+          payload_size_bytes,
+          payload_hash,
           raw_payload,
           ingested_at
         )
@@ -489,11 +556,20 @@ test('order finalization persists a deterministic last non-direct winner snapsho
           $1::uuid,
           'checkout-direct-1',
           'web',
-          '{"id":"order-finalization-1"}'::jsonb,
+          $2,
+          $3,
+          $4,
+          $5::jsonb,
           now()
         )
       `,
-      [paidSessionId]
+      [
+        paidSessionId,
+        orderRawPayloadFixture.payloadExternalId,
+        orderRawPayloadFixture.payloadSizeBytes,
+        orderRawPayloadFixture.payloadHash,
+        orderRawPayloadFixture.rawPayloadJson
+      ]
     );
 
     await enqueueAttributionForOrder('order-finalization-1', 'test_order_finalization_snapshot');
@@ -534,6 +610,12 @@ test('order finalization persists a deterministic last non-direct winner snapsho
       attributed_campaign: 'brand-search',
       attribution_reason: 'matched_by_landing_session'
     });
+
+    const orderAudit = await fetchOrderAttributionAudit('order-finalization-1');
+    assert.equal(orderAudit.attribution_tier, 'deterministic_first_party');
+    assert.equal(orderAudit.attribution_source, 'landing_session_id');
+    assert.equal(orderAudit.attribution_reason, 'matched_by_landing_session');
+    assert.ok(orderAudit.attribution_matched_at instanceof Date);
 
     const orderSnapshotResult = await pool.query<{ attribution_snapshot: Record<string, unknown> | null }>(
       `
@@ -938,11 +1020,43 @@ test('orders with no deterministic candidates persist an unattributed fallback s
       attribution_reason: 'unattributed'
     });
 
+    const orderAudit = await fetchOrderAttributionAudit('order-unattributed-1');
+    assert.equal(orderAudit.attribution_tier, 'unattributed');
+    assert.equal(orderAudit.attribution_source, 'unattributed');
+    assert.equal(orderAudit.attribution_reason, 'unattributed');
+    assert.ok(orderAudit.attribution_matched_at instanceof Date);
+
     const snapshot = await fetchOrderSnapshot('order-unattributed-1');
     assert.ok(snapshot);
     assert.equal(snapshot?.confidenceScore, 0);
     assert.equal(snapshot?.winner, null);
     assert.deepEqual(snapshot?.timeline, []);
+  } finally {
+    await resetIntegrationDatabase();
+  }
+});
+
+test('shopify_orders attribution tier constraint rejects unsupported values', async () => {
+  await resetIntegrationDatabase();
+  const { pool } = await getModules();
+
+  try {
+    await insertShopifyOrder(pool, {
+      shopifyOrderId: 'order-invalid-tier-1',
+      processedAt: '2026-04-11T10:00:00.000Z'
+    });
+
+    await assert.rejects(
+      () =>
+        pool.query(
+          `
+            UPDATE shopify_orders
+            SET attribution_tier = 'invalid_tier'
+            WHERE shopify_order_id = 'order-invalid-tier-1'
+          `
+        ),
+      /shopify_orders_attribution_tier_chk/
+    );
   } finally {
     await resetIntegrationDatabase();
   }

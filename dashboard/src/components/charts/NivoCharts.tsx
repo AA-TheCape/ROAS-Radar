@@ -4,7 +4,7 @@ import { ResponsiveBar, type BarDatum, type BarSvgProps, type BarTooltipProps } 
 import type { Margin } from '@nivo/core';
 import type { LegendProps } from '@nivo/legends';
 import { ResponsiveLine, type LineSeries, type LineSvgProps, type PointTooltipProps } from '@nivo/line';
-import { ResponsivePie, type DefaultRawDatum, type PieSvgProps, type PieTooltipProps } from '@nivo/pie';
+import { ResponsivePie, type ComputedDatum, type DefaultRawDatum, type PieSvgProps, type PieTooltipProps } from '@nivo/pie';
 
 import { EmptyState, Skeleton } from '../AuthenticatedUi';
 
@@ -72,6 +72,8 @@ type SharedPieChartProps = SharedChartProps & {
   legends?: PieSvgProps<SharedPieDatum>['legends'];
   margin?: Partial<Margin>;
 };
+
+type PieArcDatum = ComputedDatum<SharedPieDatum>;
 
 const chartPalette = ['#cb6332', '#1f7a74', '#d8a542', '#7c8aa5', '#5c6f7b', '#b64c46'];
 
@@ -667,7 +669,7 @@ export const NivoPieChart = memo(function NivoPieChart({
         arcLinkLabelsThickness={1}
         arcLinkLabelsColor="#627180"
         arcLabelsSkipAngle={isCompact ? 360 : 12}
-        arcLabel={(datum) => pieValueFormat(datum.value)}
+        arcLabel={(datum: PieArcDatum) => pieValueFormat(datum.value)}
         arcLabelsTextColor="#17212b"
         valueFormat={pieValueFormat}
         legends={effectiveLegends}

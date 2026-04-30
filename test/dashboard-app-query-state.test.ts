@@ -177,7 +177,7 @@ test('dashboard query-state helpers preserve valid control state and keep unrela
 
     assert.deepEqual(
       appModule.readDashboardStateFromSearch(
-        '?foo=bar&startDate=2026-04-02&endDate=2026-04-18&source=meta&campaign=retargeting&groupBy=campaign'
+        '?foo=bar&startDate=2026-04-02&endDate=2026-04-18&source=meta&campaign=retargeting&attributionTier=ga4_fallback&groupBy=campaign'
       ),
       {
         filters: {
@@ -185,7 +185,8 @@ test('dashboard query-state helpers preserve valid control state and keep unrela
           endDate: '2026-04-18',
           source: 'meta',
           campaign: 'retargeting',
-          attributionModel: undefined
+          attributionModel: undefined,
+          attributionTier: 'ga4_fallback'
         },
         groupBy: 'campaign'
       }
@@ -199,11 +200,12 @@ test('dashboard query-state helpers preserve valid control state and keep unrela
           endDate: '2026-04-14',
           source: 'google',
           campaign: '',
-          attributionModel: undefined
+          attributionModel: undefined,
+          attributionTier: 'deterministic_shopify_hint'
         },
         'source'
       ),
-      'foo=bar&startDate=2026-04-05&endDate=2026-04-14&source=google&groupBy=source'
+      'foo=bar&startDate=2026-04-05&endDate=2026-04-14&source=google&attributionTier=deterministic_shopify_hint&groupBy=source'
     );
   } finally {
     dom.window.close();
@@ -213,7 +215,7 @@ test('dashboard query-state helpers preserve valid control state and keep unrela
 test('dashboard controls hydrate from query params and send matching outbound requests', async () => {
   const calls: FetchCall[] = [];
   const dom = createDom({
-    url: 'http://localhost/?startDate=2026-04-03&endDate=2026-04-11&source=google&campaign=brand-search&groupBy=campaign'
+    url: 'http://localhost/?startDate=2026-04-03&endDate=2026-04-11&source=google&campaign=brand-search&attributionTier=unattributed&groupBy=campaign'
   });
   const previousFetch = globalThis.fetch;
   const container = dom.window.document.createElement('div');
@@ -235,12 +237,14 @@ test('dashboard controls hydrate from query params and send matching outbound re
     const [startDateInput, endDateInput] = Array.from(container.querySelectorAll<HTMLInputElement>('input[type="date"]'));
     const sourceInput = container.querySelector('input[placeholder="google, meta, facebook"]') as HTMLInputElement;
     const campaignInput = container.querySelector('input[placeholder="spring-sale"]') as HTMLInputElement;
+    const attributionTierSelect = container.querySelector('#attribution-tier-filter') as HTMLSelectElement;
     const groupBySelect = findGroupBySelect(container) as HTMLSelectElement;
 
     assert.equal(startDateInput.value, '2026-04-03');
     assert.equal(endDateInput.value, '2026-04-11');
     assert.equal(sourceInput.value, 'google');
     assert.equal(campaignInput.value, 'brand-search');
+    assert.equal(attributionTierSelect.value, 'unattributed');
     assert.equal(groupBySelect.value, 'campaign');
 
     const initialSummaryCall = calls.find((call) => call.path === '/api/reporting/summary');
@@ -251,12 +255,13 @@ test('dashboard controls hydrate from query params and send matching outbound re
     assert.equal(initialSummaryCall.query.get('endDate'), '2026-04-11');
     assert.equal(initialSummaryCall.query.get('source'), 'google');
     assert.equal(initialSummaryCall.query.get('campaign'), 'brand-search');
+    assert.equal(initialSummaryCall.query.get('attributionTier'), 'unattributed');
     assert.ok(initialTimeseriesCall);
     assert.equal(initialTimeseriesCall.query.get('groupBy'), 'campaign');
 
     assert.equal(
       dom.window.location.search,
-      '?startDate=2026-04-03&endDate=2026-04-11&source=google&campaign=brand-search&groupBy=campaign'
+      '?startDate=2026-04-03&endDate=2026-04-11&source=google&campaign=brand-search&attributionTier=unattributed&groupBy=campaign'
     );
 
     flushSync(() => {

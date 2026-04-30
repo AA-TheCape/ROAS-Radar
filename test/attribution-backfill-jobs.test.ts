@@ -578,6 +578,7 @@ test('processOrderAttributionBackfillRuns emits per-job lifecycle logs with job 
     recovered: 0,
     unrecoverable: 2,
     writebackCompleted: 0,
+    failures: [],
     failureCount: 0,
     sampleFailures: []
   });
@@ -587,6 +588,13 @@ test('processOrderAttributionBackfillRuns emits per-job lifecycle logs with job 
     recovered: 2,
     unrecoverable: 3,
     writebackCompleted: 1,
+    failures: [
+      {
+        orderId: '1003',
+        code: 'shopify_writeback_failed',
+        message: 'Shopify writeback failed for order 1003'
+      }
+    ],
     failureCount: 1,
     sampleFailures: [
       {

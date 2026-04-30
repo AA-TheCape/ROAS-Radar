@@ -22,13 +22,13 @@ async function request(server: ReturnType<typeof createServer>, path: string, in
 
 function restoreEnv() {
   if (originalReportingApiToken === undefined) {
-    delete process.env.REPORTING_API_TOKEN;
+    Reflect.deleteProperty(process.env, 'REPORTING_API_TOKEN');
   } else {
     process.env.REPORTING_API_TOKEN = originalReportingApiToken;
   }
 
   if (originalApiAllowedOrigins === undefined) {
-    delete process.env.API_ALLOWED_ORIGINS;
+    Reflect.deleteProperty(process.env, 'API_ALLOWED_ORIGINS');
   } else {
     process.env.API_ALLOWED_ORIGINS = originalApiAllowedOrigins;
   }

@@ -17,6 +17,7 @@ const CRITICAL_TESTS = [
   'test/attribution-backfill.integration.test.ts',
   'test/attribution-resolver.test.ts',
   'test/attribution-order-finalization.integration.test.ts',
+  'test/attribution-tier-data-flow.integration.test.ts',
   'test/shopify-writeback.test.ts',
   'test/dead-letter-replay.test.ts',
   'test/tracking-retention.integration.test.ts',

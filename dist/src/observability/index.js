@@ -14,7 +14,7 @@ function normalizeString(value) {
 function getGoogleCloudProjectId() {
     return normalizeString(process.env.GOOGLE_CLOUD_PROJECT) ?? normalizeString(process.env.GCLOUD_PROJECT);
 }
-function parseCloudTraceContext(headerValue) {
+export function parseCloudTraceContext(headerValue) {
     const projectId = getGoogleCloudProjectId();
     const normalizedHeader = normalizeString(headerValue);
     if (!projectId || !normalizedHeader) {
@@ -36,7 +36,7 @@ function serializeError(error) {
         return {
             name: error.name,
             message: error.message,
-            stack: error.stack
+            stack: error.stack ?? null
         };
     }
     return {
@@ -45,6 +45,7 @@ function serializeError(error) {
 }
 function summarizeBackfillFailures(failures) {
     return {
+        failures,
         failureCount: failures.length,
         sampleFailures: failures.slice(0, 5)
     };
@@ -59,7 +60,7 @@ export function summarizeOrderAttributionBackfillReport(report) {
     };
 }
 function normalizeBackfillErrorCode(error) {
-    if (typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string' && error.code.trim()) {
+    if (isRecord(error) && typeof error.code === 'string' && error.code.trim()) {
         return error.code.trim();
     }
     if (error instanceof Error && error.name.trim()) {
@@ -94,10 +95,10 @@ export function emitOrderAttributionBackfillJobLifecycleLog(input) {
         stage: input.stage,
         status: toBackfillLifecycleStatus(input.stage),
         jobId: input.jobId,
-        workerId: input.workerId,
-        submittedAt: input.submittedAt,
-        startedAt: input.startedAt,
-        completedAt: input.completedAt,
+        workerId: input.workerId ?? null,
+        submittedAt: input.submittedAt ?? null,
+        startedAt: input.startedAt ?? null,
+        completedAt: input.completedAt ?? null,
         startDate: input.options.startDate,
         endDate: input.options.endDate,
         dryRun: input.options.dryRun,
@@ -197,18 +198,60 @@ export function summarizeDualWriteConsistency(input) {
     };
 }
 export function summarizeResolverOutcome(input) {
+    const normalizationFailures = Array.isArray(input.normalizationFailures) ? input.normalizationFailures : [];
+    const normalizedTier = normalizeString(input.tier) ?? 'unattributed';
+    const resolverFallthroughDepth = normalizedTier === 'deterministic_first_party'
+        ? 0
+        : normalizedTier === 'deterministic_shopify_hint'
+            ? 1
+            : normalizedTier === 'ga4_fallback'
+                ? 2
+                : 3;
+    const fallthroughStage = normalizedTier === 'deterministic_first_party'
+        ? 'resolved_in_first_party'
+        : normalizedTier === 'deterministic_shopify_hint'
+            ? 'fell_through_to_shopify_hint'
+            : normalizedTier === 'ga4_fallback'
+                ? 'fell_through_to_ga4_fallback'
+                : 'fell_through_to_unattributed';
+    const baseFields = {
+        attributionTier: normalizedTier,
+        attributionReason: normalizeString(input.attributionReason) ?? null,
+        confidenceScore: typeof input.confidenceScore === 'number' ? input.confidenceScore : null,
+        pipeline: normalizeString(input.pipeline) ?? 'unknown',
+        shopifyOrderId: normalizeString(input.shopifyOrderId) ?? null,
+        orderOccurredAtUtc: input.orderOccurredAtUtc instanceof Date
+            ? input.orderOccurredAtUtc.toISOString()
+            : normalizeString(input.orderOccurredAtUtc) ?? null,
+        resolverFallthroughDepth,
+        fallthroughStage,
+        normalizationFailureCount: normalizationFailures.length,
+        hasNormalizationFailures: normalizationFailures.length > 0,
+        firstNormalizationFailureScope: normalizeString(normalizationFailures[0]?.scope) ?? null,
+        firstNormalizationFailureReason: normalizeString(normalizationFailures[0]?.reason) ?? null,
+        firstNormalizationFailureSourceKey: normalizeString(normalizationFailures[0]?.sourceKey) ?? null
+    };
     if (!input.winner) {
         return {
+            ...baseFields,
             resolverOutcome: 'unattributed',
             touchpointCount: input.touchpoints.length
         };
     }
     return {
+        ...baseFields,
         resolverOutcome: input.winner.isDirect ? 'direct_winner' : 'non_direct_winner',
         touchpointCount: input.touchpoints.length,
         winningIngestionSource: input.winner.ingestionSource ?? null,
-        winningSessionId: input.winner.sessionId ?? null
+        winningSessionId: input.winner.sessionId ?? null,
+        hasWinningSessionId: Boolean(input.winner.sessionId)
     };
+}
+export function emitAttributionResolverOutcomeLog(input) {
+    logInfo('attribution_resolver_outcome', {
+        service: process.env.K_SERVICE ?? 'roas-radar-attribution-worker',
+        ...summarizeResolverOutcome(input)
+    });
 }
 export function runWithRequestContext(context, callback) {
     return requestContextStorage.run(context, callback);
@@ -250,8 +293,8 @@ export function createRequestLoggingMiddleware(service) {
                         requestMethod: req.method,
                         requestUrl: req.originalUrl,
                         status: res.statusCode,
-                        userAgent: req.header('user-agent') ?? undefined,
-                        referer: req.header('referer') ?? undefined,
+                        userAgent: req.header('user-agent') ?? null,
+                        referer: req.header('referer') ?? null,
                         latency: `${Math.max(durationMs, 0).toFixed(3)}ms`
                     }
                 });
@@ -261,9 +304,21 @@ export function createRequestLoggingMiddleware(service) {
     };
 }
 export function logHttpError(event, error, req, extra = {}) {
-    const details = isRecord(error) && 'details' in error ? { details: error.details } : {};
-    const code = isRecord(error) && typeof error.code === 'string' ? { code: error.code } : {};
-    const statusCode = isRecord(error) && typeof error.statusCode === 'number' ? { statusCode: error.statusCode } : {};
+    const details = isRecord(error) && 'details' in error
+        ? {
+            details: error.details ?? null
+        }
+        : {};
+    const code = isRecord(error) && typeof error.code === 'string'
+        ? {
+            code: error.code
+        }
+        : {};
+    const statusCode = isRecord(error) && typeof error.statusCode === 'number'
+        ? {
+            statusCode: error.statusCode
+        }
+        : {};
     logError(event, error, {
         service: process.env.K_SERVICE ?? 'roas-radar',
         method: req.method,
@@ -286,6 +341,7 @@ export function buildAttributionBacklogLog(snapshot) {
 }
 export const __observabilityTestUtils = {
     buildAttributionBacklogLog,
+    emitAttributionResolverOutcomeLog,
     emitOrderAttributionBackfillJobLifecycleLog,
     parseCloudTraceContext,
     summarizeOrderAttributionBackfillReport,

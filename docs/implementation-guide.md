@@ -411,6 +411,7 @@ Behavior:
 - `GET /api/reporting/campaigns`
 - `GET /api/reporting/timeseries`
 - `GET /api/reporting/orders`
+- order list and detail responses now expose additive attribution tier metadata from `shopify_orders`, including tier labels and canonical winner audit fields for frontend drill-in and reporting consumers
 - `GET /api/reporting/reconciliation`
 
 These routes require `Authorization: Bearer <REPORTING_API_TOKEN>`.

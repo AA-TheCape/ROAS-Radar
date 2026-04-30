@@ -21,7 +21,7 @@ function stableJsonValue(value) {
     return value;
 }
 function stableJsonStringify(value) {
-    return JSON.stringify(stableJsonValue(value));
+    return JSON.stringify(stableJsonValue(value)) ?? 'null';
 }
 export function summarizeRawPayloadIntegrity(expected, actual) {
     const persistedMetadata = buildRawPayloadStorageMetadata(actual.persistedRawPayload);

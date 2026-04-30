@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { buildRawPayloadFixture, resetIntegrationTables } from './integration-test-helpers.js';
+
 process.env.DATABASE_URL ??= 'postgres://postgres:postgres@127.0.0.1:5432/roas_radar';
 
 const poolModule = await import('../src/db/pool.js');
@@ -10,6 +12,7 @@ const { pool } = poolModule;
 const { refreshDailyReportingMetrics } = reportingModule;
 
 async function seedGoogleConnection() {
+  const rawCustomerFixture = buildRawPayloadFixture({ customerId: 'test-customer' }, 'test-customer');
   const connectionResult = await pool.query<{ id: number }>(
     `
       INSERT INTO google_ads_connections (
@@ -18,11 +21,15 @@ async function seedGoogleConnection() {
         client_id,
         client_secret_encrypted,
         refresh_token_encrypted,
-        status
+        status,
+        raw_customer_payload_size_bytes,
+        raw_customer_payload_hash,
+        raw_customer_data
       )
-      VALUES ('test-customer', '\\x00'::bytea, 'test-client', '\\x00'::bytea, '\\x00'::bytea, 'active')
+      VALUES ('test-customer', '\\x00'::bytea, 'test-client', '\\x00'::bytea, '\\x00'::bytea, 'active', $1, $2, $3::jsonb)
       RETURNING id
-    `
+    `,
+    [rawCustomerFixture.payloadSizeBytes, rawCustomerFixture.payloadHash, rawCustomerFixture.rawPayloadJson]
   );
 
   return connectionResult.rows[0].id;
@@ -44,7 +51,13 @@ async function seedGoogleSyncJob(connectionId: number, syncDate: string) {
 test('refreshDailyReportingMetrics includes campaign-only Google spend when no creative rows exist', async () => {
   const syncDate = '2026-04-24';
 
-  await pool.query('TRUNCATE daily_reporting_metrics, google_ads_daily_spend, google_ads_raw_spend_records, google_ads_sync_jobs, google_ads_connections RESTART IDENTITY CASCADE');
+  await resetIntegrationTables(pool, [
+    'daily_reporting_metrics',
+    'google_ads_daily_spend',
+    'google_ads_raw_spend_records',
+    'google_ads_sync_jobs',
+    'google_ads_connections'
+  ]);
 
   const connectionId = await seedGoogleConnection();
   const syncJobId = await seedGoogleSyncJob(connectionId, syncDate);
@@ -122,7 +135,13 @@ test('refreshDailyReportingMetrics includes campaign-only Google spend when no c
     }
   ]);
 
-  await pool.query('TRUNCATE daily_reporting_metrics, google_ads_daily_spend, google_ads_raw_spend_records, google_ads_sync_jobs, google_ads_connections RESTART IDENTITY CASCADE');
+  await resetIntegrationTables(pool, [
+    'daily_reporting_metrics',
+    'google_ads_daily_spend',
+    'google_ads_raw_spend_records',
+    'google_ads_sync_jobs',
+    'google_ads_connections'
+  ]);
 });
 
 test.after(async () => {

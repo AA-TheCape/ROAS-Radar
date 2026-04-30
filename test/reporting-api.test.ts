@@ -373,7 +373,10 @@ test('reporting orders returns order-level attribution details for debugging', a
 
     assert.match(text, /LEFT JOIN LATERAL/);
     assert.match(text, /COALESCE\(o\.source_name, ''\) = 'web'/);
-    assert.deepEqual(params, ['2026-04-01', '2026-04-10', 'last_touch', 'facebook', 'America/Los_Angeles', 1]);
+    assert.deepEqual(
+      params,
+      ['2026-04-01', '2026-04-10', 'last_touch', 'facebook', 'deterministic_first_party', 'America/Los_Angeles', 1]
+    );
 
     return {
       rows: [
@@ -381,10 +384,23 @@ test('reporting orders returns order-level attribution details for debugging', a
           shopify_order_id: '1234567890',
           processed_at: new Date('2026-04-10T13:00:00.000Z'),
           total_price: '120.00',
+          attribution_tier: 'deterministic_first_party',
+          attribution_source: 'checkout_token',
+          order_attribution_reason: 'matched_by_checkout_token',
+          attribution_matched_at: new Date('2026-04-10T13:01:00.000Z'),
+          attribution_snapshot: {
+            confidenceScore: 1,
+            winner: {
+              sessionId: '11111111-1111-4111-8111-111111111111',
+              source: 'facebook',
+              medium: 'paid_social',
+              campaign: 'prospecting-us'
+            }
+          },
           attributed_source: 'facebook',
           attributed_medium: 'paid_social',
           attributed_campaign: 'prospecting-us',
-          attribution_reason: 'matched_by_checkout_token'
+          primary_credit_attribution_reason: 'matched_by_checkout_token'
         }
       ]
     };
@@ -395,7 +411,7 @@ test('reporting orders returns order-level attribution details for debugging', a
   try {
     const { response, body } = await requestJson(
       server,
-      '/api/reporting/orders?startDate=2026-04-01&endDate=2026-04-10&source=facebook&limit=1'
+      '/api/reporting/orders?startDate=2026-04-01&endDate=2026-04-10&source=facebook&attributionTier=deterministic_first_party&limit=1'
     );
 
     assert.equal(response.status, 200);
@@ -404,14 +420,122 @@ test('reporting orders returns order-level attribution details for debugging', a
         {
           shopifyOrderId: '1234567890',
           processedAt: '2026-04-10T13:00:00.000Z',
+          orderOccurredAtUtc: '2026-04-10T13:00:00.000Z',
           totalPrice: 120,
           source: 'facebook',
           medium: 'paid_social',
           campaign: 'prospecting-us',
-          attributionReason: 'matched_by_checkout_token'
+          attributionReason: 'matched_by_checkout_token',
+          primaryCreditAttributionReason: 'matched_by_checkout_token',
+          attributionTier: 'deterministic_first_party',
+          attributionTierLabel: 'Deterministic first-party',
+          attributionTierDescription:
+            'Resolved from durable ROAS Radar first-party evidence such as a landing session, checkout token, cart token, or stitched identity path.',
+          attributionSource: 'checkout_token',
+          attributionMatchedAt: '2026-04-10T13:01:00.000Z',
+          confidenceScore: 1,
+          sessionId: '11111111-1111-4111-8111-111111111111'
         }
       ]
     });
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
+test('reporting order details expose attribution tier metadata additively', async () => {
+  pool.query = (async (text: string, params?: unknown[]) => {
+    if (text.includes('FROM shopify_orders o')) {
+      assert.deepEqual(params, ['1234567890']);
+
+      return {
+        rows: [
+          {
+            shopify_order_id: '1234567890',
+            shopify_order_number: 'RR-1001',
+            shopify_customer_id: 'gid://shopify/Customer/42',
+            customer_identity_id: '22222222-2222-4222-8222-222222222222',
+            email_hash: 'hash_abc123',
+            currency_code: 'USD',
+            subtotal_price: '100.00',
+            total_price: '120.00',
+            financial_status: 'paid',
+            fulfillment_status: 'fulfilled',
+            processed_at: new Date('2026-04-10T13:00:00.000Z'),
+            created_at_shopify: new Date('2026-04-10T12:58:00.000Z'),
+            updated_at_shopify: new Date('2026-04-10T13:05:00.000Z'),
+            landing_session_id: '33333333-3333-4333-8333-333333333333',
+            checkout_token: 'checkout-123',
+            cart_token: 'cart-123',
+            source_name: 'web',
+            attribution_tier: 'deterministic_first_party',
+            attribution_source: 'landing_session_id',
+            attribution_matched_at: new Date('2026-04-10T13:01:00.000Z'),
+            attribution_reason: 'matched_by_landing_session',
+            attribution_snapshot: {
+              confidenceScore: 1,
+              winner: {
+                sessionId: '33333333-3333-4333-8333-333333333333',
+                source: 'google',
+                medium: 'cpc',
+                campaign: 'brand-search',
+                content: 'hero',
+                term: 'widget',
+                clickIdType: 'gclid',
+                clickIdValue: 'gclid-123'
+              }
+            },
+            attribution_snapshot_updated_at: new Date('2026-04-10T13:01:30.000Z'),
+            ingested_at: new Date('2026-04-10T13:02:00.000Z'),
+            raw_payload: { id: '1234567890' }
+          }
+        ],
+        rowCount: 1
+      };
+    }
+
+    if (text.includes('FROM shopify_order_line_items li')) {
+      return {
+        rows: [],
+        rowCount: 0
+      };
+    }
+
+    if (text.includes('FROM attribution_order_credits c')) {
+      return {
+        rows: [],
+        rowCount: 0
+      };
+    }
+
+    throw new Error(`Unexpected SQL in order details test: ${text}`);
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(server, '/api/reporting/orders/1234567890');
+
+    assert.equal(response.status, 200);
+    assert.equal(body.order.shopifyOrderId, '1234567890');
+    assert.equal(body.order.orderOccurredAtUtc, '2026-04-10T13:00:00.000Z');
+    assert.equal(body.order.attributionTier, 'deterministic_first_party');
+    assert.equal(body.order.attributionTierLabel, 'Deterministic first-party');
+    assert.match(body.order.attributionTierDescription, /durable ROAS Radar first-party evidence/);
+    assert.equal(body.order.attributionSource, 'landing_session_id');
+    assert.equal(body.order.attributionMatchedAt, '2026-04-10T13:01:00.000Z');
+    assert.equal(body.order.attributionReason, 'matched_by_landing_session');
+    assert.equal(body.order.confidenceScore, 1);
+    assert.equal(body.order.sessionId, '33333333-3333-4333-8333-333333333333');
+    assert.equal(body.order.attributedSource, 'google');
+    assert.equal(body.order.attributedMedium, 'cpc');
+    assert.equal(body.order.attributedCampaign, 'brand-search');
+    assert.equal(body.order.attributedContent, 'hero');
+    assert.equal(body.order.attributedTerm, 'widget');
+    assert.equal(body.order.attributedClickIdType, 'gclid');
+    assert.equal(body.order.attributedClickIdValue, 'gclid-123');
+    assert.equal(body.order.attributionSnapshotUpdatedAt, '2026-04-10T13:01:30.000Z');
   } finally {
     pool.query = originalPoolQuery as typeof pool.query;
     await closeServer(server);

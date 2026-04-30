@@ -38,6 +38,7 @@ Use `compareModelMetrics(...)` when comparing performance across attribution mod
 ## Dashboard Interpretation Notes
 
 - A dashboard model switch changes the attribution credit source, so revenue, orders, ROAS, CAC, and conversion-rate slices can change without any raw order ingestion change.
+- Order-level consumer views must read `attribution_tier` first when interpreting attribution strength. `attribution_reason` only explains how the winning tier or credit row was resolved inside that tier.
 - `conversionRate`, `newCustomerRate`, and `returningCustomerRate` return `0` for empty slices; ratio metrics like `roas` and `cac` return `null` when their denominator is zero.
 - Multi-touch models can create fractional orders and revenue in grouped reporting because credit is allocated from `attribution_order_credits`, not forced into whole-order rows.
 - If the math looks right but the inputs look wrong, move to `docs/analytics-playbook.md` for table interpretation and then to the schema or operational docs for capture and lifecycle questions.

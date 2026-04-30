@@ -3,7 +3,7 @@
 set -eu
 
 if [ "$#" -ne 1 ]; then
-  echo "usage: $0 <staging|production>" >&2
+  echo "usage: $0 <environment>" >&2
   exit 1
 fi
 
@@ -171,6 +171,7 @@ done
 
 grant_secret_accessor "$DASHBOARD_SA" "REPORTING_API_TOKEN"
 grant_secret_accessor "$MIGRATOR_SA" "MIGRATOR_DATABASE_URL"
+grant_secret_accessor "$DEPLOYER_SA" "REPORTING_API_TOKEN"
 grant_secret_accessor "$META_ADS_SA" "DATABASE_URL"
 grant_secret_accessor "$META_ADS_SA" "META_ADS_APP_SECRET"
 grant_secret_accessor "$META_ADS_SA" "META_ADS_ENCRYPTION_KEY"

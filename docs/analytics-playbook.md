@@ -269,13 +269,19 @@ Interpretation notes:
 
 ## Attribution Resolution Order
 
-The attribution worker resolves journeys in this order:
+The order-level attribution tier contract is the primary consumer signal. ROAS Radar resolves every order into exactly one tier in this order:
+
+1. `deterministic_first_party`
+2. `deterministic_shopify_hint`
+3. `ga4_fallback`
+4. `unattributed`
+
+Inside `deterministic_first_party`, the attribution worker resolves journeys in this order:
 
 1. `landing_session_id`
 2. `checkout_token`
 3. `cart_token`
 4. stitched customer identity fallback
-5. unattributed fallback
 
 ### What each step means
 
@@ -415,6 +421,23 @@ That is not a bug. It is how multi-touch credit allocation works in `attribution
 
 `is_primary` marks the touchpoint with the highest credited cents within a model. It does not mean that touchpoint owns 100% of the order.
 
+### `attribution_tier` is the strength and precedence field
+
+Use `attribution_tier` whenever a report, dashboard, API consumer, or export needs to answer:
+
+- how strong the attributed order evidence is
+- whether the order was resolved from real first-party evidence, Shopify hints, GA4 fallback, or not at all
+- whether a lower-tier recovery path was allowed to win
+
+Tier semantics:
+
+- `deterministic_first_party`: real ROAS Radar first-party journey resolution
+- `deterministic_shopify_hint`: synthetic Shopify-derived recovery attribution
+- `ga4_fallback`: GA4-derived fallback attribution
+- `unattributed`: no eligible attribution match qualified
+
+Do not infer these semantics from `attribution_reason`. Different reasons can exist inside the same tier, and a lower-tier reason must never be treated as stronger than a higher-tier winner.
+
 ### `attribution_reason` explains matching, not model quality
 
 `attribution_reason` tells you how the journey was resolved:
@@ -422,6 +445,7 @@ That is not a bug. It is how multi-touch credit allocation works in `attribution
 - exact session evidence
 - checkout/cart token evidence
 - stitched identity fallback
+- GA4 fallback evidence
 - unattributed fallback
 - synthetic Shopify-hint fallback in recovery-only flows
 
@@ -469,6 +493,8 @@ It is not a measure of channel performance, campaign quality, or model superiori
 `GET /api/reporting/orders`
 
 - returns one row per order using the primary credit row for the selected model
+- exposes the persisted order-level attribution audit fields as the canonical contract, including `attributionTier`, `attributionTierLabel`, `attributionTierDescription`, `attributionSource`, `attributionMatchedAt`, `attributionReason`, `confidenceScore`, and canonical winner `sessionId`
+- also exposes `primaryCreditAttributionReason` for the selected model as a secondary debugging field
 - useful for debugging why a particular order appears under a channel or campaign
 
 ## Dashboard Reading Guide
@@ -482,7 +508,7 @@ Use the dashboard in this order when sanity-checking performance:
 3. Timeseries chart
    Use this to spot timing shifts, worker lag, or reconciliation effects. A recent date can look incomplete while attribution jobs or writeback jobs are still catching up.
 4. Orders view
-   Use this as the debugging surface for a specific order. It shows the primary credit row for the selected model, so it is the fastest place to confirm whether the disagreement is attribution logic or aggregate math.
+   Use this as the debugging surface for a specific order. Read `attributionTier` first, then `attributionSource`, then `attributionReason`, and only then the model-scoped `primaryCreditAttributionReason`. This is the fastest place to confirm whether the disagreement is attribution logic, tiering, or aggregate math.
 
 When a dashboard value looks wrong, ask these questions in order:
 

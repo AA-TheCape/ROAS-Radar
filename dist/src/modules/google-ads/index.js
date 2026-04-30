@@ -16,6 +16,7 @@ const GOOGLE_ADS_OAUTH_STATE_TTL_MINUTES = 10;
 const GOOGLE_ADS_SYNC_JOB_STATUSES = ['pending', 'processing', 'retry', 'completed', 'failed'];
 const GOOGLE_ADS_SPEND_GRANULARITIES = ['account', 'campaign', 'adset', 'ad', 'creative'];
 const GOOGLE_ADS_SYNC_TIME_ZONE = 'America/Los_Angeles';
+const GOOGLE_ADS_STALE_PROCESSING_TIMEOUT_MINUTES = 90;
 const oauthStartQuerySchema = z.object({
     customerId: z.string().min(1),
     loginCustomerId: z.string().optional(),
@@ -59,6 +60,74 @@ class GoogleAdsApiError extends Error {
         this.statusCode = statusCode;
         this.details = details;
     }
+}
+function truncateLogValue(value, limit = 2_000) {
+    return value.length <= limit ? value : `${value.slice(0, limit)}…`;
+}
+function serializeGoogleAdsErrorDetails(details) {
+    if (details === null || typeof details === 'undefined') {
+        return '';
+    }
+    if (typeof details === 'string') {
+        return truncateLogValue(details);
+    }
+    try {
+        return truncateLogValue(JSON.stringify(details));
+    }
+    catch {
+        return truncateLogValue(String(details));
+    }
+}
+function formatGoogleAdsError(error) {
+    if (error instanceof GoogleAdsApiError) {
+        const details = serializeGoogleAdsErrorDetails(error.details);
+        return details
+            ? `${error.message} (status ${error.statusCode}; details=${details})`
+            : `${error.message} (status ${error.statusCode})`;
+    }
+    if (error instanceof GoogleAdsHttpError) {
+        const details = serializeGoogleAdsErrorDetails(error.details);
+        return details
+            ? `${error.message} (status ${error.statusCode}; code=${error.code}; details=${details})`
+            : `${error.message} (status ${error.statusCode}; code=${error.code})`;
+    }
+    if (error instanceof Error) {
+        return error.message;
+    }
+    return String(error);
+}
+function parseRetryDelaySeconds(value) {
+    const normalized = value.trim();
+    if (!normalized) {
+        return null;
+    }
+    const secondsMatch = /^(\d+)s$/i.exec(normalized);
+    if (secondsMatch) {
+        return Number.parseInt(secondsMatch[1] ?? '', 10);
+    }
+    return null;
+}
+function extractGoogleAdsProviderRetryDelaySeconds(details) {
+    const stack = [details];
+    while (stack.length > 0) {
+        const current = stack.pop();
+        if (Array.isArray(current)) {
+            stack.push(...current);
+            continue;
+        }
+        if (!current || typeof current !== 'object') {
+            continue;
+        }
+        const record = current;
+        if (typeof record.retryDelay === 'string') {
+            const parsed = parseRetryDelaySeconds(record.retryDelay);
+            if (parsed !== null) {
+                return parsed;
+            }
+        }
+        stack.push(...Object.values(record));
+    }
+    return null;
 }
 function assertGoogleAdsConfig() {
     if (!env.GOOGLE_ADS_ENCRYPTION_KEY) {
@@ -288,16 +357,9 @@ function listDateRangeInclusive(startDate, endDate) {
     }
     return dates;
 }
-function buildPlanningDates(now = new Date(), lastSyncCompletedAt = null) {
+function buildPlanningDates(now = new Date(), _lastSyncCompletedAt = null) {
     const currentBusinessDate = parseDateOnly(formatDateInTimeZone(now, GOOGLE_ADS_SYNC_TIME_ZONE));
-    const lookbackDays = lastSyncCompletedAt
-        ? env.GOOGLE_ADS_SYNC_LOOKBACK_DAYS
-        : env.GOOGLE_ADS_SYNC_INITIAL_LOOKBACK_DAYS;
-    const firstDate = new Date(currentBusinessDate.getTime() - (lookbackDays - 1) * 24 * 60 * 60 * 1000);
-    if (currentBusinessDate.getTime() < firstDate.getTime()) {
-        return [];
-    }
-    return listDateRangeInclusive(formatDateOnly(firstDate), formatDateOnly(currentBusinessDate));
+    return [formatDateOnly(currentBusinessDate)];
 }
 function buildReconciliationWindow(now = new Date(), lastSyncCompletedAt = null) {
     const dates = buildPlanningDates(now, lastSyncCompletedAt);
@@ -847,16 +909,19 @@ async function enqueueSyncDates(connectionId, dates) {
         ON CONFLICT (connection_id, sync_date)
         DO UPDATE SET
           status = CASE
-            WHEN google_ads_sync_jobs.status = 'processing' THEN google_ads_sync_jobs.status
+            WHEN google_ads_sync_jobs.status IN ('pending', 'retry', 'processing') THEN google_ads_sync_jobs.status
             ELSE 'pending'
           END,
           available_at = CASE
-            WHEN google_ads_sync_jobs.status = 'processing' THEN google_ads_sync_jobs.available_at
+            WHEN google_ads_sync_jobs.status IN ('pending', 'retry', 'processing') THEN google_ads_sync_jobs.available_at
             ELSE now()
           END,
-          last_error = NULL,
+          last_error = CASE
+            WHEN google_ads_sync_jobs.status IN ('pending', 'retry', 'processing') THEN google_ads_sync_jobs.last_error
+            ELSE NULL
+          END,
           completed_at = CASE
-            WHEN google_ads_sync_jobs.status = 'processing' THEN google_ads_sync_jobs.completed_at
+            WHEN google_ads_sync_jobs.status IN ('pending', 'retry', 'processing') THEN google_ads_sync_jobs.completed_at
             ELSE NULL
           END,
           updated_at = now()
@@ -874,10 +939,10 @@ async function findMissingSyncDates(connectionId, dates) {
       FROM google_ads_sync_jobs
       WHERE connection_id = $1
         AND sync_date = ANY($2::date[])
-        AND status = 'completed'
+        AND status IN ('completed', 'pending', 'retry', 'processing')
     `, [connectionId, dates]);
-    const completed = new Set(result.rows.map((row) => row.sync_date));
-    return dates.filter((date) => !completed.has(date));
+    const unavailable = new Set(result.rows.map((row) => row.sync_date));
+    return dates.filter((date) => !unavailable.has(date));
 }
 async function runReconciliation(params) {
     const window = buildReconciliationWindow(params.now ?? new Date(), params.lastSyncCompletedAt ?? null);
@@ -906,6 +971,42 @@ async function runReconciliation(params) {
     ]);
     return enqueuedJobs;
 }
+async function suppressHistoricalSyncJobs(connectionId, currentBusinessDate) {
+    const result = await query(`
+      UPDATE google_ads_sync_jobs
+      SET
+        status = 'completed',
+        completed_at = now(),
+        locked_at = NULL,
+        locked_by = NULL,
+        updated_at = now(),
+        last_error = 'automatically suppressed historical sync job'
+      WHERE connection_id = $1
+        AND sync_date < $2::date
+        AND status IN ('pending', 'retry', 'failed', 'processing')
+    `, [connectionId, currentBusinessDate]);
+    return result.rowCount ?? 0;
+}
+async function recoverStaleCurrentDaySyncJobs(connectionId, currentBusinessDate) {
+    const result = await query(`
+      UPDATE google_ads_sync_jobs
+      SET
+        status = 'retry',
+        available_at = now(),
+        locked_at = NULL,
+        locked_by = NULL,
+        updated_at = now(),
+        last_error = CASE
+          WHEN last_error IS NULL OR last_error = '' THEN 'automatically recovered stale current-day sync job'
+          ELSE last_error
+        END
+      WHERE connection_id = $1
+        AND sync_date = $2::date
+        AND status = 'processing'
+        AND locked_at <= now() - ($3::int * interval '1 minute')
+    `, [connectionId, currentBusinessDate, GOOGLE_ADS_STALE_PROCESSING_TIMEOUT_MINUTES]);
+    return result.rowCount ?? 0;
+}
 async function planIncrementalSyncs(now = new Date()) {
     const result = await query(`
       SELECT
@@ -918,6 +1019,8 @@ async function planIncrementalSyncs(now = new Date()) {
     let plannedJobs = 0;
     const today = formatDateInTimeZone(now, GOOGLE_ADS_SYNC_TIME_ZONE);
     for (const row of result.rows) {
+        await suppressHistoricalSyncJobs(row.id, today);
+        await recoverStaleCurrentDaySyncJobs(row.id, today);
         if (row.last_sync_planned_for !== today) {
             const dates = buildPlanningDates(now, row.last_sync_completed_at);
             if (dates.length > 0) {
@@ -1174,10 +1277,12 @@ async function markSyncJobSucceeded(jobId, connectionId) {
     `, [connectionId]);
 }
 async function markSyncJobFailed(job, error) {
-    const lastError = error instanceof Error ? error.message : String(error);
-    const shouldRetry = job.attempts < env.GOOGLE_ADS_SYNC_MAX_RETRIES;
+    const lastError = formatGoogleAdsError(error);
+    const providerRetryDelaySeconds = error instanceof GoogleAdsApiError ? extractGoogleAdsProviderRetryDelaySeconds(error.details) : null;
+    const retryDelaySeconds = providerRetryDelaySeconds ?? computeRetryDelaySeconds(job.attempts);
+    const hasProviderRetryDelay = providerRetryDelaySeconds !== null;
+    const shouldRetry = hasProviderRetryDelay || job.attempts < env.GOOGLE_ADS_SYNC_MAX_RETRIES;
     const nextStatus = shouldRetry ? 'retry' : 'failed';
-    const retryDelaySeconds = computeRetryDelaySeconds(job.attempts);
     await query(`
       UPDATE google_ads_sync_jobs
       SET
@@ -1293,6 +1398,7 @@ async function processSyncJob(job) {
     try {
         await attemptJob();
         await markSyncJobSucceeded(job.id, job.connection_id);
+        return 'succeeded';
     }
     catch (error) {
         if (error instanceof GoogleAdsApiError && [401, 403, 429, 500, 502, 503, 504].includes(error.statusCode)) {
@@ -1300,14 +1406,15 @@ async function processSyncJob(job) {
                 await delay(500);
                 await attemptJob();
                 await markSyncJobSucceeded(job.id, job.connection_id);
-                return;
+                return 'succeeded';
             }
             catch (retryError) {
                 await markSyncJobFailed(job, retryError);
-                return;
+                return 'failed';
             }
         }
         await markSyncJobFailed(job, error);
+        return 'failed';
     }
 }
 function buildMetricsLog(result) {
@@ -1330,13 +1437,12 @@ export async function processGoogleAdsSyncQueue(options = {}) {
     let succeededJobs = 0;
     let failedJobs = 0;
     for (const job of jobs) {
-        try {
-            await processSyncJob(job);
+        const outcome = await processSyncJob(job);
+        if (outcome === 'succeeded') {
             succeededJobs += 1;
         }
-        catch (error) {
+        else {
             failedJobs += 1;
-            await markSyncJobFailed(job, error);
         }
     }
     const result = {
@@ -1542,5 +1648,8 @@ export const __googleAdsTestUtils = {
     buildPlanningDates,
     buildReconciliationWindow,
     computeRetryDelaySeconds,
-    normalizeSpendSnapshot
+    normalizeSpendSnapshot,
+    formatGoogleAdsError,
+    extractGoogleAdsProviderRetryDelaySeconds,
+    createGoogleAdsApiErrorForTest: (statusCode, message, details) => new GoogleAdsApiError(statusCode, message, details)
 };

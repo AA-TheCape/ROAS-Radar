@@ -570,15 +570,18 @@ async function insertTrackingEventForCapture(client, input) {
             payloadSizeBytes,
             payloadHash
         ]);
-        logRawPayloadIntegrityMismatch(rawPayloadMetadata, insertResult.rows[0], {
-            surface: 'tracking_events',
-            operation: 'insert',
-            recordId: insertResult.rows[0].id,
-            fields: {
-                ingestionSource: input.ingestionSource,
-                eventType: input.eventType
-            }
-        });
+        const persistedRow = insertResult.rows[0];
+        if (persistedRow) {
+            logRawPayloadIntegrityMismatch(rawPayloadMetadata, persistedRow, {
+                surface: 'tracking_events',
+                operation: 'insert',
+                recordId: persistedRow.id,
+                fields: {
+                    ingestionSource: input.ingestionSource,
+                    eventType: input.eventType
+                }
+            });
+        }
     }
     catch (error) {
         if (typeof error === 'object' && error !== null && 'code' in error && error.code === '23505') {
@@ -687,15 +690,18 @@ async function insertTrackingBrowserEvent(client, input, rawPayload, ingestionFi
             payloadSizeBytes,
             payloadHash
         ]);
-        logRawPayloadIntegrityMismatch(rawPayloadMetadata, insertResult.rows[0], {
-            surface: 'tracking_events',
-            operation: 'insert',
-            recordId: insertResult.rows[0].id,
-            fields: {
-                ingestionSource: 'browser',
-                eventType: input.eventType
-            }
-        });
+        const persistedRow = insertResult.rows[0];
+        if (persistedRow) {
+            logRawPayloadIntegrityMismatch(rawPayloadMetadata, persistedRow, {
+                surface: 'tracking_events',
+                operation: 'insert',
+                recordId: persistedRow.id,
+                fields: {
+                    ingestionSource: 'browser',
+                    eventType: input.eventType
+                }
+            });
+        }
     }
     catch (error) {
         if (typeof error === 'object' && error !== null && 'code' in error && error.code === '23505') {
@@ -800,17 +806,21 @@ async function insertAttributionTouchEvent(client, input) {
             input.shopifyCartToken ?? null,
             input.shopifyCheckoutToken ?? null
         ]);
-        logRawPayloadIntegrityMismatch(rawPayloadMetadata, result.rows[0], {
+        const persistedRow = result.rows[0];
+        if (!persistedRow) {
+            throw new Error('session_attribution_touch_events insert did not return an id');
+        }
+        logRawPayloadIntegrityMismatch(rawPayloadMetadata, persistedRow, {
             surface: 'session_attribution_touch_events',
             operation: 'insert',
-            recordId: result.rows[0].id,
+            recordId: persistedRow.id,
             fields: {
                 ingestionSource: input.ingestionSource,
                 eventType: input.eventType
             }
         });
         return {
-            id: result.rows[0].id,
+            id: persistedRow.id,
             deduplicated: false
         };
     }
@@ -825,6 +835,20 @@ async function insertAttributionTouchEvent(client, input) {
             }
         }
         throw error;
+    }
+}
+async function ingestIdentityEdgesBestEffort(client, input, context) {
+    try {
+        await ingestIdentityEdges(client, input);
+    }
+    catch (error) {
+        logError('tracking_identity_edge_ingestion_failed', error, {
+            pipeline: context.pipeline,
+            eventType: context.eventType,
+            sourceTable: input.sourceTable,
+            sourceRecordId: input.sourceRecordId,
+            evidenceSource: input.evidenceSource
+        });
     }
 }
 async function ingestAttributionCapture(input, options) {
@@ -864,7 +888,7 @@ async function ingestAttributionCapture(input, options) {
             shopifyCartToken: input.shopifyCartToken,
             shopifyCheckoutToken: input.shopifyCheckoutToken
         });
-        await ingestIdentityEdges(client, {
+        await ingestIdentityEdgesBestEffort(client, {
             sourceTimestamp: input.capture.occurred_at,
             evidenceSource: 'tracking_event',
             sourceTable: 'tracking_events',
@@ -873,6 +897,9 @@ async function ingestAttributionCapture(input, options) {
             sessionId: input.capture.roas_radar_session_id,
             checkoutToken: input.shopifyCheckoutToken,
             cartToken: input.shopifyCartToken
+        }, {
+            pipeline: 'attribution_capture',
+            eventType: input.eventType
         });
         return touchEvent;
     });
@@ -915,7 +942,7 @@ async function ingestTrackingEvent(input, rawPayload, requestIp) {
             landing_url: input.pageUrl
         }, new Date(input.occurredAt), input.context.userAgent, ipHash);
         const insertedEventId = await insertTrackingBrowserEvent(client, input, rawPayload, ingestionFingerprint);
-        await ingestIdentityEdges(client, {
+        await ingestIdentityEdgesBestEffort(client, {
             sourceTimestamp: input.occurredAt,
             evidenceSource: 'tracking_event',
             sourceTable: 'tracking_events',
@@ -924,6 +951,9 @@ async function ingestTrackingEvent(input, rawPayload, requestIp) {
             sessionId: input.sessionId,
             checkoutToken: input.shopifyCheckoutToken,
             cartToken: input.shopifyCartToken
+        }, {
+            pipeline: 'browser_event',
+            eventType: input.eventType
         });
         await enqueueAttributionForTrackingTouchpoint(client, {
             sessionId: input.sessionId,

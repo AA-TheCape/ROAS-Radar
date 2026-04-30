@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 
+import { buildRawPayloadFixture, resetIntegrationTables } from './integration-test-helpers.js';
+
 process.env.DATABASE_URL ??= 'postgres://postgres:postgres@127.0.0.1:5432/roas_radar';
 
 let pool: typeof import('../src/db/pool.js').pool;
@@ -11,15 +13,13 @@ const RETENTION_AS_OF = new Date('2026-04-25T12:00:00.000Z');
 const RETENTION_CUTOFF = '2026-03-26T12:00:00.000Z';
 
 async function resetIntegrationDatabase(): Promise<void> {
-  await pool.query(`
-    TRUNCATE TABLE
-      order_attribution_links,
-      session_attribution_touch_events,
-      session_attribution_identities,
-      shopify_orders,
-      tracking_sessions
-    RESTART IDENTITY CASCADE
-  `);
+  await resetIntegrationTables(pool, [
+    'order_attribution_links',
+    'session_attribution_touch_events',
+    'session_attribution_identities',
+    'shopify_orders',
+    'tracking_sessions'
+  ]);
 }
 
 async function insertTrackingSession(sessionId: string): Promise<void> {
@@ -87,6 +87,7 @@ async function insertSessionAttributionTouchEvent(input: {
   sessionId: string;
   retainedUntil: string;
 }): Promise<void> {
+  const rawPayloadFixture = buildRawPayloadFixture({});
   await pool.query(
     `
       INSERT INTO session_attribution_touch_events (
@@ -100,6 +101,8 @@ async function insertSessionAttributionTouchEvent(input: {
         utm_source,
         utm_medium,
         utm_campaign,
+        payload_size_bytes,
+        payload_hash,
         raw_payload
       )
       VALUES (
@@ -113,15 +116,24 @@ async function insertSessionAttributionTouchEvent(input: {
         'google',
         'cpc',
         'spring-sale',
-        '{}'::jsonb
+        $3,
+        $4,
+        $5::jsonb
       )
     `,
-    [input.sessionId, input.retainedUntil]
+    [
+      input.sessionId,
+      input.retainedUntil,
+      rawPayloadFixture.payloadSizeBytes,
+      rawPayloadFixture.payloadHash,
+      rawPayloadFixture.rawPayloadJson
+    ]
   );
 }
 
 async function insertProtectedOrderLink(sessionId: string, shopifyOrderId: string): Promise<void> {
   await insertTrackingSession(sessionId);
+  const rawPayloadFixture = buildRawPayloadFixture({ id: shopifyOrderId, landing_session_id: sessionId }, shopifyOrderId);
 
   await pool.query(
     `
@@ -132,6 +144,9 @@ async function insertProtectedOrderLink(sessionId: string, shopifyOrderId: strin
         total_price,
         processed_at,
         landing_session_id,
+        payload_external_id,
+        payload_size_bytes,
+        payload_hash,
         raw_payload,
         ingested_at
       )
@@ -142,11 +157,21 @@ async function insertProtectedOrderLink(sessionId: string, shopifyOrderId: strin
         '100.00',
         '2026-03-02T12:00:00.000Z',
         $2::uuid,
-        $3::jsonb,
+        $3,
+        $4,
+        $5,
+        $6::jsonb,
         now()
       )
     `,
-    [shopifyOrderId, sessionId, JSON.stringify({ id: shopifyOrderId, landing_session_id: sessionId })]
+    [
+      shopifyOrderId,
+      sessionId,
+      rawPayloadFixture.payloadExternalId,
+      rawPayloadFixture.payloadSizeBytes,
+      rawPayloadFixture.payloadHash,
+      rawPayloadFixture.rawPayloadJson
+    ]
   );
 
   await pool.query(

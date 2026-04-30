@@ -139,7 +139,9 @@ test('reporting dashboard search and order drill-in stay wired for high-traffic 
 
   try {
     assert.match(mounted.container.textContent ?? '', /Campaign performance/);
-    assert.match(mounted.container.textContent ?? '', /Attributed orders/);
+    assert.match(mounted.container.textContent ?? '', /Order attribution rows/);
+    assert.match(mounted.container.textContent ?? '', /Deterministic first-party/);
+    assert.match(mounted.container.textContent ?? '', /Unattributed/);
 
     const orderButton = mounted.container.querySelector('button[aria-label="Open order details for Shopify order 1105"]');
     assert.ok(orderButton);
@@ -258,20 +260,39 @@ test('reporting dashboard keeps overview, charts, and report tables internally c
         {
           shopifyOrderId: '1201',
           processedAt: '2026-04-03T18:00:00.000Z',
+          orderOccurredAtUtc: '2026-04-03T18:00:00.000Z',
           source: 'google',
           medium: 'cpc',
           campaign: 'Brand Search',
           totalPrice: 700,
-          attributionReason: 'last-touch'
+          attributionReason: 'matched_by_landing_session',
+          primaryCreditAttributionReason: 'matched_by_landing_session',
+          attributionTier: 'deterministic_first_party',
+          attributionTierLabel: 'Deterministic first-party',
+          attributionTierDescription:
+            'Resolved from durable ROAS Radar first-party evidence such as a landing session, checkout token, cart token, or stitched identity path.',
+          attributionSource: 'landing_session_id',
+          attributionMatchedAt: '2026-04-03T18:00:15.000Z',
+          confidenceScore: 1,
+          sessionId: 'sess_1201'
         },
         {
           shopifyOrderId: '1200',
           processedAt: '2026-04-02T18:00:00.000Z',
+          orderOccurredAtUtc: '2026-04-02T18:00:00.000Z',
           source: 'meta',
           medium: 'paid_social',
           campaign: 'Prospecting Video',
           totalPrice: 500,
-          attributionReason: 'linear'
+          attributionReason: 'shopify_hint_derived',
+          primaryCreditAttributionReason: 'shopify_hint_derived',
+          attributionTier: 'deterministic_shopify_hint',
+          attributionTierLabel: 'Deterministic Shopify hint',
+          attributionTierDescription: 'Recovered synthetically from Shopify marketing hints after first-party resolution failed.',
+          attributionSource: 'shopify_marketing_hint',
+          attributionMatchedAt: '2026-04-02T18:00:20.000Z',
+          confidenceScore: 0.55,
+          sessionId: null
         }
       ],
       loading: false,

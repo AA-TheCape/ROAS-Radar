@@ -23,11 +23,37 @@ class ReportingHttpError extends Error {
 }
 
 const dateStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const attributionTierSchema = z.enum([
+  'deterministic_first_party',
+  'deterministic_shopify_hint',
+  'ga4_fallback',
+  'unattributed'
+]);
+type ReportingAttributionTier = z.infer<typeof attributionTierSchema>;
+
+const ATTRIBUTION_TIER_LABELS: Record<ReportingAttributionTier, string> = {
+  deterministic_first_party: 'Deterministic first-party',
+  deterministic_shopify_hint: 'Deterministic Shopify hint',
+  ga4_fallback: 'GA4 fallback',
+  unattributed: 'Unattributed'
+};
+
+const ATTRIBUTION_TIER_DESCRIPTIONS: Record<ReportingAttributionTier, string> = {
+  deterministic_first_party:
+    'Resolved from durable ROAS Radar first-party evidence such as a landing session, checkout token, cart token, or stitched identity path.',
+  deterministic_shopify_hint:
+    'Recovered synthetically from Shopify marketing hints after first-party resolution failed.',
+  ga4_fallback:
+    'Recovered from the GA4 fallback contract only after first-party and Shopify-hint matches were unavailable.',
+  unattributed:
+    'No eligible first-party, Shopify hint, or GA4 fallback match qualified, or the required timing data could not be normalized.'
+};
 
 const baseFiltersObjectSchema = z.object({
   startDate: dateStringSchema,
   endDate: dateStringSchema,
   attributionModel: z.enum(ATTRIBUTION_MODELS).optional().default('last_touch'),
+  attributionTier: attributionTierSchema.optional(),
   source: z.string().trim().min(1).optional(),
   campaign: z.string().trim().min(1).optional()
 });
@@ -102,10 +128,15 @@ type OrderAttributionRow = {
   shopify_order_id: string;
   processed_at: Date | null;
   total_price: string | number;
+  attribution_tier: string | null;
+  attribution_source: string | null;
+  order_attribution_reason: string | null;
+  attribution_matched_at: Date | null;
+  attribution_snapshot: unknown;
   attributed_source: string | null;
   attributed_medium: string | null;
   attributed_campaign: string | null;
-  attribution_reason: string | null;
+  primary_credit_attribution_reason: string | null;
 };
 
 type OrderDetailsRow = {
@@ -126,6 +157,12 @@ type OrderDetailsRow = {
   checkout_token: string | null;
   cart_token: string | null;
   source_name: string | null;
+  attribution_tier: string | null;
+  attribution_source: string | null;
+  attribution_matched_at: Date | null;
+  attribution_reason: string | null;
+  attribution_snapshot: unknown;
+  attribution_snapshot_updated_at: Date | null;
   ingested_at: Date;
   raw_payload: unknown;
 };
@@ -209,7 +246,8 @@ function buildMetricDimensionFilters(
 function buildOrderAttributionFilters(
   attributionModel: string,
   source: string | undefined,
-  campaign: string | undefined
+  campaign: string | undefined,
+  attributionTier?: z.infer<typeof attributionTierSchema>
 ): { sql: string; params: string[] } {
   const params: string[] = [attributionModel];
   const filters: string[] = [];
@@ -222,6 +260,11 @@ function buildOrderAttributionFilters(
   if (campaign) {
     params.push(campaign);
     filters.push(`c.attributed_campaign = $${params.length + 2}`);
+  }
+
+  if (attributionTier) {
+    params.push(attributionTier);
+    filters.push(`COALESCE(o.attribution_tier, 'unattributed') = $${params.length + 2}`);
   }
 
   return {
@@ -237,6 +280,57 @@ function normalizeContent(value: string | null): string | null {
 
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+type AttributionWinnerMetadata = {
+  sessionId: string | null;
+  source: string | null;
+  medium: string | null;
+  campaign: string | null;
+  content: string | null;
+  term: string | null;
+  clickIdType: string | null;
+  clickIdValue: string | null;
+};
+
+type OrderAttributionMetadata = {
+  confidenceScore: number | null;
+  winner: AttributionWinnerMetadata;
+};
+
+function asObjectRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function readNullableString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value : null;
+}
+
+function readNullableNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function extractOrderAttributionMetadata(snapshot: unknown): OrderAttributionMetadata {
+  const snapshotRecord = asObjectRecord(snapshot);
+  const winnerRecord = asObjectRecord(snapshotRecord?.winner);
+
+  return {
+    confidenceScore: readNullableNumber(snapshotRecord?.confidenceScore),
+    winner: {
+      sessionId: readNullableString(winnerRecord?.sessionId),
+      source: readNullableString(winnerRecord?.source),
+      medium: readNullableString(winnerRecord?.medium),
+      campaign: readNullableString(winnerRecord?.campaign),
+      content: readNullableString(winnerRecord?.content),
+      term: readNullableString(winnerRecord?.term),
+      clickIdType: readNullableString(winnerRecord?.clickIdType),
+      clickIdValue: readNullableString(winnerRecord?.clickIdValue)
+    }
+  };
+}
+
+function normalizeAttributionTier(value: string | null | undefined): ReportingAttributionTier {
+  return attributionTierSchema.safeParse(value).success ? (value as ReportingAttributionTier) : 'unattributed';
 }
 
 function countDaysInRange(startDate: string, endDate: string): number {
@@ -510,7 +604,7 @@ export function createReportingRouter(): Router {
   router.get('/orders', async (req, res, next) => {
     try {
       const input = parseInput(ordersQuerySchema, req.query);
-      const filters = buildOrderAttributionFilters(input.attributionModel, input.source, input.campaign);
+      const filters = buildOrderAttributionFilters(input.attributionModel, input.source, input.campaign, input.attributionTier);
       const reportingTimezone = await getReportingTimezone();
       const result = await query<OrderAttributionRow>(
         `
@@ -518,10 +612,15 @@ export function createReportingRouter(): Router {
             o.shopify_order_id,
             COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) AS processed_at,
             o.total_price,
+            o.attribution_tier,
+            o.attribution_source,
+            o.attribution_reason AS order_attribution_reason,
+            o.attribution_matched_at,
+            o.attribution_snapshot,
             c.attributed_source,
             c.attributed_medium,
             c.attributed_campaign,
-            c.attribution_reason
+            c.attribution_reason AS primary_credit_attribution_reason
           FROM shopify_orders o
           LEFT JOIN LATERAL (
             SELECT
@@ -547,15 +646,30 @@ export function createReportingRouter(): Router {
       );
 
       res.json({
-        rows: result.rows.map((row) => ({
-          shopifyOrderId: row.shopify_order_id,
-          processedAt: row.processed_at?.toISOString() ?? null,
-          totalPrice: Number(row.total_price),
-          source: row.attributed_source,
-          medium: row.attributed_medium,
-          campaign: row.attributed_campaign,
-          attributionReason: row.attribution_reason ?? 'unattributed'
-        }))
+        rows: result.rows.map((row) => {
+          const metadata = extractOrderAttributionMetadata(row.attribution_snapshot);
+          const attributionTier = normalizeAttributionTier(row.attribution_tier);
+          const orderAttributionReason = row.order_attribution_reason ?? 'unattributed';
+
+          return {
+            shopifyOrderId: row.shopify_order_id,
+            processedAt: row.processed_at?.toISOString() ?? null,
+            orderOccurredAtUtc: row.processed_at?.toISOString() ?? null,
+            totalPrice: Number(row.total_price),
+            source: row.attributed_source,
+            medium: row.attributed_medium,
+            campaign: row.attributed_campaign,
+            attributionReason: orderAttributionReason,
+            primaryCreditAttributionReason: row.primary_credit_attribution_reason ?? orderAttributionReason,
+            attributionTier,
+            attributionTierLabel: ATTRIBUTION_TIER_LABELS[attributionTier],
+            attributionTierDescription: ATTRIBUTION_TIER_DESCRIPTIONS[attributionTier],
+            attributionSource: row.attribution_source,
+            attributionMatchedAt: row.attribution_matched_at?.toISOString() ?? null,
+            confidenceScore: metadata.confidenceScore,
+            sessionId: metadata.winner.sessionId
+          };
+        })
       });
     } catch (error) {
       next(error);
@@ -586,6 +700,12 @@ export function createReportingRouter(): Router {
             o.checkout_token,
             o.cart_token,
             o.source_name,
+            o.attribution_tier,
+            o.attribution_source,
+            o.attribution_matched_at,
+            o.attribution_reason,
+            o.attribution_snapshot,
+            o.attribution_snapshot_updated_at,
             o.ingested_at,
             o.raw_payload
           FROM shopify_orders o
@@ -652,6 +772,7 @@ export function createReportingRouter(): Router {
       );
 
       const order = orderResult.rows[0];
+      const metadata = extractOrderAttributionMetadata(order.attribution_snapshot);
 
       res.json({
         order: {
@@ -672,6 +793,27 @@ export function createReportingRouter(): Router {
           checkoutToken: order.checkout_token,
           cartToken: order.cart_token,
           sourceName: order.source_name,
+          orderOccurredAtUtc:
+            order.processed_at?.toISOString() ??
+            order.created_at_shopify?.toISOString() ??
+            order.ingested_at.toISOString(),
+          attributionTier: normalizeAttributionTier(order.attribution_tier),
+          attributionTierLabel: ATTRIBUTION_TIER_LABELS[normalizeAttributionTier(order.attribution_tier)],
+          attributionTierDescription: ATTRIBUTION_TIER_DESCRIPTIONS[normalizeAttributionTier(order.attribution_tier)],
+          attributionSource: order.attribution_source,
+          attributionMatchedAt: order.attribution_matched_at?.toISOString() ?? null,
+          attributionReason: order.attribution_reason ?? 'unattributed',
+          confidenceScore: metadata.confidenceScore,
+          sessionId: metadata.winner.sessionId,
+          attributedSource: metadata.winner.source,
+          attributedMedium: metadata.winner.medium,
+          attributedCampaign: metadata.winner.campaign,
+          attributedContent: metadata.winner.content,
+          attributedTerm: metadata.winner.term,
+          attributedClickIdType: metadata.winner.clickIdType,
+          attributedClickIdValue: metadata.winner.clickIdValue,
+          attributionSnapshot: order.attribution_snapshot,
+          attributionSnapshotUpdatedAt: order.attribution_snapshot_updated_at?.toISOString() ?? null,
           ingestedAt: order.ingested_at.toISOString(),
           rawPayload: order.raw_payload
         },

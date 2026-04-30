@@ -1,7 +1,13 @@
 import React, { useMemo, useState, type ReactNode } from 'react';
 
 import type { OrderDetailsResponse } from '../lib/api';
+import {
+  ATTRIBUTION_TIER_PRECEDENCE_TOOLTIP,
+  formatAttributionTierLabel,
+  getAttributionTierDescription
+} from '../lib/attributionTier';
 import { formatCurrency, formatDateTimeLabel, formatNumber } from '../lib/format';
+import { AttributionTierBadge } from './AttributionTierBadge';
 import {
   Badge,
   Card,
@@ -214,7 +220,7 @@ export default function OrderDetailsView({
       emptyLabel={selectedOrderId ? `No details were loaded for order ${selectedOrderId}.` : 'No order selected.'}
     >
       <div className="grid gap-section">
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
           <MetricCard
             label="Shopify order"
             value={formatOptionalValue(order?.shopifyOrderNumber)}
@@ -231,6 +237,11 @@ export default function OrderDetailsView({
             detail={`${formatNumber(lineItems.reduce((sum, item) => sum + item.quantity, 0))} units across the order`}
           />
           <MetricCard
+            label="Attribution tier"
+            value={order?.attributionTierLabel ?? (order ? formatAttributionTierLabel(order.attributionTier) : 'Not available')}
+            detail={order?.attributionTierDescription ?? 'No attribution tier description was returned.'}
+          />
+          <MetricCard
             label="Attributed credits"
             value={formatNumber(attributionCredits.length)}
             detail={`${formatCurrency(attributedRevenue)} total credited revenue`}
@@ -238,6 +249,80 @@ export default function OrderDetailsView({
         </div>
 
         <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1.2fr)_minmax(0,0.95fr)]">
+          <DetailCard
+            title="Attribution outcome"
+            description="Canonical tier, precedence semantics, and winning attribution metadata returned by the backend. Read tier first; use reason as the within-tier diagnostic."
+          >
+            <div className="grid gap-4">
+              <div className="flex flex-wrap items-start justify-between gap-3 rounded-card border border-line/60 bg-surface-alt/55 px-4 py-4">
+                <div className="space-y-2">
+                  <Eyebrow>Winning tier</Eyebrow>
+                  {order ? <AttributionTierBadge tier={order.attributionTier} withTooltip /> : <Badge tone="neutral">Not available</Badge>}
+                  <p className="max-w-2xl text-body text-ink-muted">
+                    {order?.attributionTierDescription ?? (order ? getAttributionTierDescription(order.attributionTier) : 'No attribution tier was returned for this order.')}
+                  </p>
+                </div>
+                <Tooltip content={ATTRIBUTION_TIER_PRECEDENCE_TOOLTIP}>
+                  <StatusPill>Tier precedence</StatusPill>
+                </Tooltip>
+              </div>
+              <DetailList className="xl:grid-cols-2">
+                <div>
+                  <dt>Attribution reason</dt>
+                  <dd>{formatOptionalValue(order?.attributionReason)}</dd>
+                </div>
+                <div>
+                  <dt>Tier label</dt>
+                  <dd>{formatOptionalValue(order?.attributionTierLabel)}</dd>
+                </div>
+                <div>
+                  <dt>Attribution source</dt>
+                  <dd>{formatOptionalValue(order?.attributionSource)}</dd>
+                </div>
+                <div>
+                  <dt>Matched at</dt>
+                  <dd>{formatOptionalDateTime(order?.attributionMatchedAt, reportingTimezone)}</dd>
+                </div>
+                <div>
+                  <dt>Confidence score</dt>
+                  <dd>{formatOptionalValue(order?.confidenceScore)}</dd>
+                </div>
+                <div>
+                  <dt>Resolved session ID</dt>
+                  <dd className="break-all">{formatOptionalValue(order?.sessionId)}</dd>
+                </div>
+                <div>
+                  <dt>Order occurred at</dt>
+                  <dd>{formatOptionalDateTime(order?.orderOccurredAtUtc, reportingTimezone)}</dd>
+                </div>
+                <div>
+                  <dt>Attributed source / medium</dt>
+                  <dd>{order ? `${order.attributedSource ?? 'Unattributed'} / ${order.attributedMedium ?? 'Unattributed'}` : 'Not available'}</dd>
+                </div>
+                <div>
+                  <dt>Attributed campaign</dt>
+                  <dd>{formatOptionalValue(order?.attributedCampaign)}</dd>
+                </div>
+                <div className="md:col-[1/-1]">
+                  <dt>Attributed click ID</dt>
+                  <dd>
+                    {order?.attributedClickIdType && order.attributedClickIdValue
+                      ? `${order.attributedClickIdType}: ${order.attributedClickIdValue}`
+                      : 'Not available'}
+                  </dd>
+                </div>
+              </DetailList>
+              {order?.attributionTier === 'unattributed' ? (
+                <EmptyState
+                  title="Order is currently unattributed"
+                  description="No eligible first-party, Shopify hint, or GA4 fallback candidate won for this order, so downstream consumers should treat it as unattributed."
+                  compact
+                  tone="danger"
+                />
+              ) : null}
+            </div>
+          </DetailCard>
+
           <DetailCard title="Order overview" description="Primary order identifiers, commercial totals, and fulfillment state.">
             <DetailList className="xl:grid-cols-2">
               <div>

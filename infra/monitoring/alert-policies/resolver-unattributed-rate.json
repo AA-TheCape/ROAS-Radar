@@ -1,7 +1,7 @@
 {
-  "displayName": "ROAS Radar __ENVIRONMENT__ Resolver Unattributed Rate",
+  "displayName": "ROAS Radar __ENVIRONMENT__ Resolver Unattributed Spike",
   "documentation": {
-    "content": "The deterministic resolver is returning unattributed outcomes too often. Runbook: __RUNBOOK_URL_ATTRIBUTION_COMPLETENESS__",
+    "content": "Unattributed order outcomes spiked above the rollout threshold. Review tier distribution, fallthrough stages, and normalization-failure labels on the observability dashboard. Runbook: __RUNBOOK_URL_ATTRIBUTION_COMPLETENESS__",
     "mimeType": "text/markdown"
   },
   "combiner": "OR",
@@ -15,9 +15,25 @@
   },
   "conditions": [
     {
-      "displayName": "Resolver unattributed outcome is emitted",
-      "conditionMatchedLog": {
-        "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"attribution_resolver_outcome\" AND jsonPayload.resolverOutcome=\"unattributed\""
+      "displayName": "Unattributed outcomes exceed 20 orders in 15 minutes",
+      "conditionThreshold": {
+        "filter": "metric.type=\"logging.googleapis.com/user/roas_attribution_resolver_outcomes\" resource.type=\"cloud_run_revision\" metric.labels.attribution_tier=\"unattributed\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 20,
+        "duration": "900s",
+        "aggregations": [
+          {
+            "alignmentPeriod": "900s",
+            "perSeriesAligner": "ALIGN_SUM",
+            "crossSeriesReducer": "REDUCE_SUM",
+            "groupByFields": [
+              "metric.labels.pipeline"
+            ]
+          }
+        ],
+        "trigger": {
+          "count": 1
+        }
       }
     }
   ]

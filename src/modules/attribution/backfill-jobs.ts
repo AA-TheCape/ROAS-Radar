@@ -13,8 +13,10 @@ import {
   claimOrderAttributionBackfillRuns,
   markOrderAttributionBackfillRunCompleted,
   markOrderAttributionBackfillRunFailed,
+  updateOrderAttributionBackfillRunProgress,
   type OrderAttributionBackfillClaimedRun
 } from './backfill-run-store.js';
+import { buildEmptyOrderAttributionBackfillProgress } from './backfill-progress.js';
 
 const DEFAULT_ORDER_ATTRIBUTION_BACKFILL_RUN_BATCH_SIZE = 1;
 type ExecuteBackfillRun = typeof backfillRecentOrdersWithRecoveredAttribution;
@@ -24,6 +26,7 @@ type LegacyClaimedRun = {
   options: OrderAttributionBackfillClaimedRun['options'];
   submittedAt?: string;
   startedAt?: string | null;
+  progress?: OrderAttributionBackfillClaimedRun['progress'];
 };
 
 type ProcessOrderAttributionBackfillRunsOptions = {
@@ -90,7 +93,8 @@ export async function processOrderAttributionBackfillRuns(
     submittedBy: 'submittedBy' in run ? run.submittedBy : run.submitted_by,
     options: run.options,
     submittedAt: run.submittedAt ?? null,
-    startedAt: run.startedAt ?? null
+    startedAt: run.startedAt ?? null,
+    progress: 'progress' in run ? run.progress : buildEmptyOrderAttributionBackfillProgress()
   }));
 
   let completedRuns = 0;
@@ -110,7 +114,12 @@ export async function processOrderAttributionBackfillRuns(
 
     try {
       const executionOptions = buildBackfillExecutionOptions(run, options.workerId);
-      const detailedReport = await executeBackfillRun(executionOptions);
+      const detailedReport = await executeBackfillRun({
+        ...executionOptions,
+        runId: run.id,
+        progress: run.progress,
+        onProgress: async (progress) => updateOrderAttributionBackfillRunProgress(run.id, progress, new Date())
+      });
       const finalReport = orderAttributionBackfillReportSchema.parse(toOrderAttributionBackfillJobReport(detailedReport));
       const completedAt = new Date();
 

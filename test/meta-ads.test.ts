@@ -19,13 +19,13 @@ test('buildPlanningDates uses the initial lookback before the first successful s
   assert.deepEqual(dates, ['2026-04-07', '2026-04-08', '2026-04-09', '2026-04-10', '2026-04-11']);
 });
 
-test('buildPlanningDates starts from the last successful business date after at least one successful sync', () => {
+test('buildPlanningDates starts from the last successful reporting-timezone business date after at least one successful sync', () => {
   const dates = __metaAdsTestUtils.buildPlanningDates(
     new Date('2026-04-11T12:00:00.000Z'),
     new Date('2026-04-10T06:00:00.000Z')
   );
 
-  assert.deepEqual(dates, ['2026-04-10', '2026-04-11']);
+  assert.deepEqual(dates, ['2026-04-09', '2026-04-10', '2026-04-11']);
 });
 
 test('buildIncrementalPlanningDates re-enqueues only today after the daily plan has already been created', () => {

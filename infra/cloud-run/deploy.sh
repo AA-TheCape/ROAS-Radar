@@ -3,7 +3,7 @@
 set -eu
 
 if [ "$#" -ne 1 ]; then
-  echo "usage: $0 <staging|production>" >&2
+  echo "usage: $0 <environment>" >&2
   exit 1
 fi
 
@@ -11,6 +11,7 @@ ENVIRONMENT="$1"
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
 ENV_FILE="$SCRIPT_DIR/environments/$ENVIRONMENT.env"
+DEPLOY_METADATA_FILE=${DEPLOY_METADATA_FILE:-}
 
 if [ ! -f "$ENV_FILE" ]; then
   echo "missing environment file: $ENV_FILE" >&2
@@ -26,6 +27,36 @@ require_var() {
     echo "missing required variable $1 in $ENV_FILE" >&2
     exit 1
   fi
+}
+
+get_latest_ready_revision() {
+  SERVICE_NAME="$1"
+
+  gcloud run services describe "$SERVICE_NAME" \
+    --project="$GCP_PROJECT_ID" \
+    --region="$GCP_REGION" \
+    --format='value(status.latestReadyRevisionName)' 2>/dev/null || true
+}
+
+record_metadata() {
+  if [ -z "$DEPLOY_METADATA_FILE" ]; then
+    return
+  fi
+
+  mkdir -p "$(dirname "$DEPLOY_METADATA_FILE")"
+
+  cat >"$DEPLOY_METADATA_FILE" <<EOF
+ENVIRONMENT="$ENVIRONMENT"
+SHORT_SHA="$SHORT_SHA"
+IMAGE_URI="$IMAGE_URI"
+DASHBOARD_IMAGE_URI="$DASHBOARD_IMAGE_URI"
+API_PREVIOUS_REVISION="${API_PREVIOUS_REVISION:-}"
+API_LATEST_REVISION="${API_LATEST_REVISION:-}"
+WORKER_PREVIOUS_REVISION="${WORKER_PREVIOUS_REVISION:-}"
+WORKER_LATEST_REVISION="${WORKER_LATEST_REVISION:-}"
+DASHBOARD_PREVIOUS_REVISION="${DASHBOARD_PREVIOUS_REVISION:-}"
+DASHBOARD_LATEST_REVISION="${DASHBOARD_LATEST_REVISION:-}"
+EOF
 }
 
 for var in \
@@ -124,6 +155,10 @@ COMMON_SECRET_FLAGS="DATABASE_URL=DATABASE_URL:latest,REPORTING_API_TOKEN=REPORT
 COMMON_ENV_VARS="^@^NODE_ENV=production@DATABASE_POOL_MIN=0@DATABASE_SSL=false@TRACKING_ALLOWED_ORIGINS=$TRACKING_ALLOWED_ORIGINS@API_JSON_BODY_LIMIT=$API_JSON_BODY_LIMIT@TRACKING_BODY_LIMIT=$TRACKING_BODY_LIMIT@SHOPIFY_WEBHOOK_BODY_LIMIT=$SHOPIFY_WEBHOOK_BODY_LIMIT@SHOPIFY_APP_BASE_URL=$SHOPIFY_APP_BASE_URL@SHOPIFY_APP_API_VERSION=${SHOPIFY_APP_API_VERSION:-2026-01}@SHOPIFY_APP_SCOPES=${SHOPIFY_APP_SCOPES:-read_orders}@SHOPIFY_APP_POST_INSTALL_REDIRECT_URL=${SHOPIFY_APP_POST_INSTALL_REDIRECT_URL:-}@META_ADS_APP_ID=${META_ADS_APP_ID:-}@META_ADS_APP_BASE_URL=${META_ADS_APP_BASE_URL:-$SHOPIFY_APP_BASE_URL}@META_ADS_APP_SCOPES=${META_ADS_APP_SCOPES:-ads_read}@META_ADS_AD_ACCOUNT_ID=${META_ADS_AD_ACCOUNT_ID:-}@GOOGLE_ADS_API_VERSION=${GOOGLE_ADS_API_VERSION:-v19}"
 ADS_JOB_ENDPOINT_BASE="https://$GCP_REGION-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/$GCP_PROJECT_ID/jobs"
 
+API_PREVIOUS_REVISION=$(get_latest_ready_revision "$API_SERVICE_NAME")
+WORKER_PREVIOUS_REVISION=$(get_latest_ready_revision "$WORKER_SERVICE_NAME")
+DASHBOARD_PREVIOUS_REVISION=$(get_latest_ready_revision "$DASHBOARD_SERVICE_NAME")
+
 upsert_scheduler_job() {
   SCHEDULER_JOB_NAME="$1"
   TARGET_JOB_NAME="$2"
@@ -192,6 +227,32 @@ EOF
   rm -f "$DASHBOARD_BUILD_CONFIG"
 fi
 
+echo "Deploying migration job $MIGRATOR_JOB_NAME"
+gcloud run jobs deploy "$MIGRATOR_JOB_NAME" \
+  --project="$GCP_PROJECT_ID" \
+  --region="$GCP_REGION" \
+  --image="$IMAGE_URI" \
+  --service-account="$MIGRATOR_SA" \
+  --cpu=1 \
+  --memory=512Mi \
+  --max-retries=1 \
+  --task-timeout=1800 \
+  --parallelism=1 \
+  --tasks=1 \
+  --command=npm \
+  --args=run,db:migrate:start \
+  --set-env-vars="NODE_ENV=production,DATABASE_POOL_MAX=1,DATABASE_POOL_MIN=0,DATABASE_SSL=false" \
+  --set-secrets="DATABASE_URL=MIGRATOR_DATABASE_URL:latest" \
+  --set-cloudsql-instances="$CLOUD_SQL_CONNECTION_NAME"
+
+if [ "${RUN_MIGRATIONS_ON_DEPLOY:-true}" = "true" ]; then
+  echo "Executing migration job $MIGRATOR_JOB_NAME"
+  gcloud run jobs execute "$MIGRATOR_JOB_NAME" \
+    --project="$GCP_PROJECT_ID" \
+    --region="$GCP_REGION" \
+    --wait
+fi
+
 echo "Deploying API service $API_SERVICE_NAME"
 gcloud run deploy "$API_SERVICE_NAME" \
   --project="$GCP_PROJECT_ID" \
@@ -210,6 +271,7 @@ gcloud run deploy "$API_SERVICE_NAME" \
   --set-env-vars="${COMMON_ENV_VARS}@DATABASE_POOL_MAX=$DATABASE_POOL_MAX@ATTRIBUTION_WORKER_LOOP=false" \
   --set-secrets="$COMMON_SECRET_FLAGS" \
   --add-cloudsql-instances="$CLOUD_SQL_CONNECTION_NAME"
+API_LATEST_REVISION=$(get_latest_ready_revision "$API_SERVICE_NAME")
 
 echo "Deploying worker service $WORKER_SERVICE_NAME"
 gcloud run deploy "$WORKER_SERVICE_NAME" \
@@ -232,6 +294,7 @@ gcloud run deploy "$WORKER_SERVICE_NAME" \
   --set-env-vars="${COMMON_ENV_VARS}@DATABASE_POOL_MAX=$WORKER_DATABASE_POOL_MAX@ATTRIBUTION_WORKER_LOOP=true" \
   --set-secrets="$COMMON_SECRET_FLAGS" \
   --add-cloudsql-instances="$CLOUD_SQL_CONNECTION_NAME"
+WORKER_LATEST_REVISION=$(get_latest_ready_revision "$WORKER_SERVICE_NAME")
 
 echo "Deploying dashboard service $DASHBOARD_SERVICE_NAME"
 gcloud run deploy "$DASHBOARD_SERVICE_NAME" \
@@ -250,24 +313,7 @@ gcloud run deploy "$DASHBOARD_SERVICE_NAME" \
   --timeout=300 \
   --set-env-vars="NODE_ENV=production,DASHBOARD_API_BASE_URL=$DASHBOARD_API_BASE_URL,DASHBOARD_REPORTING_TENANT_ID=${DASHBOARD_REPORTING_TENANT_ID:-roas-radar}" \
   --set-secrets="DASHBOARD_REPORTING_API_TOKEN=REPORTING_API_TOKEN:latest"
-
-echo "Deploying migration job $MIGRATOR_JOB_NAME"
-gcloud run jobs deploy "$MIGRATOR_JOB_NAME" \
-  --project="$GCP_PROJECT_ID" \
-  --region="$GCP_REGION" \
-  --image="$IMAGE_URI" \
-  --service-account="$MIGRATOR_SA" \
-  --cpu=1 \
-  --memory=512Mi \
-  --max-retries=1 \
-  --task-timeout=1800 \
-  --parallelism=1 \
-  --tasks=1 \
-  --command=npm \
-  --args=run,db:migrate:start \
-  --set-env-vars="NODE_ENV=production,DATABASE_POOL_MAX=1,DATABASE_POOL_MIN=0,DATABASE_SSL=false" \
-  --set-secrets="DATABASE_URL=MIGRATOR_DATABASE_URL:latest" \
-  --set-cloudsql-instances="$CLOUD_SQL_CONNECTION_NAME"
+DASHBOARD_LATEST_REVISION=$(get_latest_ready_revision "$DASHBOARD_SERVICE_NAME")
 
 echo "Deploying Meta Ads sync job $META_ADS_JOB_NAME"
 gcloud run jobs deploy "$META_ADS_JOB_NAME" \
@@ -407,17 +453,11 @@ upsert_scheduler_job "$IDENTITY_GRAPH_BACKFILL_SCHEDULER_JOB_NAME" "$IDENTITY_GR
 echo "Configuring order attribution materialization scheduler job $ORDER_ATTRIBUTION_MATERIALIZATION_SCHEDULER_JOB_NAME"
 upsert_scheduler_job "$ORDER_ATTRIBUTION_MATERIALIZATION_SCHEDULER_JOB_NAME" "$ORDER_ATTRIBUTION_MATERIALIZATION_JOB_NAME" "$ORDER_ATTRIBUTION_MATERIALIZATION_SCHEDULE"
 
-if [ "${RUN_MIGRATIONS_ON_DEPLOY:-true}" = "true" ]; then
-  echo "Executing migration job $MIGRATOR_JOB_NAME"
-  gcloud run jobs execute "$MIGRATOR_JOB_NAME" \
-    --project="$GCP_PROJECT_ID" \
-    --region="$GCP_REGION" \
-    --wait
-fi
-
 if [ "${APPLY_MONITORING_ON_DEPLOY:-true}" = "true" ]; then
   echo "Applying monitoring configuration for $ENVIRONMENT"
   sh "$REPO_ROOT/infra/monitoring/apply.sh" "$ENVIRONMENT"
 fi
+
+record_metadata
 
 echo "Deployment complete for $ENVIRONMENT"

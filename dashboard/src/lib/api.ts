@@ -17,9 +17,16 @@ export type {
   OrderAttributionBackfillSubmittedOptions
 };
 
+export type AttributionTier =
+  | 'deterministic_first_party'
+  | 'deterministic_shopify_hint'
+  | 'ga4_fallback'
+  | 'unattributed';
+
 export type ReportingFilters = {
   startDate: string;
   endDate: string;
+  attributionTier?: AttributionTier | '';
   attributionModel?:
     | 'first_touch'
     | 'last_touch'
@@ -121,11 +128,20 @@ export type TimeseriesResponse = {
 export type OrderRow = {
   shopifyOrderId: string;
   processedAt: string | null;
+  orderOccurredAtUtc: string | null;
   totalPrice: number;
   source: string | null;
   medium: string | null;
   campaign: string | null;
   attributionReason: string;
+  primaryCreditAttributionReason: string;
+  attributionTier: AttributionTier;
+  attributionTierLabel: string;
+  attributionTierDescription: string;
+  attributionSource: string | null;
+  attributionMatchedAt: string | null;
+  confidenceScore: number | null;
+  sessionId: string | null;
 };
 
 export type OrdersResponse = {
@@ -189,6 +205,24 @@ export type OrderDetail = {
   checkoutToken: string | null;
   cartToken: string | null;
   sourceName: string | null;
+  orderOccurredAtUtc: string;
+  attributionTier: AttributionTier;
+  attributionTierLabel: string;
+  attributionTierDescription: string;
+  attributionSource: string | null;
+  attributionMatchedAt: string | null;
+  attributionReason: string;
+  confidenceScore: number | null;
+  sessionId: string | null;
+  attributedSource: string | null;
+  attributedMedium: string | null;
+  attributedCampaign: string | null;
+  attributedContent: string | null;
+  attributedTerm: string | null;
+  attributedClickIdType: string | null;
+  attributedClickIdValue: string | null;
+  attributionSnapshot: unknown;
+  attributionSnapshotUpdatedAt: string | null;
   ingestedAt: string;
   rawPayload: unknown;
 };
@@ -560,6 +594,10 @@ function buildSearchParams(filters: ReportingFilters, extras: Record<string, str
 
   if (filters.attributionModel?.trim()) {
     params.set('attributionModel', filters.attributionModel.trim());
+  }
+
+  if (filters.attributionTier?.trim()) {
+    params.set('attributionTier', filters.attributionTier.trim());
   }
 
   for (const [key, value] of Object.entries(extras)) {
