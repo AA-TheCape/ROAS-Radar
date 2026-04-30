@@ -10,6 +10,7 @@ import React, {
   type FormEvent
 } from 'react';
 import {
+  ATTRIBUTION_MODEL_KEYS,
   ORDER_ATTRIBUTION_BACKFILL_DEFAULT_LIMIT,
   type OrderAttributionBackfillSubmittedOptions,
   orderAttributionBackfillRequestSchema
@@ -20,6 +21,9 @@ import {
   clearStoredAuthToken,
   createUser,
   enqueueOrderAttributionBackfill,
+  fetchAllAttributionResults,
+  fetchAttributionChannelTotals,
+  fetchAttributionExplainability,
   fetchAppSettings,
   fetchCampaigns,
   fetchCurrentUser,
@@ -50,6 +54,10 @@ import {
   updateGoogleAdsConfig,
   updateMetaAdsConfig,
   type AppSettings,
+  type AttributionChannelTotalsResponse,
+  type AttributionExplainabilityResponse,
+  type AttributionFilters,
+  type AttributionResultRow,
   type AuthUser,
   type CampaignRow,
   type CreateUserPayload,
@@ -101,6 +109,7 @@ import {
 } from './components/AuthenticatedUi';
 
 const ReportingDashboard = lazy(() => import('./components/ReportingDashboard'));
+const AttributionDashboard = lazy(() => import('./components/AttributionDashboard'));
 const OrderDetailsView = lazy(() => import('./components/OrderDetailsView'));
 const SettingsAdminView = lazy(() => import('./components/SettingsAdminView'));
 const IdentityGraphHealthView = lazy(() => import('./components/IdentityGraphHealthView'));
@@ -117,6 +126,12 @@ type DashboardState = {
   timeseries: AsyncSection<TimeseriesPoint[]>;
   orders: AsyncSection<OrderRow[]>;
   spendDetails: AsyncSection<SpendDetailChannelGroup[]>;
+};
+
+type AttributionState = {
+  results: AsyncSection<AttributionResultRow[]>;
+  channelTotals: AsyncSection<AttributionChannelTotalsResponse>;
+  explainability: AsyncSection<AttributionExplainabilityResponse>;
 };
 
 type ActionFeedback = {
@@ -168,13 +183,18 @@ type SettingsForm = {
   reportingTimezone: string;
 };
 
-type AppPage = 'dashboard' | 'identity-health' | 'settings' | 'order-details';
+type AppPage = 'dashboard' | 'attribution' | 'identity-health' | 'settings' | 'order-details';
 
 const AUTHENTICATED_NAV_ITEMS: AppShellNavItem[] = [
   {
     key: 'dashboard',
     label: 'Dashboard',
     description: 'Summary metrics, campaign performance, time-based revenue trends, and attributed order rows.'
+  },
+  {
+    key: 'attribution',
+    label: 'Attribution',
+    description: 'Compare the six attribution-engine model views side-by-side and inspect per-order rationale.'
   },
   {
     key: 'identity-health',
@@ -190,6 +210,7 @@ const AUTHENTICATED_NAV_ITEMS: AppShellNavItem[] = [
 
 const DEFAULT_REPORTING_TIMEZONE = 'America/Los_Angeles';
 const DEFAULT_GROUP_BY: TimeseriesGroupBy = 'day';
+const DEFAULT_ATTRIBUTION_MODEL = ATTRIBUTION_MODEL_KEYS[2];
 const ORDER_ATTRIBUTION_BACKFILL_JOB_STORAGE_KEY = 'roas-radar.order-attribution-backfill.latest-job-id';
 const ORDER_ATTRIBUTION_BACKFILL_POLL_INTERVAL_MS = 5000;
 const REPORTING_TIMEZONE_OPTIONS = [
@@ -296,6 +317,16 @@ export function createDefaultReportingFilters(reportingTimezone = DEFAULT_REPORT
     source: '',
     campaign: '',
     attributionTier: ''
+  };
+}
+
+function createDefaultAttributionFilters(reportingTimezone = DEFAULT_REPORTING_TIMEZONE): AttributionFilters {
+  return {
+    ...buildRange(30, reportingTimezone),
+    source: '',
+    medium: '',
+    campaign: '',
+    orderId: ''
   };
 }
 
@@ -602,6 +633,12 @@ function App() {
   const [loginPassword, setLoginPassword] = useState('');
   const [loginSubmitting, setLoginSubmitting] = useState(false);
   const [filters, setFilters] = useState<ReportingFilters>(initialDashboardState.filters);
+  const [attributionFilters, setAttributionFilters] = useState<AttributionFilters>(
+    createDefaultAttributionFilters(DEFAULT_REPORTING_TIMEZONE)
+  );
+  const [activeAttributionModel, setActiveAttributionModel] = useState<(typeof ATTRIBUTION_MODEL_KEYS)[number]>(
+    DEFAULT_ATTRIBUTION_MODEL
+  );
   const [appSettings, setAppSettings] = useState<AsyncSection<AppSettings>>(createLoadingSection());
   const [settingsForm, setSettingsForm] = useState<SettingsForm>({
     reportingTimezone: DEFAULT_REPORTING_TIMEZONE
@@ -622,6 +659,24 @@ function App() {
   const [groupBy, setGroupBy] = useState<TimeseriesGroupBy>(initialDashboardState.groupBy);
   const [currentPage, setCurrentPage] = useState<AppPage>('dashboard');
   const [dashboardRefreshKey, setDashboardRefreshKey] = useState(0);
+  const [attributionState, setAttributionState] = useState<AttributionState>({
+    results: {
+      data: null,
+      loading: false,
+      error: null
+    },
+    channelTotals: {
+      data: null,
+      loading: false,
+      error: null
+    },
+    explainability: {
+      data: null,
+      loading: false,
+      error: null
+    }
+  });
+  const [selectedAttributionOrderId, setSelectedAttributionOrderId] = useState<string | null>(null);
   const [identityHealthFilters, setIdentityHealthFilters] = useState<IdentityHealthFilters>({
     ...buildRange(30, DEFAULT_REPORTING_TIMEZONE),
     source: ''
@@ -909,6 +964,72 @@ function App() {
   }, [authState.user?.isAdmin, loadOrderAttributionBackfillJob, orderAttributionBackfillJob.data]);
 
   useEffect(() => {
+    if (!authState.user || currentPage !== 'attribution') {
+      return;
+    }
+
+    let cancelled = false;
+
+    setAttributionState((current) => ({
+      ...current,
+      results: createLoadingSection(),
+      channelTotals: createLoadingSection()
+    }));
+
+    fetchAllAttributionResults(attributionFilters, activeAttributionModel)
+      .then((rows) => {
+        if (!cancelled) {
+          setAttributionState((current) => ({
+            ...current,
+            results: createResolvedSection(rows)
+          }));
+        }
+      })
+      .catch((error: Error) => {
+        if (!cancelled) {
+          setAttributionState((current) => ({
+            ...current,
+            results: createErroredSection(error.message)
+          }));
+        }
+      });
+
+    fetchAttributionChannelTotals(attributionFilters)
+      .then((response) => {
+        if (!cancelled) {
+          setAttributionState((current) => ({
+            ...current,
+            channelTotals: createResolvedSection(response)
+          }));
+        }
+      })
+      .catch((error: Error) => {
+        if (!cancelled) {
+          setAttributionState((current) => ({
+            ...current,
+            channelTotals: createErroredSection(error.message)
+          }));
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeAttributionModel, attributionFilters, authState.user, currentPage]);
+
+  useEffect(() => {
+    setSelectedAttributionOrderId(null);
+    setAttributionState((current) => ({
+      ...current,
+      explainability: {
+        data: null,
+        loading: false,
+        error: null
+      }
+    }));
+  }, [activeAttributionModel, attributionFilters]);
+
+  useEffect(() => {
     if (typeof window === 'undefined') {
       return;
     }
@@ -938,6 +1059,24 @@ function App() {
         error: null
       });
       setSelectedOrderId(null);
+      setAttributionState({
+        results: {
+          data: null,
+          loading: false,
+          error: null
+        },
+        channelTotals: {
+          data: null,
+          loading: false,
+          error: null
+        },
+        explainability: {
+          data: null,
+          loading: false,
+          error: null
+        }
+      });
+      setSelectedAttributionOrderId(null);
       return;
     }
 
@@ -962,6 +1101,24 @@ function App() {
           error: null
         });
         setSelectedOrderId(null);
+        setAttributionState({
+          results: {
+            data: null,
+            loading: false,
+            error: null
+          },
+          channelTotals: {
+            data: null,
+            loading: false,
+            error: null
+          },
+          explainability: {
+            data: null,
+            loading: false,
+            error: null
+          }
+        });
+        setSelectedAttributionOrderId(null);
       });
   }, []);
 
@@ -989,6 +1146,35 @@ function App() {
       error: null
     });
   }, []);
+
+  const openAttributionExplainability = useCallback(
+    async (orderId: string, runId: string) => {
+      setSelectedAttributionOrderId(orderId);
+      setAttributionState((current) => ({
+        ...current,
+        explainability: createLoadingSection()
+      }));
+
+      try {
+        const response = await fetchAttributionExplainability(orderId, {
+          runId,
+          modelKey: activeAttributionModel
+        });
+        setAttributionState((current) => ({
+          ...current,
+          explainability: createResolvedSection(response)
+        }));
+      } catch (error) {
+        setAttributionState((current) => ({
+          ...current,
+          explainability: createErroredSection(
+            error instanceof Error ? error.message : 'Failed to load attribution explainability'
+          )
+        }));
+      }
+    },
+    [activeAttributionModel]
+  );
 
   const loadUsers = useCallback(async () => {
     if (!authState.user?.isAdmin) {
@@ -1117,6 +1303,24 @@ function App() {
       error: null
     });
     setSelectedOrderId(null);
+    setAttributionState({
+      results: {
+        data: null,
+        loading: false,
+        error: null
+      },
+      channelTotals: {
+        data: null,
+        loading: false,
+        error: null
+      },
+      explainability: {
+        data: null,
+        loading: false,
+        error: null
+      }
+    });
+    setSelectedAttributionOrderId(null);
     setActionFeedback({
       context: null,
       loading: null,
@@ -1696,6 +1900,17 @@ function App() {
       }));
     });
   }, []);
+  const handleAttributionFiltersChange = useCallback((next: AttributionFilters) => {
+    setAttributionFilters((current) => ({
+      ...current,
+      ...next
+    }));
+  }, []);
+  const handleClearAttributionFilters = useCallback(() => {
+    startTransition(() => {
+      setAttributionFilters(createDefaultAttributionFilters(reportingTimezone));
+    });
+  }, [reportingTimezone]);
 
   if (authState.checking) {
     return (
@@ -1764,6 +1979,11 @@ function App() {
           { label: 'Authenticated app' },
           { label: 'Dashboard', current: true }
         ]
+      : currentPage === 'attribution'
+        ? [
+            { label: 'Authenticated app' },
+            { label: 'Attribution', current: true }
+          ]
       : currentPage === 'identity-health'
         ? [
             { label: 'Authenticated app' },
@@ -1834,6 +2054,31 @@ function App() {
             ordersSection={dashboard.orders}
             spendDetailsSection={dashboard.spendDetails}
             onOpenOrderDetails={(shopifyOrderId) => void openOrderDetails(shopifyOrderId)}
+          />
+        </Suspense>
+      ) : null}
+
+      {currentPage === 'attribution' ? (
+        <Suspense
+          fallback={
+            <AuthenticatedViewFallback
+              title="Attribution"
+              description="Loading attribution model comparisons, order summaries, and rationale drilldown."
+            />
+          }
+        >
+          <AttributionDashboard
+            filters={attributionFilters}
+            onFiltersChange={handleAttributionFiltersChange}
+            onClearFilters={handleClearAttributionFilters}
+            activeModel={activeAttributionModel}
+            onActiveModelChange={setActiveAttributionModel}
+            reportingTimezone={reportingTimezone}
+            resultsSection={attributionState.results}
+            channelTotalsSection={attributionState.channelTotals}
+            explainabilitySection={attributionState.explainability}
+            selectedOrderId={selectedAttributionOrderId}
+            onInspectOrder={(orderId, runId) => void openAttributionExplainability(orderId, runId)}
           />
         </Suspense>
       ) : null}

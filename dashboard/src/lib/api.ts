@@ -1,4 +1,10 @@
 import type {
+  AttributionCreditRecordV1,
+  AttributionExplainRecordV1,
+  AttributionLookbackRule,
+  AttributionModelKey,
+  AttributionResultRecordV1,
+  AttributionTouchpointInputV1,
   OrderAttributionBackfillEnqueueResponse,
   OrderAttributionBackfillJobResponse,
   OrderAttributionBackfillRequest,
@@ -36,6 +42,15 @@ export type ReportingFilters = {
     | 'rule_based_weighted';
   source?: string;
   campaign?: string;
+};
+
+export type AttributionFilters = {
+  startDate: string;
+  endDate: string;
+  source?: string;
+  medium?: string;
+  campaign?: string;
+  orderId?: string;
 };
 
 export type SummaryTotals = {
@@ -231,6 +246,93 @@ export type OrderDetailsResponse = {
   order: OrderDetail;
   lineItems: OrderDetailLineItem[];
   attributionCredits: OrderDetailAttributionCredit[];
+};
+
+export type AttributionResultRow = {
+  record: AttributionResultRecordV1;
+  orderOccurredAtUtc: string;
+  run: {
+    id: string;
+    status: string;
+    triggerSource: string;
+    submittedBy: string;
+    windowStartUtc: string | null;
+    windowEndUtc: string | null;
+    lookbackClickWindowDays: number;
+    lookbackViewWindowDays: number;
+    createdAtUtc: string;
+    completedAtUtc: string | null;
+  };
+  model: {
+    key: AttributionModelKey;
+    winnerSelectionRule: AttributionModelKey;
+    lookbackRuleApplied: AttributionLookbackRule;
+  };
+  primaryTouchpoint: AttributionCreditRecordV1 | null;
+};
+
+export type AttributionResultsResponse = {
+  rows: AttributionResultRow[];
+  nextCursor: string | null;
+};
+
+export type AttributionChannelTotalRow = {
+  modelKey: AttributionModelKey;
+  source: string | null;
+  medium: string | null;
+  orderCount: number;
+  revenueCredited: string;
+  creditWeightTotal: string;
+};
+
+export type AttributionChannelTotalsResponse = {
+  rows: AttributionChannelTotalRow[];
+  lookbackClickWindowDays: number;
+  lookbackViewWindowDays: number;
+};
+
+export type AttributionExplainabilityTouchpoint = Omit<AttributionTouchpointInputV1, 'schema_version'> & {
+  runId: string;
+  orderId: string;
+  touchpointId: string;
+  sessionId: string | null;
+  identityJourneyId: string | null;
+  touchpointOccurredAtUtc: string;
+  touchpointCapturedAtUtc: string;
+  touchpointSourceKind: AttributionTouchpointInputV1['touchpoint_source_kind'];
+  ingestionSource: AttributionTouchpointInputV1['ingestion_source'];
+  clickIdType: AttributionTouchpointInputV1['click_id_type'];
+  clickIdValue: string | null;
+  evidenceSource: AttributionTouchpointInputV1['evidence_source'];
+  isDirect: boolean;
+  engagementType: AttributionTouchpointInputV1['engagement_type'];
+  isSynthetic: boolean;
+  isEligible: boolean;
+  ineligibilityReason: string | null;
+  attributionReason: string | null;
+  attributionHint: Record<string, unknown>;
+};
+
+export type AttributionExplainabilityResponse = {
+  orderId: string;
+  selectedRunReason: 'explicit_run_id' | 'latest_run_for_order';
+  run: {
+    id: string;
+    attributionSpecVersion: 'v1';
+    status: string;
+    triggerSource: string;
+    submittedBy: string;
+    windowStartUtc: string | null;
+    windowEndUtc: string | null;
+    lookbackClickWindowDays: number;
+    lookbackViewWindowDays: number;
+    createdAtUtc: string;
+    completedAtUtc: string | null;
+  };
+  summaries: AttributionResultRecordV1[];
+  touchpoints: AttributionExplainabilityTouchpoint[];
+  credits: AttributionCreditRecordV1[];
+  explainability: AttributionExplainRecordV1[];
 };
 
 export type AuthUser = {
@@ -607,6 +709,35 @@ function buildSearchParams(filters: ReportingFilters, extras: Record<string, str
   return params;
 }
 
+function buildAttributionSearchParams(filters: AttributionFilters, extras: Record<string, string> = {}): URLSearchParams {
+  const params = new URLSearchParams({
+    startDate: filters.startDate,
+    endDate: filters.endDate
+  });
+
+  if (filters.source?.trim()) {
+    params.set('source', filters.source.trim());
+  }
+
+  if (filters.medium?.trim()) {
+    params.set('medium', filters.medium.trim());
+  }
+
+  if (filters.campaign?.trim()) {
+    params.set('campaign', filters.campaign.trim());
+  }
+
+  if (filters.orderId?.trim()) {
+    params.set('orderId', filters.orderId.trim());
+  }
+
+  for (const [key, value] of Object.entries(extras)) {
+    params.set(key, value);
+  }
+
+  return params;
+}
+
 function buildIdentityHealthSearchParams(filters: IdentityHealthFilters, extras: Record<string, string> = {}): URLSearchParams {
   const params = new URLSearchParams({
     startDate: filters.startDate,
@@ -740,6 +871,80 @@ export function fetchOrders(filters: ReportingFilters, limit = 10) {
 
 export function fetchOrderDetails(shopifyOrderId: string) {
   return requestJson<OrderDetailsResponse>(`/api/reporting/orders/${encodeURIComponent(shopifyOrderId)}`);
+}
+
+export function fetchAttributionResults(
+  filters: AttributionFilters,
+  modelKey: AttributionModelKey,
+  options: {
+    runId?: string;
+    cursor?: string;
+    limit?: number;
+  } = {}
+) {
+  const searchParams = buildAttributionSearchParams(filters, {
+    modelKey,
+    ...(options.runId ? { runId: options.runId } : {}),
+    ...(options.cursor ? { cursor: options.cursor } : {}),
+    ...(options.limit ? { limit: String(options.limit) } : {})
+  });
+
+  return requestJson<AttributionResultsResponse>('/api/attribution/results', { searchParams });
+}
+
+export async function fetchAllAttributionResults(
+  filters: AttributionFilters,
+  modelKey: AttributionModelKey,
+  options: {
+    runId?: string;
+    limitPerPage?: number;
+  } = {}
+) {
+  const rows: AttributionResultRow[] = [];
+  const limit = options.limitPerPage ?? 200;
+  let cursor: string | undefined;
+
+  do {
+    const response = await fetchAttributionResults(filters, modelKey, {
+      runId: options.runId,
+      cursor,
+      limit
+    });
+
+    rows.push(...response.rows);
+    cursor = response.nextCursor ?? undefined;
+  } while (cursor);
+
+  return rows;
+}
+
+export function fetchAttributionChannelTotals(filters: AttributionFilters, runId?: string) {
+  return requestJson<AttributionChannelTotalsResponse>('/api/attribution/channel-totals', {
+    searchParams: buildAttributionSearchParams(filters, runId ? { runId } : {})
+  });
+}
+
+export function fetchAttributionExplainability(
+  orderId: string,
+  options: {
+    runId?: string;
+    modelKey?: AttributionModelKey;
+  } = {}
+) {
+  const searchParams = new URLSearchParams();
+
+  if (options.runId) {
+    searchParams.set('runId', options.runId);
+  }
+
+  if (options.modelKey) {
+    searchParams.set('modelKey', options.modelKey);
+  }
+
+  return requestJson<AttributionExplainabilityResponse>(
+    `/api/attribution/orders/${encodeURIComponent(orderId)}/explainability`,
+    { searchParams }
+  );
 }
 
 export function fetchMetaAdsStatus() {

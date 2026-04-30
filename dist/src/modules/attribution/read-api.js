@@ -42,6 +42,25 @@ const resultsQuerySchema = z
         });
     }
 });
+const channelTotalsQuerySchema = z
+    .object({
+    startDate: dateStringSchema,
+    endDate: dateStringSchema,
+    runId: uuidSchema.optional(),
+    orderId: z.string().trim().min(1).optional(),
+    source: z.string().trim().min(1).optional(),
+    medium: z.string().trim().min(1).optional(),
+    campaign: z.string().trim().min(1).optional()
+})
+    .superRefine((value, ctx) => {
+    if (value.startDate > value.endDate) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'startDate must be on or before endDate',
+            path: ['startDate']
+        });
+    }
+});
 const explainabilityParamsSchema = z.object({
     orderId: z.string().trim().min(1)
 });
@@ -131,6 +150,37 @@ function buildResultsFilters(input, reportingTimezone, cursor) {
         const orderIdParam = params.length - 1;
         const runIdParam = params.length;
         filters.push(`(summary.order_occurred_at_utc, summary.order_id, summary.run_id) < ($${occurredAtParam}::timestamptz, $${orderIdParam}, $${runIdParam}::uuid)`);
+    }
+    return {
+        sql: `WHERE ${filters.join(' AND ')}`,
+        params
+    };
+}
+function buildChannelTotalsFilters(input, reportingTimezone) {
+    const params = [input.startDate, input.endDate, reportingTimezone];
+    const filters = [
+        "timezone($3::text, summary.order_occurred_at_utc) >= $1::date",
+        "timezone($3::text, summary.order_occurred_at_utc) < ($2::date + interval '1 day')"
+    ];
+    if (input.runId) {
+        params.push(input.runId);
+        filters.push(`summary.run_id = $${params.length}::uuid`);
+    }
+    if (input.orderId) {
+        params.push(input.orderId);
+        filters.push(`summary.order_id = $${params.length}`);
+    }
+    if (input.source) {
+        params.push(input.source);
+        filters.push(`credit.source = $${params.length}`);
+    }
+    if (input.medium) {
+        params.push(input.medium);
+        filters.push(`credit.medium = $${params.length}`);
+    }
+    if (input.campaign) {
+        params.push(input.campaign);
+        filters.push(`credit.campaign = $${params.length}`);
     }
     return {
         sql: `WHERE ${filters.join(' AND ')}`,
@@ -326,6 +376,53 @@ export function createAttributionReadRouter() {
                         runId: lastRow.run_id
                     })
                     : null
+            });
+        }
+        catch (error) {
+            next(error);
+        }
+    });
+    router.get('/channel-totals', async (req, res, next) => {
+        try {
+            const input = parseInput(channelTotalsQuerySchema, req.query);
+            const reportingTimezone = await getReportingTimezone();
+            const filters = buildChannelTotalsFilters(input, reportingTimezone);
+            const result = await query(`
+          SELECT
+            credit.model_key,
+            credit.source,
+            credit.medium,
+            COUNT(DISTINCT credit.order_id)::int AS order_count,
+            COALESCE(SUM(credit.revenue_credit), 0)::text AS revenue_credited,
+            COALESCE(SUM(credit.credit_weight), 0)::text AS credit_weight_total,
+            MIN(runs.lookback_click_window_days)::int AS lookback_click_window_days,
+            MIN(runs.lookback_view_window_days)::int AS lookback_view_window_days
+          FROM attribution_model_credits credit
+          INNER JOIN attribution_model_summaries summary
+            ON summary.run_id = credit.run_id
+           AND summary.order_id = credit.order_id
+           AND summary.model_key = credit.model_key
+          INNER JOIN attribution_runs runs
+            ON runs.id = summary.run_id
+          ${filters.sql}
+          GROUP BY credit.model_key, credit.source, credit.medium
+          ORDER BY
+            credit.model_key ASC,
+            SUM(credit.revenue_credit) DESC,
+            credit.source ASC NULLS LAST,
+            credit.medium ASC NULLS LAST
+        `, filters.params);
+            res.json({
+                rows: result.rows.map((row) => ({
+                    modelKey: row.model_key,
+                    source: row.source,
+                    medium: row.medium,
+                    orderCount: row.order_count,
+                    revenueCredited: row.revenue_credited,
+                    creditWeightTotal: row.credit_weight_total
+                })),
+                lookbackClickWindowDays: result.rows[0]?.lookback_click_window_days ?? 28,
+                lookbackViewWindowDays: result.rows[0]?.lookback_view_window_days ?? 7
             });
         }
         catch (error) {

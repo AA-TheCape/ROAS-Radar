@@ -251,6 +251,96 @@ test('attribution results return paginated order-model summaries with run and pr
   }
 });
 
+test('attribution channel totals return side-by-side model aggregates by credited channel', async () => {
+  pool.query = (async (text: string, params?: unknown[]) => {
+    if (text.includes('INSERT INTO app_settings')) {
+      return { rows: [] };
+    }
+
+    if (text.includes('SELECT reporting_timezone, updated_at') && text.includes('FROM app_settings')) {
+      return {
+        rowCount: 1,
+        rows: [
+          {
+            reporting_timezone: 'America/Los_Angeles',
+            updated_at: new Date('2026-04-01T00:00:00.000Z')
+          }
+        ]
+      };
+    }
+
+    if (text.includes('FROM app_settings')) {
+      return { rows: [] };
+    }
+
+    assert.match(text, /FROM attribution_model_credits credit/);
+    assert.equal(params?.[0], '2026-04-01');
+    assert.equal(params?.[1], '2026-04-10');
+    assert.equal(params?.[3], 'google');
+    assert.equal(params?.[4], 'cpc');
+    assert.equal(params?.[5], 'spring-sale');
+
+    return {
+      rows: [
+        {
+          model_key: 'last_non_direct',
+          source: 'google',
+          medium: 'cpc',
+          order_count: 3,
+          revenue_credited: '260.50',
+          credit_weight_total: '3.00000000',
+          lookback_click_window_days: 28,
+          lookback_view_window_days: 7
+        },
+        {
+          model_key: 'linear',
+          source: 'google',
+          medium: 'cpc',
+          order_count: 4,
+          revenue_credited: '180.25',
+          credit_weight_total: '1.75000000',
+          lookback_click_window_days: 28,
+          lookback_view_window_days: 7
+        }
+      ]
+    };
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(
+      server,
+      '/api/attribution/channel-totals?startDate=2026-04-01&endDate=2026-04-10&source=google&medium=cpc&campaign=spring-sale'
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(body.lookbackClickWindowDays, 28);
+    assert.equal(body.lookbackViewWindowDays, 7);
+    assert.deepEqual(body.rows, [
+      {
+        modelKey: 'last_non_direct',
+        source: 'google',
+        medium: 'cpc',
+        orderCount: 3,
+        revenueCredited: '260.50',
+        creditWeightTotal: '3.00000000'
+      },
+      {
+        modelKey: 'linear',
+        source: 'google',
+        medium: 'cpc',
+        orderCount: 4,
+        revenueCredited: '180.25',
+        creditWeightTotal: '1.75000000'
+      }
+    ]);
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
 test('attribution explainability returns touchpoints, model summaries, credits, and explain records for one order', async () => {
   pool.query = (async (text: string, params?: unknown[]) => {
     if (text.includes('SELECT summary.run_id::text AS run_id') && text.includes('LIMIT 1')) {

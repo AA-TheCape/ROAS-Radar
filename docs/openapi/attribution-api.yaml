@@ -69,6 +69,51 @@ paths:
           description: Invalid request
         "401":
           description: Authentication required
+  /api/attribution/channel-totals:
+    get:
+      summary: Aggregate attributed credits by channel across models
+      operationId: listAttributionChannelTotals
+      parameters:
+        - in: query
+          name: startDate
+          required: true
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}-\d{2}$'
+        - in: query
+          name: endDate
+          required: true
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}-\d{2}$'
+        - in: query
+          name: runId
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: orderId
+          schema:
+            type: string
+        - in: query
+          name: source
+          schema:
+            type: string
+        - in: query
+          name: medium
+          schema:
+            type: string
+        - in: query
+          name: campaign
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Channel-level attribution totals grouped by model
+        "400":
+          description: Invalid request
+        "401":
+          description: Authentication required
   /api/attribution/orders/{orderId}/explainability:
     get:
       summary: Fetch per-order explainability
