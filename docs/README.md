@@ -34,6 +34,7 @@
 - [Last Non-Direct Touch Approval Matrix](last-non-direct-touch-approval-matrix.md): approved primary-winner rules, deterministic precedence, and Shopify synthetic fallback caveats.
 - [Marketing Dimensions](marketing-dimensions.md): canonical source, medium, campaign, and click-ID interpretation rules.
 - [Reporting Metrics](reporting-metrics.md): dashboard and reporting metric definitions.
+- [Attribution Read API OpenAPI](openapi/attribution-api.yaml): authenticated contract for attribution result summaries and per-order explainability.
 - [Database Operations](database-operations.md): migration, backup, and operational DB guidance.
 
 ## Runbooks

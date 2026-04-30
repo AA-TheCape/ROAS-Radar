@@ -3,6 +3,7 @@ import { env, getApiAllowedOrigins } from './config/env.js';
 import { checkDatabaseHealth } from './db/pool.js';
 import { createAuthRouter, createUserAdminRouter } from './modules/auth/index.js';
 import { createAttributionAdminRouter } from './modules/attribution/admin.js';
+import { createAttributionReadRouter } from './modules/attribution/read-api.js';
 import { createGoogleAdsAdminRouter, createGoogleAdsPublicRouter } from './modules/google-ads/index.js';
 import { createMetaAdsAdminRouter, createMetaAdsPublicRouter } from './modules/meta-ads/index.js';
 import { createReportingRouter } from './modules/reporting/index.js';
@@ -67,6 +68,7 @@ export function createApp() {
     app.use('/api/auth', createAuthRouter());
     app.use('/api/settings', createSettingsRouter());
     app.use('/api/reporting', createReportingRouter());
+    app.use('/api/attribution', createAttributionReadRouter());
     app.use('/api/internal/identity', createInternalIdentityRouter());
     app.use('/api/admin/identity', createIdentityAdminRouter());
     app.use('/api/admin/users', createUserAdminRouter());

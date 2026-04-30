@@ -1,0 +1,114 @@
+openapi: 3.1.0
+info:
+  title: ROAS Radar Attribution Read API
+  version: "2026-04-30"
+  description: Read-side endpoints for model-specific attribution results and per-order explainability.
+servers:
+  - url: https://api.roasradar.dev
+security:
+  - bearerAuth: []
+paths:
+  /api/attribution/results:
+    get:
+      summary: List attribution results by model and date range
+      operationId: listAttributionResults
+      parameters:
+        - in: query
+          name: modelKey
+          required: true
+          schema:
+            $ref: "#/components/schemas/AttributionModelKey"
+        - in: query
+          name: startDate
+          required: true
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}-\d{2}$'
+        - in: query
+          name: endDate
+          required: true
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}-\d{2}$'
+        - in: query
+          name: runId
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: orderId
+          schema:
+            type: string
+        - in: query
+          name: source
+          schema:
+            type: string
+        - in: query
+          name: medium
+          schema:
+            type: string
+        - in: query
+          name: campaign
+          schema:
+            type: string
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - in: query
+          name: cursor
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Paginated attribution result summaries
+        "400":
+          description: Invalid request
+        "401":
+          description: Authentication required
+  /api/attribution/orders/{orderId}/explainability:
+    get:
+      summary: Fetch per-order explainability
+      operationId: getAttributionExplainability
+      parameters:
+        - in: path
+          name: orderId
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: runId
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: modelKey
+          schema:
+            $ref: "#/components/schemas/AttributionModelKey"
+      responses:
+        "200":
+          description: Order-level explainability payload
+        "400":
+          description: Invalid request
+        "401":
+          description: Authentication required
+        "404":
+          description: Attribution result not found
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    AttributionModelKey:
+      type: string
+      enum:
+        - first_touch
+        - last_touch
+        - last_non_direct
+        - linear
+        - clicks_only
+        - hinted_fallback_only

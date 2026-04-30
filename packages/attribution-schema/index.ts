@@ -213,6 +213,23 @@ export const ATTRIBUTION_ORDER_TIMESTAMP_SOURCES = [
   'created_at_shopify',
   'ingested_at'
 ] as const;
+export const ATTRIBUTION_MODEL_KEYS = [
+  'first_touch',
+  'last_touch',
+  'last_non_direct',
+  'linear',
+  'clicks_only',
+  'hinted_fallback_only'
+] as const;
+export const ATTRIBUTION_ALLOCATION_STATUSES = [
+  'attributed',
+  'no_eligible_touches',
+  'blocked_by_deterministic',
+  'unattributed'
+] as const;
+export const ATTRIBUTION_LOOKBACK_RULES = ['28d_click', '7d_view', 'mixed'] as const;
+export const ATTRIBUTION_EXPLAIN_STAGES = ['candidate_extraction', 'eligibility_filter', 'model_scoring', 'fallback'] as const;
+export const ATTRIBUTION_EXPLAIN_DECISIONS = ['included', 'excluded', 'winner', 'fallback_used', 'no_credit'] as const;
 
 export const attributionHintConfidenceLabelSchema = nonEmptyLowercaseEnum(['low', 'medium', 'high']);
 
@@ -286,14 +303,84 @@ export const attributionTouchpointInputV1Schema = z.object({
   }
 });
 
+export const attributionResultRecordV1Schema = z.object({
+  run_id: z.string().uuid(),
+  attribution_spec_version: z.literal('v1'),
+  order_id: z.string().min(1),
+  model_key: z.enum(ATTRIBUTION_MODEL_KEYS),
+  allocation_status: z.enum(ATTRIBUTION_ALLOCATION_STATUSES),
+  winner_touchpoint_id: nullableTextSchema,
+  winner_session_id: uuidOrNullSchema,
+  winner_evidence_source: z.enum(ATTRIBUTION_EVIDENCE_SOURCES).nullable(),
+  winner_attribution_reason: nullableTextSchema,
+  total_credit_weight: decimalStringSchema,
+  total_revenue_credited: decimalStringSchema,
+  touchpoint_count_considered: z.number().int().nonnegative(),
+  eligible_click_count: z.number().int().nonnegative(),
+  eligible_view_count: z.number().int().nonnegative(),
+  lookback_rule_applied: z.enum(ATTRIBUTION_LOOKBACK_RULES),
+  winner_selection_rule: z.enum(ATTRIBUTION_MODEL_KEYS),
+  direct_suppression_applied: z.boolean(),
+  deterministic_block_applied: z.boolean(),
+  normalization_failures_count: z.number().int().nonnegative(),
+  generated_at_utc: isoTimestampSchema
+});
+
+export const attributionCreditRecordV1Schema = z.object({
+  run_id: z.string().uuid(),
+  attribution_spec_version: z.literal('v1'),
+  order_id: z.string().min(1),
+  model_key: z.enum(ATTRIBUTION_MODEL_KEYS),
+  touchpoint_id: z.string().min(1).max(MAX_ATTRIBUTION_TEXT_LENGTH),
+  session_id: uuidOrNullSchema,
+  touchpoint_position: z.number().int().positive(),
+  occurred_at_utc: isoTimestampSchema,
+  source: nullableLowercaseTextSchema.optional(),
+  medium: nullableLowercaseTextSchema.optional(),
+  campaign: nullableLowercaseTextSchema.optional(),
+  content: nullableLowercaseTextSchema.optional(),
+  term: nullableLowercaseTextSchema.optional(),
+  click_id_type: z.enum(ATTRIBUTION_CLICK_ID_FIELDS).nullable().optional(),
+  click_id_value: nullableTextSchema.optional(),
+  touch_type: z.enum(['click', 'view']),
+  is_direct: z.boolean(),
+  evidence_source: z.enum(ATTRIBUTION_EVIDENCE_SOURCES),
+  is_synthetic: z.boolean(),
+  attribution_reason: z.string().min(1).max(MAX_ATTRIBUTION_TEXT_LENGTH),
+  credit_weight: decimalStringSchema,
+  revenue_credit: decimalStringSchema,
+  is_primary: z.boolean()
+});
+
+export const attributionExplainRecordV1Schema = z.object({
+  run_id: z.string().uuid(),
+  order_id: z.string().min(1),
+  touchpoint_id: nullableTextSchema,
+  model_key: z.enum(ATTRIBUTION_MODEL_KEYS).nullable(),
+  explain_stage: z.enum(ATTRIBUTION_EXPLAIN_STAGES),
+  decision: z.enum(ATTRIBUTION_EXPLAIN_DECISIONS),
+  decision_reason: z.string().min(1).max(MAX_ATTRIBUTION_TEXT_LENGTH),
+  details_json: z.record(z.string(), z.unknown()),
+  order_occurred_at_utc: isoTimestampOrNullSchema,
+  created_at_utc: isoTimestampSchema
+});
+
 export type AttributionEvidenceSource = (typeof ATTRIBUTION_EVIDENCE_SOURCES)[number];
 export type AttributionTouchpointSourceKind = (typeof ATTRIBUTION_TOUCHPOINT_SOURCE_KINDS)[number];
 export type AttributionIngestionSource = (typeof ATTRIBUTION_INGESTION_SOURCES)[number];
 export type AttributionEngagementType = (typeof ATTRIBUTION_ENGAGEMENT_TYPES)[number];
 export type AttributionOrderTimestampSource = (typeof ATTRIBUTION_ORDER_TIMESTAMP_SOURCES)[number];
+export type AttributionModelKey = (typeof ATTRIBUTION_MODEL_KEYS)[number];
+export type AttributionAllocationStatus = (typeof ATTRIBUTION_ALLOCATION_STATUSES)[number];
+export type AttributionLookbackRule = (typeof ATTRIBUTION_LOOKBACK_RULES)[number];
+export type AttributionExplainStage = (typeof ATTRIBUTION_EXPLAIN_STAGES)[number];
+export type AttributionExplainDecision = (typeof ATTRIBUTION_EXPLAIN_DECISIONS)[number];
 export type AttributionHintInputV1 = z.infer<typeof attributionHintInputV1Schema>;
 export type AttributionOrderInputV1 = z.infer<typeof attributionOrderInputV1Schema>;
 export type AttributionTouchpointInputV1 = z.infer<typeof attributionTouchpointInputV1Schema>;
+export type AttributionResultRecordV1 = z.infer<typeof attributionResultRecordV1Schema>;
+export type AttributionCreditRecordV1 = z.infer<typeof attributionCreditRecordV1Schema>;
+export type AttributionExplainRecordV1 = z.infer<typeof attributionExplainRecordV1Schema>;
 
 export function normalizeAttributionOrderInputV1(input: unknown): AttributionOrderInputV1 {
   return attributionOrderInputV1Schema.parse(input);
@@ -305,4 +392,16 @@ export function normalizeAttributionTouchpointInputV1(input: unknown): Attributi
 
 export function normalizeAttributionHintInputV1(input: unknown): AttributionHintInputV1 {
   return attributionHintInputV1Schema.parse(input);
+}
+
+export function normalizeAttributionResultRecordV1(input: unknown): AttributionResultRecordV1 {
+  return attributionResultRecordV1Schema.parse(input);
+}
+
+export function normalizeAttributionCreditRecordV1(input: unknown): AttributionCreditRecordV1 {
+  return attributionCreditRecordV1Schema.parse(input);
+}
+
+export function normalizeAttributionExplainRecordV1(input: unknown): AttributionExplainRecordV1 {
+  return attributionExplainRecordV1Schema.parse(input);
 }

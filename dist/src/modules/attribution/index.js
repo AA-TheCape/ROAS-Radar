@@ -595,3 +595,7 @@ export const __attributionTestUtils = {
     preprocessAttributionSnapshot
 };
 export { loadAttributionPreprocessingSnapshot, preprocessAttributionOrders, preprocessAttributionSnapshot };
+export { AttributionRunConcurrencyError, buildAttributionRunConfigHash, claimAttributionRuns, enqueueAttributionRun, getAttributionRun, markAttributionRunCompleted, markAttributionRunFailed, resumeAttributionRun, updateAttributionRunProgress } from './run-store.js';
+export { buildEmptyAttributionRunProgress, parseAttributionRunProgress } from './run-progress.js';
+export { executeAttributionRun } from './run-executor.js';
+export { processAttributionRuns } from './run-jobs.js';
