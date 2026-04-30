@@ -4,14 +4,17 @@ import test from 'node:test';
 import {
   ORDER_ATTRIBUTION_BACKFILL_DEFAULT_LIMIT,
   ORDER_ATTRIBUTION_BACKFILL_MAX_LIMIT,
+  attributionEngineV1JsonSchemas,
   normalizeAttributionCaptureV1,
   normalizeAttributionCreditRecordV1,
   normalizeAttributionConsentState,
+  normalizeAttributionDecimalString,
   normalizeAttributionExplainRecordV1,
   normalizeAttributionHintInputV1,
   normalizeAttributionOrderInputV1,
   normalizeAttributionResultRecordV1,
   normalizeAttributionTouchpointInputV1,
+  normalizeAttributionUtcTimestamp,
   normalizeOrderAttributionBackfillRequest,
   orderAttributionBackfillEnqueueResponseSchema,
   orderAttributionBackfillJobResponseSchema
@@ -85,6 +88,15 @@ test('attribution capture normalization converts empty strings to null and remov
   assert.equal(capture.gbraid, 'GB-123');
   assert.equal(capture.wbraid, null);
   assert.equal(capture.msclkid, null);
+});
+
+test('attribution shared helpers normalize decimal strings and enforce UTC timestamps with offsets', () => {
+  assert.equal(normalizeAttributionDecimalString('120'), '120');
+  assert.equal(normalizeAttributionDecimalString(120), '120.00');
+  assert.equal(normalizeAttributionUtcTimestamp('2026-04-30T12:00:00-05:00'), '2026-04-30T17:00:00.000Z');
+
+  assert.throws(() => normalizeAttributionDecimalString('abc'), /invalid_decimal_string/);
+  assert.throws(() => normalizeAttributionUtcTimestamp('2026-04-30T12:00:00'), /invalid_iso_timestamp/);
 });
 
 test('order attribution backfill request normalizes defaults', () => {
@@ -303,6 +315,101 @@ test('attribution v1 order, touchpoint, and hint schemas normalize canonical pre
   assert.equal(touchpoint.touchpoint_occurred_at_utc, '2026-04-30T11:00:00.000Z');
 });
 
+test('attribution v1 canonical schemas normalize omitted nullable fields to explicit nulls', () => {
+  const order = normalizeAttributionOrderInputV1({
+    schema_version: 1,
+    order_id: 'shopify-order-2',
+    order_platform: 'shopify',
+    order_occurred_at_utc: '2026-04-30T12:00:00Z',
+    order_timestamp_source: 'created_at_shopify',
+    currency_code: 'usd',
+    subtotal_amount: '10.00',
+    total_amount: '10.00',
+    landing_session_id: undefined,
+    checkout_token: undefined,
+    cart_token: undefined,
+    shopify_customer_id: undefined,
+    email_hash: undefined,
+    source_name: undefined,
+    identity_journey_id: undefined,
+    raw_order_ref: undefined
+  });
+
+  const touchpoint = normalizeAttributionTouchpointInputV1({
+    schema_version: 1,
+    touchpoint_id: 'event:2',
+    session_id: undefined,
+    identity_journey_id: undefined,
+    touchpoint_occurred_at_utc: '2026-04-30T11:00:00Z',
+    touchpoint_captured_at_utc: '2026-04-30T11:00:01Z',
+    touchpoint_source_kind: 'shopify_hint',
+    ingestion_source: 'shopify_marketing_hint',
+    source: undefined,
+    medium: undefined,
+    campaign: undefined,
+    content: undefined,
+    term: undefined,
+    click_id_type: undefined,
+    click_id_value: undefined,
+    evidence_source: 'shopify_marketing_hint',
+    is_direct: true,
+    engagement_type: 'unknown',
+    is_eligible: true,
+    attribution_hint: undefined,
+    ineligibility_reason: undefined,
+    attribution_reason: undefined
+  });
+
+  const credit = normalizeAttributionCreditRecordV1({
+    run_id: '11111111-1111-4111-8111-111111111111',
+    attribution_spec_version: 'v1',
+    order_id: 'order-2',
+    model_key: 'hinted_fallback_only',
+    touchpoint_id: 'tp-2',
+    session_id: undefined,
+    touchpoint_position: 1,
+    occurred_at_utc: '2026-04-28T10:00:00Z',
+    source: undefined,
+    medium: undefined,
+    campaign: undefined,
+    content: undefined,
+    term: undefined,
+    click_id_type: undefined,
+    click_id_value: undefined,
+    touch_type: 'view',
+    is_direct: true,
+    evidence_source: 'shopify_marketing_hint',
+    is_synthetic: true,
+    attribution_reason: 'synthetic_hint',
+    credit_weight: '1.00',
+    revenue_credit: '10.00',
+    is_primary: true
+  });
+
+  const explain = normalizeAttributionExplainRecordV1({
+    run_id: '11111111-1111-4111-8111-111111111111',
+    order_id: 'order-2',
+    touchpoint_id: undefined,
+    model_key: undefined,
+    explain_stage: 'fallback',
+    decision: 'fallback_used',
+    decision_reason: 'synthetic_hint',
+    details_json: {},
+    order_occurred_at_utc: undefined,
+    created_at_utc: '2026-04-30T12:05:01Z'
+  });
+
+  assert.equal(order.raw_order_ref, null);
+  assert.equal(order.checkout_token, null);
+  assert.equal(touchpoint.attribution_hint, null);
+  assert.equal(touchpoint.click_id_type, null);
+  assert.equal(credit.source, null);
+  assert.equal(credit.click_id_type, null);
+  assert.equal(explain.touchpoint_id, null);
+  assert.equal(explain.model_key, null);
+  assert.equal(explain.order_occurred_at_utc, null);
+});
+
 test('attribution v1 result, credit, and explainability schemas normalize canonical output records', () => {
   const result = normalizeAttributionResultRecordV1({
     run_id: '11111111-1111-4111-8111-111111111111',
@@ -374,4 +481,71 @@ test('attribution v1 result, credit, and explainability schemas normalize canoni
   assert.equal(credit.credit_weight, '1.00');
   assert.equal(credit.occurred_at_utc, '2026-04-28T10:00:00.000Z');
   assert.equal(explain.created_at_utc, '2026-04-30T12:05:01.000Z');
+});
+
+test('attribution v1 schemas reject timestamps without timezone offsets', () => {
+  assert.throws(
+    () =>
+      normalizeAttributionOrderInputV1({
+        schema_version: 1,
+        order_id: 'shopify-order-3',
+        order_platform: 'shopify',
+        order_occurred_at_utc: '2026-04-30T12:00:00',
+        order_timestamp_source: 'processed_at',
+        currency_code: 'USD',
+        subtotal_amount: '10.00',
+        total_amount: '10.00',
+        landing_session_id: null,
+        checkout_token: null,
+        cart_token: null,
+        shopify_customer_id: null,
+        email_hash: null,
+        source_name: null,
+        identity_journey_id: null,
+        raw_order_ref: null
+      }),
+    /Invalid ISO-8601 timestamp/
+  );
+
+  assert.throws(
+    () =>
+      normalizeAttributionResultRecordV1({
+        run_id: '11111111-1111-4111-8111-111111111111',
+        attribution_spec_version: 'v1',
+        order_id: 'order-3',
+        model_key: 'last_touch',
+        allocation_status: 'unattributed',
+        winner_touchpoint_id: null,
+        winner_session_id: null,
+        winner_evidence_source: null,
+        winner_attribution_reason: null,
+        total_credit_weight: '0.00',
+        total_revenue_credited: '0.00',
+        touchpoint_count_considered: 0,
+        eligible_click_count: 0,
+        eligible_view_count: 0,
+        lookback_rule_applied: 'mixed',
+        winner_selection_rule: 'last_touch',
+        direct_suppression_applied: false,
+        deterministic_block_applied: false,
+        normalization_failures_count: 0,
+        generated_at_utc: '2026-04-30T12:05:00'
+      }),
+    /Invalid ISO-8601 timestamp/
+  );
+});
+
+test('attribution engine package publishes six JSON schema documents for canonical v1 records', () => {
+  assert.deepEqual(Object.keys(attributionEngineV1JsonSchemas).sort(), [
+    'AttributionCreditRecordV1',
+    'AttributionExplainRecordV1',
+    'AttributionHintInputV1',
+    'AttributionOrderInputV1',
+    'AttributionResultRecordV1',
+    'AttributionTouchpointInputV1'
+  ]);
+
+  assert.equal(attributionEngineV1JsonSchemas.AttributionOrderInputV1.title, 'AttributionOrderInputV1');
+  assert.equal(attributionEngineV1JsonSchemas.AttributionTouchpointInputV1.type, 'object');
+  assert.equal(attributionEngineV1JsonSchemas.AttributionResultRecordV1.additionalProperties, false);
 });
