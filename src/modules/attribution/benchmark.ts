@@ -133,6 +133,30 @@ export type NorthbeamBenchmarkReport = {
   topVarianceDrivers: NorthbeamBenchmarkOrderMismatch[];
 };
 
+export type NorthbeamBenchmarkGateViolation =
+  | { slice: 'model'; modelKey: AttributionModel; severity: Severity; metric: string; details: string }
+  | {
+      slice: 'channel';
+      modelKey: AttributionModel;
+      channelKey: string;
+      severity: Severity;
+      metric: string;
+      details: string;
+    }
+  | {
+      slice: 'cohort';
+      cohort: NorthbeamBenchmarkCohort;
+      modelKey: AttributionModel;
+      severity: Severity;
+      metric: string;
+      details: string;
+    };
+
+export type NorthbeamBenchmarkGateResult = {
+  ok: boolean;
+  violations: NorthbeamBenchmarkGateViolation[];
+};
+
 export const NORTHBEAM_BENCHMARK_THRESHOLDS: BenchmarkThresholds = {
   modelRevenueDeltaPercent: { greenMax: 1, yellowMax: 3 },
   channelRevenueDeltaPercent: { greenMax: 2, yellowMax: 5 },
@@ -581,6 +605,154 @@ export function buildNorthbeamBenchmarkReport(
     orderLevelMismatches,
     topVarianceDrivers: orderLevelMismatches.slice(0, 10)
   };
+}
+
+export function evaluateNorthbeamBenchmarkThresholds(
+  report: NorthbeamBenchmarkReport
+): NorthbeamBenchmarkGateResult {
+  const violations: NorthbeamBenchmarkGateViolation[] = [];
+
+  for (const slice of report.modelSlices) {
+    if (slice.severity === 'red') {
+      if (slice.attributedRevenueDeltaPercent > report.thresholds.modelRevenueDeltaPercent.yellowMax) {
+        violations.push({
+          slice: 'model',
+          modelKey: slice.modelKey,
+          severity: slice.severity,
+          metric: 'attributed_revenue_delta_percent',
+          details: `${slice.attributedRevenueDeltaPercent}% > ${report.thresholds.modelRevenueDeltaPercent.yellowMax}%`
+        });
+      }
+
+      if (slice.winnerMismatchRate > report.thresholds.winnerMismatchRate.yellowMax) {
+        violations.push({
+          slice: 'model',
+          modelKey: slice.modelKey,
+          severity: slice.severity,
+          metric: 'winner_mismatch_rate',
+          details: `${slice.winnerMismatchRate}% > ${report.thresholds.winnerMismatchRate.yellowMax}%`
+        });
+      }
+
+      if (
+        slice.unattributedRateDeltaPercentagePoints >
+        report.thresholds.unattributedRateDeltaPercentagePoints.yellowMax
+      ) {
+        violations.push({
+          slice: 'model',
+          modelKey: slice.modelKey,
+          severity: slice.severity,
+          metric: 'unattributed_rate_delta_percentage_points',
+          details: `${slice.unattributedRateDeltaPercentagePoints}pp > ${report.thresholds.unattributedRateDeltaPercentagePoints.yellowMax}pp`
+        });
+      }
+    }
+  }
+
+  for (const slice of report.channelSlices) {
+    if (
+      slice.severity === 'red' &&
+      slice.revenueDeltaPercent > report.thresholds.channelRevenueDeltaPercent.yellowMax
+    ) {
+      violations.push({
+        slice: 'channel',
+        modelKey: slice.modelKey,
+        channelKey: slice.channelKey,
+        severity: slice.severity,
+        metric: 'revenue_delta_percent',
+        details: `${slice.revenueDeltaPercent}% > ${report.thresholds.channelRevenueDeltaPercent.yellowMax}%`
+      });
+    }
+  }
+
+  for (const slice of report.cohortSlices) {
+    if (slice.severity === 'red') {
+      if (slice.primaryWinnerMismatchRate > report.thresholds.winnerMismatchRate.yellowMax) {
+        violations.push({
+          slice: 'cohort',
+          cohort: slice.cohort,
+          modelKey: slice.modelKey,
+          severity: slice.severity,
+          metric: 'primary_winner_mismatch_rate',
+          details: `${slice.primaryWinnerMismatchRate}% > ${report.thresholds.winnerMismatchRate.yellowMax}%`
+        });
+      }
+
+      if (slice.directClassificationMismatchRate > report.thresholds.winnerMismatchRate.yellowMax) {
+        violations.push({
+          slice: 'cohort',
+          cohort: slice.cohort,
+          modelKey: slice.modelKey,
+          severity: slice.severity,
+          metric: 'direct_classification_mismatch_rate',
+          details: `${slice.directClassificationMismatchRate}% > ${report.thresholds.winnerMismatchRate.yellowMax}%`
+        });
+      }
+
+      if (slice.lookbackEligibilityMismatchRate > report.thresholds.winnerMismatchRate.yellowMax) {
+        violations.push({
+          slice: 'cohort',
+          cohort: slice.cohort,
+          modelKey: slice.modelKey,
+          severity: slice.severity,
+          metric: 'lookback_eligibility_mismatch_rate',
+          details: `${slice.lookbackEligibilityMismatchRate}% > ${report.thresholds.winnerMismatchRate.yellowMax}%`
+        });
+      }
+
+      if (slice.syntheticFallbackUsageMismatchRate > report.thresholds.winnerMismatchRate.yellowMax) {
+        violations.push({
+          slice: 'cohort',
+          cohort: slice.cohort,
+          modelKey: slice.modelKey,
+          severity: slice.severity,
+          metric: 'synthetic_fallback_usage_mismatch_rate',
+          details: `${slice.syntheticFallbackUsageMismatchRate}% > ${report.thresholds.winnerMismatchRate.yellowMax}%`
+        });
+      }
+    }
+  }
+
+  return {
+    ok: violations.length === 0,
+    violations
+  };
+}
+
+export function formatNorthbeamBenchmarkThresholdFailures(result: NorthbeamBenchmarkGateResult): string {
+  if (result.ok) {
+    return 'Northbeam benchmark parity thresholds satisfied.';
+  }
+
+  const lines = ['Northbeam benchmark parity threshold failures:'];
+
+  for (const violation of result.violations) {
+    if (violation.slice === 'model') {
+      lines.push(`- model ${violation.modelKey} ${violation.metric}: ${violation.details}`);
+      continue;
+    }
+
+    if (violation.slice === 'channel') {
+      lines.push(
+        `- channel ${violation.modelKey} ${violation.channelKey} ${violation.metric}: ${violation.details}`
+      );
+      continue;
+    }
+
+    lines.push(
+      `- cohort ${violation.cohort} ${violation.modelKey} ${violation.metric}: ${violation.details}`
+    );
+  }
+
+  return lines.join('\n');
+}
+
+export function assertNorthbeamBenchmarkThresholds(report: NorthbeamBenchmarkReport): void {
+  const result = evaluateNorthbeamBenchmarkThresholds(report);
+
+  if (!result.ok) {
+    throw new Error(formatNorthbeamBenchmarkThresholdFailures(result));
+  }
 }
 
 export function renderNorthbeamBenchmarkReportJson(report: NorthbeamBenchmarkReport): string {

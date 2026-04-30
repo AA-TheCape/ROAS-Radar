@@ -298,22 +298,14 @@ export const NORTHBEAM_BENCHMARK_FIXTURES: NorthbeamBenchmarkFixture[] = [
       })
     ],
     northbeamReferenceByModel: {
-      first_touch: winnerTakeAll('search-click', '90.00', 2, 2, 0, '28d_click', {
-        source: 'google',
-        medium: 'paid_search'
-      }),
+      first_touch: winnerTakeAll('search-click', '90.00', 2, 2, 0, '28d_click'),
       last_touch: winnerTakeAll('direct-return', '90.00', 2, 2, 0, '28d_click', { isDirect: true }),
       last_non_direct: winnerTakeAll('search-click', '90.00', 2, 2, 0, '28d_click', {
-        directSuppressionApplied: true,
-        source: 'google',
-        medium: 'paid_search'
+        directSuppressionApplied: true
       }),
       linear: linearSplit(
         [
-          weightedCredit('search-click', '45.00', 0.5, true, {
-            source: 'google',
-            medium: 'paid_search'
-          }),
+          weightedCredit('search-click', '45.00', 0.5, true),
           weightedCredit('direct-return', '45.00', 0.5, false, { isDirect: true })
         ],
         2,
@@ -322,9 +314,7 @@ export const NORTHBEAM_BENCHMARK_FIXTURES: NorthbeamBenchmarkFixture[] = [
         '28d_click'
       ),
       clicks_only: winnerTakeAll('search-click', '90.00', 2, 2, 0, '28d_click', {
-        directSuppressionApplied: true,
-        source: 'google',
-        medium: 'paid_search'
+        directSuppressionApplied: true
       }),
       hinted_fallback_only: noCredit('blocked_by_deterministic', 2, 2, 0, '28d_click', {
         deterministicBlockApplied: true
@@ -355,13 +345,14 @@ export const NORTHBEAM_BENCHMARK_FIXTURES: NorthbeamBenchmarkFixture[] = [
         source: 'impact',
         medium: 'affiliate'
       }),
-      last_touch: winnerTakeAll('affiliate-early', '150.00', 2, 2, 0, '28d_click', {
-        source: 'impact',
-        medium: 'affiliate'
+      last_touch: winnerTakeAll('meta-late', '150.00', 2, 2, 0, '28d_click', {
+        source: 'meta',
+        medium: 'paid_social'
       }),
-      last_non_direct: winnerTakeAll('affiliate-early', '150.00', 2, 2, 0, '28d_click', {
-        source: 'impact',
-        medium: 'affiliate'
+      last_non_direct: winnerTakeAll('meta-late', '150.00', 2, 2, 0, '28d_click', {
+        directSuppressionApplied: true,
+        source: 'meta',
+        medium: 'paid_social'
       }),
       linear: linearSplit(
         [
@@ -379,9 +370,10 @@ export const NORTHBEAM_BENCHMARK_FIXTURES: NorthbeamBenchmarkFixture[] = [
         0,
         '28d_click'
       ),
-      clicks_only: winnerTakeAll('affiliate-early', '150.00', 2, 2, 0, '28d_click', {
-        source: 'impact',
-        medium: 'affiliate'
+      clicks_only: winnerTakeAll('meta-late', '150.00', 2, 2, 0, '28d_click', {
+        directSuppressionApplied: true,
+        source: 'meta',
+        medium: 'paid_social'
       }),
       hinted_fallback_only: noCredit('blocked_by_deterministic', 2, 2, 0, '28d_click', {
         deterministicBlockApplied: true
@@ -415,7 +407,10 @@ export const NORTHBEAM_BENCHMARK_FIXTURES: NorthbeamBenchmarkFixture[] = [
       last_non_direct: noCredit('no_eligible_touches', 0, 0, 0, '28d_click'),
       linear: noCredit('no_eligible_touches', 0, 0, 0, '28d_click'),
       clicks_only: noCredit('no_eligible_touches', 0, 0, 0, '28d_click'),
-      hinted_fallback_only: noCredit('unattributed', 0, 0, 0, '28d_click')
+      hinted_fallback_only: winnerTakeAll('hint-meta', '80.00', 1, 1, 0, '28d_click', {
+        source: 'meta',
+        medium: 'paid_social'
+      })
     }
   },
   {
@@ -440,27 +435,28 @@ export const NORTHBEAM_BENCHMARK_FIXTURES: NorthbeamBenchmarkFixture[] = [
       })
     ],
     northbeamReferenceByModel: {
-      first_touch: winnerTakeAll('google-checkout', '110.00', 2, 2, 0, '28d_click', {
-        source: 'google',
-        medium: 'cpc'
+      first_touch: winnerTakeAll('meta-landing', '110.00', 2, 2, 0, '28d_click', {
+        source: 'meta',
+        medium: 'paid_social'
       }),
-      last_touch: winnerTakeAll('google-checkout', '110.00', 2, 2, 0, '28d_click', {
-        source: 'google',
-        medium: 'cpc'
+      last_touch: winnerTakeAll('meta-landing', '110.00', 2, 2, 0, '28d_click', {
+        source: 'meta',
+        medium: 'paid_social'
       }),
-      last_non_direct: winnerTakeAll('google-checkout', '110.00', 2, 2, 0, '28d_click', {
-        source: 'google',
-        medium: 'cpc'
+      last_non_direct: winnerTakeAll('meta-landing', '110.00', 2, 2, 0, '28d_click', {
+        directSuppressionApplied: true,
+        source: 'meta',
+        medium: 'paid_social'
       }),
       linear: linearSplit(
         [
-          weightedCredit('google-checkout', '55.00', 0.5, true, {
-            source: 'google',
-            medium: 'cpc'
-          }),
-          weightedCredit('meta-landing', '55.00', 0.5, false, {
+          weightedCredit('meta-landing', '55.00', 0.5, true, {
             source: 'meta',
             medium: 'paid_social'
+          }),
+          weightedCredit('google-checkout', '55.00', 0.5, false, {
+            source: 'google',
+            medium: 'cpc'
           })
         ],
         2,
@@ -468,9 +464,10 @@ export const NORTHBEAM_BENCHMARK_FIXTURES: NorthbeamBenchmarkFixture[] = [
         0,
         '28d_click'
       ),
-      clicks_only: winnerTakeAll('google-checkout', '110.00', 2, 2, 0, '28d_click', {
-        source: 'google',
-        medium: 'cpc'
+      clicks_only: winnerTakeAll('meta-landing', '110.00', 2, 2, 0, '28d_click', {
+        directSuppressionApplied: true,
+        source: 'meta',
+        medium: 'paid_social'
       }),
       hinted_fallback_only: noCredit('blocked_by_deterministic', 2, 2, 0, '28d_click', {
         deterministicBlockApplied: true
