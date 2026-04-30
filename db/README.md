@@ -33,6 +33,10 @@ The order-attribution tier audit columns added in `0037_add_shopify_order_attrib
 
 - `db/rollbacks/0037_add_shopify_order_attribution_tiers.down.sql`
 
+The Meta order-value aggregate table added in `0040_add_meta_order_value_aggregates.sql` can be rolled back with:
+
+- `db/rollbacks/0040_add_meta_order_value_aggregates.down.sql`
+
 ## Session Attribution Capture Schema
 
 Migration `0019_add_session_attribution_capture_tables.sql` adds three additive tables for canonical first-party capture persistence:
