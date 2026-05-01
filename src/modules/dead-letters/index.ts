@@ -73,12 +73,8 @@ type CountRow = QueryResultRow & { total: string };
 
 function serializeError(error: unknown): SerializedError {
 	if (error instanceof Error) {
-		const {
-			name,
-			message,
-			stack,
-			...extraContext
-		} = error as Error & Record<string, unknown>;
+		const { name, message, stack, ...extraContext } = error as Error &
+			Record<string, unknown>;
 		return {
 			message,
 			context: {
@@ -279,7 +275,9 @@ async function requeueSourceRecord(
 		return result.rowCount ? "replayed" : "skipped";
 	}
 
-	if ((deadLetter.source_table as DeadLetterSourceTable) === "attribution_jobs") {
+	if (
+		(deadLetter.source_table as DeadLetterSourceTable) === "attribution_jobs"
+	) {
 		const result = await client.query(
 			`
         UPDATE attribution_jobs

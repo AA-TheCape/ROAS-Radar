@@ -1842,8 +1842,7 @@ function App() {
 		}
 	}
 
-	const authenticatedUser = authState.user;
-	const isAdmin = authenticatedUser?.isAdmin ?? false;
+	const isAdmin = authState.user?.isAdmin ?? false;
 	const activeNavKey = currentPage;
 	const shellNavItems: AppShellNavItem[] =
 		currentPage === "order-details"
@@ -2006,6 +2005,8 @@ function App() {
 			</AuthGate>
 		);
 	}
+
+	const authenticatedUser = authState.user;
 
 	return (
 		<AuthenticatedAppShell

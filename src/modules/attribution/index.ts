@@ -24,16 +24,16 @@ import {
 	persistGa4FallbackShadowComparison,
 } from "./ga4-rollout.js";
 import {
+	type AttributionMatchSource,
+	type DeterministicIngestionSource,
+	type ResolvedAttributionTouchpoint,
+	type ResolvedJourney,
 	confidenceLabelForScore,
 	confidenceScoreForWinner,
 	dedupeDeterministicCandidates,
 	isDirectTouchpoint,
 	selectGa4FallbackWinner,
 	selectLastNonDirectWinner,
-	type AttributionMatchSource,
-	type DeterministicIngestionSource,
-	type ResolvedAttributionTouchpoint,
-	type ResolvedJourney,
 } from "./resolver.js";
 import { extractShopifyHintAttribution } from "./shopify-hints.js";
 const ATTRIBUTION_MODEL_VERSION = 1;
@@ -118,7 +118,9 @@ type ProcessAttributionQueueOptions = {
 	emitMetrics?: boolean;
 };
 
-function normalizeNullableString(value: string | null | undefined): string | null {
+function normalizeNullableString(
+	value: string | null | undefined,
+): string | null {
 	const normalized = value?.trim();
 	return normalized ? normalized : null;
 }
@@ -131,7 +133,9 @@ export function computeRetryDelaySeconds(attempts: number): number {
 		: 1;
 	return Math.min(30 * 2 ** (normalizedAttempts - 1), MAX_RETRY_DELAY_SECONDS);
 }
-export function buildProcessingMetricsLog(result: Record<string, unknown>): string {
+export function buildProcessingMetricsLog(
+	result: Record<string, unknown>,
+): string {
 	return JSON.stringify({
 		severity: "INFO",
 		event: "attribution_queue_run",

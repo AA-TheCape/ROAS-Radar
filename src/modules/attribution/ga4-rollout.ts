@@ -25,12 +25,14 @@ type ShadowReportFilters = {
 	endDate: string;
 };
 
-type QueryExecutor = Pick<PoolClient, "query"> | {
-	query: <T extends QueryResultRow = QueryResultRow>(
-		text: string,
-		params?: unknown[],
-	) => Promise<QueryResult<T>>;
-};
+type QueryExecutor =
+	| Pick<PoolClient, "query">
+	| {
+			query: <T extends QueryResultRow = QueryResultRow>(
+				text: string,
+				params?: unknown[],
+			) => Promise<QueryResult<T>>;
+	  };
 
 function executeQuery<TResult extends QueryResultRow>(
 	client: QueryExecutor,

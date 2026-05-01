@@ -128,7 +128,10 @@ function normalizeHourStart(value: string, fieldName = "hourStart"): string {
 	return toHourStart(parsed).toISOString();
 }
 
-function normalizePositiveInteger(value: number | undefined, fallback: number): number {
+function normalizePositiveInteger(
+	value: number | undefined,
+	fallback: number,
+): number {
 	if (!Number.isFinite(value)) {
 		return fallback;
 	}
@@ -234,7 +237,9 @@ export async function enqueueHours(
 	input: EnqueueHoursInput,
 ): Promise<{ hourStarts: string[]; enqueuedCount: number }> {
 	const hourStarts = Array.from(
-		new Set((input.hourStarts ?? []).map((hour: string) => normalizeHourStart(hour))),
+		new Set(
+			(input.hourStarts ?? []).map((hour: string) => normalizeHourStart(hour)),
+		),
 	).sort();
 	if (hourStarts.length === 0) {
 		return { hourStarts: [], enqueuedCount: 0 };
@@ -310,7 +315,9 @@ export async function claimHourlyJobs(
 			input.explicitHourStarts.length > 0
 				? Array.from(
 						new Set(
-							input.explicitHourStarts.map((hour: string) => normalizeHourStart(hour)),
+							input.explicitHourStarts.map((hour: string) =>
+								normalizeHourStart(hour),
+							),
 						),
 					).sort()
 				: null;
@@ -520,7 +527,9 @@ export async function processGa4SessionAttributionHourlyJobs(
 	const explicitHourStarts = input.explicitHourStarts?.length
 		? Array.from(
 				new Set(
-					input.explicitHourStarts.map((hour: string) => normalizeHourStart(hour)),
+					input.explicitHourStarts.map((hour: string) =>
+						normalizeHourStart(hour),
+					),
 				),
 			).sort()
 		: null;

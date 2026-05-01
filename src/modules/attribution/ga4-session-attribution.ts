@@ -11,8 +11,8 @@ import {
 } from "../../observability/index.js";
 
 import {
-	assertGa4BigQueryIngestionConfig,
 	type Ga4BigQueryIngestionConfig,
+	assertGa4BigQueryIngestionConfig,
 } from "./ga4-bigquery-config.js";
 
 export type Ga4BigQueryExecutor = {
@@ -33,7 +33,7 @@ const ALLOWED_CLICK_ID_KEYS = [
 	"fbclid",
 	"ttclid",
 	"msclkid",
- ] as const;
+] as const;
 
 type EnabledGa4BigQueryIngestionConfig = Extract<
 	Ga4BigQueryIngestionConfig,
@@ -381,7 +381,9 @@ function normalizeClickIdValue(value: string | null): string | null {
 	return value;
 }
 
-function extractEventParamValue(param: Ga4EventParamValue | null | undefined): string | null {
+function extractEventParamValue(
+	param: Ga4EventParamValue | null | undefined,
+): string | null {
 	if (!param || typeof param !== "object") {
 		return null;
 	}
@@ -451,9 +453,10 @@ export function extractAllowedGa4ClickIdsFromEventParams(
 	return extracted;
 }
 
-function pickClickId(
-	rawRow: Ga4RawExtractionRow,
-): { clickIdType: string | null; clickIdValue: string | null } {
+function pickClickId(rawRow: Ga4RawExtractionRow): {
+	clickIdType: string | null;
+	clickIdValue: string | null;
+} {
 	const explicitType = normalizeLowercaseString(rawRow.click_id_type);
 	const explicitValue = normalizeClickIdValue(
 		normalizeNullableString(rawRow.click_id_value),
@@ -640,7 +643,10 @@ async function readWatermarkHour() {
 	return result.rows[0]?.watermark_hour ?? null;
 }
 
-async function markRunStarted(client: Queryable, startedAt: Date): Promise<void> {
+async function markRunStarted(
+	client: Queryable,
+	startedAt: Date,
+): Promise<void> {
 	await client.query(
 		`
       INSERT INTO ga4_bigquery_ingestion_state (
