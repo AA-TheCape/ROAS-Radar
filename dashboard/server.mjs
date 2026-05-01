@@ -41,7 +41,7 @@ function writeRuntimeConfig(response) {
   const payload = {
     apiBaseUrl: '',
     reportingToken: process.env.DASHBOARD_REPORTING_API_TOKEN ?? process.env.VITE_REPORTING_API_TOKEN ?? '',
-    reportingTenantId: process.env.DASHBOARD_REPORTING_TENANT_ID ?? process.env.VITE_REPORTING_TENANT_ID ?? 'roas-radar'
+    reportingTenantId: process.env.DASHBOARD_REPORTING_TENANT_ID ?? process.env.VITE_REPORTING_TENANT_ID ?? '1'
   };
 
   response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });

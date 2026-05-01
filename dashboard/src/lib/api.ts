@@ -620,7 +620,7 @@ const API_BASE_URL = (runtimeConfig?.apiBaseUrl ?? viteEnv.VITE_API_BASE_URL ?? 
   ''
 );
 const REPORTING_TOKEN = runtimeConfig?.reportingToken ?? viteEnv.VITE_REPORTING_API_TOKEN ?? '';
-const TENANT_ID = runtimeConfig?.reportingTenantId ?? viteEnv.VITE_REPORTING_TENANT_ID ?? 'roas-radar';
+const TENANT_ID = runtimeConfig?.reportingTenantId ?? viteEnv.VITE_REPORTING_TENANT_ID ?? '1';
 const AUTH_TOKEN_STORAGE_KEY = 'roas_radar_auth_token';
 
 export function getStoredAuthToken(): string {
