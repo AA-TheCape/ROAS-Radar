@@ -8,29 +8,29 @@ process.env.REPORTING_API_TOKEN = "test-reporting-token";
 process.env.SHOPIFY_APP_API_SECRET ??= "test-app-secret";
 process.env.SHOPIFY_WEBHOOK_SECRET ??= "test-webhook-secret";
 
+type PoolModule = typeof import("../src/db/pool.js");
+type ServerModule = typeof import("../src/server.js");
+type AttributionModule = typeof import("../src/modules/attribution/index.js");
+type Ga4FallbackCandidatesModule = typeof import(
+	"../src/modules/attribution/ga4-fallback-candidates.js"
+);
+type ShopifyWritebackModule = typeof import("../src/modules/shopify/writeback.js");
+type E2EHarnessModule = typeof import("./e2e-harness.js");
+
 let cachedModules: {
-	pool: typeof import("../src/db/pool.js").pool;
-	createServer: typeof import("../src/server.js").createServer;
-	closeServer: typeof import("../src/server.js").closeServer;
-	enqueueAttributionForOrder: typeof import(
-		"../src/modules/attribution/index.js",
-	).enqueueAttributionForOrder;
-	processAttributionQueue: typeof import(
-		"../src/modules/attribution/index.js",
-	).processAttributionQueue;
-	upsertGa4FallbackCandidates: typeof import(
-		"../src/modules/attribution/ga4-fallback-candidates.js",
-	).upsertGa4FallbackCandidates;
-	enqueueShopifyOrderWriteback: typeof import(
-		"../src/modules/shopify/writeback.js",
-	).enqueueShopifyOrderWriteback;
-	processShopifyOrderWritebackQueue: typeof import(
-		"../src/modules/shopify/writeback.js",
-	).processShopifyOrderWritebackQueue;
-	testUtils: typeof import(
-		"../src/modules/shopify/writeback.js",
-	).__shopifyWritebackTestUtils;
-	resetE2EDatabase: typeof import("./e2e-harness.js").resetE2EDatabase;
+	pool: PoolModule["pool"];
+	createServer: ServerModule["createServer"];
+	closeServer: ServerModule["closeServer"];
+	enqueueAttributionForOrder: AttributionModule["enqueueAttributionForOrder"];
+	processAttributionQueue: AttributionModule["processAttributionQueue"];
+	upsertGa4FallbackCandidates:
+		Ga4FallbackCandidatesModule["upsertGa4FallbackCandidates"];
+	enqueueShopifyOrderWriteback:
+		ShopifyWritebackModule["enqueueShopifyOrderWriteback"];
+	processShopifyOrderWritebackQueue:
+		ShopifyWritebackModule["processShopifyOrderWritebackQueue"];
+	testUtils: ShopifyWritebackModule["__shopifyWritebackTestUtils"];
+	resetE2EDatabase: E2EHarnessModule["resetE2EDatabase"];
 } | null = null;
 
 async function getModules() {

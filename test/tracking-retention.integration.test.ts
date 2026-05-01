@@ -5,10 +5,14 @@ import test from "node:test";
 process.env.DATABASE_URL ??=
 	"postgres://postgres:postgres@127.0.0.1:5432/roas_radar";
 
-let pool: typeof import("../src/db/pool.js").pool;
-let runSessionAttributionRetention: typeof import(
-	"../src/modules/tracking/retention.js",
-).runSessionAttributionRetention;
+type PoolModule = typeof import("../src/db/pool.js");
+type TrackingRetentionModule = typeof import(
+	"../src/modules/tracking/retention.js"
+);
+
+let pool: PoolModule["pool"];
+let runSessionAttributionRetention:
+	TrackingRetentionModule["runSessionAttributionRetention"];
 
 const RETENTION_AS_OF = new Date("2026-04-25T12:00:00.000Z");
 const RETENTION_CUTOFF = "2026-03-26T12:00:00.000Z";

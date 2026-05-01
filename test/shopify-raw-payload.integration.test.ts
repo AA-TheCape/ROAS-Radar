@@ -10,15 +10,17 @@ const { __rawPayloadStorageTestUtils } = await import(
 );
 const { buildHashedContactProfile } = await import("../src/shared/privacy.js");
 
+type PoolModule = typeof import("../src/db/pool.js");
+type E2EHarnessModule = typeof import("./e2e-harness.js");
+type ShopifyModule = typeof import("../src/modules/shopify/index.js");
+type ShopifyWritebackModule = typeof import("../src/modules/shopify/writeback.js");
+
 let cachedModules: {
-	pool: typeof import("../src/db/pool.js").pool;
-	resetE2EDatabase: typeof import("./e2e-harness.js").resetE2EDatabase;
-	shopifyTestUtils: typeof import(
-		"../src/modules/shopify/index.js",
-	).__shopifyTestUtils;
-	shopifyWritebackTestUtils: typeof import(
-		"../src/modules/shopify/writeback.js",
-	).__shopifyWritebackTestUtils;
+	pool: PoolModule["pool"];
+	resetE2EDatabase: E2EHarnessModule["resetE2EDatabase"];
+	shopifyTestUtils: ShopifyModule["__shopifyTestUtils"];
+	shopifyWritebackTestUtils:
+		ShopifyWritebackModule["__shopifyWritebackTestUtils"];
 } | null = null;
 
 async function getModules() {
