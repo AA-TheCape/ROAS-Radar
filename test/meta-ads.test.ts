@@ -94,3 +94,67 @@ test('buildOrderValueSyncAnomalies detects zero-row pulls and sudden null-rate s
     ]
   );
 });
+
+test('selectCanonicalActionType prefers purchase, then omni_purchase, then pixel purchase before fallback types', () => {
+  assert.deepEqual(
+    __metaAdsTestUtils.selectCanonicalActionType([
+      {
+        action_type: 'onsite_conversion.messaging_purchase',
+        action_values: [{ action_type: 'onsite_conversion.messaging_purchase', value: '12.00' }]
+      },
+      {
+        action_type: 'purchase',
+        action_values: [{ action_type: 'purchase', value: '15.00' }]
+      }
+    ]),
+    {
+      actionTypeUsed: 'purchase',
+      canonicalSelectionMode: 'priority'
+    }
+  );
+
+  assert.deepEqual(
+    __metaAdsTestUtils.selectCanonicalActionType([
+      {
+        action_type: 'onsite_conversion.messaging_purchase',
+        action_values: [{ action_type: 'onsite_conversion.messaging_purchase', value: '12.00' }]
+      },
+      {
+        action_type: 'omni_purchase',
+        action_values: [{ action_type: 'omni_purchase', value: '9.00' }]
+      }
+    ]),
+    {
+      actionTypeUsed: 'omni_purchase',
+      canonicalSelectionMode: 'priority'
+    }
+  );
+});
+
+test('normalizeOrderValueRows keeps the selected action type stable when one metric array is missing the selected type', () => {
+  const normalized = __metaAdsTestUtils.normalizeOrderValueRows({
+    currency: 'USD',
+    persistedRows: [
+      {
+        id: 11,
+        payload: {
+          campaign_id: 'cmp_1',
+          campaign_name: 'Campaign One',
+          date_start: '2026-04-29',
+          date_stop: '2026-04-29',
+          spend: '10.00',
+          action_type: 'onsite_conversion.messaging_purchase',
+          actions: [],
+          action_values: [{ action_type: 'onsite_conversion.messaging_purchase', value: '12.00' }],
+          purchase_roas: [{ action_type: 'onsite_conversion.messaging_purchase', value: '1.200000' }]
+        }
+      }
+    ]
+  });
+
+  assert.equal(normalized.length, 1);
+  assert.equal(normalized[0]?.actionTypeUsed, 'onsite_conversion.messaging_purchase');
+  assert.equal(normalized[0]?.canonicalSelectionMode, 'fallback');
+  assert.equal(normalized[0]?.attributedRevenue, 12);
+  assert.equal(normalized[0]?.purchaseCount, null);
+});

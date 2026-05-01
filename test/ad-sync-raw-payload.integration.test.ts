@@ -99,6 +99,33 @@ function buildMetaMalformedAdInsightFixture() {
   return row;
 }
 
+function buildMetaOrderValueInsightFixture(params: {
+  actionType: string;
+  campaignId?: string;
+  campaignName?: string;
+  revenue?: string | null;
+  purchaseCount?: string | null;
+}) {
+  return {
+    campaign_id: params.campaignId ?? 'cmp_1',
+    campaign_name: params.campaignName ?? 'Campaign One',
+    date_start: '2026-04-11',
+    date_stop: '2026-04-11',
+    spend: '12.34',
+    action_type: params.actionType,
+    source_debug: {
+      actionType: params.actionType,
+      nested: {
+        kept: ['raw', null, { marker: params.actionType }]
+      }
+    },
+    actions: params.purchaseCount === null ? [] : [{ action_type: params.actionType, value: params.purchaseCount ?? '2' }],
+    action_values: params.revenue === null ? [] : [{ action_type: params.actionType, value: params.revenue ?? '39.50' }],
+    purchase_roas: [{ action_type: params.actionType, value: '3.200000' }],
+    oversized_blob: buildLargeText(`meta-order-value-${params.actionType}`)
+  };
+}
+
 function buildGoogleCustomerFixture() {
   return {
     customer: {
@@ -218,7 +245,7 @@ function buildGoogleMalformedAdFixture() {
 }
 
 async function loadMetaRawPersistence() {
-  const [connectionResult, spendResult] = await Promise.all([
+  const [connectionResult, rawResult] = await Promise.all([
     pool.query<{
       raw_account_data: Record<string, unknown>;
       raw_account_source: string;
@@ -238,16 +265,13 @@ async function loadMetaRawPersistence() {
       `
     ),
     pool.query<{
-      level: string;
+      campaign_id: string;
+      action_type: string | null;
       raw_payload: Record<string, unknown>;
-      payload_source: string;
-      payload_external_id: string | null;
-      payload_size_bytes: number;
-      payload_hash: string;
     }>(
       `
-        SELECT level, raw_payload, payload_source, payload_external_id, payload_size_bytes, payload_hash
-        FROM meta_ads_raw_spend_records
+        SELECT campaign_id, action_type, raw_payload
+        FROM meta_ads_order_value_raw_records
         WHERE connection_id = 1
         ORDER BY id ASC
       `
@@ -256,7 +280,7 @@ async function loadMetaRawPersistence() {
 
   return {
     connection: connectionResult.rows[0] ?? null,
-    spendRows: spendResult.rows
+    rawRows: rawResult.rows
   };
 }
 
@@ -305,12 +329,12 @@ async function loadGoogleRawPersistence() {
 
 async function loadAdProjectionCounts() {
   const [metaResult, googleResult] = await Promise.all([
-    pool.query<{ count: string }>('SELECT count(*)::text AS count FROM meta_ads_daily_spend WHERE connection_id = 1'),
+    pool.query<{ count: string }>('SELECT count(*)::text AS count FROM meta_ads_order_value_aggregates WHERE meta_connection_id = 1'),
     pool.query<{ count: string }>('SELECT count(*)::text AS count FROM google_ads_daily_spend WHERE connection_id = 1')
   ]);
 
   return {
-    metaDailyCount: Number(metaResult.rows[0]?.count ?? '0'),
+    metaOrderValueCount: Number(metaResult.rows[0]?.count ?? '0'),
     googleDailyCount: Number(googleResult.rows[0]?.count ?? '0')
   };
 }
@@ -465,34 +489,22 @@ test('Meta Ads and Google Ads sync preserve raw payloads without trimming', { co
 
     globalThis.fetch = (async (input: string | URL | Request) => {
       const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url);
-      const level = url.searchParams.get('level');
 
-      if (url.pathname.endsWith('/insights') && level) {
-        const rawInsight = buildMetaInsightFixture(level as 'account' | 'campaign' | 'adset' | 'ad');
-        const malformedInsight = level === 'ad' ? [buildMetaMalformedAdInsightFixture()] : [];
+      if (url.pathname.endsWith('/insights')) {
+        const rawInsight = buildMetaOrderValueInsightFixture({
+          actionType: 'onsite_conversion.messaging_purchase'
+        });
+        const purchaseInsight = buildMetaOrderValueInsightFixture({
+          actionType: 'purchase',
+          revenue: '42.10',
+          purchaseCount: '3'
+        });
         return new Response(
           JSON.stringify({
-            data: [rawInsight, ...malformedInsight],
+            data: [rawInsight, purchaseInsight],
             paging: {},
             extra_page_field: {
-              kept: level
-            }
-          }),
-          { status: 200, headers: { 'content-type': 'application/json' } }
-        );
-      }
-
-      if (url.searchParams.get('ids') === 'ad_1') {
-        return new Response(
-          JSON.stringify({
-            ad_1: {
-              creative: {
-                id: 'creative_1',
-                name: 'Creative One'
-              }
-            },
-            batch_debug: {
-              untouched: true
+              kept: 'campaign'
             }
           }),
           { status: 200, headers: { 'content-type': 'application/json' } }
@@ -535,104 +547,63 @@ test('Meta Ads and Google Ads sync preserve raw payloads without trimming', { co
     });
     assert.equal(persisted.connection?.raw_account_source, 'meta_ads_account');
     assert.equal(persisted.connection?.raw_account_external_id, '123456789');
-    assert.equal(persisted.spendRows.length, 5);
-    assert.equal(projectionCountsAfterMeta.metaDailyCount, 5);
-    const expectedAccountInsight = buildMetaInsightFixture('account');
-    const expectedAdInsight = buildMetaInsightFixture('ad');
-    const expectedMalformedAdInsight = buildMetaMalformedAdInsightFixture();
-    const expectedAccountMetadata = __rawPayloadStorageTestUtils.buildRawPayloadStorageMetadata(expectedAccountInsight);
-    const expectedAdMetadata = __rawPayloadStorageTestUtils.buildRawPayloadStorageMetadata(expectedAdInsight);
-    const expectedMalformedAdMetadata = __rawPayloadStorageTestUtils.buildRawPayloadStorageMetadata(expectedMalformedAdInsight);
+    assert.equal(persisted.rawRows.length, 2);
+    assert.equal(projectionCountsAfterMeta.metaOrderValueCount, 1);
+    const expectedFallbackInsight = buildMetaOrderValueInsightFixture({
+      actionType: 'onsite_conversion.messaging_purchase'
+    });
+    const expectedPurchaseInsight = buildMetaOrderValueInsightFixture({
+      actionType: 'purchase',
+      revenue: '42.10',
+      purchaseCount: '3'
+    });
     assertExactRawPayloadInvariant({
-      persistedRawPayload: persisted.spendRows[0].raw_payload,
-      expectedRawPayload: expectedAccountInsight,
+      persistedRawPayload: persisted.rawRows[0].raw_payload,
+      expectedRawPayload: expectedFallbackInsight,
       unmappedPathValue: (
-        persisted.spendRows[0].raw_payload as {
+        persisted.rawRows[0].raw_payload as {
           source_debug: { nested: { kept: Array<string | null | { marker: string }> } };
         }
       ).source_debug.nested.kept[2],
-      expectedUnmappedPathValue: expectedAccountInsight.source_debug.nested.kept[2],
+      expectedUnmappedPathValue: expectedFallbackInsight.source_debug.nested.kept[2],
       normalizedVariant: {
-        ...expectedAccountInsight,
-        objective: 'outcome_traffic'
+        ...expectedFallbackInsight,
+        campaign_name: 'campaign one'
       },
       subsetVariant: {
-        account_id: expectedAccountInsight.account_id,
-        account_name: expectedAccountInsight.account_name,
-        spend: expectedAccountInsight.spend,
-        impressions: expectedAccountInsight.impressions,
-        clicks: expectedAccountInsight.clicks,
-        date_start: expectedAccountInsight.date_start,
-        date_stop: expectedAccountInsight.date_stop
+        campaign_id: expectedFallbackInsight.campaign_id,
+        campaign_name: expectedFallbackInsight.campaign_name,
+        spend: expectedFallbackInsight.spend,
+        date_start: expectedFallbackInsight.date_start,
+        date_stop: expectedFallbackInsight.date_stop
       },
       enrichedVariant: {
-        ...expectedAccountInsight,
-        canonical_campaign: 'Meta Account'
+        ...expectedFallbackInsight,
+        canonical_selection_mode: 'fallback'
       }
     });
-    assert.equal(persisted.spendRows[0].payload_source, 'meta_ads_insights');
-    assert.equal(persisted.spendRows[0].payload_external_id, '123456789');
-    assert.equal(persisted.spendRows[0].payload_size_bytes, expectedAccountMetadata.payloadSizeBytes);
-    assert.equal(persisted.spendRows[0].payload_hash, expectedAccountMetadata.payloadHash);
-    assert.equal(persisted.spendRows[3].level, 'ad');
     assertExactRawPayloadInvariant({
-      persistedRawPayload: persisted.spendRows[3].raw_payload,
-      expectedRawPayload: expectedAdInsight,
+      persistedRawPayload: persisted.rawRows[1].raw_payload,
+      expectedRawPayload: expectedPurchaseInsight,
       unmappedPathValue: (
-        persisted.spendRows[3].raw_payload as {
+        persisted.rawRows[1].raw_payload as {
           action_values: Array<{ action_type: string; value: string | null }>;
         }
-      ).action_values[1],
-      expectedUnmappedPathValue: expectedAdInsight.action_values[1],
+      ).action_values[0],
+      expectedUnmappedPathValue: expectedPurchaseInsight.action_values[0],
       normalizedVariant: {
-        ...expectedAdInsight,
-        ad_name: 'ad one'
+        ...expectedPurchaseInsight,
+        campaign_name: 'campaign one'
       },
       subsetVariant: {
-        account_id: expectedAdInsight.account_id,
-        campaign_id: expectedAdInsight.campaign_id,
-        adset_id: expectedAdInsight.adset_id,
-        ad_id: expectedAdInsight.ad_id,
-        spend: expectedAdInsight.spend
+        campaign_id: expectedPurchaseInsight.campaign_id,
+        spend: expectedPurchaseInsight.spend
       },
       enrichedVariant: {
-        ...expectedAdInsight,
-        canonical_medium: 'paid_social'
+        ...expectedPurchaseInsight,
+        canonical_action_type: 'purchase'
       }
     });
-    assert.equal(persisted.spendRows[3].payload_source, 'meta_ads_insights');
-    assert.equal(persisted.spendRows[3].payload_external_id, 'ad_1');
-    assert.equal(persisted.spendRows[3].payload_size_bytes, expectedAdMetadata.payloadSizeBytes);
-    assert.equal(persisted.spendRows[3].payload_hash, expectedAdMetadata.payloadHash);
-    assert.equal(persisted.spendRows[4].level, 'ad');
-    assertExactRawPayloadInvariant({
-      persistedRawPayload: persisted.spendRows[4].raw_payload,
-      expectedRawPayload: expectedMalformedAdInsight,
-      unmappedPathValue: (
-        persisted.spendRows[4].raw_payload as {
-          malformed_debug: { kept: boolean };
-        }
-      ).malformed_debug,
-      expectedUnmappedPathValue: expectedMalformedAdInsight.malformed_debug,
-      normalizedVariant: {
-        ...expectedMalformedAdInsight,
-        ad_name: 'missing entity id ad'
-      },
-      subsetVariant: {
-        account_id: expectedMalformedAdInsight.account_id,
-        campaign_id: expectedMalformedAdInsight.campaign_id,
-        adset_id: expectedMalformedAdInsight.adset_id,
-        spend: expectedMalformedAdInsight.spend
-      },
-      enrichedVariant: {
-        ...expectedMalformedAdInsight,
-        roas_radar_debug: true
-      }
-    });
-    assert.equal(persisted.spendRows[4].payload_source, 'meta_ads_insights');
-    assert.equal(persisted.spendRows[4].payload_external_id, null);
-    assert.equal(persisted.spendRows[4].payload_size_bytes, expectedMalformedAdMetadata.payloadSizeBytes);
-    assert.equal(persisted.spendRows[4].payload_hash, expectedMalformedAdMetadata.payloadHash);
 
     await resetE2EDatabase();
     await seedGoogleSyncJob();
