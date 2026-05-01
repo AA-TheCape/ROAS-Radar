@@ -33,9 +33,10 @@ require_var API_SERVICE_NAME
 require_var DASHBOARD_SERVICE_NAME
 require_var WORKER_SERVICE_NAME
 
-SMOKE_TEST_DATE=${SMOKE_TEST_DATE:-$(date -u +%F)}
-REPORTING_PATH=${SMOKE_TEST_REPORTING_PATH:-/api/reporting/summary}
-REPORTING_QUERY="startDate=$SMOKE_TEST_DATE&endDate=$SMOKE_TEST_DATE"
+SMOKE_TEST_END_DATE=${SMOKE_TEST_END_DATE:-${SMOKE_TEST_DATE:-$(date -u +%F)}}
+SMOKE_TEST_START_DATE=${SMOKE_TEST_START_DATE:-$SMOKE_TEST_END_DATE}
+REPORTING_PATH=${SMOKE_TEST_REPORTING_PATH:-/api/reporting/meta-order-value}
+REPORTING_QUERY="startDate=$SMOKE_TEST_START_DATE&endDate=$SMOKE_TEST_END_DATE&limit=${SMOKE_TEST_REPORTING_LIMIT:-5}"
 
 API_URL=$(gcloud run services describe "$API_SERVICE_NAME" \
   --project="$GCP_PROJECT_ID" \
@@ -61,14 +62,75 @@ REPORTING_API_TOKEN=$(gcloud secrets versions access latest \
   --project="$GCP_PROJECT_ID" \
   --secret=REPORTING_API_TOKEN)
 
+validate_meta_order_value_response() {
+  RESPONSE_FILE="$1"
+  RESPONSE_START_DATE="$2"
+  RESPONSE_END_DATE="$3"
+
+  node -e '
+const fs = require("node:fs");
+
+const [responseFile, expectedStartDate, expectedEndDate] = process.argv.slice(1);
+const payload = JSON.parse(fs.readFileSync(responseFile, "utf8"));
+
+if (!payload || typeof payload !== "object") {
+  throw new Error("response body must be a JSON object");
+}
+
+if (!payload.scope || !Number.isInteger(payload.scope.organizationId) || payload.scope.organizationId <= 0) {
+  throw new Error("response scope.organizationId must be a positive integer");
+}
+
+if (!payload.range || payload.range.startDate !== expectedStartDate || payload.range.endDate !== expectedEndDate) {
+  throw new Error("response range does not match smoke-test query");
+}
+
+if (!payload.pagination || !Number.isInteger(payload.pagination.limit) || !Number.isInteger(payload.pagination.offset)) {
+  throw new Error("response pagination is missing required integers");
+}
+
+if (!payload.totals || typeof payload.totals !== "object") {
+  throw new Error("response totals object is required");
+}
+
+if (!Array.isArray(payload.rows)) {
+  throw new Error("response rows must be an array");
+}
+
+for (const key of ["attributedRevenue", "purchaseCount", "spend", "roas"]) {
+  const value = payload.totals[key];
+
+  if (value !== null && typeof value !== "number") {
+    throw new Error(`response totals.${key} must be numeric or null`);
+  }
+}
+' "$RESPONSE_FILE" "$RESPONSE_START_DATE" "$RESPONSE_END_DATE"
+}
+
 echo "Smoke testing API health for $ENVIRONMENT"
 curl --fail --silent --show-error "$API_URL/healthz/" >/dev/null
 curl --fail --silent --show-error "$API_URL/readyz" >/dev/null
 
-echo "Smoke testing authenticated reporting route for $ENVIRONMENT"
+echo "Smoke testing reporting auth for $ENVIRONMENT"
+UNAUTH_STATUS=$(curl --silent --show-error \
+  --output /dev/null \
+  --write-out '%{http_code}' \
+  "$API_URL$REPORTING_PATH?$REPORTING_QUERY")
+
+if [ "$UNAUTH_STATUS" != "401" ]; then
+  echo "expected unauthenticated $REPORTING_PATH smoke request to return 401, got $UNAUTH_STATUS" >&2
+  exit 1
+fi
+
+echo "Smoke testing authenticated Meta order value route for $ENVIRONMENT"
+RESPONSE_FILE=$(mktemp)
+trap 'rm -f "$RESPONSE_FILE"' EXIT INT TERM
+
 curl --fail --silent --show-error \
   -H "Authorization: Bearer $REPORTING_API_TOKEN" \
-  "$API_URL$REPORTING_PATH?$REPORTING_QUERY" >/dev/null
+  "$API_URL$REPORTING_PATH?$REPORTING_QUERY" >"$RESPONSE_FILE"
+
+validate_meta_order_value_response "$RESPONSE_FILE" "$SMOKE_TEST_START_DATE" "$SMOKE_TEST_END_DATE"
 
 echo "Smoke testing dashboard entrypoint for $ENVIRONMENT"
 curl --fail --silent --show-error "$DASHBOARD_URL/" >/dev/null

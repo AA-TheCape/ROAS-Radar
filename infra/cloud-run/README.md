@@ -25,7 +25,7 @@ The deployment flow assumes ten deployable workloads plus six Cloud Scheduler tr
 
 The API and worker use the `roas_app` PostgreSQL login. The migration job uses the `roas_migrator` PostgreSQL login. Do not reuse the migrator credential in long-lived application services.
 
-Each recurring job now runs as its own service account, and Cloud Scheduler uses a dedicated invoker identity with `roles/run.invoker`. That keeps ads sync, data quality, identity reconciliation, and attribution materialization from sharing unnecessary secret access.
+Each recurring job now runs as its own service account. Cloud Scheduler uses a dedicated invoker identity, but job invocation is granted at the individual Cloud Run Job level by `deploy.sh` instead of project-wide `roles/run.invoker`. That keeps ads sync, data quality, identity reconciliation, and attribution materialization from sharing unnecessary secret access.
 
 ## Required Secrets
 
@@ -83,6 +83,20 @@ The environment files also carry non-secret runtime settings that must be popula
 - `ADS_SYNC_DATABASE_POOL_MAX`
 - `ADS_SYNC_TIME_ZONE`
 - `META_ADS_SYNC_SCHEDULE`
+- `META_ADS_SCHEDULER_PAUSED`
+- `META_ADS_SCHEDULER_ATTEMPT_DEADLINE`
+- `META_ADS_SCHEDULER_MAX_RETRY_ATTEMPTS`
+- `META_ADS_SCHEDULER_MIN_BACKOFF`
+- `META_ADS_SCHEDULER_MAX_BACKOFF`
+- `META_ADS_SCHEDULER_MAX_DOUBLINGS`
+- `META_ADS_JOB_TIMEOUT_SECONDS`
+- `META_ADS_JOB_MAX_RETRIES`
+- `META_ADS_ORDER_VALUE_SYNC_ENABLED`
+- `META_ADS_ORDER_VALUE_SYNC_INTERVAL_MS`
+- `META_ADS_ORDER_VALUE_WINDOW_DAYS`
+- `META_ADS_ORDER_VALUE_ANOMALY_MIN_ROWS`
+- `META_ADS_ORDER_VALUE_NULL_SPIKE_MIN_RATIO`
+- `META_ADS_ORDER_VALUE_NULL_SPIKE_RATIO_DELTA`
 - `GOOGLE_ADS_SYNC_SCHEDULE`
 - `RETENTION_SCHEDULE`
 - `DATA_QUALITY_SCHEDULE`
@@ -165,6 +179,16 @@ The default daily sequence is:
 
 Meta Ads and Google Ads sync remain hourly schedulers. If one scheduled job is unhealthy, pause only that scheduler entry and leave the attribution worker service running because it also drains the live attribution queue.
 
+For Meta order-value specifically:
+
+- `staging.env` is configured active (`META_ADS_SCHEDULER_PAUSED="false"`) for non-prod validation.
+- `production.env` is configured active after the same deploy path is promoted through staging.
+- `dev.env` is configured paused by default so hourly sync is not running continuously in the sandbox environment.
+- scheduler retries are disabled at the Cloud Scheduler layer (`META_ADS_SCHEDULER_MAX_RETRY_ATTEMPTS="0"`) to avoid duplicate invocations; the Cloud Run Job owns the single retry budget via `META_ADS_JOB_MAX_RETRIES`.
+- the Meta job receives only `DATABASE_URL`, `META_ADS_APP_SECRET`, and `META_ADS_ENCRYPTION_KEY` from Secret Manager, while access tokens remain encrypted in application storage instead of being copied into environment files.
+
+Use `sh infra/cloud-run/scheduler.sh <environment> meta-ads <status|pause|resume>` for an operational toggle without redeploying.
+
 ## Large Payload Throughput
 
 The API service is configured for larger raw JSON ingestion by combining:
@@ -187,3 +211,12 @@ Keep request parser limits below the Cloud Run hard request-body ceiling. Cloud 
 
 After deploying staging or production, run the smoke-test helper:
 
+`sh infra/cloud-run/smoke-test.sh <staging|production>`
+
+The smoke helper now gates rollout promotion on `/api/reporting/meta-order-value` instead of the generic reporting summary endpoint. The check validates:
+
+- unauthenticated access is rejected with `401`
+- authenticated access succeeds with a bounded `startDate` and `endDate` query
+- the response includes the expected JSON contract surface: `scope.organizationId`, `range`, `pagination`, `totals`, and `rows`
+
+Capture the smoke-test output and the exact date window used as rollout evidence before staging sign-off and before production promotion.

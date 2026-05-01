@@ -120,6 +120,20 @@ for var in \
   SHOPIFY_APP_BASE_URL \
   ADS_SYNC_TIME_ZONE \
   META_ADS_SYNC_SCHEDULE \
+  META_ADS_SCHEDULER_PAUSED \
+  META_ADS_SCHEDULER_ATTEMPT_DEADLINE \
+  META_ADS_SCHEDULER_MAX_RETRY_ATTEMPTS \
+  META_ADS_SCHEDULER_MIN_BACKOFF \
+  META_ADS_SCHEDULER_MAX_BACKOFF \
+  META_ADS_SCHEDULER_MAX_DOUBLINGS \
+  META_ADS_JOB_TIMEOUT_SECONDS \
+  META_ADS_JOB_MAX_RETRIES \
+  META_ADS_ORDER_VALUE_SYNC_ENABLED \
+  META_ADS_ORDER_VALUE_SYNC_INTERVAL_MS \
+  META_ADS_ORDER_VALUE_WINDOW_DAYS \
+  META_ADS_ORDER_VALUE_ANOMALY_MIN_ROWS \
+  META_ADS_ORDER_VALUE_NULL_SPIKE_MIN_RATIO \
+  META_ADS_ORDER_VALUE_NULL_SPIKE_RATIO_DELTA \
   GOOGLE_ADS_SYNC_SCHEDULE \
   RETENTION_SCHEDULE \
   DATA_QUALITY_SCHEDULE \
@@ -163,6 +177,12 @@ upsert_scheduler_job() {
   SCHEDULER_JOB_NAME="$1"
   TARGET_JOB_NAME="$2"
   CRON_SCHEDULE="$3"
+  PAUSED_STATE="$4"
+  ATTEMPT_DEADLINE="$5"
+  MAX_RETRY_ATTEMPTS="$6"
+  MIN_BACKOFF="$7"
+  MAX_BACKOFF="$8"
+  MAX_DOUBLINGS="$9"
 
   if gcloud scheduler jobs describe "$SCHEDULER_JOB_NAME" \
     --project="$GCP_PROJECT_ID" \
@@ -174,6 +194,11 @@ upsert_scheduler_job() {
       --time-zone="$ADS_SYNC_TIME_ZONE" \
       --uri="$ADS_JOB_ENDPOINT_BASE/$TARGET_JOB_NAME:run" \
       --http-method=POST \
+      --attempt-deadline="$ATTEMPT_DEADLINE" \
+      --max-retry-attempts="$MAX_RETRY_ATTEMPTS" \
+      --min-backoff="$MIN_BACKOFF" \
+      --max-backoff="$MAX_BACKOFF" \
+      --max-doublings="$MAX_DOUBLINGS" \
       --oauth-service-account-email="$SCHEDULER_INVOKER_SA" \
       --oauth-token-scope="https://www.googleapis.com/auth/cloud-platform"
   else
@@ -184,8 +209,23 @@ upsert_scheduler_job() {
       --time-zone="$ADS_SYNC_TIME_ZONE" \
       --uri="$ADS_JOB_ENDPOINT_BASE/$TARGET_JOB_NAME:run" \
       --http-method=POST \
+      --attempt-deadline="$ATTEMPT_DEADLINE" \
+      --max-retry-attempts="$MAX_RETRY_ATTEMPTS" \
+      --min-backoff="$MIN_BACKOFF" \
+      --max-backoff="$MAX_BACKOFF" \
+      --max-doublings="$MAX_DOUBLINGS" \
       --oauth-service-account-email="$SCHEDULER_INVOKER_SA" \
       --oauth-token-scope="https://www.googleapis.com/auth/cloud-platform"
+  fi
+
+  if [ "$PAUSED_STATE" = "true" ]; then
+    gcloud scheduler jobs pause "$SCHEDULER_JOB_NAME" \
+      --project="$GCP_PROJECT_ID" \
+      --location="$GCP_REGION" >/dev/null
+  else
+    gcloud scheduler jobs resume "$SCHEDULER_JOB_NAME" \
+      --project="$GCP_PROJECT_ID" \
+      --location="$GCP_REGION" >/dev/null || true
   fi
 }
 
@@ -323,13 +363,13 @@ gcloud run jobs deploy "$META_ADS_JOB_NAME" \
   --service-account="$META_ADS_SA" \
   --cpu=1 \
   --memory=512Mi \
-  --max-retries=1 \
-  --task-timeout=1800 \
+  --max-retries="$META_ADS_JOB_MAX_RETRIES" \
+  --task-timeout="$META_ADS_JOB_TIMEOUT_SECONDS" \
   --parallelism=1 \
   --tasks=1 \
   --command=npm \
   --args=run,meta-ads:sync:start \
-  --set-env-vars="${COMMON_ENV_VARS}@DATABASE_POOL_MAX=$ADS_SYNC_DATABASE_POOL_MAX@META_ADS_WORKER_LOOP=false" \
+  --set-env-vars="${COMMON_ENV_VARS}@DATABASE_POOL_MAX=$ADS_SYNC_DATABASE_POOL_MAX@META_ADS_WORKER_LOOP=false@META_ADS_ORDER_VALUE_SYNC_ENABLED=$META_ADS_ORDER_VALUE_SYNC_ENABLED@META_ADS_ORDER_VALUE_SYNC_INTERVAL_MS=$META_ADS_ORDER_VALUE_SYNC_INTERVAL_MS@META_ADS_ORDER_VALUE_WINDOW_DAYS=$META_ADS_ORDER_VALUE_WINDOW_DAYS@META_ADS_ORDER_VALUE_ANOMALY_MIN_ROWS=$META_ADS_ORDER_VALUE_ANOMALY_MIN_ROWS@META_ADS_ORDER_VALUE_NULL_SPIKE_MIN_RATIO=$META_ADS_ORDER_VALUE_NULL_SPIKE_MIN_RATIO@META_ADS_ORDER_VALUE_NULL_SPIKE_RATIO_DELTA=$META_ADS_ORDER_VALUE_NULL_SPIKE_RATIO_DELTA" \
   --set-secrets="DATABASE_URL=DATABASE_URL:latest,META_ADS_APP_SECRET=META_ADS_APP_SECRET:latest,META_ADS_ENCRYPTION_KEY=META_ADS_ENCRYPTION_KEY:latest" \
   --set-cloudsql-instances="$CLOUD_SQL_CONNECTION_NAME"
 ensure_job_invoker "$META_ADS_JOB_NAME" "serviceAccount:$SCHEDULER_INVOKER_SA"
@@ -436,7 +476,16 @@ ensure_job_invoker "$ORDER_ATTRIBUTION_MATERIALIZATION_JOB_NAME" "serviceAccount
 ensure_job_invoker "$ORDER_ATTRIBUTION_MATERIALIZATION_JOB_NAME" "serviceAccount:$WORKER_SA"
 
 echo "Configuring Meta Ads scheduler job $META_ADS_SCHEDULER_JOB_NAME"
-upsert_scheduler_job "$META_ADS_SCHEDULER_JOB_NAME" "$META_ADS_JOB_NAME" "$META_ADS_SYNC_SCHEDULE"
+upsert_scheduler_job \
+  "$META_ADS_SCHEDULER_JOB_NAME" \
+  "$META_ADS_JOB_NAME" \
+  "$META_ADS_SYNC_SCHEDULE" \
+  "$META_ADS_SCHEDULER_PAUSED" \
+  "$META_ADS_SCHEDULER_ATTEMPT_DEADLINE" \
+  "$META_ADS_SCHEDULER_MAX_RETRY_ATTEMPTS" \
+  "$META_ADS_SCHEDULER_MIN_BACKOFF" \
+  "$META_ADS_SCHEDULER_MAX_BACKOFF" \
+  "$META_ADS_SCHEDULER_MAX_DOUBLINGS"
 
 echo "Configuring Google Ads scheduler job $GOOGLE_ADS_SCHEDULER_JOB_NAME"
 upsert_scheduler_job "$GOOGLE_ADS_SCHEDULER_JOB_NAME" "$GOOGLE_ADS_JOB_NAME" "$GOOGLE_ADS_SYNC_SCHEDULE"

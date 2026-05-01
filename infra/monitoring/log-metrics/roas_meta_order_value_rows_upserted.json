@@ -1,0 +1,27 @@
+{
+  "name": "roas_meta_order_value_rows_upserted",
+  "description": "Distribution of Meta order-value aggregate rows upserted per connection sync completion.",
+  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"meta_ads_order_value_sync_connection_completed\"",
+  "valueExtractor": "EXTRACT(jsonPayload.aggregateRowsUpserted)",
+  "labelExtractors": {
+    "service": "EXTRACT(jsonPayload.service)",
+    "trigger_source": "EXTRACT(jsonPayload.triggerSource)",
+    "ad_account_id": "EXTRACT(jsonPayload.adAccountId)"
+  },
+  "metricDescriptor": {
+    "metricKind": "DELTA",
+    "valueType": "DISTRIBUTION",
+    "unit": "1",
+    "displayName": "ROAS Radar Meta Order Value Rows Upserted",
+    "labels": [
+      { "key": "service", "valueType": "STRING", "description": "Service emitting the sync completion telemetry." },
+      { "key": "trigger_source", "valueType": "STRING", "description": "Why the sync ran." },
+      { "key": "ad_account_id", "valueType": "STRING", "description": "Meta ad account identifier." }
+    ]
+  },
+  "bucketOptions": {
+    "explicitBuckets": {
+      "bounds": [0, 10, 25, 50, 100, 250, 500, 1000]
+    }
+  }
+}

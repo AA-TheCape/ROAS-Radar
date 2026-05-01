@@ -125,7 +125,6 @@ done
 
 grant_project_role "serviceAccount:$DASHBOARD_SA" "roles/logging.logWriter"
 grant_project_role "serviceAccount:$SCHEDULER_INVOKER_SA" "roles/logging.logWriter"
-grant_project_role "serviceAccount:$SCHEDULER_INVOKER_SA" "roles/run.invoker"
 
 grant_project_role "serviceAccount:$DEPLOYER_SA" "roles/artifactregistry.writer"
 grant_project_role "serviceAccount:$DEPLOYER_SA" "roles/cloudbuild.builds.editor"

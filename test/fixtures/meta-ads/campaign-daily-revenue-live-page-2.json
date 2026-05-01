@@ -1,0 +1,46 @@
+{
+  "data": [
+    {
+      "campaign_id": "cmp_live_2",
+      "campaign_name": "Live Campaign Two",
+      "date_start": "2026-04-28",
+      "date_stop": "2026-04-28",
+      "spend": "22.00",
+      "action_type": "offsite_conversion.fb_pixel_purchase",
+      "actions": [
+        {
+          "action_type": "offsite_conversion.fb_pixel_purchase",
+          "value": "4"
+        }
+      ],
+      "action_values": [
+        {
+          "action_type": "offsite_conversion.fb_pixel_purchase",
+          "value": "88.80"
+        }
+      ],
+      "purchase_roas": [
+        {
+          "action_type": "offsite_conversion.fb_pixel_purchase",
+          "value": "4.036364"
+        }
+      ]
+    },
+    {
+      "campaign_id": "cmp_live_3",
+      "campaign_name": "Live Campaign Three",
+      "date_start": "2026-04-28",
+      "date_stop": "2026-04-28",
+      "spend": "19.25",
+      "action_type": "link_click",
+      "actions": [
+        {
+          "action_type": "link_click",
+          "value": "10"
+        }
+      ],
+      "action_values": [],
+      "purchase_roas": []
+    }
+  ]
+}

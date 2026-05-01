@@ -1,0 +1,31 @@
+{
+  "displayName": "ROAS Radar __ENVIRONMENT__ Meta Order Value Zero Ingestion",
+  "documentation": {
+    "content": "Meta order-value sync is completing with zero fetched or normalized rows for a prolonged period. Inspect the latest `meta_ads_order_value_sync_anomaly` events and follow the runbook: __RUNBOOK_URL_META_ORDER_VALUE__",
+    "mimeType": "text/markdown"
+  },
+  "combiner": "OR",
+  "enabled": true,
+  "severity": "WARNING",
+  "notificationChannels": __ALERT_NOTIFICATION_CHANNELS__,
+  "conditions": [
+    {
+      "displayName": "Zero-row anomalies exceed 2 in 6 hours",
+      "conditionThreshold": {
+        "filter": "metric.type=\"logging.googleapis.com/user/roas_meta_order_value_sync_anomalies\" resource.type=\"cloud_run_revision\" metric.labels.anomaly_type=\"zero_rows_pulled\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 2,
+        "duration": "21600s",
+        "aggregations": [
+          {
+            "alignmentPeriod": "21600s",
+            "perSeriesAligner": "ALIGN_SUM"
+          }
+        ],
+        "trigger": {
+          "count": 1
+        }
+      }
+    }
+  ]
+}
