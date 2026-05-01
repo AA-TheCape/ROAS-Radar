@@ -8,10 +8,12 @@ import { query, withTransaction } from '../../db/pool.js';
 import { logInfo, logWarning } from '../../observability/index.js';
 import { attachAuthContext, requireAdmin } from '../auth/index.js';
 import { normalizeTimestampToUtc, resolveOrderOccurredAtUtc } from '../attribution/candidate-extraction.js';
+import {
+  evaluateMetaAttributionEligibility,
+  type MetaEligibilityOutcome
+} from './meta-attribution-eligibility.js';
 
 const META_ATTRIBUTION_RULE_VERSION = 'meta_platform_reported_v1';
-const CANONICAL_THRESHOLD = 0.5;
-const PARALLEL_THRESHOLD = 0.35;
 const DEFAULT_ATTRIBUTION_WINDOW_DAYS = 7;
 const APPROVED_MATCH_BASES = [
   'fbclid',
@@ -23,11 +25,9 @@ const APPROVED_MATCH_BASES = [
   'meta_order_reference',
   'conversion_api_event_id'
 ] as const;
-const ORDER_JOINABLE_SOURCE_KINDS = new Set(['order_scoped', 'order_joinable']);
 
 type ApprovedMatchBasis = (typeof APPROVED_MATCH_BASES)[number];
 type MetaSourceKind = 'order_scoped' | 'order_joinable' | 'aggregate_only' | 'unknown';
-type MetaEligibilityOutcome = 'eligible_canonical' | 'eligible_parallel_only' | 'ineligible';
 
 type OrderTimestampRow = {
   shopify_order_id: string;
@@ -309,127 +309,6 @@ function buildEvidenceSnapshotHash(input: {
     .digest('hex');
 }
 
-function evaluateEligibility(input: {
-  orderOccurredAtUtc: Date | null;
-  metaTouchpointOccurredAtUtc: Date | null;
-  attributionWindowDays: number;
-  sourceKind: MetaSourceKind;
-  matchBasis: ApprovedMatchBasis | null;
-  confidenceScore: number | null;
-  rawPayloadReference: string | null;
-  rawRecordId: number | null;
-  ingestionRunId: number | null;
-  normalizationFailures: string[];
-}): {
-  eligibilityOutcome: MetaEligibilityOutcome;
-  eligibilityReasons: string[];
-  disqualificationReasons: string[];
-  parallelOnlyReasons: string[];
-  eligibilitySignals: Record<string, unknown>;
-} {
-  const hasOrderTimestamp = input.orderOccurredAtUtc !== null;
-  const hasMetaTouchpoint = input.metaTouchpointOccurredAtUtc !== null;
-  const hasApprovedMatchBasis = input.matchBasis !== null;
-  const hasRawPayloadTraceability = Boolean(input.rawPayloadReference || input.rawRecordId !== null);
-  const hasIngestionRunReference = input.ingestionRunId !== null;
-  const isOrderJoinable = ORDER_JOINABLE_SOURCE_KINDS.has(input.sourceKind);
-  const hasConfidenceScore = input.confidenceScore !== null;
-  const touchpointBeforeOrder =
-    hasOrderTimestamp &&
-    hasMetaTouchpoint &&
-    input.metaTouchpointOccurredAtUtc!.getTime() <= input.orderOccurredAtUtc!.getTime();
-  const withinAttributionWindow =
-    hasOrderTimestamp &&
-    hasMetaTouchpoint &&
-    touchpointBeforeOrder &&
-    input.metaTouchpointOccurredAtUtc!.getTime() >=
-      input.orderOccurredAtUtc!.getTime() - input.attributionWindowDays * 24 * 60 * 60 * 1000;
-  const confidenceAtLeastCanonical = (input.confidenceScore ?? -1) >= CANONICAL_THRESHOLD;
-  const confidenceWithinParallelBand =
-    input.confidenceScore !== null &&
-    input.confidenceScore >= PARALLEL_THRESHOLD &&
-    input.confidenceScore < CANONICAL_THRESHOLD;
-  const disqualificationReasons = dedupeStrings([
-    ...input.normalizationFailures,
-    ...(hasOrderTimestamp ? [] : ['missing_order_timestamp']),
-    ...(hasMetaTouchpoint ? [] : ['missing_meta_touchpoint_timestamp']),
-    ...(hasApprovedMatchBasis ? [] : ['missing_approved_match_basis']),
-    ...(hasRawPayloadTraceability ? [] : ['missing_raw_payload_traceability']),
-    ...(hasIngestionRunReference ? [] : ['missing_ingestion_run_reference']),
-    ...(isOrderJoinable ? [] : ['aggregate_only_or_non_joinable_source']),
-    ...(hasConfidenceScore ? [] : ['missing_confidence_score']),
-    ...(hasOrderTimestamp && hasMetaTouchpoint && !touchpointBeforeOrder ? ['meta_touchpoint_after_order'] : []),
-    ...(hasOrderTimestamp && hasMetaTouchpoint && touchpointBeforeOrder && !withinAttributionWindow
-      ? ['outside_attribution_window']
-      : []),
-    ...(input.confidenceScore !== null && input.confidenceScore < PARALLEL_THRESHOLD ? ['confidence_below_parallel_floor'] : [])
-  ]);
-
-  if (disqualificationReasons.length > 0) {
-    return {
-      eligibilityOutcome: 'ineligible',
-      eligibilityReasons: disqualificationReasons,
-      disqualificationReasons,
-      parallelOnlyReasons: [],
-      eligibilitySignals: {
-        hasOrderTimestamp,
-        hasMetaTouchpoint,
-        hasApprovedMatchBasis,
-        hasRawPayloadTraceability,
-        hasIngestionRunReference,
-        isOrderJoinable,
-        touchpointBeforeOrder,
-        withinAttributionWindow,
-        hasConfidenceScore,
-        confidenceAtLeastCanonical,
-        confidenceWithinParallelBand
-      }
-    };
-  }
-
-  if (confidenceAtLeastCanonical) {
-    return {
-      eligibilityOutcome: 'eligible_canonical',
-      eligibilityReasons: ['passed_meta_hard_guards', 'passed_meta_canonical_threshold'],
-      disqualificationReasons: [],
-      parallelOnlyReasons: [],
-      eligibilitySignals: {
-        hasOrderTimestamp,
-        hasMetaTouchpoint,
-        hasApprovedMatchBasis,
-        hasRawPayloadTraceability,
-        hasIngestionRunReference,
-        isOrderJoinable,
-        touchpointBeforeOrder,
-        withinAttributionWindow,
-        hasConfidenceScore,
-        confidenceAtLeastCanonical,
-        confidenceWithinParallelBand
-      }
-    };
-  }
-
-  return {
-    eligibilityOutcome: 'eligible_parallel_only',
-    eligibilityReasons: ['below_meta_canonical_threshold'],
-    disqualificationReasons: [],
-    parallelOnlyReasons: ['confidence_below_canonical_threshold'],
-    eligibilitySignals: {
-      hasOrderTimestamp,
-      hasMetaTouchpoint,
-      hasApprovedMatchBasis,
-      hasRawPayloadTraceability,
-      hasIngestionRunReference,
-      isOrderJoinable,
-      touchpointBeforeOrder,
-      withinAttributionWindow,
-      hasConfidenceScore,
-      confidenceAtLeastCanonical,
-      confidenceWithinParallelBand
-    }
-  };
-}
-
 async function loadOrderTimestamp(shopifyOrderId: string): Promise<OrderTimestampRow> {
   const result = await query<OrderTimestampRow>(
     `
@@ -494,7 +373,7 @@ function normalizePayload(
   const ruleVersion = normalizeNullableString(payload.ruleVersion) ?? META_ATTRIBUTION_RULE_VERSION;
   const confidenceScore = payload.confidenceScore ?? null;
   const attributionWindowDays = payload.attributionWindowDays ?? DEFAULT_ATTRIBUTION_WINDOW_DAYS;
-  const evaluation = evaluateEligibility({
+  const evaluation = evaluateMetaAttributionEligibility({
     orderOccurredAtUtc: orderOccurredAt,
     metaTouchpointOccurredAtUtc,
     attributionWindowDays,
@@ -823,6 +702,6 @@ export const __metaAttributionEvidenceTestUtils = {
   normalizeCurrencyCode,
   normalizeMatchBasis,
   normalizeObservedMatchBases,
-  evaluateEligibility,
+  evaluateMetaAttributionEligibility,
   normalizePayload
 };
