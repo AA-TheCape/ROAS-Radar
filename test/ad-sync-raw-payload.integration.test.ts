@@ -244,7 +244,15 @@ function buildGoogleMalformedAdFixture() {
   return row;
 }
 
-async function loadMetaRawPersistence() {
+type SeededMetaConnection = {
+  connectionId: number;
+};
+
+type SeededGoogleConnection = {
+  connectionId: number;
+};
+
+async function loadMetaRawPersistence(connectionId: number) {
   const [connectionResult, rawResult] = await Promise.all([
     pool.query<{
       raw_account_data: Record<string, unknown>;
@@ -261,8 +269,9 @@ async function loadMetaRawPersistence() {
           raw_account_payload_size_bytes,
           raw_account_payload_hash
         FROM meta_ads_connections
-        WHERE id = 1
-      `
+        WHERE id = $1
+      `,
+      [connectionId]
     ),
     pool.query<{
       campaign_id: string;
@@ -272,9 +281,10 @@ async function loadMetaRawPersistence() {
       `
         SELECT campaign_id, action_type, raw_payload
         FROM meta_ads_order_value_raw_records
-        WHERE connection_id = 1
+        WHERE connection_id = $1
         ORDER BY id ASC
-      `
+      `,
+      [connectionId]
     )
   ]);
 
@@ -284,7 +294,7 @@ async function loadMetaRawPersistence() {
   };
 }
 
-async function loadGoogleRawPersistence() {
+async function loadGoogleRawPersistence(connectionId: number) {
   const [connectionResult, spendResult] = await Promise.all([
     pool.query<{
       raw_customer_data: Record<string, unknown>;
@@ -301,8 +311,9 @@ async function loadGoogleRawPersistence() {
           raw_customer_payload_size_bytes,
           raw_customer_payload_hash
         FROM google_ads_connections
-        WHERE id = 1
-      `
+        WHERE id = $1
+      `,
+      [connectionId]
     ),
     pool.query<{
       level: string;
@@ -315,9 +326,10 @@ async function loadGoogleRawPersistence() {
       `
         SELECT level, raw_payload, payload_source, payload_external_id, payload_size_bytes, payload_hash
         FROM google_ads_raw_spend_records
-        WHERE connection_id = 1
+        WHERE connection_id = $1
         ORDER BY id ASC
-      `
+      `,
+      [connectionId]
     )
   ]);
 
@@ -327,10 +339,23 @@ async function loadGoogleRawPersistence() {
   };
 }
 
-async function loadAdProjectionCounts() {
+async function loadAdProjectionCounts(params: {
+  metaConnectionId?: number;
+  googleConnectionId?: number;
+}) {
   const [metaResult, googleResult] = await Promise.all([
-    pool.query<{ count: string }>('SELECT count(*)::text AS count FROM meta_ads_order_value_aggregates WHERE meta_connection_id = 1'),
-    pool.query<{ count: string }>('SELECT count(*)::text AS count FROM google_ads_daily_spend WHERE connection_id = 1')
+    params.metaConnectionId
+      ? pool.query<{ count: string }>(
+          'SELECT count(*)::text AS count FROM meta_ads_order_value_aggregates WHERE meta_connection_id = $1',
+          [params.metaConnectionId]
+        )
+      : Promise.resolve({ rows: [{ count: '0' }] }),
+    params.googleConnectionId
+      ? pool.query<{ count: string }>(
+          'SELECT count(*)::text AS count FROM google_ads_daily_spend WHERE connection_id = $1',
+          [params.googleConnectionId]
+        )
+      : Promise.resolve({ rows: [{ count: '0' }] })
   ]);
 
   return {
@@ -339,14 +364,13 @@ async function loadAdProjectionCounts() {
   };
 }
 
-async function seedMetaSyncJob(): Promise<void> {
+async function seedMetaSyncJob(): Promise<SeededMetaConnection> {
   const rawAccountData = buildMetaAccountFixture();
   const rawAccountJson = JSON.stringify(rawAccountData);
 
-  await pool.query(
+  const connectionResult = await pool.query<{ id: number }>(
     `
       INSERT INTO meta_ads_connections (
-        id,
         ad_account_id,
         access_token_encrypted,
         token_type,
@@ -363,7 +387,6 @@ async function seedMetaSyncJob(): Promise<void> {
         raw_account_payload_hash
       )
       VALUES (
-        1,
         '123456789',
         pgp_sym_encrypt($1, $2, 'cipher-algo=aes256, compress-algo=0'),
         'Bearer',
@@ -379,6 +402,7 @@ async function seedMetaSyncJob(): Promise<void> {
         $4,
         $5
       )
+      RETURNING id
     `,
     [
       'meta-access-token',
@@ -389,29 +413,36 @@ async function seedMetaSyncJob(): Promise<void> {
     ]
   );
 
-  await pool.query(
+  const connectionId = connectionResult.rows[0]?.id;
+  assert.ok(connectionId);
+
+  const syncJobResult = await pool.query<{ id: number }>(
     `
       INSERT INTO meta_ads_sync_jobs (
-        id,
         connection_id,
         sync_date,
         status,
         available_at,
         updated_at
       )
-      VALUES (1, 1, '2026-04-11'::date, 'pending', now(), now())
-    `
+      VALUES ($1, '2026-04-11'::date, 'pending', now(), now())
+      RETURNING id
+    `,
+    [connectionId]
   );
+
+  assert.ok(syncJobResult.rows[0]?.id);
+
+  return { connectionId };
 }
 
-async function seedGoogleSyncJob(): Promise<void> {
+async function seedGoogleSyncJob(): Promise<SeededGoogleConnection> {
   const rawCustomerData = buildGoogleCustomerFixture();
   const rawCustomerJson = JSON.stringify(rawCustomerData);
 
-  await pool.query(
+  const connectionResult = await pool.query<{ id: number }>(
     `
       INSERT INTO google_ads_connections (
-        id,
         customer_id,
         login_customer_id,
         developer_token_encrypted,
@@ -432,7 +463,6 @@ async function seedGoogleSyncJob(): Promise<void> {
         raw_customer_payload_hash
       )
       VALUES (
-        1,
         '1234567890',
         NULL,
         pgp_sym_encrypt($1, $4, 'cipher-algo=aes256, compress-algo=0'),
@@ -452,6 +482,7 @@ async function seedGoogleSyncJob(): Promise<void> {
         $7,
         $8
       )
+      RETURNING id
     `,
     [
       process.env.GOOGLE_ADS_DEVELOPER_TOKEN,
@@ -465,7 +496,10 @@ async function seedGoogleSyncJob(): Promise<void> {
     ]
   );
 
-  await pool.query(
+  const connectionId = connectionResult.rows[0]?.id;
+  assert.ok(connectionId);
+
+  const syncJobResult = await pool.query<{ id: number }>(
     `
       INSERT INTO google_ads_sync_jobs (
         connection_id,
@@ -474,17 +508,34 @@ async function seedGoogleSyncJob(): Promise<void> {
         available_at,
         updated_at
       )
-      VALUES (1, '2026-04-11'::date, 'pending', now(), now())
-    `
+      VALUES ($1, '2026-04-11'::date, 'pending', now(), now())
+      RETURNING id
+    `,
+    [connectionId]
   );
+
+  assert.ok(syncJobResult.rows[0]?.id);
+
+  return { connectionId };
 }
+
+test.beforeEach(async () => {
+  await resetE2EDatabase();
+});
+
+test.afterEach(async () => {
+  await resetE2EDatabase();
+});
+
+test.after(async () => {
+  await pool.end();
+});
 
 test('Meta Ads and Google Ads sync preserve raw payloads without trimming', { concurrency: false }, async () => {
   const previousFetch = globalThis.fetch;
 
   try {
-    await resetE2EDatabase();
-    await seedMetaSyncJob();
+    const metaSeed = await seedMetaSyncJob();
     const expectedMetaAccount = buildMetaAccountFixture();
 
     globalThis.fetch = (async (input: string | URL | Request) => {
@@ -520,8 +571,8 @@ test('Meta Ads and Google Ads sync preserve raw payloads without trimming', { co
     });
 
     assert.equal(result.succeededJobs, 1);
-    const persisted = await loadMetaRawPersistence();
-    const projectionCountsAfterMeta = await loadAdProjectionCounts();
+    const persisted = await loadMetaRawPersistence(metaSeed.connectionId);
+    const projectionCountsAfterMeta = await loadAdProjectionCounts({ metaConnectionId: metaSeed.connectionId });
     assertExactRawPayloadInvariant({
       persistedRawPayload: persisted.connection?.raw_account_data ?? {},
       expectedRawPayload: expectedMetaAccount,
@@ -606,7 +657,7 @@ test('Meta Ads and Google Ads sync preserve raw payloads without trimming', { co
     });
 
     await resetE2EDatabase();
-    await seedGoogleSyncJob();
+    const googleSeed = await seedGoogleSyncJob();
     const expectedGoogleCustomer = buildGoogleCustomerFixture();
 
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -665,8 +716,8 @@ test('Meta Ads and Google Ads sync preserve raw payloads without trimming', { co
     });
 
     assert.equal(googleResult.succeededJobs, 1);
-    const googlePersisted = await loadGoogleRawPersistence();
-    const projectionCountsAfterGoogle = await loadAdProjectionCounts();
+    const googlePersisted = await loadGoogleRawPersistence(googleSeed.connectionId);
+    const projectionCountsAfterGoogle = await loadAdProjectionCounts({ googleConnectionId: googleSeed.connectionId });
     assertExactRawPayloadInvariant({
       persistedRawPayload: googlePersisted.connection?.raw_customer_data ?? {},
       expectedRawPayload: expectedGoogleCustomer,
@@ -834,7 +885,5 @@ test('Meta Ads and Google Ads sync preserve raw payloads without trimming', { co
     assert.equal(googlePersisted.spendRows[3].payload_hash, expectedMalformedGoogleAdMetadata.payloadHash);
   } finally {
     globalThis.fetch = previousFetch;
-    await resetE2EDatabase();
-    await pool.end();
   }
 });

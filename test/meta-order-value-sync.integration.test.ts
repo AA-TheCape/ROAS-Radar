@@ -56,7 +56,7 @@ async function captureStructuredLogs<T>(callback: () => Promise<T>): Promise<{
   }
 }
 
-async function seedMetaConnection(): Promise<void> {
+async function seedMetaConnection(): Promise<number> {
   const rawAccount = {
     id: '123456789',
     name: 'Meta Account',
@@ -64,10 +64,9 @@ async function seedMetaConnection(): Promise<void> {
   };
   const rawAccountJson = JSON.stringify(rawAccount);
 
-  await pool.query(
+  const result = await pool.query<{ id: number }>(
     `
       INSERT INTO meta_ads_connections (
-        id,
         ad_account_id,
         access_token_encrypted,
         token_type,
@@ -83,7 +82,6 @@ async function seedMetaConnection(): Promise<void> {
         raw_account_payload_hash
       )
       VALUES (
-        1,
         '123456789',
         pgp_sym_encrypt($1, $2, 'cipher-algo=aes256, compress-algo=0'),
         'Bearer',
@@ -98,6 +96,7 @@ async function seedMetaConnection(): Promise<void> {
         $4,
         $5
       )
+      RETURNING id
     `,
     [
       'meta-access-token',
@@ -107,6 +106,8 @@ async function seedMetaConnection(): Promise<void> {
       createHash('sha256').update(rawAccountJson).digest('hex')
     ]
   );
+
+  return result.rows[0]?.id ?? 0;
 }
 
 async function loadOrderValuePersistence() {
@@ -175,6 +176,18 @@ async function loadOrderValuePersistence() {
   };
 }
 
+test.beforeEach(async () => {
+  await resetE2EDatabase();
+});
+
+test.afterEach(async () => {
+  await resetE2EDatabase();
+});
+
+test.after(async () => {
+  await pool.end();
+});
+
 test(
   'runMetaAdsOrderValueSync persists raw rows, replaces same-window aggregates, and keeps aggregate row counts idempotent',
   { concurrency: false },
@@ -182,8 +195,9 @@ test(
   const previousFetch = globalThis.fetch;
 
   try {
-    await resetE2EDatabase();
-    await seedMetaConnection();
+    const connectionId = await seedMetaConnection();
+    assert.equal(typeof connectionId, 'number');
+    assert.ok(connectionId > 0);
 
     const pageOne = {
       data: [
@@ -334,8 +348,9 @@ test('runMetaAdsOrderValueSync emits a zero-row anomaly when Meta returns no cam
   const previousFetch = globalThis.fetch;
 
   try {
-    await resetE2EDatabase();
-    await seedMetaConnection();
+    const connectionId = await seedMetaConnection();
+    assert.equal(typeof connectionId, 'number');
+    assert.ok(connectionId > 0);
 
     globalThis.fetch = (async () =>
       new Response(JSON.stringify({ data: [], paging: {} }), {

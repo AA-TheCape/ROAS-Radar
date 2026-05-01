@@ -299,6 +299,10 @@ test.beforeEach(async () => {
   await resetE2EDatabase();
 });
 
+test.afterEach(async () => {
+  await resetE2EDatabase();
+});
+
 test.after(async () => {
   await pool.end();
 });
