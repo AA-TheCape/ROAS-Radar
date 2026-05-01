@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "build:dashboard": "npm --prefix dashboard run build",
+    "build:dashboard": "npm --prefix dashboard ci --include=dev && npm --prefix dashboard run build",
     "db:migrate": "tsx src/db/migrate.ts",
     "db:migrate:start": "node dist/src/db/migrate.js",
     "db:migrate:check": "node scripts/check-migrations.mjs",
