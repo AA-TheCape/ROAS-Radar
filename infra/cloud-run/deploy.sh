@@ -177,12 +177,12 @@ upsert_scheduler_job() {
   SCHEDULER_JOB_NAME="$1"
   TARGET_JOB_NAME="$2"
   CRON_SCHEDULE="$3"
-  PAUSED_STATE="$4"
-  ATTEMPT_DEADLINE="$5"
-  MAX_RETRY_ATTEMPTS="$6"
-  MIN_BACKOFF="$7"
-  MAX_BACKOFF="$8"
-  MAX_DOUBLINGS="$9"
+  PAUSED_STATE="${4:-false}"
+  ATTEMPT_DEADLINE="${5:-1800s}"
+  MAX_RETRY_ATTEMPTS="${6:-0}"
+  MIN_BACKOFF="${7:-300s}"
+  MAX_BACKOFF="${8:-1800s}"
+  MAX_DOUBLINGS="${9:-1}"
 
   if gcloud scheduler jobs describe "$SCHEDULER_JOB_NAME" \
     --project="$GCP_PROJECT_ID" \
