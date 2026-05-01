@@ -239,6 +239,7 @@ async function insertSessionAttributionTouchEvent(
         gclid,
         gbraid,
         wbraid,
+        payload_size_bytes,
         raw_payload
       )
       VALUES (
@@ -257,6 +258,7 @@ async function insertSessionAttributionTouchEvent(
         'GCLID-123',
         'GBRAID-123',
         'WBRAID-123',
+        octet_length(convert_to('{}', 'utf8')),
         '{}'::jsonb
       )
     `,

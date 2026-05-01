@@ -19,9 +19,18 @@ async function seedGoogleConnection() {
         client_id,
         client_secret_encrypted,
         refresh_token_encrypted,
+        raw_customer_payload_size_bytes,
         status
       )
-      VALUES ('test-customer', '\\x00'::bytea, 'test-client', '\\x00'::bytea, '\\x00'::bytea, 'active')
+      VALUES (
+        'test-customer',
+        '\\x00'::bytea,
+        'test-client',
+        '\\x00'::bytea,
+        '\\x00'::bytea,
+        octet_length(convert_to('{}', 'utf8')),
+        'active'
+      )
       RETURNING id
     `,
 	);
