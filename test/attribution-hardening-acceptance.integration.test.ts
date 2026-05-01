@@ -305,6 +305,7 @@ test("hard-to-lose acceptance preserves canonical capture, session id, and Shopi
           landing_session_id,
           source_name,
           raw_payload,
+          payload_size_bytes,
           ingested_at
         )
         VALUES (
@@ -316,6 +317,7 @@ test("hard-to-lose acceptance preserves canonical capture, session id, and Shopi
           $1::uuid,
           'web',
           $2::jsonb,
+          octet_length(convert_to($2::text, 'utf8')),
           now()
         )
       `,

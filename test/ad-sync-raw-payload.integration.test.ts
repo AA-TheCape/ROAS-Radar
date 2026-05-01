@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import test from "node:test";
 
 process.env.DATABASE_URL ??=
@@ -99,17 +98,13 @@ function buildMetaInsightFixture(
 }
 
 function buildMetaMalformedAdInsightFixture() {
-	const row = {
+	return {
 		...buildMetaInsightFixture("ad"),
 		ad_name: "Missing Entity Id Ad",
 		malformed_debug: {
 			kept: true,
 		},
 	};
-
-	(row as { ad_id?: string }).ad_id = undefined;
-
-	return row;
 }
 
 function buildGoogleCustomerFixture() {
@@ -158,7 +153,7 @@ function buildGoogleCampaignFixture() {
 }
 
 function buildGoogleMalformedCampaignFixture() {
-	const row = {
+	return {
 		...buildGoogleCampaignFixture(),
 		campaign: {
 			name: "Missing Campaign Id",
@@ -167,10 +162,6 @@ function buildGoogleMalformedCampaignFixture() {
 			kept: true,
 		},
 	};
-
-	(row.campaign as { id?: string }).id = undefined;
-
-	return row;
 }
 
 function buildGoogleAdFixture() {
@@ -212,7 +203,7 @@ function buildGoogleAdFixture() {
 }
 
 function buildGoogleMalformedAdFixture() {
-	const row = {
+	return {
 		...buildGoogleAdFixture(),
 		adGroupAd: {
 			ad: {
@@ -224,10 +215,6 @@ function buildGoogleMalformedAdFixture() {
 			kept: true,
 		},
 	};
-
-	(row.adGroupAd.ad as { id?: string }).id = undefined;
-
-	return row;
 }
 
 async function loadMetaRawPersistence() {
@@ -369,16 +356,14 @@ async function seedMetaSyncJob(): Promise<void> {
         'meta_ads_account',
         now(),
         '123456789',
-        $4,
-        $5
+        octet_length(convert_to($3::text, 'utf8')),
+        encode(digest($3::text, 'sha256'), 'hex')
       )
     `,
 		[
 			"meta-access-token",
 			process.env.META_ADS_ENCRYPTION_KEY,
 			rawAccountJson,
-			Buffer.byteLength(rawAccountJson, "utf8"),
-			createHash("sha256").update(rawAccountJson).digest("hex"),
 		],
 	);
 
@@ -442,8 +427,8 @@ async function seedGoogleSyncJob(): Promise<void> {
         'google_ads_customer',
         now(),
         '1234567890',
-        $7,
-        $8
+        octet_length(convert_to($6::text, 'utf8')),
+        encode(digest($6::text, 'sha256'), 'hex')
       )
     `,
 		[
@@ -453,8 +438,6 @@ async function seedGoogleSyncJob(): Promise<void> {
 			process.env.GOOGLE_ADS_ENCRYPTION_KEY,
 			"google-refresh-token",
 			rawCustomerJson,
-			Buffer.byteLength(rawCustomerJson, "utf8"),
-			createHash("sha256").update(rawCustomerJson).digest("hex"),
 		],
 	);
 

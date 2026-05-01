@@ -172,6 +172,7 @@ test("request-context bootstrap fallback preserves attributable revenue when the
           landing_session_id,
           source_name,
           raw_payload,
+          payload_size_bytes,
           ingested_at
         )
         VALUES (
@@ -183,6 +184,7 @@ test("request-context bootstrap fallback preserves attributable revenue when the
           $3::uuid,
           'web',
           $4::jsonb,
+          octet_length(convert_to($4::text, 'utf8')),
           now()
         )
       `,

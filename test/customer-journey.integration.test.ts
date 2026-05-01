@@ -93,7 +93,7 @@ test("customer_journey refreshes incrementally and preserves reproducible canoni
           'cpc',
           'spring',
           'co-1',
-          2,
+          octet_length(convert_to('{}', 'utf8')),
           '{}'::jsonb
         )
       `,
@@ -185,7 +185,7 @@ test("customer_journey refreshes incrementally and preserves reproducible canoni
           '2026-04-25T11:00:00.000Z',
           $2::uuid,
           'co-1',
-          2,
+          octet_length(convert_to('{}', 'utf8')),
           'web'
         )
       `,
@@ -280,7 +280,7 @@ test("customer_journey refreshes incrementally and preserves reproducible canoni
           'lifecycle',
           'vip',
           'co-2',
-          2,
+          octet_length(convert_to('{}', 'utf8')),
           '{}'::jsonb
         )
       `,
@@ -346,7 +346,7 @@ test("customer_journey refreshes incrementally and preserves reproducible canoni
           '2026-04-25T13:00:00.000Z',
           $2::uuid,
           'co-2',
-          2,
+          octet_length(convert_to('{}', 'utf8')),
           'web'
         )
       `,
@@ -512,8 +512,8 @@ test("customer_journey materialization only includes sessions and orders inside 
           raw_payload
         )
         VALUES
-          ($1::uuid, 'page_view', '2026-03-26T12:01:00.000Z', 2, '{}'::jsonb),
-          ($2::uuid, 'page_view', '2026-03-26T12:01:00.000Z', 2, '{}'::jsonb)
+          ($1::uuid, 'page_view', '2026-03-26T12:01:00.000Z', octet_length(convert_to('{}', 'utf8')), '{}'::jsonb),
+          ($2::uuid, 'page_view', '2026-03-26T12:01:00.000Z', octet_length(convert_to('{}', 'utf8')), '{}'::jsonb)
       `,
 			[boundarySessionId, outsideSessionId],
 		);
@@ -533,8 +533,8 @@ test("customer_journey materialization only includes sessions and orders inside 
           source_name
         )
         VALUES
-          ('journey-window-order-in', '2001', 'USD', 10.00, 10.00, '2026-04-25T12:00:00.000Z', $1::uuid, $3::uuid, 2, 'web'),
-          ('journey-window-order-out', '2002', 'USD', 20.00, 20.00, '2026-03-26T11:59:59.000Z', $2::uuid, $3::uuid, 2, 'web')
+          ('journey-window-order-in', '2001', 'USD', 10.00, 10.00, '2026-04-25T12:00:00.000Z', $1::uuid, $3::uuid, octet_length(convert_to('{}', 'utf8')), 'web'),
+          ('journey-window-order-out', '2002', 'USD', 20.00, 20.00, '2026-03-26T11:59:59.000Z', $2::uuid, $3::uuid, octet_length(convert_to('{}', 'utf8')), 'web')
       `,
 			[boundarySessionId, outsideSessionId, journeyId],
 		);

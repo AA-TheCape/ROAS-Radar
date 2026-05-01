@@ -106,6 +106,7 @@ async function insertRecoverableOrder(
         gbraid,
         wbraid,
         shopify_checkout_token,
+        payload_size_bytes,
         raw_payload
       )
       VALUES (
@@ -123,6 +124,7 @@ async function insertRecoverableOrder(
         'GBRAID-123',
         'WBRAID-123',
         $2,
+        octet_length(convert_to('{}', 'utf8')),
         '{}'::jsonb
       )
     `,
@@ -185,6 +187,7 @@ async function insertRecoverableOrder(
         gclid,
         gbraid,
         wbraid,
+        payload_size_bytes,
         raw_payload
       )
       VALUES (
@@ -203,6 +206,7 @@ async function insertRecoverableOrder(
         'GCLID-123',
         'GBRAID-123',
         'WBRAID-123',
+        octet_length(convert_to('{}', 'utf8')),
         '{}'::jsonb
       )
     `,
@@ -220,6 +224,7 @@ async function insertRecoverableOrder(
         checkout_token,
         source_name,
         raw_payload,
+        payload_size_bytes,
         ingested_at
       )
       VALUES (
@@ -231,6 +236,7 @@ async function insertRecoverableOrder(
         $3,
         'web',
         $4::jsonb,
+        octet_length(convert_to($4::text, 'utf8')),
         now()
       )
     `,

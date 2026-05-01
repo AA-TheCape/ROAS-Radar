@@ -248,6 +248,7 @@ async function insertShopifyOrder(
         landing_session_id,
         processed_at,
         raw_payload,
+        payload_size_bytes,
         ingested_at
       )
       VALUES (
@@ -258,6 +259,7 @@ async function insertShopifyOrder(
         $2::uuid,
         '2026-04-22T12:00:00.000Z',
         '{}'::jsonb,
+        octet_length(convert_to('{}', 'utf8')),
         now()
       )
     `,

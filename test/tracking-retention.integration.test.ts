@@ -124,7 +124,7 @@ async function insertSessionAttributionTouchEvent(input: {
         'cpc',
         'spring-sale',
         '{}'::jsonb,
-        2
+        octet_length(convert_to('{}', 'utf8'))
       )
     `,
 		[input.sessionId, input.retainedUntil],
@@ -158,7 +158,7 @@ async function insertProtectedOrderLink(
         '2026-03-02T12:00:00.000Z',
         $2::uuid,
         $3::jsonb,
-        73,
+        octet_length(convert_to($3::text, 'utf8')),
         now()
       )
     `,

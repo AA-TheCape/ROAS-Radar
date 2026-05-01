@@ -159,6 +159,7 @@ test("paid capture survives attribution, Shopify writeback, and reporting end to
           landing_session_id,
           source_name,
           raw_payload,
+          payload_size_bytes,
           ingested_at
         )
         VALUES (
@@ -170,6 +171,7 @@ test("paid capture survives attribution, Shopify writeback, and reporting end to
           $1::uuid,
           'web',
           $2::jsonb,
+          octet_length(convert_to($2::text, 'utf8')),
           now()
         )
       `,
@@ -329,6 +331,7 @@ test("GA4-only fallback flows through attribution and reporting with the fallbac
           processed_at,
           source_name,
           raw_payload,
+          payload_size_bytes,
           ingested_at
         )
         VALUES (
@@ -339,6 +342,7 @@ test("GA4-only fallback flows through attribution and reporting with the fallbac
           '2026-04-24T12:15:00.000Z',
           'web',
           $1::jsonb,
+          octet_length(convert_to($1::text, 'utf8')),
           now()
         )
       `,

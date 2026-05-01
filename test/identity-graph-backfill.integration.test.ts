@@ -99,7 +99,7 @@ test("identity graph backfill reconciles processed source rows and materializes 
         'cpc',
         'launch',
         'co-backfill-1',
-        2,
+        octet_length(convert_to('{}', 'utf8')),
         '{}'::jsonb
       )
     `,
@@ -156,7 +156,7 @@ test("identity graph backfill reconciles processed source rows and materializes 
         $2::uuid,
         'co-backfill-1',
         'web',
-        2
+        octet_length(convert_to('{}', 'utf8'))
       )
     `,
 		[orderEmailHash, sessionId],

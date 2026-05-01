@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import test from "node:test";
 
 process.env.DATABASE_URL ??=
@@ -8,10 +7,6 @@ process.env.DATABASE_URL ??=
 import { resetE2EDatabase } from "./e2e-harness.ts";
 
 const EMPTY_JSON_PAYLOAD = "{}";
-const EMPTY_JSON_PAYLOAD_HASH = createHash("sha256")
-	.update(EMPTY_JSON_PAYLOAD)
-	.digest("hex");
-const EMPTY_JSON_PAYLOAD_SIZE = Buffer.byteLength(EMPTY_JSON_PAYLOAD, "utf8");
 
 test.beforeEach(async () => {
 	await resetE2EDatabase();
@@ -81,8 +76,8 @@ test("identity graph ingestion dual-writes canonical ids onto rollout surfaces",
         $2::timestamptz,
         'browser',
         $2::timestamptz,
-        $6,
-        $7
+        octet_length(convert_to($5::text, 'utf8')),
+        encode(digest($5::text, 'sha256'), 'hex')
       )
     `,
 		[
@@ -91,8 +86,6 @@ test("identity graph ingestion dual-writes canonical ids onto rollout surfaces",
 			cartToken,
 			checkoutToken,
 			EMPTY_JSON_PAYLOAD,
-			EMPTY_JSON_PAYLOAD_SIZE,
-			EMPTY_JSON_PAYLOAD_HASH,
 		],
 	);
 
@@ -171,8 +164,8 @@ test("identity graph ingestion dual-writes canonical ids onto rollout surfaces",
         $4::timestamptz,
         'shopify_order',
         $4::timestamptz,
-        $9,
-        $10
+        octet_length(convert_to($8::text, 'utf8')),
+        encode(digest($8::text, 'sha256'), 'hex')
       )
     `,
 		[
@@ -184,8 +177,6 @@ test("identity graph ingestion dual-writes canonical ids onto rollout surfaces",
 			checkoutToken,
 			cartToken,
 			EMPTY_JSON_PAYLOAD,
-			EMPTY_JSON_PAYLOAD_SIZE,
-			EMPTY_JSON_PAYLOAD_HASH,
 		],
 	);
 
@@ -346,15 +337,13 @@ test("identity graph dual-write keeps attribution fallback compatible during rol
         '2026-04-24T12:00:00.000Z',
         'browser',
         '2026-04-24T12:00:00.000Z',
-        $3,
-        $4
+        octet_length(convert_to($2::text, 'utf8')),
+        encode(digest($2::text, 'sha256'), 'hex')
       )
     `,
 		[
 			sessionId,
 			EMPTY_JSON_PAYLOAD,
-			EMPTY_JSON_PAYLOAD_SIZE,
-			EMPTY_JSON_PAYLOAD_HASH,
 		],
 	);
 
@@ -391,8 +380,8 @@ test("identity graph dual-write keeps attribution fallback compatible during rol
         '2026-04-24T12:15:00.000Z',
         'shopify_order',
         '2026-04-24T12:15:00.000Z',
-        $5,
-        $6
+        octet_length(convert_to($4::text, 'utf8')),
+        encode(digest($4::text, 'sha256'), 'hex')
       )
     `,
 		[
@@ -400,8 +389,6 @@ test("identity graph dual-write keeps attribution fallback compatible during rol
 			shopifyCustomerId,
 			emailHash,
 			EMPTY_JSON_PAYLOAD,
-			EMPTY_JSON_PAYLOAD_SIZE,
-			EMPTY_JSON_PAYLOAD_HASH,
 		],
 	);
 

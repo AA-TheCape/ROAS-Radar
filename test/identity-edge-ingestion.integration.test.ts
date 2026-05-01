@@ -738,7 +738,7 @@ test("shared hashed emails across authoritative Shopify customers are quarantine
           '2026-04-22T09:00:00.000Z',
           '2026-04-22T09:00:00.000Z',
           '2026-04-22T09:00:00.000Z',
-          2,
+          octet_length(convert_to('{}', 'utf8')),
           'web'
         ),
         (
@@ -752,7 +752,7 @@ test("shared hashed emails across authoritative Shopify customers are quarantine
           '2026-04-22T10:00:00.000Z',
           '2026-04-22T10:00:00.000Z',
           '2026-04-22T10:00:00.000Z',
-          2,
+          octet_length(convert_to('{}', 'utf8')),
           'web'
         ),
         (
@@ -766,7 +766,7 @@ test("shared hashed emails across authoritative Shopify customers are quarantine
           '2026-04-22T11:00:00.000Z',
           '2026-04-22T11:00:00.000Z',
           '2026-04-22T11:00:00.000Z',
-          2,
+          octet_length(convert_to('{}', 'utf8')),
           'web'
         ),
         (
@@ -780,7 +780,7 @@ test("shared hashed emails across authoritative Shopify customers are quarantine
           '2026-04-22T12:00:00.000Z',
           '2026-04-22T12:00:00.000Z',
           '2026-04-22T12:00:00.000Z',
-          2,
+          octet_length(convert_to('{}', 'utf8')),
           'web'
         )
     `,
