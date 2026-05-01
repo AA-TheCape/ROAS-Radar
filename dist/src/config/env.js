@@ -97,6 +97,7 @@ const parsers = {
     K_JOB_EXECUTION: (name) => parseString(name, ''),
     K_SERVICE: (name) => parseString(name, ''),
     META_ADS_AD_ACCOUNT_ID: (name) => parseString(name, ''),
+    META_ADS_API_VERSION: (name) => parseString(name, 'v25.0'),
     META_ADS_APP_BASE_URL: (name) => parseString(name, ''),
     META_ADS_APP_ID: (name) => parseString(name, ''),
     META_ADS_APP_SCOPES: (name) => parseStringList(name, []),

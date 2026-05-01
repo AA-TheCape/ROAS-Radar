@@ -9,7 +9,7 @@ import { query, withTransaction } from '../../db/pool.js';
 import { logError, logInfo, logWarning } from '../../observability/index.js';
 import { buildSearchParamsAuditPayload, parseJsonResponsePayload, recordAdSyncApiTransaction } from '../ad-sync-audit/index.js';
 
-const META_GRAPH_API_BASE_URL = 'https://graph.facebook.com/v99.0';
+const META_GRAPH_API_BASE_URL = 'https://graph.facebook.com';
 const META_ORDER_VALUE_ACTION_REPORT_TIME = 'conversion';
 const META_ORDER_VALUE_USE_ACCOUNT_ATTRIBUTION_SETTING = true;
 const META_ORDER_VALUE_REQUEST_FIELDS = [
@@ -332,7 +332,9 @@ function normalizeAdAccountId(adAccountId: string): string {
 }
 
 function buildMetaInsightsUrl(adAccountId: string, syncDate: string): URL {
-  const url = new URL(`${META_GRAPH_API_BASE_URL}/act_${normalizeAdAccountId(adAccountId)}/insights`);
+  const url = new URL(
+    `${META_GRAPH_API_BASE_URL}/${env.META_ADS_API_VERSION}/act_${normalizeAdAccountId(adAccountId)}/insights`
+  );
   url.searchParams.set('level', 'campaign');
   url.searchParams.set('time_increment', '1');
   url.searchParams.set('fields', META_ORDER_VALUE_REQUEST_FIELDS.join(','));
