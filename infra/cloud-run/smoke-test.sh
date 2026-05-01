@@ -67,44 +67,54 @@ validate_meta_order_value_response() {
   RESPONSE_START_DATE="$2"
   RESPONSE_END_DATE="$3"
 
-  node -e '
-const fs = require("node:fs");
+  python3 - "$RESPONSE_FILE" "$RESPONSE_START_DATE" "$RESPONSE_END_DATE" <<'PY'
+import json
+import sys
 
-const [responseFile, expectedStartDate, expectedEndDate] = process.argv.slice(1);
-const payload = JSON.parse(fs.readFileSync(responseFile, "utf8"));
+response_file, expected_start_date, expected_end_date = sys.argv[1:4]
 
-if (!payload || typeof payload !== "object") {
-  throw new Error("response body must be a JSON object");
-}
+with open(response_file, encoding="utf-8") as handle:
+    payload = json.load(handle)
 
-if (!payload.scope || !Number.isInteger(payload.scope.organizationId) || payload.scope.organizationId <= 0) {
-  throw new Error("response scope.organizationId must be a positive integer");
-}
+if not isinstance(payload, dict):
+    raise SystemExit("response body must be a JSON object")
 
-if (!payload.range || payload.range.startDate !== expectedStartDate || payload.range.endDate !== expectedEndDate) {
-  throw new Error("response range does not match smoke-test query");
-}
+scope = payload.get("scope")
+if (
+    not isinstance(scope, dict)
+    or not isinstance(scope.get("organizationId"), int)
+    or scope["organizationId"] <= 0
+):
+    raise SystemExit("response scope.organizationId must be a positive integer")
 
-if (!payload.pagination || !Number.isInteger(payload.pagination.limit) || !Number.isInteger(payload.pagination.offset)) {
-  throw new Error("response pagination is missing required integers");
-}
+date_range = payload.get("range")
+if (
+    not isinstance(date_range, dict)
+    or date_range.get("startDate") != expected_start_date
+    or date_range.get("endDate") != expected_end_date
+):
+    raise SystemExit("response range does not match smoke-test query")
 
-if (!payload.totals || typeof payload.totals !== "object") {
-  throw new Error("response totals object is required");
-}
+pagination = payload.get("pagination")
+if (
+    not isinstance(pagination, dict)
+    or not isinstance(pagination.get("limit"), int)
+    or not isinstance(pagination.get("offset"), int)
+):
+    raise SystemExit("response pagination is missing required integers")
 
-if (!Array.isArray(payload.rows)) {
-  throw new Error("response rows must be an array");
-}
+totals = payload.get("totals")
+if not isinstance(totals, dict):
+    raise SystemExit("response totals object is required")
 
-for (const key of ["attributedRevenue", "purchaseCount", "spend", "roas"]) {
-  const value = payload.totals[key];
+if not isinstance(payload.get("rows"), list):
+    raise SystemExit("response rows must be an array")
 
-  if (value !== null && typeof value !== "number") {
-    throw new Error(`response totals.${key} must be numeric or null`);
-  }
-}
-' "$RESPONSE_FILE" "$RESPONSE_START_DATE" "$RESPONSE_END_DATE"
+for key in ("attributedRevenue", "purchaseCount", "spend", "roas"):
+    value = totals.get(key)
+    if value is not None and not isinstance(value, (int, float)):
+        raise SystemExit(f"response totals.{key} must be numeric or null")
+PY
 }
 
 echo "Smoke testing API health for $ENVIRONMENT"
