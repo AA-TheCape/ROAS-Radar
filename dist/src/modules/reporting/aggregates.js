@@ -52,6 +52,7 @@ export async function refreshDailyReportingMetrics(client, metricDates) {
             ORDER BY COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) ASC, o.shopify_order_id ASC
           ) AS customer_order_rank
         FROM shopify_orders o
+        WHERE COALESCE(o.source_name, '') = 'web'
       ),
       attributed_order_rows AS (
         SELECT
@@ -77,7 +78,8 @@ export async function refreshDailyReportingMetrics(client, metricDates) {
           ON o.shopify_order_id = c.shopify_order_id
         INNER JOIN order_customer_rankings r
           ON r.shopify_order_id = o.shopify_order_id
-        WHERE DATE(timezone($2::text, COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at))) = ANY($1::date[])
+        WHERE COALESCE(o.source_name, '') = 'web'
+          AND DATE(timezone($2::text, COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at))) = ANY($1::date[])
         GROUP BY 1, 2, 3, 4, 5, 6, 7
       ),
       spend_source_rows AS (

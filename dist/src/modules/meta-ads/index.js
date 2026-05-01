@@ -5,6 +5,7 @@ import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
 import { logError, logInfo, logWarning } from '../../observability/index.js';
 import { buildSearchParamsAuditPayload, parseJsonResponsePayload, recordAdSyncApiTransaction } from '../ad-sync-audit/index.js';
+import { createMetaAttributionEvidenceAdminRouter } from './order-attribution-evidence.js';
 const META_GRAPH_API_BASE_URL = 'https://graph.facebook.com/v99.0';
 const META_ORDER_VALUE_ACTION_REPORT_TIME = 'conversion';
 const META_ORDER_VALUE_USE_ACCOUNT_ATTRIBUTION_SETTING = true;
@@ -1126,6 +1127,7 @@ export function createMetaAdsAdminRouter() {
     router.get('/healthz', (_req, res) => {
         res.status(200).json({ ok: true });
     });
+    router.use(createMetaAttributionEvidenceAdminRouter());
     return router;
 }
 export const __metaAdsTestUtils = {
