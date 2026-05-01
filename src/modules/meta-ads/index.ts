@@ -113,6 +113,8 @@ type MetaAdsConnectionSecretRow = {
   account_currency: string | null;
 };
 
+type MetaAdsQueryable = Pick<PoolClient, 'query'>;
+
 type PersistedMetaAdsRawOrderValueRow = {
   id: number;
   payload: MetaAdsOrderValueApiRow;
@@ -611,8 +613,10 @@ async function createSyncRun(params: {
   connectionId: number;
   triggerSource: string;
   syncDate: string;
+  client?: MetaAdsQueryable;
 }): Promise<number> {
-  const result = await query<{ id: number }>(
+  const executor = params.client ?? poolQueryExecutor;
+  const result = await executor.query<{ id: number }>(
     `
       INSERT INTO meta_ads_order_value_sync_runs (
         connection_id,
@@ -658,8 +662,10 @@ async function markSyncRunCompleted(params: {
   recordsReceived: number;
   rawRowsPersisted: number;
   aggregateRowsUpserted: number;
+  client?: MetaAdsQueryable;
 }): Promise<void> {
-  await query(
+  const executor = params.client ?? poolQueryExecutor;
+  await executor.query(
     `
       UPDATE meta_ads_order_value_sync_runs
       SET
@@ -678,19 +684,7 @@ async function markSyncRunCompleted(params: {
 }
 
 async function markSyncRunFailed(runId: number, error: unknown): Promise<void> {
-  await query(
-    `
-      UPDATE meta_ads_order_value_sync_runs
-      SET
-        status = 'failed',
-        completed_at = now(),
-        error_count = 1,
-        error_details = $2::jsonb,
-        updated_at = now()
-      WHERE id = $1
-    `,
-    [runId, JSON.stringify([serializeErrorDetails(error)])]
-  );
+  await markSyncRunFailedWithClient(runId, error, poolQueryExecutor);
 }
 
 async function enqueueSyncJobsForWindow(now: Date): Promise<number> {
@@ -821,7 +815,7 @@ async function getConnectionSecret(connectionId: number): Promise<MetaAdsConnect
 }
 
 async function updateConnectionSyncStarted(connectionId: number): Promise<void> {
-  await query(
+  await poolQueryExecutor.query(
     `
       UPDATE meta_ads_connections
       SET
@@ -835,8 +829,10 @@ async function updateConnectionSyncStarted(connectionId: number): Promise<void> 
   );
 }
 
-async function markSyncJobSucceeded(jobId: number, connectionId: number): Promise<void> {
-  await query(
+async function markSyncJobSucceeded(jobId: number, connectionId: number, client?: MetaAdsQueryable): Promise<void> {
+  const executor = client ?? poolQueryExecutor;
+
+  await executor.query(
     `
       UPDATE meta_ads_sync_jobs
       SET
@@ -851,7 +847,7 @@ async function markSyncJobSucceeded(jobId: number, connectionId: number): Promis
     [jobId]
   );
 
-  await query(
+  await executor.query(
     `
       UPDATE meta_ads_connections
       SET
@@ -865,7 +861,11 @@ async function markSyncJobSucceeded(jobId: number, connectionId: number): Promis
   );
 }
 
-async function markSyncJobFailed(job: MetaAdsConnectionSyncJobRow, error: unknown): Promise<void> {
+async function markSyncJobFailed(
+  job: MetaAdsConnectionSyncJobRow,
+  error: unknown,
+  client?: MetaAdsQueryable
+): Promise<void> {
   const message = error instanceof Error ? error.message : String(error);
   const retryDelaySeconds = Math.min(300, Math.max(15, job.attempts * 30));
   const shouldRetry =
@@ -873,7 +873,9 @@ async function markSyncJobFailed(job: MetaAdsConnectionSyncJobRow, error: unknow
     job.attempts < META_ADS_SYNC_MAX_RETRIES;
   const nextStatus = shouldRetry ? 'retry' : 'failed';
 
-  await query(
+  const executor = client ?? poolQueryExecutor;
+
+  await executor.query(
     `
       UPDATE meta_ads_sync_jobs
       SET
@@ -892,7 +894,7 @@ async function markSyncJobFailed(job: MetaAdsConnectionSyncJobRow, error: unknow
     [job.id, nextStatus, retryDelaySeconds, message]
   );
 
-  await query(
+  await executor.query(
     `
       UPDATE meta_ads_connections
       SET
@@ -1235,13 +1237,9 @@ async function processSyncJob(job: MetaAdsConnectionSyncJobRow, triggerSource: s
 }> {
   await updateConnectionSyncStarted(job.connection_id);
   const connection = await getConnectionSecret(job.connection_id);
-  const runId = await createSyncRun({
-    connectionId: job.connection_id,
-    triggerSource,
-    syncDate: job.sync_date
-  });
   const apiMetrics = buildMetaAdsApiRequestMetricsAccumulator();
   const sourceSyncedAt = new Date();
+  let runId: number | null = null;
 
   try {
     const rawRows = await fetchAllOrderValueRows({
@@ -1252,10 +1250,17 @@ async function processSyncJob(job: MetaAdsConnectionSyncJobRow, triggerSource: s
     });
     const baseline = await loadOrderValueBaseline(job.connection_id, job.sync_date);
 
-    const { persistedRows, normalizedRows } = await withTransaction(async (client) => {
+    const { persistedRows, normalizedRows, persistedRunId } = await withTransaction(async (client) => {
+      const createdRunId = await createSyncRun({
+        connectionId: job.connection_id,
+        triggerSource,
+        syncDate: job.sync_date,
+        client
+      });
+
       const persisted = await persistRawOrderValueRows(client, {
         connectionId: job.connection_id,
-        syncRunId: runId,
+        syncRunId: createdRunId,
         syncJobId: job.id,
         rows: rawRows
       });
@@ -1273,11 +1278,22 @@ async function processSyncJob(job: MetaAdsConnectionSyncJobRow, triggerSource: s
         sourceSyncedAt
       });
 
+      await markSyncRunCompleted({
+        runId: createdRunId,
+        recordsReceived: normalized.length,
+        rawRowsPersisted: persisted.length,
+        aggregateRowsUpserted: normalized.length,
+        client
+      });
+      await markSyncJobSucceeded(job.id, job.connection_id, client);
+
       return {
         persistedRows: persisted,
-        normalizedRows: normalized
+        normalizedRows: normalized,
+        persistedRunId: createdRunId
       };
     });
+    runId = persistedRunId;
 
     const summary = summarizeOrderValueRecords(normalizedRows);
     const anomalies = buildOrderValueSyncAnomalies({
@@ -1286,14 +1302,6 @@ async function processSyncJob(job: MetaAdsConnectionSyncJobRow, triggerSource: s
       summary,
       baseline
     });
-
-    await markSyncRunCompleted({
-      runId,
-      recordsReceived: summary.totalRows,
-      rawRowsPersisted: persistedRows.length,
-      aggregateRowsUpserted: normalizedRows.length
-    });
-    await markSyncJobSucceeded(job.id, job.connection_id);
 
     logInfo('meta_ads_order_value_sync_connection_completed', {
       service: process.env.K_SERVICE ?? 'roas-radar',
@@ -1346,8 +1354,22 @@ async function processSyncJob(job: MetaAdsConnectionSyncJobRow, triggerSource: s
       anomalyCount: anomalies.length
     };
   } catch (error) {
-    await markSyncRunFailed(runId, error);
-    await markSyncJobFailed(job, error);
+    runId = await withTransaction(async (client) => {
+      const failedRunId =
+        runId ??
+        (await createSyncRun({
+          connectionId: job.connection_id,
+          triggerSource,
+          syncDate: job.sync_date,
+          client
+        }));
+
+      await markSyncRunFailedWithClient(failedRunId, error, client);
+      await markSyncJobFailed(job, error, client);
+
+      return failedRunId;
+    });
+
     logError('meta_ads_order_value_sync_connection_failed', error, {
       service: process.env.K_SERVICE ?? 'roas-radar',
       runId,
@@ -1370,6 +1392,26 @@ async function processSyncJob(job: MetaAdsConnectionSyncJobRow, triggerSource: s
       anomalyCount: 0
     };
   }
+}
+
+const poolQueryExecutor: MetaAdsQueryable = {
+  query: (text, params) => query(text, params)
+};
+
+async function markSyncRunFailedWithClient(runId: number, error: unknown, client: MetaAdsQueryable): Promise<void> {
+  await client.query(
+    `
+      UPDATE meta_ads_order_value_sync_runs
+      SET
+        status = 'failed',
+        completed_at = now(),
+        error_count = 1,
+        error_details = $2::jsonb,
+        updated_at = now()
+      WHERE id = $1
+    `,
+    [runId, JSON.stringify([serializeErrorDetails(error)])]
+  );
 }
 
 function buildQueueMetricsLog(result: MetaAdsQueueProcessResult): void {
