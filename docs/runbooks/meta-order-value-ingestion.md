@@ -33,12 +33,12 @@
 2. If API latency or request failures spike, inspect recent `meta_ads_api_request_failed` logs by `transactionSource` and compare with Meta platform status before widening retries.
 3. If zero-row pulls persist for more than two scheduled windows, compare the raw API payload in `meta_ads_order_value_raw_records` and the transaction audit table to confirm whether Meta returned empty data or normalization dropped rows.
 4. If null-canonical spike alerts fire, inspect the raw rows for missing `action_values`, missing `actions`, or changed purchase-like action types before changing the allowed action-type set.
-5. After remediation, trigger a manual `/api/admin/meta-ads/sync` window or rerun the Cloud Run job to repopulate the affected dates.
-6. If the hourly Cloud Scheduler trigger itself is contributing to the incident, pause it with `sh infra/cloud-run/scheduler.sh <environment> meta-ads pause` and verify the job state before re-enabling it.
+5. After remediation, rerun the `roas-radar-meta-order-value-sync-*` Cloud Run job to repopulate the rolling order-value window.
+6. If the hourly Cloud Scheduler trigger itself is contributing to the incident, pause it with `sh infra/cloud-run/scheduler.sh <environment> meta-order-value pause` and verify the job state before re-enabling it.
 
 ## Scheduler Runtime Defaults
 
-- Cloud Scheduler runs hourly via `META_ADS_SYNC_SCHEDULE`.
+- Cloud Scheduler runs hourly via `META_ADS_ORDER_VALUE_SYNC_SCHEDULE`.
 - Cloud Scheduler retries are intentionally disabled by default so duplicate hourly runs do not stack on top of Cloud Run Job retries.
 - Cloud Run Job retries remain enabled with a single retry budget and a 30 minute task timeout.
 - The Meta job service account reads only `DATABASE_URL`, `META_ADS_APP_SECRET`, and `META_ADS_ENCRYPTION_KEY` from Secret Manager.

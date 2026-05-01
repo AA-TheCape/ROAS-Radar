@@ -4,19 +4,21 @@ This directory contains the operational scripts and environment definitions for 
 
 ## Topology
 
-The deployment flow assumes ten deployable workloads plus six Cloud Scheduler triggers:
+The deployment flow assumes eleven deployable workloads plus seven Cloud Scheduler triggers:
 
 - `roas-radar-api`: public Cloud Run service for `/track`, Shopify webhooks, and authenticated reporting APIs.
 - `roas-radar-dashboard`: public Cloud Run service for the React reporting dashboard.
 - `roas-radar-attribution-worker`: internal Cloud Run service for attribution and asynchronous processing.
 - `roas-radar-migrate`: Cloud Run Job that runs `npm run db:migrate:start` with elevated database credentials.
 - `roas-radar-meta-ads-sync`: Cloud Run Job that runs `npm run meta-ads:sync:start` once per invocation.
+- `roas-radar-meta-order-value-sync`: Cloud Run Job that runs `npm run meta-ads:order-value:start` once per invocation.
 - `roas-radar-google-ads-sync`: Cloud Run Job that runs `npm run google-ads:sync:start` once per invocation.
 - `roas-radar-session-retention`: Cloud Run Job that runs `npm run session-attribution:retention:start` to prune expired attribution-session records.
 - `roas-radar-data-quality`: Cloud Run Job that runs `npm run data-quality:check:start` once per invocation.
 - `roas-radar-identity-graph-backfill`: Cloud Run Job that runs `npm run identity:backfill-graph:start` over a recent window to reconcile graph attachments and catch missed identity stitching.
 - `roas-radar-order-attribution-materialization`: Cloud Run Job that runs `npm run attribution:materialization:start` over a recent order window to recover attribution and refresh reporting aggregates.
 - `roas-radar-meta-ads-sync-scheduler`: Cloud Scheduler job that invokes the Meta Ads Cloud Run Job.
+- `roas-radar-meta-order-value-sync-scheduler`: Cloud Scheduler job that invokes the Meta order-value Cloud Run Job.
 - `roas-radar-google-ads-sync-scheduler`: Cloud Scheduler job that invokes the Google Ads Cloud Run Job.
 - `roas-radar-session-retention-scheduler`: Cloud Scheduler job that invokes the session-retention Cloud Run Job.
 - `roas-radar-data-quality-scheduler`: Cloud Scheduler job that invokes the data-quality Cloud Run Job.
@@ -62,8 +64,10 @@ The environment files also carry non-secret runtime settings that must be popula
 - `WORKER_CONCURRENCY`
 - `WORKER_TIMEOUT_SECONDS`
 - `META_ADS_JOB_NAME`
+- `META_ADS_ORDER_VALUE_JOB_NAME`
 - `GOOGLE_ADS_JOB_NAME`
 - `META_ADS_SCHEDULER_JOB_NAME`
+- `META_ADS_ORDER_VALUE_SCHEDULER_JOB_NAME`
 - `GOOGLE_ADS_SCHEDULER_JOB_NAME`
 - `RETENTION_JOB_NAME`
 - `DATA_QUALITY_JOB_NAME`
@@ -83,6 +87,8 @@ The environment files also carry non-secret runtime settings that must be popula
 - `ADS_SYNC_DATABASE_POOL_MAX`
 - `ADS_SYNC_TIME_ZONE`
 - `META_ADS_SYNC_SCHEDULE`
+- `META_ADS_ORDER_VALUE_SYNC_SCHEDULE`
+- `META_ADS_ORDER_VALUE_SCHEDULER_PAUSED`
 - `META_ADS_SCHEDULER_PAUSED`
 - `META_ADS_SCHEDULER_ATTEMPT_DEADLINE`
 - `META_ADS_SCHEDULER_MAX_RETRY_ATTEMPTS`
@@ -177,17 +183,17 @@ The default daily sequence is:
 3. identity graph backfill at `35 3 * * *`
 4. order attribution materialization at `50 3 * * *`
 
-Meta Ads and Google Ads sync remain hourly schedulers. If one scheduled job is unhealthy, pause only that scheduler entry and leave the attribution worker service running because it also drains the live attribution queue.
+Meta Ads, Meta order-value, and Google Ads sync remain hourly schedulers. If one scheduled job is unhealthy, pause only that scheduler entry and leave the attribution worker service running because it also drains the live attribution queue.
 
 For Meta order-value specifically:
 
-- `staging.env` is configured active (`META_ADS_SCHEDULER_PAUSED="false"`) for non-prod validation.
+- `staging.env` is configured active (`META_ADS_ORDER_VALUE_SCHEDULER_PAUSED="false"`) for non-prod validation.
 - `production.env` is configured active after the same deploy path is promoted through staging.
 - `dev.env` is configured paused by default so hourly sync is not running continuously in the sandbox environment.
 - scheduler retries are disabled at the Cloud Scheduler layer (`META_ADS_SCHEDULER_MAX_RETRY_ATTEMPTS="0"`) to avoid duplicate invocations; the Cloud Run Job owns the single retry budget via `META_ADS_JOB_MAX_RETRIES`.
-- the Meta job receives only `DATABASE_URL`, `META_ADS_APP_SECRET`, and `META_ADS_ENCRYPTION_KEY` from Secret Manager, while access tokens remain encrypted in application storage instead of being copied into environment files.
+- the Meta order-value job receives only `DATABASE_URL`, `META_ADS_APP_SECRET`, and `META_ADS_ENCRYPTION_KEY` from Secret Manager, while access tokens remain encrypted in application storage instead of being copied into environment files.
 
-Use `sh infra/cloud-run/scheduler.sh <environment> meta-ads <status|pause|resume>` for an operational toggle without redeploying.
+Use `sh infra/cloud-run/scheduler.sh <environment> meta-order-value <status|pause|resume>` for the order-value operational toggle without redeploying.
 
 ## Large Payload Throughput
 

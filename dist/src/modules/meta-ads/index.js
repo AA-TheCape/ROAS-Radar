@@ -1103,17 +1103,6 @@ export async function runMetaAdsOrderValueSync(options = {}) {
     });
     return result;
 }
-export function startMetaAdsOrderValueScheduler() {
-    if (!env.META_ADS_ORDER_VALUE_SYNC_ENABLED) {
-        return () => undefined;
-    }
-    const timer = setInterval(() => {
-        void runMetaAdsOrderValueSync({ triggerSource: 'scheduler' }).catch(() => undefined);
-    }, env.META_ADS_ORDER_VALUE_SYNC_INTERVAL_MS);
-    return () => {
-        clearInterval(timer);
-    };
-}
 export function createMetaAdsPublicRouter() {
     const router = Router();
     router.get('/healthz', (_req, res) => {
