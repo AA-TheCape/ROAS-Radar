@@ -1,1004 +1,488 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Router } from 'express';
-import { z } from 'zod';
 import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
-import { buildRawPayloadStorageMetadata, logRawPayloadIntegrityMismatch } from '../../shared/raw-payload-storage.js';
-import { logError, logInfo } from '../../observability/index.js';
-import { attachAuthContext, requireAdmin } from '../auth/index.js';
+import { logError, logInfo, logWarning } from '../../observability/index.js';
 import { buildSearchParamsAuditPayload, parseJsonResponsePayload, recordAdSyncApiTransaction } from '../ad-sync-audit/index.js';
-import { buildCanonicalSpendDimensions } from '../marketing-dimensions/index.js';
-import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
-const META_OAUTH_STATE_TTL_MINUTES = 10;
-const META_GRAPH_BASE_URL = 'https://graph.facebook.com';
-const META_SYNC_JOB_STATUSES = ['pending', 'processing', 'retry', 'completed', 'failed'];
-const META_SPEND_LEVELS = ['account', 'campaign', 'adset', 'ad'];
-const META_SPEND_GRANULARITIES = ['account', 'campaign', 'adset', 'ad', 'creative'];
-const META_ACTION_REPORT_TIMES = ['conversion', 'impression', 'mixed'];
-const META_ADS_SYNC_TIME_ZONE = 'America/Los_Angeles';
-const META_PURCHASE_ACTION_TYPE_PRIORITY = ['purchase', 'omni_purchase', 'offsite_conversion.fb_pixel_purchase'];
-const metaAdsActionMetricSchema = z
-    .object({
-    action_type: z.string().optional(),
-    value: z.union([z.string(), z.number()]).optional()
-})
-    .passthrough();
-const metaAdsRevenueInsightRowSchema = z
-    .object({
-    date_start: z.string().optional(),
-    date_stop: z.string().optional(),
-    campaign_id: z.string().optional(),
-    campaign_name: z.string().optional(),
-    spend: z.string().optional(),
-    actions: z.array(metaAdsActionMetricSchema).optional(),
-    action_values: z.array(metaAdsActionMetricSchema).optional(),
-    purchase_roas: z.array(metaAdsActionMetricSchema).optional(),
-    action_type: z.string().optional()
-})
-    .passthrough();
-const metaAdsRevenueInsightsPageSchema = z
-    .object({
-    data: z.array(metaAdsRevenueInsightRowSchema).optional(),
-    paging: z
-        .object({
-        next: z.string().optional()
-    })
-        .optional()
-})
-    .passthrough();
-const oauthStartQuerySchema = z.object({
-    redirectPath: z.string().optional()
-});
-const metaAdsConfigUpdateSchema = z.object({
-    appId: z.string().min(1),
-    appSecret: z.string().optional(),
-    appBaseUrl: z.string().url(),
-    appScopes: z.union([z.string(), z.array(z.string())]).optional(),
-    adAccountId: z.string().min(1)
-});
-const manualSyncSchema = z.object({
-    startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
-});
-const oauthCallbackSchema = z.object({
-    code: z.string().min(1).optional(),
-    state: z.string().min(1).optional(),
-    error: z.string().optional(),
-    error_description: z.string().optional()
-});
-class MetaAdsHttpError extends Error {
-    statusCode;
-    code;
-    details;
-    constructor(statusCode, code, message, details) {
-        super(message);
-        this.name = 'MetaAdsHttpError';
-        this.statusCode = statusCode;
-        this.code = code;
-        this.details = details;
-    }
-}
+const META_GRAPH_API_BASE_URL = 'https://graph.facebook.com/v99.0';
+const META_ORDER_VALUE_ACTION_REPORT_TIME = 'conversion';
+const META_ORDER_VALUE_USE_ACCOUNT_ATTRIBUTION_SETTING = true;
+const META_ORDER_VALUE_REQUEST_FIELDS = [
+    'campaign_id',
+    'campaign_name',
+    'date_start',
+    'date_stop',
+    'spend',
+    'actions',
+    'action_values',
+    'purchase_roas'
+];
+const META_ORDER_VALUE_PRIMARY_ACTION_TYPES = [
+    'purchase',
+    'omni_purchase',
+    'offsite_conversion.fb_pixel_purchase'
+];
+const META_ADS_SYNC_MAX_RETRIES = 3;
+const META_ADS_RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
 class MetaAdsApiError extends Error {
     statusCode;
     details;
-    constructor(statusCode, message, details = null) {
+    constructor(statusCode, message, details) {
         super(message);
         this.name = 'MetaAdsApiError';
         this.statusCode = statusCode;
         this.details = details;
     }
 }
-function normalizeMetaAdsScopes(rawValue) {
-    if (Array.isArray(rawValue)) {
-        return rawValue.map((entry) => entry.trim()).filter(Boolean);
-    }
-    if (typeof rawValue !== 'string') {
-        return [];
-    }
-    return rawValue
-        .split(',')
-        .map((entry) => entry.trim())
-        .filter(Boolean);
-}
-function normalizeMetaAdAccountId(value) {
-    const normalized = value.trim();
-    const accountId = normalized.startsWith('act_') ? normalized.slice(4) : normalized;
-    if (!/^\d+$/.test(accountId)) {
-        throw new MetaAdsHttpError(400, 'invalid_meta_ad_account_id', 'META_ADS_AD_ACCOUNT_ID must be numeric or act_<id>');
-    }
-    return accountId;
-}
-function normalizeRedirectPath(rawValue) {
-    if (!rawValue) {
+function safeRatio(numerator, denominator) {
+    if (denominator <= 0) {
         return null;
     }
-    const trimmed = rawValue.trim();
-    if (!trimmed) {
-        return null;
-    }
-    if (!trimmed.startsWith('/')) {
-        throw new MetaAdsHttpError(400, 'invalid_redirect_path', 'redirectPath must be a root-relative path');
-    }
-    return trimmed;
+    return Number((numerator / denominator).toFixed(4));
 }
-async function getStoredMetaAdsSettings() {
-    const result = await query(`
-      SELECT
-        id,
-        app_id,
-        pgp_sym_decrypt(app_secret_encrypted, $1) AS app_secret,
-        app_base_url,
-        app_scopes,
-        ad_account_id,
-        updated_at
-      FROM meta_ads_settings
-      ORDER BY updated_at DESC
-      LIMIT 1
-    `, [env.META_ADS_ENCRYPTION_KEY]);
-    return result.rows[0] ?? null;
-}
-async function getResolvedMetaAdsConfig() {
-    if (!env.META_ADS_ENCRYPTION_KEY) {
-        throw new MetaAdsHttpError(500, 'meta_ads_config_missing', 'Missing Meta Ads configuration: META_ADS_ENCRYPTION_KEY');
-    }
-    const stored = await getStoredMetaAdsSettings();
-    const appId = stored?.app_id?.trim() || env.META_ADS_APP_ID.trim();
-    const appSecret = stored?.app_secret?.trim() || env.META_ADS_APP_SECRET.trim();
-    const appBaseUrl = (stored?.app_base_url?.trim() || env.META_ADS_APP_BASE_URL.trim()).replace(/\/$/, '');
-    const appScopes = (stored?.app_scopes?.length ? stored.app_scopes : env.META_ADS_APP_SCOPES).map((entry) => entry.trim()).filter(Boolean);
-    const adAccountId = stored?.ad_account_id?.trim() || env.META_ADS_AD_ACCOUNT_ID.trim();
-    const missing = [
-        ['META_ADS_APP_ID', appId],
-        ['META_ADS_APP_SECRET', appSecret],
-        ['META_ADS_APP_BASE_URL', appBaseUrl],
-        ['META_ADS_AD_ACCOUNT_ID', adAccountId]
-    ]
-        .filter(([, value]) => !value)
-        .map(([key]) => key);
-    if (missing.length > 0) {
-        throw new MetaAdsHttpError(500, 'meta_ads_config_missing', `Missing Meta Ads configuration: ${missing.join(', ')}`);
-    }
+function buildMetaAdsApiRequestMetricsAccumulator() {
     return {
-        appId,
-        appSecret,
-        appBaseUrl,
-        appScopes,
-        adAccountId,
-        encryptionKey: env.META_ADS_ENCRYPTION_KEY,
-        source: stored ? 'database' : 'environment'
+        requestCount: 0,
+        errorCount: 0,
+        retryCount: 0,
+        latencyMsTotal: 0,
+        latencyMsMax: 0
     };
 }
-async function getMetaAdsConfigurationSummary() {
-    const stored = env.META_ADS_ENCRYPTION_KEY ? await getStoredMetaAdsSettings() : null;
-    const appId = stored?.app_id?.trim() || env.META_ADS_APP_ID.trim();
-    const appSecretConfigured = Boolean(stored?.app_secret?.trim() || env.META_ADS_APP_SECRET.trim());
-    const appBaseUrl = (stored?.app_base_url?.trim() || env.META_ADS_APP_BASE_URL.trim()).replace(/\/$/, '');
-    const appScopes = (stored?.app_scopes?.length ? stored.app_scopes : env.META_ADS_APP_SCOPES).map((entry) => entry.trim()).filter(Boolean);
-    const adAccountId = stored?.ad_account_id?.trim() || env.META_ADS_AD_ACCOUNT_ID.trim();
-    const missingFields = [
-        ['appId', appId],
-        ['appSecret', appSecretConfigured ? 'configured' : ''],
-        ['appBaseUrl', appBaseUrl],
-        ['adAccountId', adAccountId],
-        ['encryptionKey', env.META_ADS_ENCRYPTION_KEY]
-    ]
-        .filter(([, value]) => !value)
-        .map(([key]) => key);
-    return {
-        source: stored ? 'database' : 'environment',
-        appId,
-        appBaseUrl,
-        appScopes,
-        adAccountId,
-        appSecretConfigured,
-        missingFields
-    };
+function summarizeOrderValueRecords(records) {
+    return records.reduce((summary, record) => {
+        summary.totalRows += 1;
+        if (record.attributedRevenue === null) {
+            summary.nullAttributedRevenueCount += 1;
+        }
+        if (record.purchaseCount === null) {
+            summary.nullPurchaseCountCount += 1;
+        }
+        if (record.actionTypeUsed === null) {
+            summary.nullActionTypeCount += 1;
+        }
+        if (record.canonicalSelectionMode === 'fallback') {
+            summary.fallbackSelectionCount += 1;
+        }
+        else if (record.canonicalSelectionMode === 'priority') {
+            summary.prioritySelectionCount += 1;
+        }
+        else {
+            summary.noSelectionCount += 1;
+        }
+        return summary;
+    }, {
+        totalRows: 0,
+        nullAttributedRevenueCount: 0,
+        nullPurchaseCountCount: 0,
+        nullActionTypeCount: 0,
+        fallbackSelectionCount: 0,
+        prioritySelectionCount: 0,
+        noSelectionCount: 0
+    });
 }
-async function upsertMetaAdsSettings(payload) {
-    if (!env.META_ADS_ENCRYPTION_KEY) {
-        throw new MetaAdsHttpError(500, 'meta_ads_config_missing', 'Missing Meta Ads configuration: META_ADS_ENCRYPTION_KEY');
+function buildOrderValueSyncAnomalies(input) {
+    const anomalies = [];
+    if (input.rawRowsFetched === 0 || input.summary.totalRows === 0) {
+        anomalies.push({
+            type: 'zero_rows_pulled',
+            severity: 'warning',
+            summary: 'Meta order value sync completed with zero upstream rows or zero normalized records.',
+            details: {
+                rawRowsFetched: input.rawRowsFetched,
+                normalizedRecords: input.summary.totalRows
+            }
+        });
     }
-    const secretProvided = typeof payload.appSecret === 'string' && payload.appSecret.trim().length > 0;
-    const normalizedScopes = normalizeMetaAdsScopes(payload.appScopes);
-    const existing = await getStoredMetaAdsSettings();
-    const nextSecret = secretProvided ? (payload.appSecret ?? '').trim() : existing?.app_secret ?? '';
-    await query(`
-      DELETE FROM meta_ads_settings
-    `);
-    await query(`
-      INSERT INTO meta_ads_settings (
-        id,
-        app_id,
-        app_secret_encrypted,
-        app_base_url,
-        app_scopes,
-        ad_account_id,
-        updated_at
-      )
-      VALUES (
-        1,
-        $1,
-        CASE
-          WHEN $2::text = '' THEN NULL
-          ELSE pgp_sym_encrypt($2, $6, 'cipher-algo=aes256, compress-algo=0')
-        END,
-        $3,
-        $4::text[],
-        $5,
-        now()
-      )
-    `, [
-        payload.appId.trim(),
-        nextSecret,
-        new URL(payload.appBaseUrl).toString().replace(/\/$/, ''),
-        normalizedScopes,
-        payload.adAccountId.trim(),
-        env.META_ADS_ENCRYPTION_KEY
-    ]);
-}
-function getMetaAdsAppBaseUrl(config) {
-    return new URL(config.appBaseUrl).toString().replace(/\/$/, '');
-}
-function buildMetaAdsRedirectUri(config) {
-    return `${getMetaAdsAppBaseUrl(config)}/meta-ads/oauth/callback`;
-}
-function createOAuthStateDigest(state) {
-    return createHash('sha256').update(state).digest('hex');
-}
-function buildMetaAdsAuthorizationUrl(config, state) {
-    const url = new URL('https://www.facebook.com/dialog/oauth');
-    url.searchParams.set('client_id', config.appId);
-    url.searchParams.set('redirect_uri', buildMetaAdsRedirectUri(config));
-    url.searchParams.set('state', state);
-    url.searchParams.set('scope', config.appScopes.join(','));
-    return url.toString();
-}
-function calculateTokenExpiresAt(expiresInSeconds, now = new Date()) {
-    if (!expiresInSeconds || expiresInSeconds <= 0) {
-        return null;
+    if (input.summary.totalRows < env.META_ADS_ORDER_VALUE_ANOMALY_MIN_ROWS) {
+        return anomalies;
     }
-    return new Date(now.getTime() + expiresInSeconds * 1000);
-}
-function computeRetryDelaySeconds(attempts) {
-    const safeAttempts = Math.max(1, attempts);
-    return Math.min(60 * 2 ** (safeAttempts - 1), 60 * 60);
-}
-function shouldRefreshToken(tokenExpiresAt, now = new Date()) {
-    if (!tokenExpiresAt) {
-        return false;
+    const currentChecks = [
+        {
+            type: 'null_attributed_revenue_spike',
+            currentCount: input.summary.nullAttributedRevenueCount,
+            baselineCount: input.baseline.nullAttributedRevenueCount,
+            detailKey: 'nullAttributedRevenueRate',
+            summary: 'Meta order value sync detected a spike in null attributed revenue rows.'
+        },
+        {
+            type: 'null_purchase_count_spike',
+            currentCount: input.summary.nullPurchaseCountCount,
+            baselineCount: input.baseline.nullPurchaseCountCount,
+            detailKey: 'nullPurchaseCountRate',
+            summary: 'Meta order value sync detected a spike in null purchase count rows.'
+        },
+        {
+            type: 'null_action_type_spike',
+            currentCount: input.summary.nullActionTypeCount,
+            baselineCount: input.baseline.nullActionTypeCount,
+            detailKey: 'nullActionTypeRate',
+            summary: 'Meta order value sync detected a spike in rows without a canonical action type.'
+        }
+    ];
+    for (const check of currentChecks) {
+        const currentRate = safeRatio(check.currentCount, input.summary.totalRows) ?? 0;
+        const baselineRate = safeRatio(check.baselineCount, input.baseline.totalRows) ?? 0;
+        if (currentRate >= env.META_ADS_ORDER_VALUE_NULL_SPIKE_MIN_RATIO &&
+            currentRate - baselineRate >= env.META_ADS_ORDER_VALUE_NULL_SPIKE_RATIO_DELTA) {
+            anomalies.push({
+                type: check.type,
+                severity: 'warning',
+                summary: check.summary,
+                details: {
+                    rawRowsFetched: input.rawRowsFetched,
+                    totalRows: input.summary.totalRows,
+                    baselineTotalRows: input.baseline.totalRows,
+                    [check.detailKey]: currentRate,
+                    baselineRate,
+                    ratioDelta: Number((currentRate - baselineRate).toFixed(4))
+                }
+            });
+        }
     }
-    return tokenExpiresAt.getTime() - now.getTime() <= env.META_ADS_TOKEN_REFRESH_LEEWAY_HOURS * 60 * 60 * 1000;
+    return anomalies;
 }
-function formatDateOnly(value) {
-    return value.toISOString().slice(0, 10);
-}
-function parseDateOnly(value) {
-    return new Date(`${value}T00:00:00.000Z`);
-}
-function listDateRangeInclusive(startDate, endDate) {
-    const start = parseDateOnly(startDate);
-    const end = parseDateOnly(endDate);
-    if (start.getTime() > end.getTime()) {
-        throw new MetaAdsHttpError(400, 'invalid_date_range', 'startDate must be on or before endDate');
-    }
+function buildSyncWindowDates(now) {
     const dates = [];
-    for (let cursor = start; cursor.getTime() <= end.getTime(); cursor = new Date(cursor.getTime() + 24 * 60 * 60 * 1000)) {
-        dates.push(formatDateOnly(cursor));
+    const totalDays = Math.max(1, env.META_ADS_ORDER_VALUE_WINDOW_DAYS);
+    const end = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    for (let offset = totalDays - 1; offset >= 0; offset -= 1) {
+        dates.push(new Date(end - offset * 24 * 60 * 60 * 1000).toISOString().slice(0, 10));
     }
     return dates;
 }
-function buildPlanningDates(now = new Date(), lastSyncCompletedAt = null) {
-    const currentBusinessDate = parseDateOnly(formatDateInTimeZone(now, META_ADS_SYNC_TIME_ZONE));
-    const firstDate = lastSyncCompletedAt
-        ? parseDateOnly(formatDateInTimeZone(lastSyncCompletedAt, META_ADS_SYNC_TIME_ZONE))
-        : new Date(currentBusinessDate.getTime() - (env.META_ADS_SYNC_INITIAL_LOOKBACK_DAYS - 1) * 24 * 60 * 60 * 1000);
-    if (currentBusinessDate.getTime() < firstDate.getTime()) {
-        return [];
-    }
-    return listDateRangeInclusive(formatDateOnly(firstDate), formatDateOnly(currentBusinessDate));
+function normalizeAdAccountId(adAccountId) {
+    return adAccountId.replace(/^act_/, '');
 }
-function buildIncrementalPlanningDates(now = new Date(), lastSyncCompletedAt = null, lastSyncPlannedFor = null) {
-    const today = formatDateInTimeZone(now, META_ADS_SYNC_TIME_ZONE);
-    if (lastSyncPlannedFor === today) {
-        return [today];
-    }
-    return buildPlanningDates(now, lastSyncCompletedAt);
+function buildMetaInsightsUrl(adAccountId, syncDate) {
+    const url = new URL(`${META_GRAPH_API_BASE_URL}/act_${normalizeAdAccountId(adAccountId)}/insights`);
+    url.searchParams.set('level', 'campaign');
+    url.searchParams.set('time_increment', '1');
+    url.searchParams.set('fields', META_ORDER_VALUE_REQUEST_FIELDS.join(','));
+    url.searchParams.set('action_breakdowns', 'action_type');
+    url.searchParams.set('action_report_time', META_ORDER_VALUE_ACTION_REPORT_TIME);
+    url.searchParams.set('use_account_attribution_setting', META_ORDER_VALUE_USE_ACCOUNT_ATTRIBUTION_SETTING ? 'true' : 'false');
+    url.searchParams.set('time_range', JSON.stringify({ since: syncDate, until: syncDate }));
+    return url;
 }
-function buildOrderValueWindow(now = new Date()) {
-    const endDate = formatDateInTimeZone(now, META_ADS_SYNC_TIME_ZONE);
-    const windowDays = Math.max(1, env.META_ADS_ORDER_VALUE_WINDOW_DAYS);
-    const start = parseDateOnly(endDate);
-    start.setUTCDate(start.getUTCDate() - (windowDays - 1));
-    const startDate = formatDateOnly(start);
-    return {
-        startDate,
-        endDate,
-        dates: listDateRangeInclusive(startDate, endDate)
-    };
-}
-function normalizeSyncErrorCode(error) {
-    if (typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string' && error.code.trim()) {
-        return error.code.trim();
+function parseMetricNumber(value) {
+    if (typeof value === 'number') {
+        return Number.isFinite(value) ? value : null;
     }
-    if (error instanceof Error && error.name.trim()) {
-        return error.name.trim();
+    if (typeof value !== 'string') {
+        return null;
     }
-    return 'meta_ads_order_value_sync_failed';
-}
-function normalizeSyncErrorMessage(error) {
-    if (error instanceof Error && error.message.trim()) {
-        return error.message.trim();
+    const trimmed = value.trim();
+    if (!trimmed) {
+        return null;
     }
-    if (typeof error === 'string' && error.trim()) {
-        return error.trim();
-    }
-    return 'Meta Ads order value sync failed';
-}
-function buildInsightsEntityId(level, row) {
-    switch (level) {
-        case 'account':
-            return row.account_id ?? '';
-        case 'campaign':
-            return row.campaign_id ?? '';
-        case 'adset':
-            return row.adset_id ?? '';
-        case 'ad':
-            return row.ad_id ?? '';
-    }
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : null;
 }
 function parseMetricInteger(value) {
-    const parsed = Number.parseInt(value ?? '0', 10);
-    return Number.isFinite(parsed) ? parsed : 0;
+    const parsed = parseMetricNumber(value);
+    if (parsed === null) {
+        return null;
+    }
+    return Math.trunc(parsed);
 }
-function parseMetricDecimal(value) {
-    const parsed = Number.parseFloat(value ?? '0');
-    return Number.isFinite(parsed) ? parsed.toFixed(2) : '0.00';
+function isAllowedPurchaseLikeActionType(actionType) {
+    if (typeof actionType !== 'string') {
+        return false;
+    }
+    const normalized = actionType.trim();
+    return normalized.length > 0 && normalized.toLowerCase().includes('purchase');
 }
-function parseNullableMetricDecimal(value) {
-    const normalized = typeof value === 'number' ? value : Number.parseFloat(value ?? '');
-    return Number.isFinite(normalized) ? normalized.toFixed(2) : null;
-}
-function parseNullableMetricFloat(value) {
-    const normalized = typeof value === 'number' ? value : Number.parseFloat(value ?? '');
-    return Number.isFinite(normalized) ? normalized.toFixed(6) : null;
-}
-function parseNullableMetricInteger(value) {
-    const normalized = typeof value === 'number' ? value : Number.parseInt(value ?? '', 10);
-    return Number.isFinite(normalized) ? normalized : null;
-}
-function formatDateInTimeZone(value, timeZone) {
-    const formatter = new Intl.DateTimeFormat('en-CA', {
-        timeZone,
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit'
-    });
-    return formatter.format(value);
-}
-function normalizeMetricActionType(actionType) {
-    const normalized = actionType?.trim();
-    return normalized ? normalized : null;
-}
-function collectMetricActionTypes(entries) {
-    const actionTypes = new Set();
-    for (const entry of entries) {
-        const actionType = normalizeMetricActionType(entry.action_type);
-        if (actionType) {
-            actionTypes.add(actionType);
+function collectEncounteredPurchaseActionTypes(rows) {
+    const encountered = [];
+    const seen = new Set();
+    const visit = (actionType) => {
+        if (!isAllowedPurchaseLikeActionType(actionType) || seen.has(actionType)) {
+            return;
+        }
+        seen.add(actionType);
+        encountered.push(actionType);
+    };
+    for (const row of rows) {
+        visit(row.action_type);
+        for (const entry of row.actions ?? []) {
+            visit(entry?.action_type);
+        }
+        for (const entry of row.action_values ?? []) {
+            visit(entry?.action_type);
+        }
+        for (const entry of row.purchase_roas ?? []) {
+            visit(entry?.action_type);
         }
     }
-    return actionTypes;
+    return encountered;
 }
-function chooseCanonicalPurchaseActionType(availableActionTypes, allowedPurchaseActionTypes) {
-    const available = new Set([...availableActionTypes].filter(Boolean));
-    for (const actionType of META_PURCHASE_ACTION_TYPE_PRIORITY) {
-        if (available.has(actionType)) {
+function selectCanonicalActionType(rows) {
+    const encountered = collectEncounteredPurchaseActionTypes(rows);
+    const encounteredSet = new Set(encountered);
+    for (const actionType of META_ORDER_VALUE_PRIMARY_ACTION_TYPES) {
+        if (encounteredSet.has(actionType)) {
             return {
                 actionTypeUsed: actionType,
                 canonicalSelectionMode: 'priority'
             };
         }
     }
-    for (const actionType of allowedPurchaseActionTypes) {
-        if (available.has(actionType)) {
-            return {
-                actionTypeUsed: actionType,
-                canonicalSelectionMode: 'fallback'
-            };
-        }
+    if (encountered.length > 0) {
+        return {
+            actionTypeUsed: encountered[0] ?? null,
+            canonicalSelectionMode: 'fallback'
+        };
     }
     return {
         actionTypeUsed: null,
         canonicalSelectionMode: 'none'
     };
 }
-function sumMetricValues(entries, actionType) {
-    if (!actionType) {
-        return null;
-    }
+function sumMetricEntries(rows, field, actionType) {
+    let found = false;
     let total = 0;
-    let matched = false;
-    for (const entry of entries) {
-        if (normalizeMetricActionType(entry.action_type) !== actionType) {
-            continue;
+    for (const row of rows) {
+        for (const entry of row[field] ?? []) {
+            if (entry?.action_type !== actionType) {
+                continue;
+            }
+            const parsed = field === 'actions' ? parseMetricInteger(entry.value) : parseMetricNumber(entry.value);
+            if (parsed === null) {
+                continue;
+            }
+            found = true;
+            total += parsed;
         }
-        const value = parseNullableMetricDecimal(entry.value);
-        if (value === null) {
-            continue;
-        }
-        total += Number(value);
-        matched = true;
     }
-    return matched ? total.toFixed(2) : null;
-}
-function sumMetricCounts(entries, actionType) {
-    if (!actionType) {
+    if (!found) {
         return null;
     }
-    let total = 0;
-    let matched = false;
-    for (const entry of entries) {
-        if (normalizeMetricActionType(entry.action_type) !== actionType) {
-            continue;
-        }
-        const value = parseNullableMetricInteger(entry.value);
-        if (value === null) {
-            continue;
-        }
-        total += value;
-        matched = true;
+    if (field === 'actions') {
+        return Math.trunc(total);
     }
-    return matched ? total : null;
+    return Number(total.toFixed(2));
 }
-function firstMetricFloat(entries, actionType) {
-    if (!actionType) {
-        return null;
-    }
-    for (const entry of entries) {
-        if (normalizeMetricActionType(entry.action_type) !== actionType) {
-            continue;
-        }
-        const value = parseNullableMetricFloat(entry.value);
-        if (value !== null) {
-            return value;
+function firstMetricEntryValue(rows, field, actionType) {
+    for (const row of rows) {
+        for (const entry of row[field] ?? []) {
+            if (entry?.action_type !== actionType) {
+                continue;
+            }
+            const parsed = parseMetricNumber(entry.value);
+            if (parsed !== null) {
+                return parsed;
+            }
         }
     }
     return null;
 }
-function parseRevenueInsightsPage(payload) {
-    const parsed = metaAdsRevenueInsightsPageSchema.safeParse(payload);
-    if (!parsed.success) {
-        throw new MetaAdsHttpError(502, 'meta_ads_invalid_insights_response', 'Meta Ads insights response was malformed', {
-            issues: parsed.error.issues
-        });
+function hasSelectedActionType(row, actionType) {
+    if (row.action_type === actionType) {
+        return true;
     }
-    return parsed.data;
+    return [row.action_values ?? [], row.actions ?? [], row.purchase_roas ?? []].some((entries) => entries.some((entry) => entry?.action_type === actionType));
 }
-function normalizeCampaignDailyRevenueRecords(adAccountId, rows, options = {}) {
-    const allowedPurchaseActionTypes = options.allowedPurchaseActionTypes?.length
-        ? [...options.allowedPurchaseActionTypes]
-        : [...META_PURCHASE_ACTION_TYPE_PRIORITY];
+function groupRowsByCampaignDate(rows) {
     const grouped = new Map();
     for (const row of rows) {
-        const reportDate = row.date_start?.trim();
-        const campaignId = row.campaign_id?.trim();
+        const reportDate = typeof row.payload.date_start === 'string' ? row.payload.date_start : '';
+        const campaignId = typeof row.payload.campaign_id === 'string' ? row.payload.campaign_id : '';
         if (!reportDate || !campaignId) {
             continue;
         }
-        const key = `${reportDate}:${campaignId}`;
-        const rawActionValues = row.action_values ?? [];
-        const rawActions = row.actions ?? [];
-        const rawPurchaseRoas = row.purchase_roas ?? [];
-        const spend = parseMetricDecimal(row.spend);
-        const entry = grouped.get(key) ?? {
+        const key = `${reportDate}::${campaignId}`;
+        const existing = grouped.get(key);
+        if (existing) {
+            existing.push(row);
+        }
+        else {
+            grouped.set(key, [row]);
+        }
+    }
+    return grouped;
+}
+function normalizeOrderValueRows(params) {
+    const normalizedRows = [];
+    const grouped = groupRowsByCampaignDate(params.persistedRows);
+    for (const rows of grouped.values()) {
+        const payloads = rows.map((row) => row.payload);
+        const first = payloads[0];
+        const campaignId = typeof first?.campaign_id === 'string' ? first.campaign_id : null;
+        const reportDate = typeof first?.date_start === 'string' ? first.date_start : null;
+        if (!campaignId || !reportDate) {
+            continue;
+        }
+        const selection = selectCanonicalActionType(payloads);
+        const selectedRow = selection.actionTypeUsed
+            ? rows.find((row) => hasSelectedActionType(row.payload, selection.actionTypeUsed)) ?? rows[0]
+            : rows[0];
+        const attributedRevenue = selection.actionTypeUsed === null ? null : sumMetricEntries(payloads, 'action_values', selection.actionTypeUsed);
+        const purchaseCount = selection.actionTypeUsed === null ? null : sumMetricEntries(payloads, 'actions', selection.actionTypeUsed);
+        const purchaseRoas = selection.actionTypeUsed === null ? null : firstMetricEntryValue(payloads, 'purchase_roas', selection.actionTypeUsed);
+        normalizedRows.push({
             reportDate,
             rawDateStart: reportDate,
-            rawDateStop: row.date_stop?.trim() || null,
+            rawDateStop: typeof first.date_stop === 'string' ? first.date_stop : null,
             campaignId,
-            campaignName: row.campaign_name?.trim() || null,
-            spend,
-            rawActionValues: [],
-            rawActions: [],
-            rawPurchaseRoas: [],
-            rawRows: []
-        };
-        entry.rawActionValues.push(...rawActionValues);
-        entry.rawActions.push(...rawActions);
-        entry.rawPurchaseRoas.push(...rawPurchaseRoas);
-        entry.rawRows.push(row);
-        if (!entry.campaignName && row.campaign_name?.trim()) {
-            entry.campaignName = row.campaign_name.trim();
-        }
-        if (entry.spend === '0.00' && spend !== '0.00') {
-            entry.spend = spend;
-        }
-        if (!entry.rawDateStop && row.date_stop?.trim()) {
-            entry.rawDateStop = row.date_stop.trim();
-        }
-        grouped.set(key, entry);
-    }
-    return [...grouped.values()]
-        .map((entry) => {
-        const selection = chooseCanonicalPurchaseActionType(new Set([...collectMetricActionTypes(entry.rawActionValues), ...collectMetricActionTypes(entry.rawActions)]), allowedPurchaseActionTypes);
-        return {
-            adAccountId,
-            reportDate: entry.reportDate,
-            rawDateStart: entry.rawDateStart,
-            rawDateStop: entry.rawDateStop,
-            campaignId: entry.campaignId,
-            campaignName: entry.campaignName,
-            currency: options.currency ?? null,
-            spend: entry.spend,
-            attributedRevenue: sumMetricValues(entry.rawActionValues, selection.actionTypeUsed),
-            purchaseCount: sumMetricCounts(entry.rawActions, selection.actionTypeUsed),
-            purchaseRoas: firstMetricFloat(entry.rawPurchaseRoas, selection.actionTypeUsed),
+            campaignName: typeof first.campaign_name === 'string' ? first.campaign_name : null,
+            currency: params.currency,
+            spend: parseMetricNumber(first.spend) ?? 0,
+            attributedRevenue,
+            purchaseCount,
+            purchaseRoas,
             actionTypeUsed: selection.actionTypeUsed,
             canonicalSelectionMode: selection.canonicalSelectionMode,
-            actionReportTime: options.actionReportTime ?? 'conversion',
-            useAccountAttributionSetting: options.useAccountAttributionSetting ?? true,
-            rawActionValues: entry.rawActionValues,
-            rawActions: entry.rawActions,
-            rawRows: entry.rawRows
-        };
-    })
-        .sort((left, right) => left.reportDate.localeCompare(right.reportDate) || left.campaignId.localeCompare(right.campaignId));
-}
-function normalizeInsightRows(row, creativeMap, currency) {
-    const normalized = [];
-    const baseDimensions = buildCanonicalSpendDimensions({
-        source: 'meta',
-        medium: 'paid_social',
-        campaign: row.campaign_name ?? null,
-        content: null,
-        term: null
-    });
-    const baseRow = {
-        accountId: row.account_id ?? null,
-        accountName: row.account_name ?? null,
-        campaignId: row.campaign_id ?? null,
-        campaignName: row.campaign_name ?? null,
-        adsetId: row.adset_id ?? null,
-        adsetName: row.adset_name ?? null,
-        adId: row.ad_id ?? null,
-        adName: row.ad_name ?? null,
-        creativeId: null,
-        creativeName: null,
-        canonicalSource: baseDimensions.source,
-        canonicalMedium: baseDimensions.medium,
-        canonicalCampaign: baseDimensions.campaign,
-        canonicalContent: baseDimensions.content,
-        canonicalTerm: baseDimensions.term,
-        currency,
-        spend: parseMetricDecimal(row.spend),
-        impressions: parseMetricInteger(row.impressions),
-        clicks: parseMetricInteger(row.clicks),
-        rawPayload: row
-    };
-    if (row.account_id) {
-        normalized.push({
-            ...baseRow,
-            granularity: 'account',
-            entityKey: row.account_id
+            rawRecordId: selectedRow?.id ?? null,
+            rawRevenueRecordIds: rows.map((row) => row.id),
+            rawActionValues: payloads.flatMap((row) => row.action_values ?? []),
+            rawActions: payloads.flatMap((row) => row.actions ?? [])
         });
     }
-    if (row.campaign_id) {
-        normalized.push({
-            ...baseRow,
-            granularity: 'campaign',
-            entityKey: row.campaign_id
-        });
-    }
-    if (row.adset_id) {
-        normalized.push({
-            ...baseRow,
-            granularity: 'adset',
-            entityKey: row.adset_id
-        });
-    }
-    if (row.ad_id) {
-        const adDimensions = buildCanonicalSpendDimensions({
-            source: 'meta',
-            medium: 'paid_social',
-            campaign: row.campaign_name ?? null,
-            content: row.ad_name ?? null,
-            term: null
-        });
-        normalized.push({
-            ...baseRow,
-            granularity: 'ad',
-            entityKey: row.ad_id,
-            canonicalContent: adDimensions.content
-        });
-        const creative = creativeMap[row.ad_id];
-        if (creative?.creativeId) {
-            const creativeDimensions = buildCanonicalSpendDimensions({
-                source: 'meta',
-                medium: 'paid_social',
-                campaign: row.campaign_name ?? null,
-                content: creative.creativeName ?? row.ad_name ?? null,
-                term: null
-            });
-            normalized.push({
-                ...baseRow,
-                granularity: 'creative',
-                entityKey: creative.creativeId,
-                creativeId: creative.creativeId,
-                creativeName: creative.creativeName,
-                canonicalContent: creativeDimensions.content
-            });
-        }
-    }
-    return normalized;
+    return normalizedRows;
 }
-function rollupNormalizedSpendRows(rows) {
-    const rollup = new Map();
-    for (const row of rows) {
-        const key = `${row.granularity}:${row.entityKey}`;
-        const existing = rollup.get(key);
-        if (!existing) {
-            rollup.set(key, { ...row });
-            continue;
-        }
-        existing.spend = (Number(existing.spend) + Number(row.spend)).toFixed(2);
-        existing.impressions += row.impressions;
-        existing.clicks += row.clicks;
-    }
-    return [...rollup.values()];
-}
-function rollupPersistableSpendRows(rows) {
-    const rollup = new Map();
-    for (const row of rows) {
-        const key = `${row.normalizedRow.granularity}:${row.normalizedRow.entityKey}`;
-        const existing = rollup.get(key);
-        if (!existing) {
-            rollup.set(key, {
-                rawRecordId: row.rawRecordId,
-                normalizedRow: { ...row.normalizedRow }
-            });
-            continue;
-        }
-        existing.normalizedRow.spend = (Number(existing.normalizedRow.spend) + Number(row.normalizedRow.spend)).toFixed(2);
-        existing.normalizedRow.impressions += row.normalizedRow.impressions;
-        existing.normalizedRow.clicks += row.normalizedRow.clicks;
-        if (existing.rawRecordId === null) {
-            existing.rawRecordId = row.rawRecordId;
-        }
-    }
-    return [...rollup.values()];
-}
-function buildMetaLog(event, payload) {
-    return JSON.stringify({
-        event,
-        ...payload
-    });
-}
-async function metaFetchJson(url, retryCount = 2, audit) {
-    let lastError;
-    const requestUrl = `${url.origin}${url.pathname}`;
-    const requestPayload = buildSearchParamsAuditPayload(url.searchParams, ['access_token']);
-    for (let attempt = 1; attempt <= retryCount + 1; attempt += 1) {
-        const requestStartedAt = new Date();
-        try {
-            const response = await fetch(url);
-            const text = await response.text();
-            const json = parseJsonResponsePayload(text);
-            const responseReceivedAt = new Date();
-            if (audit) {
-                await recordAdSyncApiTransaction({
-                    platform: 'meta_ads',
-                    connectionId: audit.connectionId,
-                    syncJobId: audit.syncJobId,
-                    transactionSource: audit.transactionSource,
-                    sourceMetadata: {
-                        ...(audit.sourceMetadata ?? {}),
-                        attempt
-                    },
-                    requestMethod: 'GET',
-                    requestUrl,
-                    requestPayload,
-                    requestStartedAt,
-                    responseStatus: response.status,
-                    responsePayload: json,
-                    responseReceivedAt,
-                    errorMessage: response.ok ? null : json?.error?.message ?? `HTTP ${response.status}`
-                });
-            }
-            if (!response.ok) {
-                const errorBody = json ?? null;
-                const errorMessage = errorBody?.error?.message ?? `Meta Ads API request failed with status ${response.status}`;
-                throw new MetaAdsApiError(response.status, errorMessage, errorBody);
-            }
-            return json;
-        }
-        catch (error) {
-            lastError = error;
-            if (audit && !(error instanceof MetaAdsApiError)) {
-                await recordAdSyncApiTransaction({
-                    platform: 'meta_ads',
-                    connectionId: audit.connectionId,
-                    syncJobId: audit.syncJobId,
-                    transactionSource: audit.transactionSource,
-                    sourceMetadata: {
-                        ...(audit.sourceMetadata ?? {}),
-                        attempt
-                    },
-                    requestMethod: 'GET',
-                    requestUrl,
-                    requestPayload,
-                    requestStartedAt,
-                    responseStatus: null,
-                    responsePayload: null,
-                    responseReceivedAt: null,
-                    errorMessage: error instanceof Error ? error.message : String(error)
-                });
-            }
-            if (attempt > retryCount ||
-                !(error instanceof MetaAdsApiError) ||
-                ![429, 500, 502, 503, 504].includes(error.statusCode)) {
-                break;
-            }
-            await delay(attempt * 500);
-        }
-    }
-    throw lastError;
-}
-async function exchangeCodeForAccessToken(config, code) {
-    const url = new URL(`${META_GRAPH_BASE_URL}/${env.META_ADS_API_VERSION}/oauth/access_token`);
-    url.searchParams.set('client_id', config.appId);
-    url.searchParams.set('client_secret', config.appSecret);
-    url.searchParams.set('redirect_uri', buildMetaAdsRedirectUri(config));
-    url.searchParams.set('code', code);
-    return metaFetchJson(url);
-}
-async function exchangeLongLivedAccessToken(config, accessToken) {
-    const url = new URL(`${META_GRAPH_BASE_URL}/${env.META_ADS_API_VERSION}/oauth/access_token`);
-    url.searchParams.set('grant_type', 'fb_exchange_token');
-    url.searchParams.set('client_id', config.appId);
-    url.searchParams.set('client_secret', config.appSecret);
-    url.searchParams.set('fb_exchange_token', accessToken);
-    return metaFetchJson(url);
-}
-async function fetchMetaAdsAccount(accessToken, adAccountId) {
-    const url = new URL(`${META_GRAPH_BASE_URL}/${env.META_ADS_API_VERSION}/act_${adAccountId}`);
-    url.searchParams.set('access_token', accessToken);
-    url.searchParams.set('fields', 'id,name,currency');
-    return metaFetchJson(url);
-}
-async function insertOAuthState(redirectPath) {
-    const state = randomBytes(24).toString('hex');
-    const stateDigest = createOAuthStateDigest(state);
-    await query(`
-      INSERT INTO meta_ads_oauth_states (state_digest, redirect_path, expires_at)
-      VALUES ($1, $2, now() + ($3::int * interval '1 minute'))
-    `, [stateDigest, redirectPath, META_OAUTH_STATE_TTL_MINUTES]);
-    return state;
-}
-async function consumeOAuthState(state) {
+async function loadOrderValueBaseline(connectionId, beforeDate) {
     const result = await query(`
-      UPDATE meta_ads_oauth_states
-      SET consumed_at = now()
-      WHERE state_digest = $1
-        AND consumed_at IS NULL
-        AND expires_at >= now()
-      RETURNING redirect_path
-    `, [createOAuthStateDigest(state)]);
-    if (!result.rowCount) {
-        throw new MetaAdsHttpError(400, 'invalid_meta_oauth_state', 'The Meta Ads OAuth state is invalid or expired');
-    }
-    return result.rows[0].redirect_path;
+      SELECT
+        COUNT(*)::text AS total_rows,
+        COUNT(*) FILTER (WHERE attributed_revenue IS NULL)::text AS null_attributed_revenue_count,
+        COUNT(*) FILTER (WHERE purchase_count IS NULL)::text AS null_purchase_count_count,
+        COUNT(*) FILTER (WHERE canonical_action_type IS NULL)::text AS null_action_type_count
+      FROM meta_ads_order_value_aggregates
+      WHERE meta_connection_id = $1
+        AND report_date < $2::date
+        AND action_report_time = $3
+        AND use_account_attribution_setting = $4
+    `, [connectionId, beforeDate, META_ORDER_VALUE_ACTION_REPORT_TIME, META_ORDER_VALUE_USE_ACCOUNT_ATTRIBUTION_SETTING]);
+    return {
+        totalRows: Number(result.rows[0]?.total_rows ?? '0'),
+        nullAttributedRevenueCount: Number(result.rows[0]?.null_attributed_revenue_count ?? '0'),
+        nullPurchaseCountCount: Number(result.rows[0]?.null_purchase_count_count ?? '0'),
+        nullActionTypeCount: Number(result.rows[0]?.null_action_type_count ?? '0')
+    };
 }
-async function upsertMetaAdsConnection(params) {
-    const rawPayloadMetadata = buildRawPayloadStorageMetadata(params.account);
-    const { rawPayloadJson, payloadSizeBytes, payloadHash } = rawPayloadMetadata;
-    const upsertResult = await query(`
-      INSERT INTO meta_ads_connections (
-        ad_account_id,
-        access_token_encrypted,
-        token_type,
-        granted_scopes,
-        token_expires_at,
-        last_refreshed_at,
+async function createSyncRun(params) {
+    const executor = params.client ?? poolQueryExecutor;
+    const result = await executor.query(`
+      INSERT INTO meta_ads_order_value_sync_runs (
+        connection_id,
+        trigger_source,
         status,
-        account_name,
-        account_currency,
-        raw_account_data,
-        raw_account_external_id,
-        raw_account_payload_size_bytes,
-        raw_account_payload_hash,
+        window_start_date,
+        window_end_date,
+        started_at,
         updated_at
       )
-      VALUES (
-        $1,
-        pgp_sym_encrypt($2, $3, 'cipher-algo=aes256, compress-algo=0'),
-        $4,
-        $5::text[],
-        $6,
-        now(),
-        'active',
-        $7,
-        $8,
-        $9::jsonb,
-        $10,
-        $11,
-        $12,
-        now()
-      )
-      ON CONFLICT (ad_account_id)
-      DO UPDATE SET
-        access_token_encrypted = pgp_sym_encrypt($2, $3, 'cipher-algo=aes256, compress-algo=0'),
-        token_type = $4,
-        granted_scopes = $5::text[],
-        token_expires_at = $6,
-        last_refreshed_at = now(),
-        status = 'active',
-        account_name = $7,
-        account_currency = $8,
-        raw_account_data = $9::jsonb,
-        raw_account_external_id = $10,
-        raw_account_payload_size_bytes = $11,
-        raw_account_payload_hash = $12,
-        updated_at = now()
-      RETURNING
-        raw_account_payload_size_bytes AS "storedPayloadSizeBytes",
-        raw_account_payload_hash AS "storedPayloadHash",
-        raw_account_data AS "persistedRawPayload"
-    `, [
-        params.adAccountId,
-        params.accessToken,
-        params.encryptionKey,
-        params.tokenType,
-        params.grantedScopes,
-        params.tokenExpiresAt,
-        params.account.name ?? null,
-        params.account.currency ?? params.account.account_currency ?? null,
-        rawPayloadJson,
-        params.adAccountId,
-        payloadSizeBytes,
-        payloadHash
-    ]);
-    logRawPayloadIntegrityMismatch(rawPayloadMetadata, upsertResult.rows[0], {
-        surface: 'meta_ads_connections.raw_account_data',
-        operation: 'upsert',
-        recordId: params.adAccountId
-    });
+      VALUES ($1, $2, 'running', $3::date, $3::date, now(), now())
+      RETURNING id
+    `, [params.connectionId, params.triggerSource, params.syncDate]);
+    return result.rows[0].id;
 }
-async function getActiveMetaAdsConnection() {
-    const config = await getResolvedMetaAdsConfig();
-    const result = await query(`
-      SELECT
-        id,
-        ad_account_id,
-        pgp_sym_decrypt(access_token_encrypted, $1) AS access_token,
-        token_type,
-        granted_scopes,
-        token_expires_at,
-        last_refreshed_at,
-        last_sync_planned_for::text,
-        status,
-        account_name,
-        account_currency
-      FROM meta_ads_connections
-      WHERE status = 'active'
-      ORDER BY updated_at DESC
-      LIMIT 1
-    `, [config.encryptionKey]);
-    return result.rows[0] ?? null;
-}
-async function refreshMetaAdsConnectionToken(connection) {
-    const config = await getResolvedMetaAdsConfig();
-    const refreshed = await exchangeLongLivedAccessToken(config, connection.access_token);
-    const expiresAt = calculateTokenExpiresAt(refreshed.expires_in);
-    const accessToken = refreshed.access_token;
-    await query(`
-      UPDATE meta_ads_connections
-      SET
-        access_token_encrypted = pgp_sym_encrypt($2, $3, 'cipher-algo=aes256, compress-algo=0'),
-        token_type = $4,
-        token_expires_at = $5,
-        last_refreshed_at = now(),
-        updated_at = now()
-      WHERE id = $1
-    `, [connection.id, accessToken, config.encryptionKey, refreshed.token_type ?? connection.token_type, expiresAt]);
+function serializeErrorDetails(error) {
+    if (error instanceof MetaAdsApiError) {
+        return {
+            message: error.message,
+            statusCode: error.statusCode,
+            details: error.details
+        };
+    }
+    if (error instanceof Error) {
+        return {
+            message: error.message,
+            name: error.name
+        };
+    }
     return {
-        ...connection,
-        access_token: accessToken,
-        token_type: refreshed.token_type ?? connection.token_type,
-        token_expires_at: expiresAt,
-        last_refreshed_at: new Date()
+        message: String(error)
     };
 }
-async function getUsableMetaAdsConnection(forceRefresh = false) {
-    const connection = await getActiveMetaAdsConnection();
-    if (!connection) {
-        throw new MetaAdsHttpError(404, 'meta_ads_connection_not_found', 'No active Meta Ads connection was found');
-    }
-    if (forceRefresh || shouldRefreshToken(connection.token_expires_at)) {
-        return refreshMetaAdsConnectionToken(connection);
-    }
-    return connection;
+async function markSyncRunCompleted(params) {
+    const executor = params.client ?? poolQueryExecutor;
+    await executor.query(`
+      UPDATE meta_ads_order_value_sync_runs
+      SET
+        status = 'completed',
+        completed_at = now(),
+        records_received = $2,
+        raw_rows_persisted = $3,
+        aggregate_rows_upserted = $4,
+        error_count = 0,
+        error_details = '[]'::jsonb,
+        updated_at = now()
+      WHERE id = $1
+    `, [params.runId, params.recordsReceived, params.rawRowsPersisted, params.aggregateRowsUpserted]);
 }
-async function enqueueSyncDates(connectionId, dates) {
-    let enqueuedJobs = 0;
-    for (const date of dates) {
-        await query(`
-        INSERT INTO meta_ads_sync_jobs (connection_id, sync_date, status, available_at, updated_at)
-        VALUES ($1, $2::date, 'pending', now(), now())
-        ON CONFLICT (connection_id, sync_date)
-        DO UPDATE SET
-          status = CASE
-            WHEN meta_ads_sync_jobs.status IN ('pending', 'retry', 'processing') THEN meta_ads_sync_jobs.status
-            ELSE 'pending'
-          END,
-          available_at = CASE
-            WHEN meta_ads_sync_jobs.status IN ('pending', 'retry', 'processing') THEN meta_ads_sync_jobs.available_at
-            ELSE now()
-          END,
-          last_error = CASE
-            WHEN meta_ads_sync_jobs.status IN ('pending', 'retry', 'processing') THEN meta_ads_sync_jobs.last_error
-            ELSE NULL
-          END,
-          completed_at = CASE
-            WHEN meta_ads_sync_jobs.status IN ('pending', 'retry', 'processing') THEN meta_ads_sync_jobs.completed_at
-            ELSE NULL
-          END,
-          updated_at = now()
-      `, [connectionId, date]);
-        enqueuedJobs += 1;
-    }
-    return enqueuedJobs;
+async function markSyncRunFailed(runId, error) {
+    await markSyncRunFailedWithClient(runId, error, poolQueryExecutor);
 }
-async function ensureSyncJobsByDate(connectionId, dates) {
-    const syncJobsByDate = new Map();
-    for (const date of dates) {
-        const result = await query(`
-        INSERT INTO meta_ads_sync_jobs (connection_id, sync_date, status, available_at, completed_at, updated_at)
-        VALUES ($1, $2::date, 'completed', now(), now(), now())
-        ON CONFLICT (connection_id, sync_date)
-        DO UPDATE SET
-          updated_at = now()
-        RETURNING id, sync_date::text
-      `, [connectionId, date]);
-        const row = result.rows[0];
-        if (row) {
-            syncJobsByDate.set(row.sync_date, row.id);
-        }
-    }
-    return syncJobsByDate;
-}
-async function planIncrementalSyncs(now = new Date()) {
-    const result = await query(`
-      SELECT
-        id,
-        last_sync_completed_at,
-        last_sync_planned_for::text
+async function enqueueSyncJobsForWindow(now) {
+    const connections = await query(`
+      SELECT id
       FROM meta_ads_connections
       WHERE status = 'active'
+      ORDER BY id ASC
     `);
-    let plannedJobs = 0;
-    const today = formatDateInTimeZone(now, META_ADS_SYNC_TIME_ZONE);
-    for (const row of result.rows) {
-        const dates = buildIncrementalPlanningDates(now, row.last_sync_completed_at, row.last_sync_planned_for);
-        if (dates.length === 0) {
-            continue;
-        }
-        plannedJobs += await enqueueSyncDates(row.id, dates);
-        if (row.last_sync_planned_for !== today) {
-            await query('UPDATE meta_ads_connections SET last_sync_planned_for = $2::date, updated_at = now() WHERE id = $1', [
-                row.id,
-                today
-            ]);
+    const syncDates = buildSyncWindowDates(now);
+    let enqueuedJobs = 0;
+    for (const connection of connections.rows) {
+        for (const syncDate of syncDates) {
+            await query(`
+          INSERT INTO meta_ads_sync_jobs (
+            connection_id,
+            sync_date,
+            status,
+            attempts,
+            available_at,
+            locked_at,
+            locked_by,
+            last_error,
+            completed_at,
+            updated_at
+          )
+          VALUES ($1, $2::date, 'pending', 0, now(), NULL, NULL, NULL, NULL, now())
+          ON CONFLICT (connection_id, sync_date)
+          DO UPDATE SET
+            status = CASE
+              WHEN meta_ads_sync_jobs.status = 'processing' THEN meta_ads_sync_jobs.status
+              ELSE 'pending'
+            END,
+            available_at = CASE
+              WHEN meta_ads_sync_jobs.status = 'processing' THEN meta_ads_sync_jobs.available_at
+              ELSE now()
+            END,
+            locked_at = CASE
+              WHEN meta_ads_sync_jobs.status = 'processing' THEN meta_ads_sync_jobs.locked_at
+              ELSE NULL
+            END,
+            locked_by = CASE
+              WHEN meta_ads_sync_jobs.status = 'processing' THEN meta_ads_sync_jobs.locked_by
+              ELSE NULL
+            END,
+            last_error = CASE
+              WHEN meta_ads_sync_jobs.status = 'processing' THEN meta_ads_sync_jobs.last_error
+              ELSE NULL
+            END,
+            completed_at = CASE
+              WHEN meta_ads_sync_jobs.status = 'processing' THEN meta_ads_sync_jobs.completed_at
+              ELSE NULL
+            END,
+            updated_at = now()
+        `, [connection.id, syncDate]);
+            enqueuedJobs += 1;
         }
     }
-    return plannedJobs;
+    return enqueuedJobs;
 }
 async function claimSyncJobs(workerId, limit) {
     const result = await query(`
       WITH claimable AS (
         SELECT j.id, j.connection_id
         FROM meta_ads_sync_jobs j
+        JOIN meta_ads_connections c ON c.id = j.connection_id
         WHERE j.status IN ('pending', 'retry')
           AND j.available_at <= now()
+          AND c.status = 'active'
         ORDER BY j.sync_date ASC, j.id ASC
         LIMIT $2
         FOR UPDATE SKIP LOCKED
@@ -1013,123 +497,203 @@ async function claimSyncJobs(workerId, limit) {
       FROM claimable
       JOIN meta_ads_connections c ON c.id = claimable.connection_id
       WHERE j.id = claimable.id
-      RETURNING j.id, j.connection_id, c.ad_account_id, j.sync_date::text, j.attempts
+      RETURNING
+        j.id,
+        j.connection_id,
+        c.ad_account_id,
+        c.account_currency,
+        j.sync_date::text,
+        j.attempts
     `, [workerId, limit]);
     return result.rows;
 }
-async function fetchInsightsForLevel(audit, accessToken, adAccountId, syncDate, level) {
-    const rows = [];
-    let nextUrl = new URL(`${META_GRAPH_BASE_URL}/${env.META_ADS_API_VERSION}/act_${adAccountId}/insights`);
-    nextUrl.searchParams.set('fields', 'account_id,account_name,campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,spend,impressions,clicks,objective,date_start,date_stop');
-    nextUrl.searchParams.set('access_token', accessToken);
-    nextUrl.searchParams.set('level', level);
-    nextUrl.searchParams.set('time_increment', '1');
-    nextUrl.searchParams.set('limit', '500');
-    nextUrl.searchParams.set('time_range', JSON.stringify({ since: syncDate, until: syncDate }));
-    while (nextUrl) {
-        const page = await metaFetchJson(nextUrl, 2, {
-            connectionId: audit.connectionId,
-            syncJobId: audit.syncJobId,
-            transactionSource: 'meta_ads_insights',
-            sourceMetadata: {
-                adAccountId,
-                syncDate,
-                level
-            }
+async function getConnectionSecret(connectionId) {
+    const result = await query(`
+      SELECT
+        id,
+        ad_account_id,
+        pgp_sym_decrypt(access_token_encrypted, $2)::text AS access_token,
+        account_currency
+      FROM meta_ads_connections
+      WHERE id = $1
+    `, [connectionId, env.META_ADS_ENCRYPTION_KEY]);
+    const row = result.rows[0];
+    if (!row?.access_token) {
+        throw new Error(`Meta Ads connection ${connectionId} is missing a decryptable access token`);
+    }
+    return row;
+}
+async function updateConnectionSyncStarted(connectionId) {
+    await poolQueryExecutor.query(`
+      UPDATE meta_ads_connections
+      SET
+        last_sync_started_at = now(),
+        last_sync_status = 'running',
+        last_sync_error = NULL,
+        updated_at = now()
+      WHERE id = $1
+    `, [connectionId]);
+}
+async function markSyncJobSucceeded(jobId, connectionId, client) {
+    const executor = client ?? poolQueryExecutor;
+    await executor.query(`
+      UPDATE meta_ads_sync_jobs
+      SET
+        status = 'completed',
+        completed_at = now(),
+        locked_at = NULL,
+        locked_by = NULL,
+        last_error = NULL,
+        updated_at = now()
+      WHERE id = $1
+    `, [jobId]);
+    await executor.query(`
+      UPDATE meta_ads_connections
+      SET
+        last_sync_completed_at = now(),
+        last_sync_status = 'succeeded',
+        last_sync_error = NULL,
+        updated_at = now()
+      WHERE id = $1
+    `, [connectionId]);
+}
+async function markSyncJobFailed(job, error, client) {
+    const message = error instanceof Error ? error.message : String(error);
+    const retryDelaySeconds = Math.min(300, Math.max(15, job.attempts * 30));
+    const shouldRetry = (error instanceof MetaAdsApiError && META_ADS_RETRYABLE_STATUS_CODES.has(error.statusCode)) ||
+        job.attempts < META_ADS_SYNC_MAX_RETRIES;
+    const nextStatus = shouldRetry ? 'retry' : 'failed';
+    const executor = client ?? poolQueryExecutor;
+    await executor.query(`
+      UPDATE meta_ads_sync_jobs
+      SET
+        status = $2,
+        available_at = CASE
+          WHEN $2 = 'retry' THEN now() + ($3::int * interval '1 second')
+          ELSE available_at
+        END,
+        locked_at = NULL,
+        locked_by = NULL,
+        last_error = $4,
+        completed_at = CASE WHEN $2 = 'failed' THEN now() ELSE completed_at END,
+        updated_at = now()
+      WHERE id = $1
+    `, [job.id, nextStatus, retryDelaySeconds, message]);
+    await executor.query(`
+      UPDATE meta_ads_connections
+      SET
+        last_sync_status = $2,
+        last_sync_error = $3,
+        updated_at = now()
+      WHERE id = $1
+    `, [job.connection_id, shouldRetry ? 'retry' : 'failed', message]);
+}
+async function performMetaApiRequest(params) {
+    const requestStartedAt = new Date();
+    const response = await fetch(params.url, {
+        method: 'GET',
+        headers: {
+            authorization: `Bearer ${params.connection.access_token}`
+        }
+    });
+    const responseReceivedAt = new Date();
+    const bodyText = await response.text();
+    const payload = parseJsonResponsePayload(bodyText);
+    const latencyMs = responseReceivedAt.getTime() - requestStartedAt.getTime();
+    params.apiMetrics.requestCount += 1;
+    params.apiMetrics.latencyMsTotal += latencyMs;
+    params.apiMetrics.latencyMsMax = Math.max(params.apiMetrics.latencyMsMax, latencyMs);
+    await recordAdSyncApiTransaction({
+        platform: 'meta_ads',
+        connectionId: params.job.connection_id,
+        syncJobId: params.job.id,
+        transactionSource: 'meta_ads_order_value_insights',
+        sourceMetadata: {
+            triggerSource: params.triggerSource,
+            syncDate: params.job.sync_date,
+            actionReportTime: META_ORDER_VALUE_ACTION_REPORT_TIME
+        },
+        requestMethod: 'GET',
+        requestUrl: params.url.toString(),
+        requestPayload: buildSearchParamsAuditPayload(params.url.searchParams),
+        requestStartedAt,
+        responseStatus: response.status,
+        responsePayload: payload,
+        responseReceivedAt
+    });
+    if (!response.ok) {
+        params.apiMetrics.errorCount += 1;
+        logError('meta_ads_api_request_failed', new MetaAdsApiError(response.status, 'Meta Ads API request failed', payload), {
+            service: process.env.K_SERVICE ?? 'roas-radar',
+            connectionId: params.job.connection_id,
+            syncJobId: params.job.id,
+            adAccountId: params.connection.ad_account_id,
+            syncDate: params.job.sync_date,
+            triggerSource: params.triggerSource,
+            requestUrl: params.url.toString(),
+            responseStatus: response.status
         });
-        rows.push(...(page.data ?? []));
-        nextUrl = page.paging?.next ? new URL(page.paging.next) : null;
+        throw new MetaAdsApiError(response.status, `Meta Ads API request failed with status ${response.status}`, payload);
+    }
+    const parsed = payload;
+    logInfo('meta_ads_api_request_completed', {
+        service: process.env.K_SERVICE ?? 'roas-radar',
+        connectionId: params.job.connection_id,
+        syncJobId: params.job.id,
+        adAccountId: params.connection.ad_account_id,
+        syncDate: params.job.sync_date,
+        triggerSource: params.triggerSource,
+        requestUrl: params.url.toString(),
+        requestNumber: params.apiMetrics.requestCount,
+        rowCount: Array.isArray(parsed.data) ? parsed.data.length : 0,
+        latencyMs,
+        hasNextPage: typeof parsed.paging?.next === 'string'
+    });
+    return parsed;
+}
+async function fetchAllOrderValueRows(params) {
+    const rows = [];
+    let nextUrl = buildMetaInsightsUrl(params.connection.ad_account_id, params.job.sync_date);
+    while (nextUrl) {
+        const requestUrl = nextUrl;
+        try {
+            const payload = await performMetaApiRequest({
+                job: params.job,
+                connection: params.connection,
+                url: requestUrl,
+                apiMetrics: params.apiMetrics,
+                triggerSource: params.triggerSource
+            });
+            rows.push(...(Array.isArray(payload.data) ? payload.data : []));
+            nextUrl = typeof payload.paging?.next === 'string' ? new URL(payload.paging.next) : null;
+        }
+        catch (error) {
+            if (!(error instanceof MetaAdsApiError) || !META_ADS_RETRYABLE_STATUS_CODES.has(error.statusCode)) {
+                throw error;
+            }
+            params.apiMetrics.retryCount += 1;
+            await delay(500);
+            const payload = await performMetaApiRequest({
+                job: params.job,
+                connection: params.connection,
+                url: requestUrl,
+                apiMetrics: params.apiMetrics,
+                triggerSource: params.triggerSource
+            });
+            rows.push(...(Array.isArray(payload.data) ? payload.data : []));
+            nextUrl = typeof payload.paging?.next === 'string' ? new URL(payload.paging.next) : null;
+        }
     }
     return rows;
 }
-export async function fetchCampaignDailyRevenueInsights(params) {
-    const rows = [];
-    let nextUrl = new URL(`${META_GRAPH_BASE_URL}/${env.META_ADS_API_VERSION}/act_${params.adAccountId}/insights`);
-    nextUrl.searchParams.set('fields', 'campaign_id,campaign_name,date_start,date_stop,spend,actions,action_values,purchase_roas');
-    nextUrl.searchParams.set('access_token', params.accessToken);
-    nextUrl.searchParams.set('level', 'campaign');
-    nextUrl.searchParams.set('time_increment', '1');
-    nextUrl.searchParams.set('action_breakdowns', 'action_type');
-    nextUrl.searchParams.set('use_account_attribution_setting', String(params.useAccountAttributionSetting ?? true));
-    nextUrl.searchParams.set('action_report_time', params.actionReportTime ?? 'conversion');
-    nextUrl.searchParams.set('limit', String(params.pageLimit ?? 500));
-    nextUrl.searchParams.set('time_range', JSON.stringify({ since: params.startDate, until: params.endDate }));
-    while (nextUrl) {
-        const payload = await metaFetchJson(nextUrl, params.retryCount ?? 2, params.audit
-            ? {
-                connectionId: params.audit.connectionId,
-                syncJobId: params.audit.syncJobId,
-                transactionSource: 'meta_ads_campaign_revenue_insights',
-                sourceMetadata: {
-                    adAccountId: params.adAccountId,
-                    startDate: params.startDate,
-                    endDate: params.endDate,
-                    actionReportTime: params.actionReportTime ?? 'conversion',
-                    useAccountAttributionSetting: params.useAccountAttributionSetting ?? true
-                }
-            }
-            : undefined);
-        const page = parseRevenueInsightsPage(payload);
-        rows.push(...(page.data ?? []));
-        nextUrl = page.paging?.next ? new URL(page.paging.next) : null;
-    }
-    return normalizeCampaignDailyRevenueRecords(params.adAccountId, rows, {
-        currency: params.currency ?? null,
-        actionReportTime: params.actionReportTime ?? 'conversion',
-        useAccountAttributionSetting: params.useAccountAttributionSetting ?? true,
-        allowedPurchaseActionTypes: params.allowedPurchaseActionTypes
-    });
-}
-async function createMetaAdsOrderValueSyncRun(params) {
-    const result = await query(`
-      INSERT INTO meta_ads_order_value_sync_runs (
-        connection_id,
-        trigger_source,
-        status,
-        window_start_date,
-        window_end_date,
-        started_at,
-        updated_at
-      )
-      VALUES ($1, $2, 'running', $3::date, $4::date, now(), now())
-      RETURNING id, connection_id
-    `, [params.connectionId, params.triggerSource, params.windowStartDate, params.windowEndDate]);
-    return result.rows[0].id;
-}
-async function completeMetaAdsOrderValueSyncRun(runId, accumulator, failedConnections) {
-    const status = accumulator.errors.length === 0 ? 'completed' : failedConnections > 0 && accumulator.recordsReceived > 0 ? 'partial_failure' : 'failed';
-    await query(`
-      UPDATE meta_ads_order_value_sync_runs
-      SET
-        status = $2,
-        completed_at = now(),
-        records_received = $3,
-        raw_rows_persisted = $4,
-        aggregate_rows_upserted = $5,
-        error_count = $6,
-        error_details = $7::jsonb,
-        updated_at = now()
-      WHERE id = $1
-    `, [
-        runId,
-        status,
-        accumulator.recordsReceived,
-        accumulator.rawRowsPersisted,
-        accumulator.aggregateRowsUpserted,
-        accumulator.errors.length,
-        JSON.stringify(accumulator.errors)
-    ]);
-}
-async function persistOrderValueRawRows(client, params) {
-    const rawRecordIdsByAggregateKey = new Map();
+async function persistRawOrderValueRows(client, params) {
+    const persistedRows = [];
     for (const row of params.rows) {
-        const reportDate = row.date_start?.trim();
-        const campaignId = row.campaign_id?.trim();
-        if (!reportDate || !campaignId) {
+        const campaignId = typeof row.campaign_id === 'string' ? row.campaign_id : null;
+        const reportDate = typeof row.date_start === 'string' ? row.date_start : null;
+        if (!campaignId || !reportDate) {
             continue;
         }
-        const actionType = row.action_type?.trim() || null;
-        const syncJobId = params.syncJobsByDate.get(reportDate) ?? null;
         const insert = await client.query(`
         INSERT INTO meta_ads_order_value_raw_records (
           connection_id,
@@ -1146,38 +710,36 @@ async function persistOrderValueRawRows(client, params) {
       `, [
             params.connectionId,
             params.syncRunId,
-            syncJobId,
+            params.syncJobId,
             reportDate,
             campaignId,
-            row.campaign_name?.trim() || null,
-            actionType,
+            typeof row.campaign_name === 'string' ? row.campaign_name : null,
+            typeof row.action_type === 'string' ? row.action_type : null,
             JSON.stringify(row)
         ]);
-        const key = `${reportDate}:${campaignId}`;
-        const ids = rawRecordIdsByAggregateKey.get(key) ?? [];
-        ids.push(insert.rows[0].id);
-        rawRecordIdsByAggregateKey.set(key, ids);
+        persistedRows.push({
+            id: insert.rows[0].id,
+            payload: row
+        });
     }
-    return rawRecordIdsByAggregateKey;
+    return persistedRows;
 }
-async function upsertOrderValueAggregates(client, params) {
-    let upsertedRows = 0;
-    for (const record of params.records) {
-        const syncJobId = params.syncJobsByDate.get(record.reportDate);
-        if (!syncJobId) {
-            continue;
-        }
-        const key = `${record.reportDate}:${record.campaignId}`;
-        const rawRevenueRecordIds = params.rawRecordIdsByAggregateKey.get(key) ?? [];
-        const rawRecordLookup = await client.query(`
-        SELECT id
-        FROM meta_ads_raw_spend_records
-        WHERE connection_id = $1
-          AND report_date = $2::date
-          AND level = 'campaign'
-          AND entity_id = $3
-        LIMIT 1
-      `, [params.connectionId, record.reportDate, record.campaignId]);
+async function replaceAggregateRows(client, params) {
+    await client.query(`
+      DELETE FROM meta_ads_order_value_aggregates
+      WHERE organization_id = $1
+        AND meta_connection_id = $2
+        AND report_date = $3::date
+        AND action_report_time = $4
+        AND use_account_attribution_setting = $5
+    `, [
+        env.DEFAULT_ORGANIZATION_ID,
+        params.connectionId,
+        params.syncDate,
+        META_ORDER_VALUE_ACTION_REPORT_TIME,
+        META_ORDER_VALUE_USE_ACCOUNT_ATTRIBUTION_SETTING
+    ]);
+    for (const row of params.normalizedRows) {
         await client.query(`
         INSERT INTO meta_ads_order_value_aggregates (
           organization_id,
@@ -1206,564 +768,240 @@ async function upsertOrderValueAggregates(client, params) {
           updated_at
         )
         VALUES (
-          $1, $2, $3, $4, $5, $6::date, $7::date, $8::date, $9, $10, $11::numeric, $12, $13::numeric,
-          $14::numeric, $15, $16, $17, $18::jsonb, $19::jsonb, $20::jsonb, now(), $21, $22, now()
-        )
-        ON CONFLICT (
-          organization_id,
-          ad_account_id,
-          report_date,
-          campaign_id,
-          action_report_time,
-          use_account_attribution_setting
-        )
-        DO UPDATE SET
-          meta_connection_id = EXCLUDED.meta_connection_id,
-          sync_job_id = EXCLUDED.sync_job_id,
-          raw_record_id = EXCLUDED.raw_record_id,
-          raw_date_start = EXCLUDED.raw_date_start,
-          raw_date_stop = EXCLUDED.raw_date_stop,
-          campaign_name = EXCLUDED.campaign_name,
-          attributed_revenue = EXCLUDED.attributed_revenue,
-          purchase_count = EXCLUDED.purchase_count,
-          spend = EXCLUDED.spend,
-          purchase_roas = EXCLUDED.purchase_roas,
-          currency = EXCLUDED.currency,
-          canonical_action_type = EXCLUDED.canonical_action_type,
-          canonical_selection_mode = EXCLUDED.canonical_selection_mode,
-          raw_action_values = EXCLUDED.raw_action_values,
-          raw_actions = EXCLUDED.raw_actions,
-          raw_revenue_record_ids = EXCLUDED.raw_revenue_record_ids,
-          source_synced_at = EXCLUDED.source_synced_at,
-          updated_at = now()
-      `, [
-            params.organizationId,
-            params.connectionId,
-            syncJobId,
-            rawRecordLookup.rows[0]?.id ?? null,
-            record.adAccountId,
-            record.reportDate,
-            record.rawDateStart,
-            record.rawDateStop,
-            record.campaignId,
-            record.campaignName,
-            record.attributedRevenue,
-            record.purchaseCount,
-            record.spend,
-            record.purchaseRoas,
-            record.currency,
-            record.actionTypeUsed,
-            record.canonicalSelectionMode,
-            JSON.stringify(record.rawActionValues),
-            JSON.stringify(record.rawActions),
-            JSON.stringify(rawRevenueRecordIds),
-            record.actionReportTime,
-            record.useAccountAttributionSetting
-        ]);
-        upsertedRows += 1;
-    }
-    return upsertedRows;
-}
-export async function runMetaAdsOrderValueSync(options = {}) {
-    const now = options.now ?? new Date();
-    const triggerSource = options.triggerSource ?? 'application_scheduler';
-    const window = buildOrderValueWindow(now);
-    const organizationId = env.DEFAULT_ORGANIZATION_ID;
-    const result = await query(`
-      SELECT
-        id,
-        ad_account_id,
-        pgp_sym_decrypt(access_token_encrypted, $1) AS access_token,
-        token_type,
-        granted_scopes,
-        token_expires_at,
-        last_refreshed_at,
-        last_sync_planned_for::text,
-        status,
-        account_name,
-        account_currency
-      FROM meta_ads_connections
-      WHERE status = 'active'
-      ORDER BY updated_at DESC
-    `, [(await getResolvedMetaAdsConfig()).encryptionKey]);
-    let attemptedConnections = 0;
-    let succeededConnections = 0;
-    let failedConnections = 0;
-    let aggregateRowsUpserted = 0;
-    let rawRowsPersisted = 0;
-    let recordsReceived = 0;
-    let lastRunId = null;
-    for (const baseConnection of result.rows) {
-        attemptedConnections += 1;
-        const accumulator = {
-            recordsReceived: 0,
-            rawRowsPersisted: 0,
-            aggregateRowsUpserted: 0,
-            errors: []
-        };
-        const runId = await createMetaAdsOrderValueSyncRun({
-            connectionId: baseConnection.id,
-            triggerSource,
-            windowStartDate: window.startDate,
-            windowEndDate: window.endDate
-        });
-        lastRunId = runId;
-        try {
-            const connection = shouldRefreshToken(baseConnection.token_expires_at)
-                ? await refreshMetaAdsConnectionToken(baseConnection)
-                : baseConnection;
-            const syncJobsByDate = await ensureSyncJobsByDate(connection.id, window.dates);
-            const rawRows = [];
-            let nextUrl = new URL(`${META_GRAPH_BASE_URL}/${env.META_ADS_API_VERSION}/act_${connection.ad_account_id}/insights`);
-            nextUrl.searchParams.set('fields', 'campaign_id,campaign_name,date_start,date_stop,spend,actions,action_values,purchase_roas');
-            nextUrl.searchParams.set('access_token', connection.access_token);
-            nextUrl.searchParams.set('level', 'campaign');
-            nextUrl.searchParams.set('time_increment', '1');
-            nextUrl.searchParams.set('action_breakdowns', 'action_type');
-            nextUrl.searchParams.set('use_account_attribution_setting', 'true');
-            nextUrl.searchParams.set('action_report_time', 'conversion');
-            nextUrl.searchParams.set('limit', '500');
-            nextUrl.searchParams.set('time_range', JSON.stringify({ since: window.startDate, until: window.endDate }));
-            while (nextUrl) {
-                const payload = await metaFetchJson(nextUrl, 2, {
-                    connectionId: connection.id,
-                    syncJobId: syncJobsByDate.get(window.endDate) ?? [...syncJobsByDate.values()][0] ?? 0,
-                    transactionSource: 'meta_ads_hourly_order_value_sync',
-                    sourceMetadata: {
-                        adAccountId: connection.ad_account_id,
-                        windowStartDate: window.startDate,
-                        windowEndDate: window.endDate,
-                        triggerSource
-                    }
-                });
-                const page = parseRevenueInsightsPage(payload);
-                rawRows.push(...(page.data ?? []));
-                nextUrl = page.paging?.next ? new URL(page.paging.next) : null;
-            }
-            const records = normalizeCampaignDailyRevenueRecords(connection.ad_account_id, rawRows, {
-                currency: connection.account_currency,
-                actionReportTime: 'conversion',
-                useAccountAttributionSetting: true
-            });
-            accumulator.recordsReceived = records.length;
-            await withTransaction(async (client) => {
-                const rawRecordIdsByAggregateKey = await persistOrderValueRawRows(client, {
-                    connectionId: connection.id,
-                    syncRunId: runId,
-                    syncJobsByDate,
-                    rows: rawRows
-                });
-                accumulator.rawRowsPersisted = rawRows.length;
-                accumulator.aggregateRowsUpserted = await upsertOrderValueAggregates(client, {
-                    connectionId: connection.id,
-                    syncJobsByDate,
-                    records,
-                    rawRecordIdsByAggregateKey,
-                    organizationId
-                });
-            });
-            await completeMetaAdsOrderValueSyncRun(runId, accumulator, 0);
-            succeededConnections += 1;
-            recordsReceived += accumulator.recordsReceived;
-            rawRowsPersisted += accumulator.rawRowsPersisted;
-            aggregateRowsUpserted += accumulator.aggregateRowsUpserted;
-        }
-        catch (error) {
-            accumulator.errors.push({
-                code: normalizeSyncErrorCode(error),
-                message: normalizeSyncErrorMessage(error),
-                adAccountId: baseConnection.ad_account_id
-            });
-            await completeMetaAdsOrderValueSyncRun(runId, accumulator, 1);
-            failedConnections += 1;
-            logError('meta_ads_order_value_sync_connection_failed', error, {
-                connectionId: baseConnection.id,
-                adAccountId: baseConnection.ad_account_id,
-                triggerSource,
-                windowStartDate: window.startDate,
-                windowEndDate: window.endDate,
-                syncRunId: runId
-            });
-        }
-    }
-    const syncResult = {
-        runId: lastRunId,
-        triggerSource,
-        windowStartDate: window.startDate,
-        windowEndDate: window.endDate,
-        attemptedConnections,
-        succeededConnections,
-        failedConnections,
-        recordsReceived,
-        rawRowsPersisted,
-        aggregateRowsUpserted
-    };
-    logInfo('meta_ads_order_value_sync_completed', syncResult);
-    return syncResult;
-}
-export function startMetaAdsOrderValueScheduler(options = {}) {
-    if (!env.META_ADS_ORDER_VALUE_SYNC_ENABLED) {
-        return () => undefined;
-    }
-    const intervalMs = options.intervalMs ?? env.META_ADS_ORDER_VALUE_SYNC_INTERVAL_MS;
-    const runner = options.runner ?? runMetaAdsOrderValueSync;
-    const now = options.now ?? (() => new Date());
-    const setIntervalFn = options.setIntervalFn ?? setInterval;
-    const clearIntervalFn = options.clearIntervalFn ?? clearInterval;
-    const triggerImmediately = options.triggerImmediately ?? true;
-    let running = false;
-    const tick = async (triggerSource) => {
-        if (running) {
-            logInfo('meta_ads_order_value_sync_skipped', {
-                reason: 'run_already_in_progress',
-                triggerSource
-            });
-            return;
-        }
-        running = true;
-        try {
-            await runner({
-                now: now(),
-                triggerSource
-            });
-        }
-        catch (error) {
-            logError('meta_ads_order_value_sync_failed', error, {
-                triggerSource
-            });
-        }
-        finally {
-            running = false;
-        }
-    };
-    if (triggerImmediately) {
-        void tick('application_startup');
-    }
-    const timer = setIntervalFn(() => {
-        void tick('application_scheduler');
-    }, intervalMs);
-    return () => {
-        clearIntervalFn(timer);
-    };
-}
-async function fetchCreativeMap(audit, accessToken, adIds) {
-    const creativeMap = {};
-    for (let index = 0; index < adIds.length; index += 50) {
-        const chunk = adIds.slice(index, index + 50);
-        if (chunk.length === 0) {
-            continue;
-        }
-        const url = new URL(`${META_GRAPH_BASE_URL}/${env.META_ADS_API_VERSION}/`);
-        url.searchParams.set('access_token', accessToken);
-        url.searchParams.set('ids', chunk.join(','));
-        url.searchParams.set('fields', 'creative{id,name}');
-        const response = await metaFetchJson(url, 2, {
-            connectionId: audit.connectionId,
-            syncJobId: audit.syncJobId,
-            transactionSource: 'meta_ads_creatives',
-            sourceMetadata: {
-                adAccountId: audit.adAccountId,
-                syncDate: audit.syncDate,
-                adIds: chunk
-            }
-        });
-        for (const adId of chunk) {
-            const creative = response[adId]?.creative;
-            creativeMap[adId] = {
-                creativeId: creative?.id ?? null,
-                creativeName: creative?.name ?? null
-            };
-        }
-    }
-    return creativeMap;
-}
-async function persistDailySpendSnapshot(client, params) {
-    const normalizedRowsToInsert = [];
-    await client.query('DELETE FROM meta_ads_daily_spend WHERE connection_id = $1 AND report_date = $2::date', [params.connectionId, params.syncDate]);
-    await client.query('DELETE FROM meta_ads_raw_spend_records WHERE connection_id = $1 AND report_date = $2::date', [params.connectionId, params.syncDate]);
-    for (const level of META_SPEND_LEVELS) {
-        for (const row of params.rowsByLevel[level]) {
-            const entityId = buildInsightsEntityId(level, row) || null;
-            const rawPayloadMetadata = buildRawPayloadStorageMetadata(row);
-            const { rawPayloadJson, payloadSizeBytes, payloadHash } = rawPayloadMetadata;
-            // docs/raw-payload-persistence-contract.md governs this table: persist the
-            // decoded Meta insight row exactly before any normalization or rollup logic.
-            const rawInsert = await client.query(`
-          INSERT INTO meta_ads_raw_spend_records (
-            connection_id,
-            sync_job_id,
-            report_date,
-            level,
-            entity_id,
-            payload_external_id,
-            currency,
-            spend,
-            impressions,
-            clicks,
-            raw_payload,
-            payload_size_bytes,
-            payload_hash,
-            updated_at
-          )
-          VALUES ($1, $2, $3::date, $4, $5, $6, $7, $8::numeric, $9, $10, $11::jsonb, $12, $13, now())
-          RETURNING
-            id,
-            payload_size_bytes AS "storedPayloadSizeBytes",
-            payload_hash AS "storedPayloadHash",
-            raw_payload AS "persistedRawPayload"
-        `, [
-                params.connectionId,
-                params.syncJobId,
-                params.syncDate,
-                level,
-                entityId,
-                entityId,
-                params.currency,
-                parseMetricDecimal(row.spend),
-                parseMetricInteger(row.impressions),
-                parseMetricInteger(row.clicks),
-                rawPayloadJson,
-                payloadSizeBytes,
-                payloadHash
-            ]);
-            logRawPayloadIntegrityMismatch(rawPayloadMetadata, rawInsert.rows[0], {
-                surface: 'meta_ads_raw_spend_records',
-                operation: 'insert',
-                recordId: rawInsert.rows[0].id,
-                fields: {
-                    level,
-                    entityId,
-                    syncJobId: params.syncJobId
-                }
-            });
-            // Raw spend records are the canonical source-payload surface. Projection rows are
-            // derived later and are allowed to skip malformed rows that cannot produce entity keys.
-            const rawRecordId = rawInsert.rows[0].id;
-            if (!entityId) {
-                continue;
-            }
-            const normalizedRows = normalizeInsightRows(row, params.creativeMap, params.currency);
-            for (const normalizedRow of normalizedRows) {
-                normalizedRowsToInsert.push({
-                    rawRecordId,
-                    normalizedRow
-                });
-            }
-        }
-    }
-    for (const row of rollupPersistableSpendRows(normalizedRowsToInsert)) {
-        const normalizedRow = row.normalizedRow;
-        // meta_ads_daily_spend is a derived reporting projection, not the canonical raw-source
-        // retention surface. It intentionally stores normalized rollups linked back to raw rows.
-        await client.query(`
-        INSERT INTO meta_ads_daily_spend (
-          connection_id,
-          raw_record_id,
-          sync_job_id,
-          report_date,
-          granularity,
-          entity_key,
-          account_id,
-          account_name,
-          campaign_id,
-          campaign_name,
-          adset_id,
-          adset_name,
-          ad_id,
-          ad_name,
-          creative_id,
-          creative_name,
-          canonical_source,
-          canonical_medium,
-          canonical_campaign,
-          canonical_content,
-          canonical_term,
-          currency,
-          spend,
-          impressions,
-          clicks,
-          raw_payload,
-          updated_at
-        )
-        VALUES (
-          $1, $2, $3, $4::date, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-          $18, $19, $20, $21, $22,
-          $23::numeric, $24, $25, $26::jsonb, now()
+          $1,
+          $2,
+          $3,
+          $4,
+          $5,
+          $6::date,
+          $7::date,
+          $8::date,
+          $9,
+          $10,
+          $11,
+          $12,
+          $13,
+          $14,
+          $15,
+          $16,
+          $17,
+          $18::jsonb,
+          $19::jsonb,
+          $20::jsonb,
+          $21,
+          $22,
+          $23,
+          now()
         )
       `, [
+            env.DEFAULT_ORGANIZATION_ID,
             params.connectionId,
-            row.rawRecordId,
             params.syncJobId,
-            params.syncDate,
-            normalizedRow.granularity,
-            normalizedRow.entityKey,
-            normalizedRow.accountId,
-            normalizedRow.accountName,
-            normalizedRow.campaignId,
-            normalizedRow.campaignName,
-            normalizedRow.adsetId,
-            normalizedRow.adsetName,
-            normalizedRow.adId,
-            normalizedRow.adName,
-            normalizedRow.creativeId,
-            normalizedRow.creativeName,
-            normalizedRow.canonicalSource,
-            normalizedRow.canonicalMedium,
-            normalizedRow.canonicalCampaign,
-            normalizedRow.canonicalContent,
-            normalizedRow.canonicalTerm,
-            normalizedRow.currency,
-            normalizedRow.spend,
-            normalizedRow.impressions,
-            normalizedRow.clicks,
-            JSON.stringify(normalizedRow.rawPayload)
+            null,
+            normalizeAdAccountId(params.adAccountId),
+            row.reportDate,
+            row.rawDateStart,
+            row.rawDateStop,
+            row.campaignId,
+            row.campaignName,
+            row.attributedRevenue,
+            row.purchaseCount,
+            row.spend,
+            row.purchaseRoas,
+            row.currency,
+            row.actionTypeUsed,
+            row.canonicalSelectionMode,
+            JSON.stringify(row.rawActionValues),
+            JSON.stringify(row.rawActions),
+            JSON.stringify(row.rawRevenueRecordIds),
+            params.sourceSyncedAt,
+            META_ORDER_VALUE_ACTION_REPORT_TIME,
+            META_ORDER_VALUE_USE_ACCOUNT_ATTRIBUTION_SETTING
         ]);
     }
-    await refreshDailyReportingMetrics(client, [params.syncDate]);
 }
-async function markSyncJobSucceeded(jobId, connectionId) {
-    await query(`
-      UPDATE meta_ads_sync_jobs
-      SET
-        status = 'completed',
-        completed_at = now(),
-        locked_at = NULL,
-        locked_by = NULL,
-        last_error = NULL,
-        updated_at = now()
-      WHERE id = $1
-    `, [jobId]);
-    await query(`
-      UPDATE meta_ads_connections
-      SET
-        last_sync_completed_at = now(),
-        last_sync_status = 'succeeded',
-        last_sync_error = NULL,
-        updated_at = now()
-      WHERE id = $1
-    `, [connectionId]);
+function emitOrderValueSyncAnomalies(params) {
+    for (const anomaly of params.anomalies) {
+        logWarning('meta_ads_order_value_sync_anomaly', {
+            service: process.env.K_SERVICE ?? 'roas-radar',
+            runId: params.runId,
+            connectionId: params.connectionId,
+            adAccountId: params.adAccountId,
+            triggerSource: params.triggerSource,
+            windowStartDate: params.windowStartDate,
+            windowEndDate: params.windowEndDate,
+            anomalyType: anomaly.type,
+            severity: anomaly.severity,
+            summary: anomaly.summary,
+            details: anomaly.details,
+            alertable: true
+        });
+    }
 }
-async function markSyncJobFailed(job, error) {
-    const lastError = error instanceof Error ? error.message : String(error);
-    const shouldRetry = job.attempts < env.META_ADS_SYNC_MAX_RETRIES;
-    const nextStatus = shouldRetry ? 'retry' : 'failed';
-    const retryDelaySeconds = computeRetryDelaySeconds(job.attempts);
-    await query(`
-      UPDATE meta_ads_sync_jobs
-      SET
-        status = $2,
-        available_at = CASE
-          WHEN $2 = 'retry' THEN now() + ($3::int * interval '1 second')
-          ELSE available_at
-        END,
-        locked_at = NULL,
-        locked_by = NULL,
-        last_error = $4,
-        completed_at = CASE WHEN $2 = 'failed' THEN now() ELSE completed_at END,
-        updated_at = now()
-      WHERE id = $1
-    `, [job.id, nextStatus, retryDelaySeconds, lastError]);
-    await query(`
-      UPDATE meta_ads_connections
-      SET
-        last_sync_status = $2,
-        last_sync_error = $3,
-        updated_at = now()
-      WHERE id = $1
-    `, [job.connection_id, shouldRetry ? 'retry' : 'failed', lastError]);
-    process.stderr.write(`${buildMetaLog('meta_ads_sync_job_failed', {
-        severity: shouldRetry ? 'WARNING' : 'ERROR',
-        alertable: !shouldRetry,
-        jobId: job.id,
-        connectionId: job.connection_id,
-        adAccountId: job.ad_account_id,
-        syncDate: job.sync_date,
-        attempts: job.attempts,
-        willRetry: shouldRetry,
-        retryDelaySeconds: shouldRetry ? retryDelaySeconds : 0,
-        error: lastError
-    })}\n`);
-}
-async function processSyncJob(job) {
-    await query(`
-      UPDATE meta_ads_connections
-      SET
-        last_sync_started_at = now(),
-        last_sync_status = 'running',
-        last_sync_error = NULL,
-        updated_at = now()
-      WHERE id = $1
-    `, [job.connection_id]);
-    let connection = await getUsableMetaAdsConnection();
+async function processSyncJob(job, triggerSource) {
+    await updateConnectionSyncStarted(job.connection_id);
+    const connection = await getConnectionSecret(job.connection_id);
+    const apiMetrics = buildMetaAdsApiRequestMetricsAccumulator();
+    const sourceSyncedAt = new Date();
+    let runId = null;
     try {
-        const rowsByLevel = {
-            // Keep the decoded API responses in audit storage before row-level normalization.
-            account: await fetchInsightsForLevel({ connectionId: job.connection_id, syncJobId: job.id }, connection.access_token, job.ad_account_id, job.sync_date, 'account'),
-            campaign: await fetchInsightsForLevel({ connectionId: job.connection_id, syncJobId: job.id }, connection.access_token, job.ad_account_id, job.sync_date, 'campaign'),
-            adset: await fetchInsightsForLevel({ connectionId: job.connection_id, syncJobId: job.id }, connection.access_token, job.ad_account_id, job.sync_date, 'adset'),
-            ad: await fetchInsightsForLevel({ connectionId: job.connection_id, syncJobId: job.id }, connection.access_token, job.ad_account_id, job.sync_date, 'ad')
-        };
-        const adIds = [...new Set(rowsByLevel.ad.map((row) => row.ad_id).filter((value) => Boolean(value)))];
-        const creativeMap = await fetchCreativeMap({
-            connectionId: job.connection_id,
-            syncJobId: job.id,
-            adAccountId: job.ad_account_id,
-            syncDate: job.sync_date
-        }, connection.access_token, adIds);
-        await withTransaction(async (client) => {
-            await persistDailySpendSnapshot(client, {
+        const rawRows = await fetchAllOrderValueRows({
+            job,
+            connection,
+            apiMetrics,
+            triggerSource
+        });
+        const baseline = await loadOrderValueBaseline(job.connection_id, job.sync_date);
+        const { persistedRows, normalizedRows, persistedRunId } = await withTransaction(async (client) => {
+            const createdRunId = await createSyncRun({
                 connectionId: job.connection_id,
+                triggerSource,
+                syncDate: job.sync_date,
+                client
+            });
+            const persisted = await persistRawOrderValueRows(client, {
+                connectionId: job.connection_id,
+                syncRunId: createdRunId,
+                syncJobId: job.id,
+                rows: rawRows
+            });
+            const normalized = normalizeOrderValueRows({
+                persistedRows: persisted,
+                currency: connection.account_currency
+            });
+            await replaceAggregateRows(client, {
+                connectionId: job.connection_id,
+                adAccountId: connection.ad_account_id,
                 syncJobId: job.id,
                 syncDate: job.sync_date,
-                currency: connection.account_currency,
-                rowsByLevel,
-                creativeMap
+                normalizedRows: normalized,
+                sourceSyncedAt
             });
+            await markSyncRunCompleted({
+                runId: createdRunId,
+                recordsReceived: normalized.length,
+                rawRowsPersisted: persisted.length,
+                aggregateRowsUpserted: normalized.length,
+                client
+            });
+            await markSyncJobSucceeded(job.id, job.connection_id, client);
+            return {
+                persistedRows: persisted,
+                normalizedRows: normalized,
+                persistedRunId: createdRunId
+            };
         });
-        await markSyncJobSucceeded(job.id, job.connection_id);
+        runId = persistedRunId;
+        const summary = summarizeOrderValueRecords(normalizedRows);
+        const anomalies = buildOrderValueSyncAnomalies({
+            rawRowsFetched: rawRows.length,
+            records: normalizedRows,
+            summary,
+            baseline
+        });
+        logInfo('meta_ads_order_value_sync_connection_completed', {
+            service: process.env.K_SERVICE ?? 'roas-radar',
+            runId,
+            jobId: job.id,
+            connectionId: job.connection_id,
+            adAccountId: connection.ad_account_id,
+            triggerSource,
+            windowStartDate: job.sync_date,
+            windowEndDate: job.sync_date,
+            rawRowsFetched: rawRows.length,
+            normalizedRecordsReceived: summary.totalRows,
+            rawRowsPersisted: persistedRows.length,
+            aggregateRowsUpserted: normalizedRows.length,
+            apiRequestCount: apiMetrics.requestCount,
+            apiRequestErrorCount: apiMetrics.errorCount,
+            apiRequestRetryCount: apiMetrics.retryCount,
+            apiLatencyMsTotal: apiMetrics.latencyMsTotal,
+            apiLatencyMsMax: apiMetrics.latencyMsMax,
+            apiLatencyMsAvg: apiMetrics.requestCount > 0 ? Number((apiMetrics.latencyMsTotal / apiMetrics.requestCount).toFixed(2)) : 0,
+            nullAttributedRevenueCount: summary.nullAttributedRevenueCount,
+            nullAttributedRevenueRate: safeRatio(summary.nullAttributedRevenueCount, summary.totalRows),
+            nullPurchaseCountCount: summary.nullPurchaseCountCount,
+            nullPurchaseCountRate: safeRatio(summary.nullPurchaseCountCount, summary.totalRows),
+            nullActionTypeCount: summary.nullActionTypeCount,
+            nullActionTypeRate: safeRatio(summary.nullActionTypeCount, summary.totalRows),
+            anomalyCount: anomalies.length,
+            anomalyTypes: anomalies.map((anomaly) => anomaly.type),
+            zeroRowsPulled: rawRows.length === 0 || summary.totalRows === 0
+        });
+        emitOrderValueSyncAnomalies({
+            runId,
+            connectionId: job.connection_id,
+            adAccountId: connection.ad_account_id,
+            triggerSource,
+            windowStartDate: job.sync_date,
+            windowEndDate: job.sync_date,
+            anomalies
+        });
+        return {
+            outcome: 'succeeded',
+            recordsReceived: summary.totalRows,
+            rawRowsFetched: rawRows.length,
+            rawRowsPersisted: persistedRows.length,
+            aggregateRowsUpserted: normalizedRows.length,
+            apiRequestCount: apiMetrics.requestCount,
+            anomalyCount: anomalies.length
+        };
     }
     catch (error) {
-        if (error instanceof MetaAdsApiError && [400, 401, 403].includes(error.statusCode)) {
-            connection = await getUsableMetaAdsConnection(true);
-            try {
-                const rowsByLevel = {
-                    account: await fetchInsightsForLevel({ connectionId: job.connection_id, syncJobId: job.id }, connection.access_token, job.ad_account_id, job.sync_date, 'account'),
-                    campaign: await fetchInsightsForLevel({ connectionId: job.connection_id, syncJobId: job.id }, connection.access_token, job.ad_account_id, job.sync_date, 'campaign'),
-                    adset: await fetchInsightsForLevel({ connectionId: job.connection_id, syncJobId: job.id }, connection.access_token, job.ad_account_id, job.sync_date, 'adset'),
-                    ad: await fetchInsightsForLevel({ connectionId: job.connection_id, syncJobId: job.id }, connection.access_token, job.ad_account_id, job.sync_date, 'ad')
-                };
-                const adIds = [
-                    ...new Set(rowsByLevel.ad.map((row) => row.ad_id).filter((value) => Boolean(value)))
-                ];
-                const creativeMap = await fetchCreativeMap({
+        runId = await withTransaction(async (client) => {
+            const failedRunId = runId ??
+                (await createSyncRun({
                     connectionId: job.connection_id,
-                    syncJobId: job.id,
-                    adAccountId: job.ad_account_id,
-                    syncDate: job.sync_date
-                }, connection.access_token, adIds);
-                await withTransaction(async (client) => {
-                    await persistDailySpendSnapshot(client, {
-                        connectionId: job.connection_id,
-                        syncJobId: job.id,
-                        syncDate: job.sync_date,
-                        currency: connection.account_currency,
-                        rowsByLevel,
-                        creativeMap
-                    });
-                });
-                await markSyncJobSucceeded(job.id, job.connection_id);
-                return;
-            }
-            catch (retryError) {
-                await markSyncJobFailed(job, retryError);
-                return;
-            }
-        }
-        await markSyncJobFailed(job, error);
+                    triggerSource,
+                    syncDate: job.sync_date,
+                    client
+                }));
+            await markSyncRunFailedWithClient(failedRunId, error, client);
+            await markSyncJobFailed(job, error, client);
+            return failedRunId;
+        });
+        logError('meta_ads_order_value_sync_connection_failed', error, {
+            service: process.env.K_SERVICE ?? 'roas-radar',
+            runId,
+            jobId: job.id,
+            connectionId: job.connection_id,
+            adAccountId: connection.ad_account_id,
+            triggerSource,
+            windowStartDate: job.sync_date,
+            windowEndDate: job.sync_date,
+            attempts: job.attempts
+        });
+        return {
+            outcome: 'failed',
+            recordsReceived: 0,
+            rawRowsFetched: 0,
+            rawRowsPersisted: 0,
+            aggregateRowsUpserted: 0,
+            apiRequestCount: apiMetrics.requestCount,
+            anomalyCount: 0
+        };
     }
 }
-function buildMetricsLog(result) {
-    return buildMetaLog('meta_ads_sync_run', {
+const poolQueryExecutor = {
+    query(text, params) {
+        return query(text, params);
+    }
+};
+async function markSyncRunFailedWithClient(runId, error, client) {
+    await client.query(`
+      UPDATE meta_ads_order_value_sync_runs
+      SET
+        status = 'failed',
+        completed_at = now(),
+        error_count = 1,
+        error_details = $2::jsonb,
+        updated_at = now()
+      WHERE id = $1
+    `, [runId, JSON.stringify([serializeErrorDetails(error)])]);
+}
+function buildQueueMetricsLog(result) {
+    logInfo('meta_ads_sync_run', {
+        service: process.env.K_SERVICE ?? 'roas-radar',
         workerId: result.workerId,
         enqueuedJobs: result.enqueuedJobs,
         claimedJobs: result.claimedJobs,
@@ -1775,20 +1013,20 @@ function buildMetricsLog(result) {
 export async function processMetaAdsSyncQueue(options = {}) {
     const startedAt = Date.now();
     const workerId = options.workerId ?? `meta-ads-sync-${randomBytes(6).toString('hex')}`;
-    const limit = options.limit ?? env.META_ADS_SYNC_BATCH_SIZE;
     const now = options.now ?? new Date();
-    const enqueuedJobs = await planIncrementalSyncs(now);
+    const limit = options.limit ?? env.META_ADS_SYNC_BATCH_SIZE;
+    const triggerSource = options.triggerSource ?? 'worker';
+    const enqueuedJobs = options.planJobs ? await enqueueSyncJobsForWindow(now) : 0;
     const jobs = await claimSyncJobs(workerId, limit);
     let succeededJobs = 0;
     let failedJobs = 0;
     for (const job of jobs) {
-        try {
-            await processSyncJob(job);
+        const result = await processSyncJob(job, triggerSource);
+        if (result.outcome === 'succeeded') {
             succeededJobs += 1;
         }
-        catch (error) {
+        else {
             failedJobs += 1;
-            await markSyncJobFailed(job, error);
         }
     }
     const result = {
@@ -1800,166 +1038,100 @@ export async function processMetaAdsSyncQueue(options = {}) {
         durationMs: Date.now() - startedAt
     };
     if (options.emitMetrics) {
-        process.stdout.write(`${buildMetricsLog(result)}\n`);
+        buildQueueMetricsLog(result);
     }
     return result;
 }
+export async function runMetaAdsOrderValueSync(options = {}) {
+    const now = options.now ?? new Date();
+    const triggerSource = options.triggerSource ?? 'scheduler';
+    const workerId = `meta-ads-order-value-${randomBytes(6).toString('hex')}`;
+    let succeededConnections = 0;
+    let failedConnections = 0;
+    let recordsReceived = 0;
+    let rawRowsFetched = 0;
+    let rawRowsPersisted = 0;
+    let aggregateRowsUpserted = 0;
+    let apiRequestCount = 0;
+    let anomalyCount = 0;
+    let jobsPlanned = false;
+    while (true) {
+        if (!jobsPlanned) {
+            await enqueueSyncJobsForWindow(now);
+            jobsPlanned = true;
+        }
+        const jobs = await claimSyncJobs(workerId, env.META_ADS_SYNC_BATCH_SIZE);
+        if (jobs.length === 0) {
+            break;
+        }
+        for (const job of jobs) {
+            const result = await processSyncJob(job, triggerSource);
+            if (result.outcome === 'succeeded') {
+                succeededConnections += 1;
+            }
+            else {
+                failedConnections += 1;
+            }
+            recordsReceived += result.recordsReceived;
+            rawRowsFetched += result.rawRowsFetched;
+            rawRowsPersisted += result.rawRowsPersisted;
+            aggregateRowsUpserted += result.aggregateRowsUpserted;
+            apiRequestCount += result.apiRequestCount;
+            anomalyCount += result.anomalyCount;
+        }
+    }
+    const result = {
+        succeededConnections,
+        failedConnections,
+        recordsReceived,
+        rawRowsFetched,
+        rawRowsPersisted,
+        aggregateRowsUpserted,
+        apiRequestCount,
+        anomalyCount
+    };
+    logInfo('meta_ads_order_value_sync_completed', {
+        service: process.env.K_SERVICE ?? 'roas-radar',
+        triggerSource,
+        succeededConnections: result.succeededConnections,
+        failedConnections: result.failedConnections,
+        recordsReceived: result.recordsReceived,
+        rawRowsFetched: result.rawRowsFetched,
+        aggregateRowsUpserted: result.aggregateRowsUpserted,
+        apiRequestCount: result.apiRequestCount,
+        anomalyCount: result.anomalyCount
+    });
+    return result;
+}
+export function startMetaAdsOrderValueScheduler() {
+    if (!env.META_ADS_ORDER_VALUE_SYNC_ENABLED) {
+        return () => undefined;
+    }
+    const timer = setInterval(() => {
+        void runMetaAdsOrderValueSync({ triggerSource: 'scheduler' }).catch(() => undefined);
+    }, env.META_ADS_ORDER_VALUE_SYNC_INTERVAL_MS);
+    return () => {
+        clearInterval(timer);
+    };
+}
 export function createMetaAdsPublicRouter() {
     const router = Router();
-    router.get('/oauth/callback', async (req, res, next) => {
-        try {
-            const config = await getResolvedMetaAdsConfig();
-            const payload = oauthCallbackSchema.parse(req.query);
-            if (payload.error) {
-                throw new MetaAdsHttpError(400, 'meta_ads_oauth_denied', payload.error_description ?? `Meta Ads OAuth failed with error: ${payload.error}`);
-            }
-            if (!payload.code || !payload.state) {
-                throw new MetaAdsHttpError(400, 'meta_ads_oauth_invalid_callback', 'Missing OAuth callback parameters');
-            }
-            const redirectPath = await consumeOAuthState(payload.state);
-            const shortLivedToken = await exchangeCodeForAccessToken(config, payload.code);
-            const longLivedToken = await exchangeLongLivedAccessToken(config, shortLivedToken.access_token);
-            const adAccountId = normalizeMetaAdAccountId(config.adAccountId);
-            const account = await fetchMetaAdsAccount(longLivedToken.access_token, adAccountId);
-            await upsertMetaAdsConnection({
-                adAccountId,
-                accessToken: longLivedToken.access_token,
-                tokenType: longLivedToken.token_type ?? shortLivedToken.token_type ?? 'Bearer',
-                grantedScopes: config.appScopes,
-                tokenExpiresAt: calculateTokenExpiresAt(longLivedToken.expires_in),
-                account,
-                encryptionKey: config.encryptionKey
-            });
-            const initialDates = buildPlanningDates(new Date(), null);
-            const connection = await getUsableMetaAdsConnection();
-            await enqueueSyncDates(connection.id, initialDates);
-            if (redirectPath) {
-                res.redirect(302, redirectPath);
-                return;
-            }
-            res.status(200).json({
-                ok: true,
-                adAccountId,
-                plannedDates: initialDates
-            });
-        }
-        catch (error) {
-            next(error);
-        }
+    router.get('/healthz', (_req, res) => {
+        res.status(200).json({ ok: true });
     });
     return router;
 }
 export function createMetaAdsAdminRouter() {
     const router = Router();
-    router.use(attachAuthContext);
-    router.use(requireAdmin);
-    router.get('/oauth/start', async (req, res, next) => {
-        try {
-            const config = await getResolvedMetaAdsConfig();
-            const payload = oauthStartQuerySchema.parse(req.query);
-            const redirectPath = normalizeRedirectPath(payload.redirectPath);
-            const state = await insertOAuthState(redirectPath);
-            res.status(200).json({
-                authorizationUrl: buildMetaAdsAuthorizationUrl(config, state),
-                redirectUri: buildMetaAdsRedirectUri(config),
-                state
-            });
-        }
-        catch (error) {
-            next(error);
-        }
-    });
-    router.get('/status', async (_req, res, next) => {
-        try {
-            const config = await getMetaAdsConfigurationSummary();
-            const result = await query(`
-          SELECT
-            id,
-            ad_account_id,
-            granted_scopes,
-            token_expires_at,
-            last_refreshed_at,
-            last_sync_started_at,
-            last_sync_completed_at,
-            last_sync_status,
-            last_sync_error,
-            status,
-            account_name,
-            account_currency
-          FROM meta_ads_connections
-          ORDER BY updated_at DESC
-          LIMIT 1
-        `);
-            res.status(200).json({
-                config,
-                connection: result.rows[0] ?? null
-            });
-        }
-        catch (error) {
-            next(error);
-        }
-    });
-    router.put('/config', async (req, res, next) => {
-        try {
-            const payload = metaAdsConfigUpdateSchema.parse(req.body);
-            await upsertMetaAdsSettings(payload);
-            res.status(200).json({
-                ok: true,
-                config: await getMetaAdsConfigurationSummary()
-            });
-        }
-        catch (error) {
-            next(error);
-        }
-    });
-    router.post('/sync', async (req, res, next) => {
-        try {
-            const payload = manualSyncSchema.parse(req.body);
-            const connection = await getUsableMetaAdsConnection();
-            const dates = listDateRangeInclusive(payload.startDate, payload.endDate);
-            const enqueuedJobs = await enqueueSyncDates(connection.id, dates);
-            res.status(202).json({
-                ok: true,
-                enqueuedJobs,
-                dates
-            });
-        }
-        catch (error) {
-            next(error);
-        }
-    });
-    router.post('/refresh-token', async (_req, res, next) => {
-        try {
-            const connection = await getUsableMetaAdsConnection(true);
-            res.status(200).json({
-                ok: true,
-                tokenExpiresAt: connection.token_expires_at,
-                lastRefreshedAt: connection.last_refreshed_at
-            });
-        }
-        catch (error) {
-            next(error);
-        }
+    router.get('/healthz', (_req, res) => {
+        res.status(200).json({ ok: true });
     });
     return router;
 }
 export const __metaAdsTestUtils = {
-    normalizeMetaAdAccountId,
-    buildMetaAdsAuthorizationUrl,
-    buildMetaAdsRedirectUri,
-    calculateTokenExpiresAt,
-    computeRetryDelaySeconds,
-    shouldRefreshToken,
-    buildPlanningDates,
-    buildIncrementalPlanningDates,
-    buildOrderValueWindow,
-    listDateRangeInclusive,
-    chooseCanonicalPurchaseActionType,
-    normalizeCampaignDailyRevenueRecords,
-    normalizeInsightRows,
-    rollupNormalizedSpendRows,
-    rollupPersistableSpendRows,
-    fetchCampaignDailyRevenueInsights,
-    startMetaAdsOrderValueScheduler,
-    upsertOrderValueAggregates
+    buildMetaAdsApiRequestMetricsAccumulator,
+    summarizeOrderValueRecords,
+    buildOrderValueSyncAnomalies,
+    selectCanonicalActionType,
+    normalizeOrderValueRows
 };

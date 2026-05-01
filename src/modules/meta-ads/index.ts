@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { Router } from 'express';
-import type { PoolClient } from 'pg';
+import type { PoolClient, QueryResult, QueryResultRow } from 'pg';
 
 import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
@@ -113,7 +113,12 @@ type MetaAdsConnectionSecretRow = {
   account_currency: string | null;
 };
 
-type MetaAdsQueryable = Pick<PoolClient, 'query'>;
+type MetaAdsQueryable = {
+  query<TResult extends QueryResultRow = QueryResultRow>(
+    text: string,
+    params?: unknown[]
+  ): Promise<QueryResult<TResult>>;
+};
 
 type PersistedMetaAdsRawOrderValueRow = {
   id: number;
@@ -1395,7 +1400,12 @@ async function processSyncJob(job: MetaAdsConnectionSyncJobRow, triggerSource: s
 }
 
 const poolQueryExecutor: MetaAdsQueryable = {
-  query: (text, params) => query(text, params)
+  query<TResult extends QueryResultRow = QueryResultRow>(
+    text: string,
+    params?: unknown[]
+  ): Promise<QueryResult<TResult>> {
+    return query<TResult>(text, params);
+  }
 };
 
 async function markSyncRunFailedWithClient(runId: number, error: unknown, client: MetaAdsQueryable): Promise<void> {

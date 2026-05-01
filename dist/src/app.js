@@ -5,6 +5,7 @@ import { createAuthRouter, createUserAdminRouter } from './modules/auth/index.js
 import { createAttributionAdminRouter } from './modules/attribution/admin.js';
 import { createGoogleAdsAdminRouter, createGoogleAdsPublicRouter } from './modules/google-ads/index.js';
 import { createMetaAdsAdminRouter, createMetaAdsPublicRouter } from './modules/meta-ads/index.js';
+import { createMetaOrderValueRouter } from './modules/reporting/meta-order-value.js';
 import { createReportingRouter } from './modules/reporting/index.js';
 import { createSettingsRouter } from './modules/settings/index.js';
 import { createShopifyAdminRouter, createShopifyPublicRouter, createShopifyWebhookRouter } from './modules/shopify/index.js';
@@ -66,6 +67,7 @@ export function createApp() {
     app.use(express.json({ limit: env.API_JSON_BODY_LIMIT }));
     app.use('/api/auth', createAuthRouter());
     app.use('/api/settings', createSettingsRouter());
+    app.use('/api/reporting/meta-order-value', createMetaOrderValueRouter());
     app.use('/api/reporting', createReportingRouter());
     app.use('/api/internal/identity', createInternalIdentityRouter());
     app.use('/api/admin/identity', createIdentityAdminRouter());

@@ -64,7 +64,7 @@ async function seedMetaConnection(): Promise<number> {
   };
   const rawAccountJson = JSON.stringify(rawAccount);
 
-  const result = await pool.query<{ id: number }>(
+  const result = await pool.query<{ id: number | string }>(
     `
       INSERT INTO meta_ads_connections (
         ad_account_id,
@@ -107,7 +107,13 @@ async function seedMetaConnection(): Promise<number> {
     ]
   );
 
-  return result.rows[0]?.id ?? 0;
+  const rawConnectionId = result.rows[0]?.id;
+
+  if (rawConnectionId === undefined) {
+    return 0;
+  }
+
+  return Number(rawConnectionId);
 }
 
 async function loadOrderValuePersistence() {
