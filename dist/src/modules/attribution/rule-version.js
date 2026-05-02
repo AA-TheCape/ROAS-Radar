@@ -12,3 +12,12 @@ export function assertSupportedAttributionResolverRuleVersion(value) {
     }
     return value;
 }
+export function selectResolverRuleVersionForForwardProcessing(order) {
+    if (!order.attributionTier) {
+        return ATTRIBUTION_RESOLVER_RULE_VERSION;
+    }
+    if (isSupportedAttributionResolverRuleVersion(order.attributionResolverRuleVersion)) {
+        return order.attributionResolverRuleVersion;
+    }
+    return 'attribution_resolver_v1';
+}

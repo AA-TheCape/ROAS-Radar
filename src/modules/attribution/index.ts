@@ -29,7 +29,10 @@ import {
   type ResolvedAttributionTouchpoint,
   type TieredAttributionResolverInput
 } from './resolver.js';
-import { ATTRIBUTION_RESOLVER_RULE_VERSION } from './rule-version.js';
+import {
+  ATTRIBUTION_RESOLVER_RULE_VERSION,
+  selectResolverRuleVersionForForwardProcessing
+} from './rule-version.js';
 
 const ATTRIBUTION_MODEL_VERSION = 1;
 const JOB_STALE_AFTER_MINUTES = 15;
@@ -49,6 +52,7 @@ type OrderRow = {
   customer_identity_id: string | null;
   source_name: string | null;
   attribution_tier: ResolvedAttributionTier | null;
+  attribution_resolver_rule_version: string | null;
   raw_payload: unknown;
 };
 
@@ -296,6 +300,7 @@ async function fetchOrder(client: PoolClient, shopifyOrderId: string): Promise<O
         customer_identity_id::text,
         source_name,
         attribution_tier,
+        attribution_resolver_rule_version,
         raw_payload
       FROM shopify_orders
       WHERE shopify_order_id = $1
@@ -358,7 +363,13 @@ async function resolveAttributionJourney(client: PoolClient, order: OrderRow): P
 
   return {
     resolverInput,
-    journey: resolveAttributionTierForVersion(resolverInput, ATTRIBUTION_RESOLVER_RULE_VERSION)
+    journey: resolveAttributionTierForVersion(
+      resolverInput,
+      selectResolverRuleVersionForForwardProcessing({
+        attributionTier: order.attribution_tier,
+        attributionResolverRuleVersion: order.attribution_resolver_rule_version
+      })
+    )
   };
 }
 

@@ -559,6 +559,39 @@ test('resolveAttributionTierForVersion replays deterministically and keeps Meta 
   );
 });
 
+test('forward-processing resolver version selection preserves historical orders until manual backfill', async () => {
+  const ruleVersionModule = await import('../src/modules/attribution/rule-version.js');
+
+  assert.equal(
+    ruleVersionModule.selectResolverRuleVersionForForwardProcessing({
+      attributionTier: null,
+      attributionResolverRuleVersion: 'attribution_resolver_v1'
+    }),
+    'attribution_resolver_v2'
+  );
+  assert.equal(
+    ruleVersionModule.selectResolverRuleVersionForForwardProcessing({
+      attributionTier: 'ga4_fallback',
+      attributionResolverRuleVersion: 'attribution_resolver_v1'
+    }),
+    'attribution_resolver_v1'
+  );
+  assert.equal(
+    ruleVersionModule.selectResolverRuleVersionForForwardProcessing({
+      attributionTier: 'deterministic_first_party',
+      attributionResolverRuleVersion: null
+    }),
+    'attribution_resolver_v1'
+  );
+  assert.equal(
+    ruleVersionModule.selectResolverRuleVersionForForwardProcessing({
+      attributionTier: 'platform_reported_meta',
+      attributionResolverRuleVersion: 'attribution_resolver_v2'
+    }),
+    'attribution_resolver_v2'
+  );
+});
+
 test('resolveAttributionTier promotes eligible Meta only after deterministic first-party and Shopify hint fail', async () => {
   const testUtils = await getTestUtils();
 

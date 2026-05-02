@@ -6,6 +6,11 @@ export const SUPPORTED_ATTRIBUTION_RESOLVER_RULE_VERSIONS = [
 export type AttributionResolverRuleVersion =
   (typeof SUPPORTED_ATTRIBUTION_RESOLVER_RULE_VERSIONS)[number];
 
+type ForwardProcessingResolverVersionOrder = {
+  attributionTier: string | null;
+  attributionResolverRuleVersion: string | null;
+};
+
 export const ATTRIBUTION_RESOLVER_RULE_VERSION: AttributionResolverRuleVersion =
   'attribution_resolver_v2';
 
@@ -23,4 +28,18 @@ export function assertSupportedAttributionResolverRuleVersion(
   }
 
   return value;
+}
+
+export function selectResolverRuleVersionForForwardProcessing(
+  order: ForwardProcessingResolverVersionOrder
+): AttributionResolverRuleVersion {
+  if (!order.attributionTier) {
+    return ATTRIBUTION_RESOLVER_RULE_VERSION;
+  }
+
+  if (isSupportedAttributionResolverRuleVersion(order.attributionResolverRuleVersion)) {
+    return order.attributionResolverRuleVersion;
+  }
+
+  return 'attribution_resolver_v1';
 }

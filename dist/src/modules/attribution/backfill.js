@@ -200,7 +200,7 @@ async function persistAttribution(client, order, evaluation, backfillRunId) {
         journey,
         resolverInput,
         orderAttributionAudit,
-        resolverRunSource: 'manual_backfill',
+        resolverRunSource: backfillRunId ? 'manual_backfill' : 'forward_processing',
         resolverTriggeredBy: `backfill:${backfillRunId ?? 'adhoc'}`,
         backfillRunId
     });
