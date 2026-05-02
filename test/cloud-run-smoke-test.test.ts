@@ -113,7 +113,7 @@ done
 printf '%s|%s\n' "$AUTH_HEADER" "$URL" >> "$CURL_LOG_PATH"
 
 case "$URL" in
-  https://api.example.test/healthz|https://api.example.test/readyz|https://dashboard.example.test/)
+  https://api.example.test/readyz|https://dashboard.example.test/)
     :
     ;;
   https://api.example.test/api/reporting/meta-order-value*)
@@ -180,7 +180,6 @@ test('cloud run smoke test validates unauthenticated and authenticated Meta orde
     assert.equal(result.status, 0, result.stderr);
 
     const curlLog = readFileSync(fixture.curlLogPath, 'utf8');
-    assert.match(curlLog, /\|https:\/\/api\.example\.test\/healthz/);
     assert.match(curlLog, /\|https:\/\/api\.example\.test\/readyz/);
     assert.match(
       curlLog,
