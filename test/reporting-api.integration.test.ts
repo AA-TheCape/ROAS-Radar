@@ -307,10 +307,11 @@ test('reporting orders only returns online store Shopify orders', async () => {
       revenue_credit,
       is_primary,
       attribution_reason,
+      match_source,
       model_version
     ) VALUES
-      ($1, 'last_touch', 1, NULL, $2, 'facebook', 'paid_social', 'prospecting-us', '1.0', '80.00', true, 'matched_by_checkout_token', 1),
-      ($3, 'last_touch', 1, NULL, $4, 'pos', 'offline', 'retail', '1.0', '50.00', true, 'matched_by_checkout_token', 1)`,
+      ($1, 'last_touch', 1, NULL, $2, 'facebook', 'paid_social', 'prospecting-us', '1.0', '80.00', true, 'matched_by_checkout_token', 'checkout_token', 1),
+      ($3, 'last_touch', 1, NULL, $4, 'pos', 'offline', 'retail', '1.0', '50.00', true, 'matched_by_checkout_token', 'checkout_token', 1)`,
     [
       'web-order-1',
       '2026-04-10T12:55:00.000Z',

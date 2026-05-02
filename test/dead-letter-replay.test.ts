@@ -248,7 +248,6 @@ async function insertShopifyOrder(pool: Pool, orderId: string, sessionId: string
         payload_size_bytes,
         payload_hash,
         raw_payload,
-        payload_size_bytes,
         ingested_at
       )
       VALUES (

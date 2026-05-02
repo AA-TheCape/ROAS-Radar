@@ -153,6 +153,9 @@ test('refreshDailyReportingMetrics excludes non-online-store Shopify orders from
     'shopify_orders'
   ]);
 
+  const webOrderPayload = buildRawPayloadFixture({ id: 'web-order-1' }, 'web-order-1');
+  const posOrderPayload = buildRawPayloadFixture({ id: 'pos-order-1' }, 'pos-order-1');
+
   await pool.query(
     `
       INSERT INTO shopify_orders (
@@ -163,12 +166,25 @@ test('refreshDailyReportingMetrics excludes non-online-store Shopify orders from
         total_price,
         processed_at,
         source_name,
-        raw_payload
+        raw_payload,
+        payload_external_id,
+        payload_size_bytes,
+        payload_hash
       ) VALUES
-        ('web-order-1', '18391', 'USD', 90.00, 100.00, $1::timestamptz, 'web', '{}'::jsonb),
-        ('pos-order-1', '18392', 'USD', 45.00, 50.00, $1::timestamptz, 'pos', '{}'::jsonb)
+        ('web-order-1', '18391', 'USD', 90.00, 100.00, $1::timestamptz, 'web', $2::jsonb, $3, $4, $5),
+        ('pos-order-1', '18392', 'USD', 45.00, 50.00, $1::timestamptz, 'pos', $6::jsonb, $7, $8, $9)
     `,
-    [`${metricDate}T17:00:00.000Z`]
+    [
+      `${metricDate}T17:00:00.000Z`,
+      webOrderPayload.rawPayloadJson,
+      webOrderPayload.payloadExternalId,
+      webOrderPayload.payloadSizeBytes,
+      webOrderPayload.payloadHash,
+      posOrderPayload.rawPayloadJson,
+      posOrderPayload.payloadExternalId,
+      posOrderPayload.payloadSizeBytes,
+      posOrderPayload.payloadHash
+    ]
   );
 
   await pool.query(
@@ -186,10 +202,11 @@ test('refreshDailyReportingMetrics excludes non-online-store Shopify orders from
         revenue_credit,
         is_primary,
         attribution_reason,
+        match_source,
         model_version
       ) VALUES
-        ('web-order-1', 'last_touch', 1, NULL, $1::timestamptz, 'facebook', 'paid_social', 'prospecting-us', 1.0, 100.00, true, 'matched_by_checkout_token', 1),
-        ('pos-order-1', 'last_touch', 1, NULL, $1::timestamptz, 'pos', 'offline', 'retail', 1.0, 50.00, true, 'matched_by_checkout_token', 1)
+        ('web-order-1', 'last_touch', 1, NULL, $1::timestamptz, 'facebook', 'paid_social', 'prospecting-us', 1.0, 100.00, true, 'matched_by_checkout_token', 'checkout_token', 1),
+        ('pos-order-1', 'last_touch', 1, NULL, $1::timestamptz, 'pos', 'offline', 'retail', 1.0, 50.00, true, 'matched_by_checkout_token', 'checkout_token', 1)
     `,
     [`${metricDate}T16:55:00.000Z`]
   );
