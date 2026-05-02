@@ -190,7 +190,6 @@ function formatSelectionModeLabel(mode: MetaOrderValueRow['canonicalSelectionMod
       return 'Fallback';
     case 'priority':
       return 'Priority';
-    case 'none':
     default:
       return 'No match';
   }

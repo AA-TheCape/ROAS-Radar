@@ -34,6 +34,10 @@ type Env = {
   DEAD_LETTER_REPLAY_MAX_BATCH_SIZE: number;
   DEFAULT_ORGANIZATION_ID: number;
   GCLOUD_PROJECT: string;
+  GA4_BIGQUERY_BACKFILL_HOURS: number;
+  GA4_BIGQUERY_ENABLED: boolean;
+  GA4_BIGQUERY_LOOKBACK_HOURS: number;
+  GA4_FALLBACK_RETENTION_DAYS: number;
   GOOGLE_ADS_API_VERSION: string;
   GOOGLE_ADS_APP_BASE_URL: string;
   GOOGLE_ADS_APP_SCOPES: string[];
@@ -43,6 +47,7 @@ type Env = {
   GOOGLE_ADS_ENCRYPTION_KEY: string;
   GOOGLE_ADS_SYNC_BATCH_SIZE: number;
   GOOGLE_ADS_SYNC_MAX_RETRIES: number;
+  GOOGLE_ADS_TRANSFER_LOOKBACK_DAYS: number;
   GOOGLE_ADS_WORKER_LOOP: boolean;
   GOOGLE_ADS_WORKER_POLL_INTERVAL_MS: number;
   GOOGLE_CLOUD_PROJECT: string;
@@ -194,6 +199,10 @@ const parsers: { [TKey in keyof Env]: EnvParser<Env[TKey]> } = {
   DEAD_LETTER_REPLAY_MAX_BATCH_SIZE: (name) => parseInteger(name, 100),
   DEFAULT_ORGANIZATION_ID: (name) => parseInteger(name, 1),
   GCLOUD_PROJECT: (name) => parseString(name, ''),
+  GA4_BIGQUERY_BACKFILL_HOURS: (name) => parseInteger(name, 168),
+  GA4_BIGQUERY_ENABLED: (name) => parseBoolean(name, false),
+  GA4_BIGQUERY_LOOKBACK_HOURS: (name) => parseInteger(name, 24),
+  GA4_FALLBACK_RETENTION_DAYS: (name) => parseInteger(name, 30),
   GOOGLE_ADS_API_VERSION: (name) => parseString(name, 'v22'),
   GOOGLE_ADS_APP_BASE_URL: (name) => parseString(name, ''),
   GOOGLE_ADS_APP_SCOPES: (name) => parseStringList(name, []),
@@ -203,6 +212,7 @@ const parsers: { [TKey in keyof Env]: EnvParser<Env[TKey]> } = {
   GOOGLE_ADS_ENCRYPTION_KEY: (name) => parseString(name, ''),
   GOOGLE_ADS_SYNC_BATCH_SIZE: (name) => parseInteger(name, 5),
   GOOGLE_ADS_SYNC_MAX_RETRIES: (name) => parseInteger(name, 3),
+  GOOGLE_ADS_TRANSFER_LOOKBACK_DAYS: (name) => parseInteger(name, 30),
   GOOGLE_ADS_WORKER_LOOP: (name) => parseBoolean(name, true),
   GOOGLE_ADS_WORKER_POLL_INTERVAL_MS: (name) => parseInteger(name, 60 * 1000),
   GOOGLE_CLOUD_PROJECT: (name) => parseString(name, ''),

@@ -184,7 +184,6 @@ function buildOrderByClause(input: MetaOrderValueQueryInput): string {
       return `purchase_roas ${direction} NULLS LAST, report_date DESC, campaign_id ASC`;
     case 'actionType':
       return `canonical_action_type ${direction} NULLS LAST, report_date DESC, campaign_id ASC`;
-    case 'reportDate':
     default:
       return `report_date ${direction}, attributed_revenue DESC NULLS LAST, campaign_id ASC`;
   }

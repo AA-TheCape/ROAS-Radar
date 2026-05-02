@@ -118,7 +118,7 @@ PY
 }
 
 echo "Smoke testing API health for $ENVIRONMENT"
-curl --fail --silent --show-error "$API_URL/healthz/" >/dev/null
+curl --fail --silent --show-error "$API_URL/healthz" >/dev/null
 curl --fail --silent --show-error "$API_URL/readyz" >/dev/null
 
 echo "Smoke testing reporting auth for $ENVIRONMENT"

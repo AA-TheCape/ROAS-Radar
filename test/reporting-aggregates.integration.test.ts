@@ -1,12 +1,12 @@
-import assert from 'node:assert/strict';
-import test from 'node:test';
+import assert from "node:assert/strict";
+import test from "node:test";
 
 import { buildRawPayloadFixture, resetIntegrationTables } from './integration-test-helpers.js';
 
 process.env.DATABASE_URL ??= 'postgres://postgres:postgres@127.0.0.1:5432/roas_radar';
 
-const poolModule = await import('../src/db/pool.js');
-const reportingModule = await import('../src/modules/reporting/aggregates.js');
+const poolModule = await import("../src/db/pool.js");
+const reportingModule = await import("../src/modules/reporting/aggregates.js");
 
 const { pool } = poolModule;
 const { refreshDailyReportingMetrics } = reportingModule;
@@ -32,24 +32,24 @@ async function seedGoogleConnection() {
     [rawCustomerFixture.payloadSizeBytes, rawCustomerFixture.payloadHash, rawCustomerFixture.rawPayloadJson]
   );
 
-  return connectionResult.rows[0].id;
+	return connectionResult.rows[0].id;
 }
 
 async function seedGoogleSyncJob(connectionId: number, syncDate: string) {
-  const jobResult = await pool.query<{ id: number }>(
-    `
+	const jobResult = await pool.query<{ id: number }>(
+		`
       INSERT INTO google_ads_sync_jobs (connection_id, sync_date, status)
       VALUES ($1, $2::date, 'completed')
       RETURNING id
     `,
-    [connectionId, syncDate]
-  );
+		[connectionId, syncDate],
+	);
 
-  return jobResult.rows[0].id;
+	return jobResult.rows[0].id;
 }
 
-test('refreshDailyReportingMetrics includes campaign-only Google spend when no creative rows exist', async () => {
-  const syncDate = '2026-04-24';
+test("refreshDailyReportingMetrics includes campaign-only Google spend when no creative rows exist", async () => {
+	const syncDate = "2026-04-24";
 
   await resetIntegrationTables(pool, [
     'daily_reporting_metrics',
@@ -59,11 +59,11 @@ test('refreshDailyReportingMetrics includes campaign-only Google spend when no c
     'google_ads_connections'
   ]);
 
-  const connectionId = await seedGoogleConnection();
-  const syncJobId = await seedGoogleSyncJob(connectionId, syncDate);
+	const connectionId = await seedGoogleConnection();
+	const syncJobId = await seedGoogleSyncJob(connectionId, syncDate);
 
-  await pool.query(
-    `
+	await pool.query(
+		`
       INSERT INTO google_ads_daily_spend (
         connection_id,
         sync_job_id,
@@ -96,24 +96,24 @@ test('refreshDailyReportingMetrics includes campaign-only Google spend when no c
         ($1, $2, $3::date, 'campaign', 'campaign-search', 'acct-1', 'Account', 'campaign-search', 'Search Campaign', NULL, NULL, NULL, NULL, NULL, NULL, 'google', 'cpc', 'search campaign', 'unknown', 'unknown', 'USD', 10.00, 500, 20, '{}'::jsonb),
         ($1, $2, $3::date, 'creative', 'creative-search', 'acct-1', 'Account', 'campaign-search', 'Search Campaign', 'adgroup-1', 'Ad group 1', 'ad-1', 'Search Ad', 'creative-search', 'Search Ad', 'google', 'cpc', 'search campaign', 'search ad', 'unknown', 'USD', 10.00, 500, 20, '{}'::jsonb)
     `,
-    [connectionId, syncJobId, syncDate]
-  );
+		[connectionId, syncJobId, syncDate],
+	);
 
-  const client = await pool.connect();
+	const client = await pool.connect();
 
-  try {
-    await client.query('BEGIN');
-    await refreshDailyReportingMetrics(client, [syncDate]);
-    await client.query('COMMIT');
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
+	try {
+		await client.query("BEGIN");
+		await refreshDailyReportingMetrics(client, [syncDate]);
+		await client.query("COMMIT");
+	} catch (error) {
+		await client.query("ROLLBACK");
+		throw error;
+	} finally {
+		client.release();
+	}
 
-  const result = await pool.query(
-    `
+	const result = await pool.query(
+		`
       SELECT campaign, spend
       FROM daily_reporting_metrics
       WHERE metric_date = $1::date
@@ -121,19 +121,19 @@ test('refreshDailyReportingMetrics includes campaign-only Google spend when no c
         AND source = 'google'
       ORDER BY campaign ASC, spend DESC
     `,
-    [syncDate]
-  );
+		[syncDate],
+	);
 
-  assert.deepEqual(result.rows, [
-    {
-      campaign: 'marketplace with individual asset groups',
-      spend: '35.20'
-    },
-    {
-      campaign: 'search campaign',
-      spend: '10.00'
-    }
-  ]);
+	assert.deepEqual(result.rows, [
+		{
+			campaign: "marketplace with individual asset groups",
+			spend: "35.20",
+		},
+		{
+			campaign: "search campaign",
+			spend: "10.00",
+		},
+	]);
 
   await resetIntegrationTables(pool, [
     'daily_reporting_metrics',
@@ -153,6 +153,9 @@ test('refreshDailyReportingMetrics excludes non-online-store Shopify orders from
     'shopify_orders'
   ]);
 
+  const webOrderPayload = buildRawPayloadFixture({ id: 'web-order-1' }, 'web-order-1');
+  const posOrderPayload = buildRawPayloadFixture({ id: 'pos-order-1' }, 'pos-order-1');
+
   await pool.query(
     `
       INSERT INTO shopify_orders (
@@ -163,12 +166,25 @@ test('refreshDailyReportingMetrics excludes non-online-store Shopify orders from
         total_price,
         processed_at,
         source_name,
-        raw_payload
+        raw_payload,
+        payload_external_id,
+        payload_size_bytes,
+        payload_hash
       ) VALUES
-        ('web-order-1', '18391', 'USD', 90.00, 100.00, $1::timestamptz, 'web', '{}'::jsonb),
-        ('pos-order-1', '18392', 'USD', 45.00, 50.00, $1::timestamptz, 'pos', '{}'::jsonb)
+        ('web-order-1', '18391', 'USD', 90.00, 100.00, $1::timestamptz, 'web', $2::jsonb, $3, $4, $5),
+        ('pos-order-1', '18392', 'USD', 45.00, 50.00, $1::timestamptz, 'pos', $6::jsonb, $7, $8, $9)
     `,
-    [`${metricDate}T17:00:00.000Z`]
+    [
+      `${metricDate}T17:00:00.000Z`,
+      webOrderPayload.rawPayloadJson,
+      webOrderPayload.payloadExternalId,
+      webOrderPayload.payloadSizeBytes,
+      webOrderPayload.payloadHash,
+      posOrderPayload.rawPayloadJson,
+      posOrderPayload.payloadExternalId,
+      posOrderPayload.payloadSizeBytes,
+      posOrderPayload.payloadHash
+    ]
   );
 
   await pool.query(
@@ -186,10 +202,12 @@ test('refreshDailyReportingMetrics excludes non-online-store Shopify orders from
         revenue_credit,
         is_primary,
         attribution_reason,
+        match_source,
+        confidence_label,
         model_version
       ) VALUES
-        ('web-order-1', 'last_touch', 1, NULL, $1::timestamptz, 'facebook', 'paid_social', 'prospecting-us', 1.0, 100.00, true, 'matched_by_checkout_token', 1),
-        ('pos-order-1', 'last_touch', 1, NULL, $1::timestamptz, 'pos', 'offline', 'retail', 1.0, 50.00, true, 'matched_by_checkout_token', 1)
+        ('web-order-1', 'last_touch', 1, NULL, $1::timestamptz, 'facebook', 'paid_social', 'prospecting-us', 1.0, 100.00, true, 'matched_by_checkout_token', 'matched_by_checkout_token', 'high', 1),
+        ('pos-order-1', 'last_touch', 1, NULL, $1::timestamptz, 'pos', 'offline', 'retail', 1.0, 50.00, true, 'matched_by_checkout_token', 'matched_by_checkout_token', 'high', 1)
     `,
     [`${metricDate}T16:55:00.000Z`]
   );
@@ -237,5 +255,5 @@ test('refreshDailyReportingMetrics excludes non-online-store Shopify orders from
 });
 
 test.after(async () => {
-  await pool.end();
+	await pool.end();
 });

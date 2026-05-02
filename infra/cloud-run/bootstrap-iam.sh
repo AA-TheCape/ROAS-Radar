@@ -5,6 +5,10 @@ set -eu
 if [ "$#" -ne 1 ]; then
   echo "usage: $0 <environment>" >&2
   exit 1
+}
+
+if [ "$#" -ne 1 ]; then
+  usage
 fi
 
 ENVIRONMENT="$1"
@@ -16,8 +20,10 @@ if [ ! -f "$ENV_FILE" ]; then
   exit 1
 fi
 
+set -a
 # shellcheck disable=SC1090
 . "$ENV_FILE"
+set +a
 
 require_var() {
   eval "value=\${$1:-}"
@@ -27,132 +33,96 @@ require_var() {
   fi
 }
 
-require_var GCP_PROJECT_ID
-require_var GCP_REGION
-require_var ARTIFACT_REGISTRY_REPOSITORY
-require_var API_SERVICE_ACCOUNT_NAME
-require_var DASHBOARD_SERVICE_ACCOUNT_NAME
-require_var WORKER_SERVICE_ACCOUNT_NAME
-require_var MIGRATOR_JOB_SERVICE_ACCOUNT_NAME
-require_var META_ADS_JOB_SERVICE_ACCOUNT_NAME
-require_var GOOGLE_ADS_JOB_SERVICE_ACCOUNT_NAME
-require_var RETENTION_JOB_SERVICE_ACCOUNT_NAME
-require_var DATA_QUALITY_JOB_SERVICE_ACCOUNT_NAME
-require_var IDENTITY_GRAPH_BACKFILL_JOB_SERVICE_ACCOUNT_NAME
-require_var ORDER_ATTRIBUTION_MATERIALIZATION_JOB_SERVICE_ACCOUNT_NAME
-require_var SCHEDULER_INVOKER_SERVICE_ACCOUNT_NAME
-require_var DEPLOYER_SERVICE_ACCOUNT_NAME
+service_account_email() {
+  printf '%s@%s.iam.gserviceaccount.com' "$1" "$GCP_PROJECT_ID"
+}
 
-PROJECT_NUMBER=$(gcloud projects describe "$GCP_PROJECT_ID" --format='value(projectNumber)')
+ensure_service_account() {
+  account_name="$1"
+  display_name="$2"
 
-create_service_account() {
-  ACCOUNT_NAME="$1"
-  DISPLAY_NAME="$2"
-  EMAIL="$ACCOUNT_NAME@$GCP_PROJECT_ID.iam.gserviceaccount.com"
-
-  if ! gcloud iam service-accounts describe "$EMAIL" --project="$GCP_PROJECT_ID" >/dev/null 2>&1; then
-    gcloud iam service-accounts create "$ACCOUNT_NAME" \
-      --project="$GCP_PROJECT_ID" \
-      --display-name="$DISPLAY_NAME"
+  if ! gcloud iam service-accounts describe "$(service_account_email "$account_name")" --project "$GCP_PROJECT_ID" >/dev/null 2>&1; then
+    gcloud iam service-accounts create "$account_name" \
+      --project "$GCP_PROJECT_ID" \
+      --display-name "$display_name"
   fi
-
-  printf '%s' "$EMAIL"
 }
 
 grant_project_role() {
-  MEMBER="$1"
-  ROLE="$2"
+  member="$1"
+  role="$2"
 
   gcloud projects add-iam-policy-binding "$GCP_PROJECT_ID" \
-    --member="$MEMBER" \
-    --role="$ROLE" \
-    --quiet >/dev/null
+    --member "$member" \
+    --role "$role" \
+    >/dev/null
 }
 
-grant_secret_accessor() {
-  SERVICE_ACCOUNT_EMAIL="$1"
-  SECRET_NAME="$2"
+grant_secret_access() {
+  service_account="$1"
+  secret_name="$2"
 
-  gcloud secrets add-iam-policy-binding "$SECRET_NAME" \
-    --project="$GCP_PROJECT_ID" \
-    --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
-    --role="roles/secretmanager.secretAccessor" \
-    --quiet >/dev/null
-}
-
-ensure_repo() {
-  if ! gcloud artifacts repositories describe "$ARTIFACT_REGISTRY_REPOSITORY" \
-    --project="$GCP_PROJECT_ID" \
-    --location="$GCP_REGION" >/dev/null 2>&1; then
-    gcloud artifacts repositories create "$ARTIFACT_REGISTRY_REPOSITORY" \
-      --project="$GCP_PROJECT_ID" \
-      --location="$GCP_REGION" \
-      --repository-format=docker \
-      --description="ROAS Radar application images"
+  if [ -z "$secret_name" ]; then
+    return
   fi
+
+  gcloud secrets add-iam-policy-binding "$secret_name" \
+    --project "$GCP_PROJECT_ID" \
+    --member "serviceAccount:$(service_account_email "$service_account")" \
+    --role roles/secretmanager.secretAccessor \
+    >/dev/null
 }
 
-API_SA=$(create_service_account "$API_SERVICE_ACCOUNT_NAME" "ROAS Radar API ($ENVIRONMENT)")
-DASHBOARD_SA=$(create_service_account "$DASHBOARD_SERVICE_ACCOUNT_NAME" "ROAS Radar dashboard ($ENVIRONMENT)")
-WORKER_SA=$(create_service_account "$WORKER_SERVICE_ACCOUNT_NAME" "ROAS Radar worker ($ENVIRONMENT)")
-MIGRATOR_SA=$(create_service_account "$MIGRATOR_JOB_SERVICE_ACCOUNT_NAME" "ROAS Radar migrator ($ENVIRONMENT)")
-META_ADS_SA=$(create_service_account "$META_ADS_JOB_SERVICE_ACCOUNT_NAME" "ROAS Radar Meta Ads sync ($ENVIRONMENT)")
-GOOGLE_ADS_SA=$(create_service_account "$GOOGLE_ADS_JOB_SERVICE_ACCOUNT_NAME" "ROAS Radar Google Ads sync ($ENVIRONMENT)")
-RETENTION_SA=$(create_service_account "$RETENTION_JOB_SERVICE_ACCOUNT_NAME" "ROAS Radar retention ($ENVIRONMENT)")
-DATA_QUALITY_SA=$(create_service_account "$DATA_QUALITY_JOB_SERVICE_ACCOUNT_NAME" "ROAS Radar data quality ($ENVIRONMENT)")
-IDENTITY_GRAPH_BACKFILL_SA=$(create_service_account "$IDENTITY_GRAPH_BACKFILL_JOB_SERVICE_ACCOUNT_NAME" "ROAS Radar identity graph backfill ($ENVIRONMENT)")
-ORDER_ATTRIBUTION_MATERIALIZATION_SA=$(create_service_account "$ORDER_ATTRIBUTION_MATERIALIZATION_JOB_SERVICE_ACCOUNT_NAME" "ROAS Radar order attribution materialization ($ENVIRONMENT)")
-SCHEDULER_INVOKER_SA=$(create_service_account "$SCHEDULER_INVOKER_SERVICE_ACCOUNT_NAME" "ROAS Radar scheduler invoker ($ENVIRONMENT)")
-DEPLOYER_SA=$(create_service_account "$DEPLOYER_SERVICE_ACCOUNT_NAME" "ROAS Radar deployer ($ENVIRONMENT)")
+grant_roles_csv() {
+  service_account="$1"
+  roles_csv="$2"
+  old_ifs=$IFS
+  IFS=','
+  set -- $roles_csv
+  IFS=$old_ifs
 
-ensure_repo
+  for role in "$@"; do
+    trimmed=$(printf '%s' "$role" | awk '{$1=$1; print}')
+    if [ -n "$trimmed" ]; then
+      grant_project_role "serviceAccount:$(service_account_email "$service_account")" "$trimmed"
+    fi
+  done
+}
 
-for SA in \
-  "$API_SA" \
-  "$WORKER_SA" \
-  "$MIGRATOR_SA" \
-  "$META_ADS_SA" \
-  "$GOOGLE_ADS_SA" \
-  "$RETENTION_SA" \
-  "$DATA_QUALITY_SA" \
-  "$IDENTITY_GRAPH_BACKFILL_SA" \
-  "$ORDER_ATTRIBUTION_MATERIALIZATION_SA"
+for var in \
+  GCP_PROJECT_ID \
+  API_SERVICE_ACCOUNT_NAME \
+  ATTRIBUTION_WORKER_SERVICE_ACCOUNT_NAME \
+  MIGRATION_JOB_SERVICE_ACCOUNT_NAME \
+  META_ADS_SYNC_JOB_SERVICE_ACCOUNT_NAME \
+  GOOGLE_ADS_SYNC_JOB_SERVICE_ACCOUNT_NAME \
+  GA4_INGESTION_JOB_SERVICE_ACCOUNT_NAME \
+  GA4_INGESTION_SCHEDULER_SERVICE_ACCOUNT_NAME
 do
-  grant_project_role "serviceAccount:$SA" "roles/cloudsql.client"
-  grant_project_role "serviceAccount:$SA" "roles/logging.logWriter"
-  grant_project_role "serviceAccount:$SA" "roles/monitoring.metricWriter"
+  require_var "$var"
 done
 
 grant_project_role "serviceAccount:$DASHBOARD_SA" "roles/logging.logWriter"
 grant_project_role "serviceAccount:$SCHEDULER_INVOKER_SA" "roles/logging.logWriter"
 
-grant_project_role "serviceAccount:$DEPLOYER_SA" "roles/artifactregistry.writer"
-grant_project_role "serviceAccount:$DEPLOYER_SA" "roles/cloudbuild.builds.editor"
-grant_project_role "serviceAccount:$DEPLOYER_SA" "roles/logging.logWriter"
-grant_project_role "serviceAccount:$DEPLOYER_SA" "roles/logging.configWriter"
-grant_project_role "serviceAccount:$DEPLOYER_SA" "roles/monitoring.editor"
-grant_project_role "serviceAccount:$DEPLOYER_SA" "roles/run.admin"
-grant_project_role "serviceAccount:$DEPLOYER_SA" "roles/iam.serviceAccountUser"
-grant_project_role "serviceAccount:$DEPLOYER_SA" "roles/cloudscheduler.admin"
+grant_roles_csv "$API_SERVICE_ACCOUNT_NAME" "${API_SERVICE_ACCOUNT_ROLES:-roles/cloudsql.client,roles/logging.logWriter,roles/monitoring.metricWriter}"
+grant_roles_csv "$ATTRIBUTION_WORKER_SERVICE_ACCOUNT_NAME" "${ATTRIBUTION_WORKER_SERVICE_ACCOUNT_ROLES:-roles/cloudsql.client,roles/logging.logWriter,roles/monitoring.metricWriter}"
+grant_roles_csv "$MIGRATION_JOB_SERVICE_ACCOUNT_NAME" "${MIGRATION_JOB_SERVICE_ACCOUNT_ROLES:-roles/cloudsql.client,roles/logging.logWriter}"
+grant_roles_csv "$META_ADS_SYNC_JOB_SERVICE_ACCOUNT_NAME" "${META_ADS_SYNC_JOB_SERVICE_ACCOUNT_ROLES:-roles/cloudsql.client,roles/logging.logWriter,roles/monitoring.metricWriter}"
+grant_roles_csv "$GOOGLE_ADS_SYNC_JOB_SERVICE_ACCOUNT_NAME" "${GOOGLE_ADS_SYNC_JOB_SERVICE_ACCOUNT_ROLES:-roles/cloudsql.client,roles/logging.logWriter,roles/monitoring.metricWriter}"
+grant_roles_csv "$GA4_INGESTION_JOB_SERVICE_ACCOUNT_NAME" "${GA4_INGESTION_JOB_SERVICE_ACCOUNT_ROLES:-roles/cloudsql.client,roles/logging.logWriter,roles/monitoring.metricWriter,roles/bigquery.jobUser,roles/bigquery.dataViewer}"
+grant_roles_csv "$GA4_INGESTION_SCHEDULER_SERVICE_ACCOUNT_NAME" "${GA4_INGESTION_SCHEDULER_SERVICE_ACCOUNT_ROLES:-roles/run.developer}"
 
-gcloud projects add-iam-policy-binding "$GCP_PROJECT_ID" \
-  --member="serviceAccount:$PROJECT_NUMBER@cloudbuild.gserviceaccount.com" \
-  --role="roles/artifactregistry.writer" \
-  --quiet >/dev/null || true
+grant_secret_access "$API_SERVICE_ACCOUNT_NAME" "${DATABASE_URL_SECRET_NAME:-}"
+grant_secret_access "$ATTRIBUTION_WORKER_SERVICE_ACCOUNT_NAME" "${DATABASE_URL_SECRET_NAME:-}"
+grant_secret_access "$MIGRATION_JOB_SERVICE_ACCOUNT_NAME" "${DATABASE_URL_SECRET_NAME:-}"
+grant_secret_access "$META_ADS_SYNC_JOB_SERVICE_ACCOUNT_NAME" "${DATABASE_URL_SECRET_NAME:-}"
+grant_secret_access "$GOOGLE_ADS_SYNC_JOB_SERVICE_ACCOUNT_NAME" "${DATABASE_URL_SECRET_NAME:-}"
+grant_secret_access "$GA4_INGESTION_JOB_SERVICE_ACCOUNT_NAME" "${DATABASE_URL_SECRET_NAME:-}"
 
-for SECRET in \
-  DATABASE_URL \
-  REPORTING_API_TOKEN \
-  SHOPIFY_WEBHOOK_SECRET \
-  SHOPIFY_APP_API_KEY \
-  SHOPIFY_APP_API_SECRET \
-  SHOPIFY_APP_ENCRYPTION_KEY \
-  META_ADS_APP_SECRET \
-  META_ADS_ENCRYPTION_KEY \
-  GOOGLE_ADS_ENCRYPTION_KEY
-do
-  grant_secret_accessor "$API_SA" "$SECRET"
-done
+grant_secret_access "$API_SERVICE_ACCOUNT_NAME" "${REPORTING_API_TOKEN_SECRET_NAME:-}"
+grant_secret_access "$ATTRIBUTION_WORKER_SERVICE_ACCOUNT_NAME" "${REPORTING_API_TOKEN_SECRET_NAME:-}"
+grant_secret_access "$GA4_INGESTION_JOB_SERVICE_ACCOUNT_NAME" "${REPORTING_API_TOKEN_SECRET_NAME:-}"
 
 for SECRET in \
   DATABASE_URL \

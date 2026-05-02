@@ -1,9 +1,9 @@
-import assert from 'node:assert/strict';
-import test from 'node:test';
+import assert from "node:assert/strict";
+import test from "node:test";
 
 process.env.DATABASE_URL ??= 'postgres://postgres:postgres@localhost:5432/roas_radar_test';
 
-const { __metaAdsTestUtils } = await import('../src/modules/meta-ads/index.js');
+const { __metaAdsTestUtils } = await import("../src/modules/meta-ads/index.js");
 
 test('summarizeOrderValueRecords counts null canonical fields and selection modes', () => {
   const summary = __metaAdsTestUtils.summarizeOrderValueRecords([

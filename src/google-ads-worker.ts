@@ -1,46 +1,48 @@
-import { randomUUID } from 'node:crypto';
-import { setTimeout as delay } from 'node:timers/promises';
+import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 
-import { env } from './config/env.js';
-import { pool } from './db/pool.js';
-import { processGoogleAdsSyncQueue } from './modules/google-ads/index.js';
+import { env } from "./config/env.js";
+import { pool } from "./db/pool.js";
+import { processGoogleAdsSyncQueue } from "./modules/google-ads/index.js";
 
 async function run(): Promise<void> {
-  const workerId = `google-ads-worker-${randomUUID()}`;
-  let shouldStop = false;
+	const workerId = `google-ads-worker-${randomUUID()}`;
+	let shouldStop = false;
 
-  const requestStop = () => {
-    shouldStop = true;
-  };
+	const requestStop = () => {
+		shouldStop = true;
+	};
 
-  process.on('SIGINT', requestStop);
-  process.on('SIGTERM', requestStop);
+	process.on("SIGINT", requestStop);
+	process.on("SIGTERM", requestStop);
 
-  do {
-    const result = await processGoogleAdsSyncQueue({
-      workerId,
-      limit: env.GOOGLE_ADS_SYNC_BATCH_SIZE,
-      emitMetrics: true
-    });
+	do {
+		const result = await processGoogleAdsSyncQueue({
+			workerId,
+			limit: env.GOOGLE_ADS_SYNC_BATCH_SIZE,
+			emitMetrics: true,
+		});
 
-    if (!env.GOOGLE_ADS_WORKER_LOOP) {
-      break;
-    }
+		if (!env.GOOGLE_ADS_WORKER_LOOP) {
+			break;
+		}
 
-    if (shouldStop) {
-      break;
-    }
+		if (shouldStop) {
+			break;
+		}
 
-    if (result.claimedJobs === 0 && result.enqueuedJobs === 0) {
-      await delay(env.GOOGLE_ADS_WORKER_POLL_INTERVAL_MS);
-    }
-  } while (!shouldStop);
+		if (result.claimedJobs === 0 && result.enqueuedJobs === 0) {
+			await delay(env.GOOGLE_ADS_WORKER_POLL_INTERVAL_MS);
+		}
+	} while (!shouldStop);
 
-  await pool.end();
+	await pool.end();
 }
 
 run().catch(async (error) => {
-  process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
-  await pool.end().catch(() => undefined);
-  process.exit(1);
+	process.stderr.write(
+		`${error instanceof Error ? error.stack : String(error)}\n`,
+	);
+	await pool.end().catch(() => undefined);
+	process.exit(1);
 });

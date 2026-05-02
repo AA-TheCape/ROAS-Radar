@@ -1,25 +1,27 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID } from "node:crypto";
 
-import { pool } from './db/pool.js';
-import { runSessionAttributionRetentionJob } from './modules/tracking/retention.js';
+import { pool } from "./db/pool.js";
+import { runSessionAttributionRetentionJob } from "./modules/tracking/retention.js";
 
 async function run(): Promise<void> {
-  const workerId = `session-attribution-retention-${randomUUID()}`;
-  const result = await runSessionAttributionRetentionJob();
+	const workerId = `session-attribution-retention-${randomUUID()}`;
+	const result = await runSessionAttributionRetentionJob();
 
-  process.stdout.write(
-    `${JSON.stringify({
-      event: 'session_attribution_retention_run',
-      workerId,
-      ...result
-    })}\n`
-  );
+	process.stdout.write(
+		`${JSON.stringify({
+			event: "session_attribution_retention_run",
+			workerId,
+			...result,
+		})}\n`,
+	);
 
-  await pool.end();
+	await pool.end();
 }
 
 run().catch(async (error) => {
-  process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
-  await pool.end().catch(() => undefined);
-  process.exit(1);
+	process.stderr.write(
+		`${error instanceof Error ? error.stack : String(error)}\n`,
+	);
+	await pool.end().catch(() => undefined);
+	process.exit(1);
 });

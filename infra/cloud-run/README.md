@@ -1,8 +1,8 @@
 # Cloud Run Deployment
 
-This directory contains the operational scripts and environment definitions for deploying the ROAS Radar API, dashboard, attribution worker, migration job, and scheduled pipeline jobs to Google Cloud Run.
+This directory contains the checked-in deployment contract for the Node backend, the optional dashboard service, and the scheduled jobs that support attribution and ad-ingestion workloads.
 
-## Topology
+The root backend `Dockerfile` is the production packaging path for every backend Cloud Run workload in this directory. It builds on `node:22-bookworm-slim` and defaults the API container command to `npm run start:api`.
 
 The deployment flow assumes eleven deployable workloads plus seven Cloud Scheduler triggers:
 
@@ -25,26 +25,23 @@ The deployment flow assumes eleven deployable workloads plus seven Cloud Schedul
 - `roas-radar-identity-graph-backfill-scheduler`: Cloud Scheduler job that invokes the identity-graph backfill Cloud Run Job.
 - `roas-radar-order-attribution-materialization-scheduler`: Cloud Scheduler job that invokes the order-attribution materialization Cloud Run Job.
 
-The API and worker use the `roas_app` PostgreSQL login. The migration job uses the `roas_migrator` PostgreSQL login. Do not reuse the migrator credential in long-lived application services.
+## Files
 
 Each recurring job now runs as its own service account. Cloud Scheduler uses a dedicated invoker identity, but job invocation is granted at the individual Cloud Run Job level by `deploy.sh` instead of project-wide `roles/run.invoker`. That keeps ads sync, data quality, identity reconciliation, and attribution materialization from sharing unnecessary secret access.
 
-## Required Secrets
+## Required environment values
 
-The deploy script expects the following Secret Manager secrets to exist for each environment:
+Each environment file must define:
 
-- `DATABASE_URL`: runtime DSN for the API and worker (`roas_app` user).
-- `MIGRATOR_DATABASE_URL`: DSN for the migration job (`roas_migrator` user).
-- `REPORTING_API_TOKEN`
-- `SHOPIFY_WEBHOOK_SECRET`
-- `SHOPIFY_APP_API_KEY`
-- `SHOPIFY_APP_API_SECRET`
-- `SHOPIFY_APP_ENCRYPTION_KEY`
-- `META_ADS_APP_SECRET`
-- `META_ADS_ENCRYPTION_KEY`
-- `GOOGLE_ADS_ENCRYPTION_KEY`
+- `GCP_PROJECT_ID`
+- `GCP_REGION`
+- `ARTIFACT_REGISTRY_REPOSITORY`
+- service and job names
+- service-account names
+- secret bindings for `DATABASE_URL` and any other runtime secrets
+- `GA4_INGESTION_SCHEDULE`
 
-The environment files also carry non-secret runtime settings that must be populated before deployment, including:
+The checked-in env files are valid shell files. Replace the placeholder project id, Cloud SQL connection name, VPC connector, and any extra secret bindings before deploying.
 
 - `TRACKING_ALLOWED_ORIGINS`
 - `API_JSON_BODY_LIMIT`
@@ -135,7 +132,7 @@ The environment files also carry non-secret runtime settings that must be popula
 - `SESSION_ATTRIBUTION_RETENTION_BATCH_SIZE`
 - `SESSION_ATTRIBUTION_RETENTION_MAX_BATCHES`
 
-## First-Time Setup
+Run these commands from the repo root on Node 22 before deploying:
 
 1. Provision Cloud SQL and private networking from `infra/cloud-sql/`.
 2. Run `infra/cloud-run/bootstrap-iam.sh ENVIRONMENT` to create service accounts and grant IAM roles.
@@ -145,7 +142,7 @@ The environment files also carry non-secret runtime settings that must be popula
 6. Apply monitoring with `infra/monitoring/apply.sh ENVIRONMENT`.
 7. Validate the scheduled jobs and schedulers with `docs/runbooks/cloud-run-pipelines.md`.
 
-## Deployment
+This sequence validates the compiled backend entrypoints, the migration check, the GA4-critical test suite, and the Docker packaging path that Cloud Run consumes.
 
 For one-off environment deploys, run `infra/cloud-run/deploy.sh dev`, `infra/cloud-run/deploy.sh staging`, or `infra/cloud-run/deploy.sh production`.
 
@@ -159,29 +156,36 @@ For staged promotion, use `infra/cloud-run/promote.sh <dev|staging|production>`.
 - can run a staging rollback drill by toggling `RUN_STAGING_ROLLBACK_DRILL=true`
 - persists rollout metadata in `infra/cloud-run/.deploy-state/`
 
-The Cloud Build trigger should run as the environment deployer service account created by `bootstrap-iam.sh`:
+- `SKIP_BUILDS=true`: reuse an already-pushed image tag instead of building locally
+- `SHORT_SHA=<tag>` or `IMAGE_TAG=<tag>`: force the image tag that `deploy.sh` references
+- `RUN_MIGRATIONS_ON_DEPLOY=true`: execute the migration job after deployment
+- `APPLY_MONITORING_ON_DEPLOY=true`: apply the monitoring assets in `infra/monitoring/`
 
 - `roas-radar-deployer-dev@<project>.iam.gserviceaccount.com` for dev
 - `roas-radar-deployer-staging@<project>.iam.gserviceaccount.com` for staging
 - `roas-radar-deployer-prod@<project>.iam.gserviceaccount.com` for production
 
-Recommended trigger settings:
+The deploy contract for GA4 is:
 
-- event: push to branch
-- branch regex: `^main$`
-- region: the same region used by Cloud Run and Artifact Registry
-- build config: `cloudbuild.staging.yaml`
+1. Deploy the backend image that contains `dist/src/ga4-session-attribution-worker.js`.
+2. Deploy the Cloud Run Job with command `npm` and args `run,ga4:ingest:start`.
+3. Bind `GA4_BIGQUERY_ENABLED=true` plus `GA4_INGESTION_REQUESTED_BY`, batch size, retry, backoff, and stale-lock env vars.
+4. Upsert the Cloud Scheduler job on `5 * * * *` unless the environment file says otherwise.
+5. Keep the Cloud Run Job retry count at `0`; the application owns hour-level retry and dead-letter behavior.
 
 Use `cloudbuild.release.yaml` for the full staged promotion pipeline. Its defaults promote through production, run migrations, apply monitoring, and require a successful staging rollback drill before production deployment continues. Use substitutions to stop at staging or disable the drill when needed.
 
 ## Scheduled Pipelines
 
-The default daily sequence is:
+- `GA4_INGESTION_REQUESTED_BY=cloud-run-scheduler-<environment>`
+- `GA4_INGESTION_BATCH_SIZE=6`
+- `GA4_INGESTION_MAX_RETRIES=5`
+- `GA4_INGESTION_INITIAL_BACKOFF_SECONDS=300`
+- `GA4_INGESTION_MAX_BACKOFF_SECONDS=21600`
+- `GA4_INGESTION_STALE_LOCK_MINUTES=30`
+- `GA4_INGESTION_SCHEDULER_TIME_ZONE=Etc/UTC`
 
-1. session retention at `0 3 * * *`
-2. data quality at `20 3 * * *`
-3. identity graph backfill at `35 3 * * *`
-4. order attribution materialization at `50 3 * * *`
+## Verification after deploy
 
 Meta Ads, Meta order-value, and Google Ads sync remain hourly schedulers. If one scheduled job is unhealthy, pause only that scheduler entry and leave the attribution worker service running because it also drains the live attribution queue.
 
@@ -195,7 +199,7 @@ For Meta order-value specifically:
 
 Use `sh infra/cloud-run/scheduler.sh <environment> meta-order-value <status|pause|resume>` for the order-value operational toggle without redeploying.
 
-## Large Payload Throughput
+Check that the job description still shows command `npm`, args `run,ga4:ingest:start`, and `maxRetries: 0`.
 
 The API service is configured for larger raw JSON ingestion by combining:
 

@@ -5,6 +5,10 @@ set -eu
 if [ "$#" -ne 1 ]; then
   echo "usage: $0 <environment>" >&2
   exit 1
+}
+
+if [ "$#" -ne 1 ]; then
+  usage
 fi
 
 ENVIRONMENT="$1"
@@ -18,8 +22,10 @@ if [ ! -f "$ENV_FILE" ]; then
   exit 1
 fi
 
+set -a
 # shellcheck disable=SC1090
 . "$ENV_FILE"
+set +a
 
 require_var() {
   eval "value=\${$1:-}"
@@ -62,10 +68,7 @@ EOF
 for var in \
   GCP_PROJECT_ID \
   GCP_REGION \
-  CLOUD_SQL_CONNECTION_NAME \
   ARTIFACT_REGISTRY_REPOSITORY \
-  IMAGE_NAME \
-  IMAGE_NAME_DASHBOARD \
   API_SERVICE_NAME \
   DASHBOARD_SERVICE_NAME \
   WORKER_SERVICE_NAME \
@@ -246,30 +249,10 @@ ensure_job_invoker() {
 }
 
 if [ "${SKIP_BUILDS:-false}" != "true" ]; then
-  echo "Building image $IMAGE_URI"
-  gcloud builds submit "$REPO_ROOT" \
-    --project="$GCP_PROJECT_ID" \
-    --tag="$IMAGE_URI"
-
-  echo "Building dashboard image $DASHBOARD_IMAGE_URI"
-  DASHBOARD_BUILD_CONFIG=$(mktemp)
-  cat >"$DASHBOARD_BUILD_CONFIG" <<EOF
-steps:
-  - name: gcr.io/cloud-builders/docker
-    args:
-      - build
-      - -f
-      - dashboard/Dockerfile
-      - -t
-      - $DASHBOARD_IMAGE_URI
-      - .
-images:
-  - $DASHBOARD_IMAGE_URI
-EOF
-  gcloud builds submit "$REPO_ROOT" \
-    --project="$GCP_PROJECT_ID" \
-    --config="$DASHBOARD_BUILD_CONFIG"
-  rm -f "$DASHBOARD_BUILD_CONFIG"
+  if ! command_exists docker; then
+    echo "docker is required unless SKIP_BUILDS=true" >&2
+    exit 1
+  fi
 fi
 
 echo "Deploying migration job $MIGRATOR_JOB_NAME"

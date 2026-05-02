@@ -1,67 +1,73 @@
-import { createHash } from 'node:crypto';
-import { isDeepStrictEqual } from 'node:util';
+import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 
-import { logWarning } from '../observability/index.js';
+import { logWarning } from "../observability/index.js";
 
 export type RawPayloadStorageMetadata = {
-  rawPayload: unknown;
-  rawPayloadJson: string;
-  payloadSizeBytes: number;
-  payloadHash: string;
+	rawPayload: unknown;
+	rawPayloadJson: string;
+	payloadSizeBytes: number;
+	payloadHash: string;
 };
 
 export type RawPayloadIntegrityRow = {
-  storedPayloadSizeBytes: number | null;
-  storedPayloadHash: string | null;
-  persistedRawPayload: unknown;
+	storedPayloadSizeBytes: number | null;
+	storedPayloadHash: string | null;
+	persistedRawPayload: unknown;
 };
 
 export type RawPayloadIntegritySummary = {
-  integrityStatus: 'matched' | 'mismatched';
-  metadataPresent: boolean;
-  payloadMatches: boolean;
-  storedSizeMatches: boolean;
-  storedHashMatches: boolean;
-  persistedSizeMatches: boolean;
-  persistedHashMatches: boolean;
-  expectedPayloadSizeBytes: number;
-  expectedPayloadHash: string;
-  storedPayloadSizeBytes: number | null;
-  storedPayloadHash: string | null;
-  persistedPayloadSizeBytes: number;
-  persistedPayloadHash: string;
+	integrityStatus: "matched" | "mismatched";
+	metadataPresent: boolean;
+	payloadMatches: boolean;
+	storedSizeMatches: boolean;
+	storedHashMatches: boolean;
+	persistedSizeMatches: boolean;
+	persistedHashMatches: boolean;
+	expectedPayloadSizeBytes: number;
+	expectedPayloadHash: string;
+	storedPayloadSizeBytes: number | null;
+	storedPayloadHash: string | null;
+	persistedPayloadSizeBytes: number;
+	persistedPayloadHash: string;
 };
 
 export type RawPayloadIntegrityMismatchContext = {
-  surface: string;
-  operation: 'insert' | 'update' | 'upsert';
-  recordId?: string | number | null;
-  fields?: Record<string, unknown>;
+	surface: string;
+	operation: "insert" | "update" | "upsert";
+	recordId?: string | number | null;
+	fields?: Record<string, unknown>;
 };
 
-export function buildRawPayloadStorageMetadata(rawPayload: unknown): RawPayloadStorageMetadata {
-  const rawPayloadJson = stableJsonStringify(rawPayload);
+export function buildRawPayloadStorageMetadata(
+	rawPayload: unknown,
+): RawPayloadStorageMetadata {
+	const rawPayloadJson = stableJsonStringify(rawPayload);
 
-  return {
-    rawPayload,
-    rawPayloadJson,
-    payloadSizeBytes: Buffer.byteLength(rawPayloadJson, 'utf8'),
-    payloadHash: createHash('sha256').update(rawPayloadJson).digest('hex')
-  };
+	return {
+		rawPayload,
+		rawPayloadJson,
+		payloadSizeBytes: Buffer.byteLength(rawPayloadJson, "utf8"),
+		payloadHash: createHash("sha256").update(rawPayloadJson).digest("hex"),
+	};
 }
 
 function stableJsonValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map((entry) => stableJsonValue(entry));
-  }
+	if (Array.isArray(value)) {
+		return value.map((entry) => stableJsonValue(entry));
+	}
 
-  if (value && typeof value === 'object') {
-    const entries = Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right));
+	if (value && typeof value === "object") {
+		const entries = Object.entries(value as Record<string, unknown>).sort(
+			([left], [right]) => left.localeCompare(right),
+		);
 
-    return Object.fromEntries(entries.map(([key, entry]) => [key, stableJsonValue(entry)]));
-  }
+		return Object.fromEntries(
+			entries.map(([key, entry]) => [key, stableJsonValue(entry)]),
+		);
+	}
 
-  return value;
+	return value;
 }
 
 function stableJsonStringify(value: unknown): string {
@@ -69,64 +75,73 @@ function stableJsonStringify(value: unknown): string {
 }
 
 export function summarizeRawPayloadIntegrity(
-  expected: RawPayloadStorageMetadata,
-  actual: RawPayloadIntegrityRow
+	expected: RawPayloadStorageMetadata,
+	actual: RawPayloadIntegrityRow,
 ): RawPayloadIntegritySummary {
-  const persistedMetadata = buildRawPayloadStorageMetadata(actual.persistedRawPayload);
-  const payloadMatches = isDeepStrictEqual(actual.persistedRawPayload, expected.rawPayload);
-  const storedSizeMatches = actual.storedPayloadSizeBytes === expected.payloadSizeBytes;
-  const storedHashMatches = actual.storedPayloadHash === expected.payloadHash;
-  const persistedSizeMatches = persistedMetadata.payloadSizeBytes === expected.payloadSizeBytes;
-  const persistedHashMatches = persistedMetadata.payloadHash === expected.payloadHash;
-  const metadataPresent = actual.storedPayloadSizeBytes !== null && actual.storedPayloadHash !== null;
+	const persistedMetadata = buildRawPayloadStorageMetadata(
+		actual.persistedRawPayload,
+	);
+	const payloadMatches = isDeepStrictEqual(
+		actual.persistedRawPayload,
+		expected.rawPayload,
+	);
+	const storedSizeMatches =
+		actual.storedPayloadSizeBytes === expected.payloadSizeBytes;
+	const storedHashMatches = actual.storedPayloadHash === expected.payloadHash;
+	const persistedSizeMatches =
+		persistedMetadata.payloadSizeBytes === expected.payloadSizeBytes;
+	const persistedHashMatches =
+		persistedMetadata.payloadHash === expected.payloadHash;
+	const metadataPresent =
+		actual.storedPayloadSizeBytes !== null && actual.storedPayloadHash !== null;
 
-  return {
-    integrityStatus:
-      metadataPresent &&
-      payloadMatches &&
-      storedSizeMatches &&
-      storedHashMatches &&
-      persistedSizeMatches &&
-      persistedHashMatches
-        ? 'matched'
-        : 'mismatched',
-    metadataPresent,
-    payloadMatches,
-    storedSizeMatches,
-    storedHashMatches,
-    persistedSizeMatches,
-    persistedHashMatches,
-    expectedPayloadSizeBytes: expected.payloadSizeBytes,
-    expectedPayloadHash: expected.payloadHash,
-    storedPayloadSizeBytes: actual.storedPayloadSizeBytes,
-    storedPayloadHash: actual.storedPayloadHash,
-    persistedPayloadSizeBytes: persistedMetadata.payloadSizeBytes,
-    persistedPayloadHash: persistedMetadata.payloadHash
-  };
+	return {
+		integrityStatus:
+			metadataPresent &&
+			payloadMatches &&
+			storedSizeMatches &&
+			storedHashMatches &&
+			persistedSizeMatches &&
+			persistedHashMatches
+				? "matched"
+				: "mismatched",
+		metadataPresent,
+		payloadMatches,
+		storedSizeMatches,
+		storedHashMatches,
+		persistedSizeMatches,
+		persistedHashMatches,
+		expectedPayloadSizeBytes: expected.payloadSizeBytes,
+		expectedPayloadHash: expected.payloadHash,
+		storedPayloadSizeBytes: actual.storedPayloadSizeBytes,
+		storedPayloadHash: actual.storedPayloadHash,
+		persistedPayloadSizeBytes: persistedMetadata.payloadSizeBytes,
+		persistedPayloadHash: persistedMetadata.payloadHash,
+	};
 }
 
 export function logRawPayloadIntegrityMismatch(
-  expected: RawPayloadStorageMetadata,
-  actual: RawPayloadIntegrityRow,
-  context: RawPayloadIntegrityMismatchContext
+	expected: RawPayloadStorageMetadata,
+	actual: RawPayloadIntegrityRow,
+	context: RawPayloadIntegrityMismatchContext,
 ): void {
-  const summary = summarizeRawPayloadIntegrity(expected, actual);
+	const summary = summarizeRawPayloadIntegrity(expected, actual);
 
-  if (summary.integrityStatus === 'matched') {
-    return;
-  }
+	if (summary.integrityStatus === "matched") {
+		return;
+	}
 
-  logWarning('raw_payload_integrity_mismatch', {
-    surface: context.surface,
-    operation: context.operation,
-    recordId: context.recordId ?? null,
-    ...summary,
-    ...(context.fields ?? {})
-  });
+	logWarning("raw_payload_integrity_mismatch", {
+		surface: context.surface,
+		operation: context.operation,
+		recordId: context.recordId ?? null,
+		...summary,
+		...(context.fields ?? {}),
+	});
 }
 
 export const __rawPayloadStorageTestUtils = {
-  buildRawPayloadStorageMetadata,
-  summarizeRawPayloadIntegrity,
-  logRawPayloadIntegrityMismatch
+	buildRawPayloadStorageMetadata,
+	summarizeRawPayloadIntegrity,
+	logRawPayloadIntegrityMismatch,
 };

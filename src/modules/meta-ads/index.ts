@@ -163,12 +163,12 @@ export type MetaAdsQueueProcessOptions = {
 };
 
 export type MetaAdsQueueProcessResult = {
-  workerId: string;
-  enqueuedJobs: number;
-  claimedJobs: number;
-  succeededJobs: number;
-  failedJobs: number;
-  durationMs: number;
+	workerId: string;
+	enqueuedJobs: number;
+	claimedJobs: number;
+	succeededJobs: number;
+	failedJobs: number;
+	durationMs: number;
 };
 
 class MetaAdsApiError extends Error {
@@ -324,7 +324,7 @@ function buildSyncWindowDates(now: Date): string[] {
     dates.push(new Date(end - offset * 24 * 60 * 60 * 1000).toISOString().slice(0, 10));
   }
 
-  return dates;
+	return dates;
 }
 
 function normalizeAdAccountId(adAccountId: string): string {
@@ -553,8 +553,9 @@ function normalizeOrderValueRows(params: {
     }
 
     const selection = selectCanonicalActionType(payloads);
-    const selectedRow = selection.actionTypeUsed
-      ? rows.find((row) => hasSelectedActionType(row.payload, selection.actionTypeUsed!)) ?? rows[0]
+    const selectedActionType = selection.actionTypeUsed;
+    const selectedRow = selectedActionType
+      ? rows.find((row) => hasSelectedActionType(row.payload, selectedActionType)) ?? rows[0]
       : rows[0];
     const attributedRevenue =
       selection.actionTypeUsed === null ? null : sumMetricEntries(payloads, 'action_values', selection.actionTypeUsed);
@@ -757,7 +758,7 @@ async function enqueueSyncJobsForWindow(now: Date): Promise<number> {
     }
   }
 
-  return enqueuedJobs;
+	return enqueuedJobs;
 }
 
 async function claimSyncJobs(workerId: string, limit: number): Promise<MetaAdsConnectionSyncJobRow[]> {
@@ -792,10 +793,10 @@ async function claimSyncJobs(workerId: string, limit: number): Promise<MetaAdsCo
         j.sync_date::text,
         j.attempts
     `,
-    [workerId, limit]
-  );
+		[workerId, limit],
+	);
 
-  return result.rows;
+	return result.rows;
 }
 
 async function getConnectionSecret(connectionId: number): Promise<MetaAdsConnectionSecretRow> {
@@ -851,8 +852,8 @@ async function markSyncJobSucceeded(jobId: number, connectionId: number, client?
         updated_at = now()
       WHERE id = $1
     `,
-    [jobId]
-  );
+		[jobId],
+	);
 
   await executor.query(
     `
@@ -864,8 +865,8 @@ async function markSyncJobSucceeded(jobId: number, connectionId: number, client?
         updated_at = now()
       WHERE id = $1
     `,
-    [connectionId]
-  );
+		[connectionId],
+	);
 }
 
 async function markSyncJobFailed(
@@ -1459,20 +1460,20 @@ export async function processMetaAdsSyncQueue(options: MetaAdsQueueProcessOption
     }
   }
 
-  const result: MetaAdsQueueProcessResult = {
-    workerId,
-    enqueuedJobs,
-    claimedJobs: jobs.length,
-    succeededJobs,
-    failedJobs,
-    durationMs: Date.now() - startedAt
-  };
+	const result: MetaAdsQueueProcessResult = {
+		workerId,
+		enqueuedJobs,
+		claimedJobs: jobs.length,
+		succeededJobs,
+		failedJobs,
+		durationMs: Date.now() - startedAt,
+	};
 
   if (options.emitMetrics) {
     buildQueueMetricsLog(result);
   }
 
-  return result;
+	return result;
 }
 
 export async function runMetaAdsOrderValueSync(options: {
@@ -1549,23 +1550,23 @@ export async function runMetaAdsOrderValueSync(options: {
 }
 
 export function createMetaAdsPublicRouter(): Router {
-  const router = Router();
+	const router = Router();
 
   router.get('/healthz', (_req, res) => {
     res.status(200).json({ ok: true });
   });
 
-  return router;
+	return router;
 }
 
 export function createMetaAdsAdminRouter(): Router {
-  const router = Router();
+	const router = Router();
 
   router.get('/healthz', (_req, res) => {
     res.status(200).json({ ok: true });
   });
 
-  return router;
+	return router;
 }
 
 export const __metaAdsTestUtils = {

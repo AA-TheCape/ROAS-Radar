@@ -1,17 +1,18 @@
-process.env.DATABASE_URL ??= 'postgres://postgres:postgres@127.0.0.1:5432/roas_radar';
+process.env.DATABASE_URL ??=
+	"postgres://postgres:postgres@127.0.0.1:5432/roas_radar";
 
 import { resetIntegrationTables } from './integration-test-helpers.js';
 
 let cachedPool: typeof import('../src/db/pool.js').pool | null = null;
 
 async function getPool() {
-  if (cachedPool) {
-    return cachedPool;
-  }
+	if (cachedPool) {
+		return cachedPool;
+	}
 
-  const poolModule = await import('../src/db/pool.js');
-  cachedPool = poolModule.pool;
-  return cachedPool;
+	const poolModule = await import("../src/db/pool.js");
+	cachedPool = poolModule.pool;
+	return cachedPool;
 }
 
 export async function resetE2EDatabase(): Promise<void> {

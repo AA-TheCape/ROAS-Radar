@@ -1,8 +1,8 @@
-# Cloud Run Pipelines Runbook
+# Cloud Run Pipelines
 
 Use this runbook when deploying or operating the scheduled Cloud Run workers in dev, staging, or production.
 
-## Managed Workloads
+## Managed workloads
 
 - Cloud Run services:
   - `roas-radar-api`
@@ -20,22 +20,9 @@ Use this runbook when deploying or operating the scheduled Cloud Run workers in 
 - Cloud Scheduler:
   - one scheduler per recurring Cloud Run Job
 
-## First-Time Bootstrap
+## Pre-deploy checks
 
-1. Fill in `infra/cloud-run/environments/<environment>.env`.
-2. Run `sh infra/cloud-run/bootstrap-iam.sh <environment>`.
-3. Create or rotate the required Secret Manager secrets:
-   - `DATABASE_URL`
-   - `MIGRATOR_DATABASE_URL`
-   - `REPORTING_API_TOKEN`
-   - `SHOPIFY_WEBHOOK_SECRET`
-   - `SHOPIFY_APP_API_KEY`
-   - `SHOPIFY_APP_API_SECRET`
-   - `SHOPIFY_APP_ENCRYPTION_KEY`
-   - `META_ADS_APP_SECRET`
-   - `META_ADS_ENCRYPTION_KEY`
-   - `GOOGLE_ADS_ENCRYPTION_KEY`
-4. Deploy with `sh infra/cloud-run/deploy.sh <environment>`.
+Run the backend verification contract from a clean Node 22 checkout in this order:
 
 For staged releases, prefer:
 

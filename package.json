@@ -34,6 +34,8 @@
     "identity:backfill-graph": "tsx src/admin/backfill-identity-graph.ts",
     "identity:backfill-graph:start": "node dist/src/identity-graph-backfill-worker.js",
     "dead-letters:replay": "tsx src/admin/replay-dead-letters.ts",
+    "ga4:ingest": "tsx src/ga4-session-attribution-worker.ts",
+    "ga4:ingest:start": "node dist/src/ga4-session-attribution-worker.js",
     "test": "node scripts/run-tests.mjs all",
     "test:all": "node scripts/run-tests.mjs all",
     "test:unit": "node scripts/run-tests.mjs unit",
@@ -43,6 +45,7 @@
     "test:dead-letters": "node --import tsx --test test/dead-letter-replay.test.ts"
   },
   "dependencies": {
+    "@google-cloud/bigquery": "^7.8.0",
     "dotenv": "^16.4.5",
     "express": "^4.21.2",
     "pg": "^8.13.1",

@@ -1,5 +1,5 @@
 {
-  "name": "roas_tracking_dual_write_consistency",
-  "description": "Counts matched and mismatched browser-vs-server tracking dual-write outcomes.",
-  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"tracking_dual_write_consistency\""
+	"name": "roas_tracking_dual_write_consistency",
+	"description": "Counts matched and mismatched browser-vs-server tracking dual-write outcomes.",
+	"filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"tracking_dual_write_consistency\""
 }

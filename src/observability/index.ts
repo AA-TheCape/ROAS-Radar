@@ -70,6 +70,22 @@ type ResolverOutcomeInput = {
   }>;
 };
 
+type Ga4IngestionSummaryInput = {
+  watermarkBefore: string | null;
+  watermarkAfter: string | null;
+  processedHours: string[];
+  extractedRows: number;
+  upsertedRows: number;
+  now?: Date;
+  lagAlertThresholdHours?: number;
+  rows?: Array<{
+    source: string | null;
+    medium: string | null;
+    campaign: string | null;
+    clickIdValue: string | null;
+  }>;
+};
+
 const requestContextStorage = new AsyncLocalStorage<RequestContext>();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -485,6 +501,57 @@ export function logHttpError(
   });
 }
 
+function computeGa4IngestionLagHours(now: Date, watermarkAfter: string | null): number | null {
+  if (!watermarkAfter) {
+    return null;
+  }
+
+  const latestCompleteHour = new Date(
+    Math.floor(now.getTime() / (60 * 60 * 1000)) * (60 * 60 * 1000) - 60 * 60 * 1000
+  );
+  const watermarkDate = new Date(watermarkAfter);
+
+  if (Number.isNaN(latestCompleteHour.getTime()) || Number.isNaN(watermarkDate.getTime())) {
+    return null;
+  }
+
+  return Math.max(0, Math.round((latestCompleteHour.getTime() - watermarkDate.getTime()) / (60 * 60 * 1000)));
+}
+
+export function summarizeGa4IngestionResult(input: Ga4IngestionSummaryInput): SerializableFields {
+  const rows = input.rows ?? [];
+  const rowCount = rows.length;
+  const countPresent = (selector: (row: (typeof rows)[number]) => string | null) =>
+    rows.reduce((total, row) => total + Number(hasMeaningfulValue(selector(row))), 0);
+
+  const sourcePresentRows = countPresent((row) => row.source);
+  const mediumPresentRows = countPresent((row) => row.medium);
+  const campaignPresentRows = countPresent((row) => row.campaign);
+  const clickIdPresentRows = countPresent((row) => row.clickIdValue);
+  const lagHours = computeGa4IngestionLagHours(input.now ?? new Date(), input.watermarkAfter);
+  const lagAlertThresholdHours = input.lagAlertThresholdHours ?? 2;
+
+  return {
+    watermarkBefore: input.watermarkBefore,
+    watermarkAfter: input.watermarkAfter,
+    processedHourCount: input.processedHours.length,
+    processedHours: input.processedHours,
+    extractedRows: input.extractedRows,
+    upsertedRows: input.upsertedRows,
+    lagHours,
+    lagAlertThresholdHours,
+    lagStatus: lagHours !== null && lagHours >= lagAlertThresholdHours ? 'lagging' : 'healthy',
+    sourcePresentRows,
+    mediumPresentRows,
+    campaignPresentRows,
+    clickIdPresentRows,
+    sourceFillRate: rowCount > 0 ? sourcePresentRows / rowCount : 0,
+    mediumFillRate: rowCount > 0 ? mediumPresentRows / rowCount : 0,
+    campaignFillRate: rowCount > 0 ? campaignPresentRows / rowCount : 0,
+    clickIdFillRate: rowCount > 0 ? clickIdPresentRows / rowCount : 0
+  };
+}
+
 export function buildAttributionBacklogLog(snapshot: AttributionBacklogSnapshot): string {
   return JSON.stringify({
     severity: 'INFO',
@@ -501,6 +568,7 @@ export const __observabilityTestUtils = {
   emitAttributionResolverOutcomeLog,
   emitOrderAttributionBackfillJobLifecycleLog,
   parseCloudTraceContext,
+  summarizeGa4IngestionResult,
   summarizeOrderAttributionBackfillReport,
   summarizeAttributionObservation,
   summarizeDualWriteConsistency,

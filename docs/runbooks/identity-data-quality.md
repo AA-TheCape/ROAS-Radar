@@ -118,4 +118,4 @@ LIMIT 50;
 2. Repair or quarantine conflicting identifiers before replaying ingestion when the breach is caused by authoritative Shopify conflicts.
 3. If an identifier is already quarantined, do not expect replay alone to merge it back automatically; ambiguous nodes are intentionally ignored by future auto-merges until repaired.
 4. Fix the upstream hashing or normalization path before replaying records if the breach is a hash-format anomaly.
-5. Re-run `npm run data-quality:check` locally or re-execute the Cloud Run Job after repair to confirm the alert clears.
+5. Re-run `npm run data-quality:run` locally or re-execute the Cloud Run Job after repair to confirm the alert clears.

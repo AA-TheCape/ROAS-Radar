@@ -66,6 +66,7 @@ type SyntheticAttributionInput = {
   term: string | null;
   clickIdType: string | null;
   clickIdValue: string | null;
+  matchSource?: string | null;
   attributionReason: string;
   confidenceScore?: number | null;
 };
