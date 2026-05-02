@@ -2,13 +2,13 @@
 
 set -eu
 
-if [ "$#" -ne 1 ]; then
+usage() {
   echo "usage: $0 <environment>" >&2
-  exit 1
 }
 
 if [ "$#" -ne 1 ]; then
   usage
+  exit 1
 fi
 
 ENVIRONMENT="$1"
