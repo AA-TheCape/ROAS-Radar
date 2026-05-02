@@ -10,14 +10,35 @@ process.env.SHOPIFY_WEBHOOK_SECRET ??= 'test-webhook-secret';
 const poolModule = await import('../src/db/pool.js');
 const serverModule = await import('../src/server.js');
 const harnessModule = await import('./e2e-harness.js');
+const helpersModule = await import('./integration-test-helpers.js');
 
 const { pool } = poolModule;
 const { closeServer, createServer } = serverModule;
 const { resetE2EDatabase } = harnessModule;
+const { buildRawPayloadFixture } = helpersModule;
+const REPORTING_SCHEMA_VERSION = '2026-05-02';
 
 function buildHeaders(): Record<string, string> {
   return {
     authorization: 'Bearer test-reporting-token'
+  };
+}
+
+function buildCampaignLabel(
+  displayName: string,
+  entityId: string | null,
+  platform: 'google_ads' | 'meta_ads' | null,
+  resolutionStatus: 'resolved' | 'fallback_name' | 'unresolved',
+  lastSeenAt: string | null = null,
+  updatedAt: string | null = null
+) {
+  return {
+    displayName,
+    entityId,
+    platform,
+    resolutionStatus,
+    lastSeenAt,
+    updatedAt
   };
 }
 
@@ -66,6 +87,7 @@ test('reporting summary reads persisted daily aggregates from PostgreSQL', async
     );
 
     assert.equal(response.status, 200);
+    assert.equal(response.headers.get('x-roas-radar-reporting-schema'), REPORTING_SCHEMA_VERSION);
     assert.deepEqual(body, {
       range: {
         startDate: '2026-04-10',
@@ -88,6 +110,8 @@ test('reporting summary reads persisted daily aggregates from PostgreSQL', async
 
 test('reporting campaign-oriented responses enrich display names from metadata lookup rows with deterministic fallback order', async () => {
   await resetE2EDatabase();
+  const googleCustomerFixture = buildRawPayloadFixture({ customer: { id: 'acct-google' } }, 'acct-google');
+  const metaAccountFixture = buildRawPayloadFixture({ account_id: 'acct-meta' }, 'acct-meta');
 
   await pool.query(
     `
@@ -98,10 +122,17 @@ test('reporting campaign-oriented responses enrich display names from metadata l
         client_id,
         client_secret_encrypted,
         refresh_token_encrypted,
-        status
+        status,
+        raw_customer_data,
+        raw_customer_source,
+        raw_customer_received_at,
+        raw_customer_external_id,
+        raw_customer_payload_size_bytes,
+        raw_customer_payload_hash
       )
-      VALUES (1, 'acct-google', '\\x00'::bytea, 'client', '\\x00'::bytea, '\\x00'::bytea, 'active')
-    `
+      VALUES (1, 'acct-google', '\\x00'::bytea, 'client', '\\x00'::bytea, '\\x00'::bytea, 'active', $1::jsonb, 'google_ads_customer', now(), 'acct-google', $2, $3)
+    `,
+    [googleCustomerFixture.rawPayloadJson, googleCustomerFixture.payloadSizeBytes, googleCustomerFixture.payloadHash]
   );
 
   await pool.query(
@@ -117,10 +148,17 @@ test('reporting campaign-oriented responses enrich display names from metadata l
         id,
         ad_account_id,
         access_token_encrypted,
-        status
+        status,
+        raw_account_data,
+        raw_account_source,
+        raw_account_received_at,
+        raw_account_external_id,
+        raw_account_payload_size_bytes,
+        raw_account_payload_hash
       )
-      VALUES (1, 'acct-meta', '\\x00'::bytea, 'active')
-    `
+      VALUES (1, 'acct-meta', '\\x00'::bytea, 'active', $1::jsonb, 'meta_ads_account', now(), 'acct-meta', $2, $3)
+    `,
+    [metaAccountFixture.rawPayloadJson, metaAccountFixture.payloadSizeBytes, metaAccountFixture.payloadHash]
   );
 
   await pool.query(
@@ -245,6 +283,7 @@ test('reporting campaign-oriented responses enrich display names from metadata l
     );
 
     assert.equal(campaigns.response.status, 200);
+    assert.equal(campaigns.response.headers.get('x-roas-radar-reporting-schema'), REPORTING_SCHEMA_VERSION);
     assert.deepEqual(campaigns.body, {
       rows: [
         {
@@ -259,7 +298,15 @@ test('reporting campaign-oriented responses enrich display names from metadata l
           campaignDisplayName: 'Google Brand Search Latest',
           campaignEntityId: 'cmp_google_1',
           campaignPlatform: 'google_ads',
-          campaignNameResolutionStatus: 'resolved'
+          campaignNameResolutionStatus: 'resolved',
+          campaignLabel: buildCampaignLabel(
+            'Google Brand Search Latest',
+            'cmp_google_1',
+            'google_ads',
+            'resolved',
+            '2026-04-10T08:00:00.000Z',
+            '2026-04-10T08:05:00.000Z'
+          )
         },
         {
           source: 'meta',
@@ -273,7 +320,8 @@ test('reporting campaign-oriented responses enrich display names from metadata l
           campaignDisplayName: 'Meta Prospecting Raw',
           campaignEntityId: 'cmp_meta_1',
           campaignPlatform: 'meta_ads',
-          campaignNameResolutionStatus: 'fallback_name'
+          campaignNameResolutionStatus: 'fallback_name',
+          campaignLabel: buildCampaignLabel('Meta Prospecting Raw', 'cmp_meta_1', 'meta_ads', 'fallback_name')
         },
         {
           source: 'google',
@@ -287,13 +335,15 @@ test('reporting campaign-oriented responses enrich display names from metadata l
           campaignDisplayName: 'cmp_google_2',
           campaignEntityId: 'cmp_google_2',
           campaignPlatform: 'google_ads',
-          campaignNameResolutionStatus: 'unresolved'
+          campaignNameResolutionStatus: 'unresolved',
+          campaignLabel: buildCampaignLabel('cmp_google_2', 'cmp_google_2', 'google_ads', 'unresolved')
         }
       ],
       nextCursor: null
     });
 
     assert.equal(spendDetails.response.status, 200);
+    assert.equal(spendDetails.response.headers.get('x-roas-radar-reporting-schema'), REPORTING_SCHEMA_VERSION);
     assert.deepEqual(spendDetails.body.groups, [
       {
         source: 'google',
@@ -307,7 +357,15 @@ test('reporting campaign-oriented responses enrich display names from metadata l
             campaignDisplayName: 'Google Brand Search Latest',
             campaignEntityId: 'cmp_google_1',
             campaignPlatform: 'google_ads',
-            campaignNameResolutionStatus: 'resolved'
+            campaignNameResolutionStatus: 'resolved',
+            campaignLabel: buildCampaignLabel(
+              'Google Brand Search Latest',
+              'cmp_google_1',
+              'google_ads',
+              'resolved',
+              '2026-04-10T08:00:00.000Z',
+              '2026-04-10T08:05:00.000Z'
+            )
           },
           {
             campaign: 'clearance',
@@ -315,7 +373,8 @@ test('reporting campaign-oriented responses enrich display names from metadata l
             campaignDisplayName: 'cmp_google_2',
             campaignEntityId: 'cmp_google_2',
             campaignPlatform: 'google_ads',
-            campaignNameResolutionStatus: 'unresolved'
+            campaignNameResolutionStatus: 'unresolved',
+            campaignLabel: buildCampaignLabel('cmp_google_2', 'cmp_google_2', 'google_ads', 'unresolved')
           }
         ]
       },
@@ -331,13 +390,15 @@ test('reporting campaign-oriented responses enrich display names from metadata l
             campaignDisplayName: 'Meta Prospecting Raw',
             campaignEntityId: 'cmp_meta_1',
             campaignPlatform: 'meta_ads',
-            campaignNameResolutionStatus: 'fallback_name'
+            campaignNameResolutionStatus: 'fallback_name',
+            campaignLabel: buildCampaignLabel('Meta Prospecting Raw', 'cmp_meta_1', 'meta_ads', 'fallback_name')
           }
         ]
       }
     ]);
 
     assert.equal(timeseries.response.status, 200);
+    assert.equal(timeseries.response.headers.get('x-roas-radar-reporting-schema'), REPORTING_SCHEMA_VERSION);
     assert.deepEqual(timeseries.body, {
       points: [
         {
@@ -348,7 +409,15 @@ test('reporting campaign-oriented responses enrich display names from metadata l
           campaignDisplayName: 'Google Brand Search Latest',
           campaignEntityId: 'cmp_google_1',
           campaignPlatform: 'google_ads',
-          campaignNameResolutionStatus: 'resolved'
+          campaignNameResolutionStatus: 'resolved',
+          campaignLabel: buildCampaignLabel(
+            'Google Brand Search Latest',
+            'cmp_google_1',
+            'google_ads',
+            'resolved',
+            '2026-04-10T08:00:00.000Z',
+            '2026-04-10T08:05:00.000Z'
+          )
         },
         {
           date: 'clearance',
@@ -358,7 +427,8 @@ test('reporting campaign-oriented responses enrich display names from metadata l
           campaignDisplayName: 'cmp_google_2',
           campaignEntityId: 'cmp_google_2',
           campaignPlatform: 'google_ads',
-          campaignNameResolutionStatus: 'unresolved'
+          campaignNameResolutionStatus: 'unresolved',
+          campaignLabel: buildCampaignLabel('cmp_google_2', 'cmp_google_2', 'google_ads', 'unresolved')
         },
         {
           date: 'prospecting-us',
@@ -368,7 +438,8 @@ test('reporting campaign-oriented responses enrich display names from metadata l
           campaignDisplayName: 'Meta Prospecting Raw',
           campaignEntityId: 'cmp_meta_1',
           campaignPlatform: 'meta_ads',
-          campaignNameResolutionStatus: 'fallback_name'
+          campaignNameResolutionStatus: 'fallback_name',
+          campaignLabel: buildCampaignLabel('Meta Prospecting Raw', 'cmp_meta_1', 'meta_ads', 'fallback_name')
         }
       ],
       lowestBuckets: [
@@ -383,7 +454,8 @@ test('reporting campaign-oriented responses enrich display names from metadata l
           campaignDisplayName: 'cmp_google_2',
           campaignEntityId: 'cmp_google_2',
           campaignPlatform: 'google_ads',
-          campaignNameResolutionStatus: 'unresolved'
+          campaignNameResolutionStatus: 'unresolved',
+          campaignLabel: buildCampaignLabel('cmp_google_2', 'cmp_google_2', 'google_ads', 'unresolved')
         },
         {
           bucket: 'prospecting-us',
@@ -396,7 +468,8 @@ test('reporting campaign-oriented responses enrich display names from metadata l
           campaignDisplayName: 'Meta Prospecting Raw',
           campaignEntityId: 'cmp_meta_1',
           campaignPlatform: 'meta_ads',
-          campaignNameResolutionStatus: 'fallback_name'
+          campaignNameResolutionStatus: 'fallback_name',
+          campaignLabel: buildCampaignLabel('Meta Prospecting Raw', 'cmp_meta_1', 'meta_ads', 'fallback_name')
         },
         {
           bucket: 'brand-search',
@@ -409,7 +482,15 @@ test('reporting campaign-oriented responses enrich display names from metadata l
           campaignDisplayName: 'Google Brand Search Latest',
           campaignEntityId: 'cmp_google_1',
           campaignPlatform: 'google_ads',
-          campaignNameResolutionStatus: 'resolved'
+          campaignNameResolutionStatus: 'resolved',
+          campaignLabel: buildCampaignLabel(
+            'Google Brand Search Latest',
+            'cmp_google_1',
+            'google_ads',
+            'resolved',
+            '2026-04-10T08:00:00.000Z',
+            '2026-04-10T08:05:00.000Z'
+          )
         }
       ]
     });
@@ -465,6 +546,7 @@ test('reporting spend details and lowest buckets are scoped to the requested dat
     );
 
     assert.equal(spendDetails.response.status, 200);
+    assert.equal(spendDetails.response.headers.get('x-roas-radar-reporting-schema'), REPORTING_SCHEMA_VERSION);
     assert.deepEqual(spendDetails.body, {
       summary: {
         totalSpend: 1150,
@@ -508,6 +590,7 @@ test('reporting spend details and lowest buckets are scoped to the requested dat
     });
 
     assert.equal(timeseries.response.status, 200);
+    assert.equal(timeseries.response.headers.get('x-roas-radar-reporting-schema'), REPORTING_SCHEMA_VERSION);
     assert.deepEqual(timeseries.body, {
       points: [
         {
@@ -593,10 +676,12 @@ test('reporting orders only returns online store Shopify orders', async () => {
       revenue_credit,
       is_primary,
       attribution_reason,
-      model_version
+      model_version,
+      match_source,
+      confidence_label
     ) VALUES
-      ($1, 'last_touch', 1, NULL, $2, 'facebook', 'paid_social', 'prospecting-us', '1.0', '80.00', true, 'matched_by_checkout_token', 1),
-      ($3, 'last_touch', 1, NULL, $4, 'pos', 'offline', 'retail', '1.0', '50.00', true, 'matched_by_checkout_token', 1)`,
+      ($1, 'last_touch', 1, NULL, $2, 'facebook', 'paid_social', 'prospecting-us', '1.0', '80.00', true, 'matched_by_checkout_token', 1, 'checkout_token', 'high'),
+      ($3, 'last_touch', 1, NULL, $4, 'pos', 'offline', 'retail', '1.0', '50.00', true, 'matched_by_checkout_token', 1, 'checkout_token', 'high')`,
     [
       'web-order-1',
       '2026-04-10T12:55:00.000Z',

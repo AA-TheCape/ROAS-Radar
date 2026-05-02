@@ -64,6 +64,11 @@ export type CampaignRow = {
   orders: number;
   revenue: number;
   conversionRate: number;
+  campaignDisplayName?: string;
+  campaignEntityId?: string | null;
+  campaignPlatform?: 'google_ads' | 'meta_ads' | null;
+  campaignNameResolutionStatus?: 'resolved' | 'fallback_name' | 'unresolved';
+  campaignLabel?: CampaignLabel;
 };
 
 export type CampaignsResponse = {
@@ -74,6 +79,11 @@ export type CampaignsResponse = {
 export type SpendDetailCampaignRow = {
   campaign: string;
   spend: number;
+  campaignDisplayName?: string;
+  campaignEntityId?: string | null;
+  campaignPlatform?: 'google_ads' | 'meta_ads' | null;
+  campaignNameResolutionStatus?: 'resolved' | 'fallback_name' | 'unresolved';
+  campaignLabel?: CampaignLabel;
 };
 
 export type SpendDetailChannelGroup = {
@@ -110,6 +120,11 @@ export type TimeseriesPoint = {
   visits: number;
   orders: number;
   revenue: number;
+  campaignDisplayName?: string;
+  campaignEntityId?: string | null;
+  campaignPlatform?: 'google_ads' | 'meta_ads' | null;
+  campaignNameResolutionStatus?: 'resolved' | 'fallback_name' | 'unresolved';
+  campaignLabel?: CampaignLabel;
 };
 
 export type TimeseriesResponse = {
@@ -122,7 +137,21 @@ export type TimeseriesResponse = {
     spend: number;
     conversionRate: number;
     roas: number | null;
+    campaignDisplayName?: string;
+    campaignEntityId?: string | null;
+    campaignPlatform?: 'google_ads' | 'meta_ads' | null;
+    campaignNameResolutionStatus?: 'resolved' | 'fallback_name' | 'unresolved';
+    campaignLabel?: CampaignLabel;
   }>;
+};
+
+export type CampaignLabel = {
+  displayName: string;
+  entityId: string | null;
+  platform: 'google_ads' | 'meta_ads' | null;
+  resolutionStatus: 'resolved' | 'fallback_name' | 'unresolved';
+  lastSeenAt: string | null;
+  updatedAt: string | null;
 };
 
 export type OrderRow = {

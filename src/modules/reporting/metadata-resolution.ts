@@ -14,8 +14,8 @@ type CampaignMetadataResolutionRow = {
   latest_name: string | null;
   last_seen_at: Date | null;
   updated_at: Date | null;
-  rank_by_group: number;
-  rank_by_campaign: number;
+  rank_by_group: string | number;
+  rank_by_campaign: string | number;
 };
 
 export type CampaignDisplayResolution = {
@@ -204,12 +204,14 @@ export async function resolveCampaignDisplayMetadata(
 
   for (const row of result.rows) {
     const resolution = buildResolution(row);
+    const rankByCampaign = Number(row.rank_by_campaign);
+    const rankByGroup = Number(row.rank_by_group);
 
-    if (row.rank_by_campaign === 1) {
+    if (rankByCampaign === 1) {
       byCampaign.set(row.campaign, resolution);
     }
 
-    if (row.rank_by_group === 1) {
+    if (rankByGroup === 1) {
       byGroup.set(buildCampaignResolutionGroupKey(row.source, row.medium, row.campaign), resolution);
     }
   }

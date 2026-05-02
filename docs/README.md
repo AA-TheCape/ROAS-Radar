@@ -13,7 +13,8 @@
 
 1. Read [Analytics Playbook](analytics-playbook.md) for how ROAS Radar stores attribution, resolves orders, and exposes reporting outputs.
 2. Read [Reporting Metrics](reporting-metrics.md) for KPI formulas used by the dashboard and reporting API.
-3. Read [Marketing Dimensions](marketing-dimensions.md) and [Attribution Schema V1](attribution-schema-v1.md) when channel naming or field semantics matter.
+3. Read [Reporting API Contract](reporting-api-contract.md) for response versioning, additive compatibility rules, and campaign label enrichment fields.
+4. Read [Marketing Dimensions](marketing-dimensions.md) and [Attribution Schema V1](attribution-schema-v1.md) when channel naming or field semantics matter.
 
 ### Troubleshooting
 
@@ -31,6 +32,7 @@
 - [Shopify App Setup](shopify-app-setup.md): Shopify app install flow, OAuth, and webhook provisioning.
 - [Visitor Identity Stitching](visitor-identity-stitching.md): deterministic identity-linking behavior for Shopify customers, orders, and tracked sessions.
 - [Analytics Playbook](analytics-playbook.md): reporting, attribution, and analytics operating model.
+- [Reporting API Contract](reporting-api-contract.md): authenticated reporting response schema, additive versioning strategy, and campaign label enrichment compatibility rules.
 - [Last Non-Direct Touch Approval Matrix](last-non-direct-touch-approval-matrix.md): approved primary-winner rules, deterministic precedence, and Shopify synthetic fallback caveats.
 - [Marketing Dimensions](marketing-dimensions.md): canonical source, medium, campaign, and click-ID interpretation rules.
 - [Reporting Metrics](reporting-metrics.md): dashboard and reporting metric definitions.

@@ -11,10 +11,29 @@ const serverModule = await import('../src/server.js');
 const { pool } = poolModule;
 const { closeServer, createServer } = serverModule;
 const originalPoolQuery = pool.query.bind(pool);
+const REPORTING_SCHEMA_VERSION = '2026-05-02';
 
 function buildHeaders(): Record<string, string> {
   return {
     authorization: 'Bearer test-reporting-token'
+  };
+}
+
+function buildCampaignLabel(
+  displayName: string,
+  entityId: string | null,
+  platform: 'google_ads' | 'meta_ads' | null,
+  resolutionStatus: 'resolved' | 'fallback_name' | 'unresolved',
+  lastSeenAt: string | null = null,
+  updatedAt: string | null = null
+) {
+  return {
+    displayName,
+    entityId,
+    platform,
+    resolutionStatus,
+    lastSeenAt,
+    updatedAt
   };
 }
 
@@ -72,6 +91,7 @@ test('reporting summary returns headline metrics from daily campaign aggregates'
     );
 
     assert.equal(response.status, 200);
+    assert.equal(response.headers.get('x-roas-radar-reporting-schema'), REPORTING_SCHEMA_VERSION);
     assert.deepEqual(body, {
       range: {
         startDate: '2026-04-01',
@@ -147,10 +167,27 @@ test('reporting campaigns returns campaign rows sorted for dashboard tables', as
       };
     }
 
-    assert.match(text, /FROM ad_platform_entity_metadata/);
+    assert.match(text, /ad_platform_entity_metadata/);
     assert.deepEqual(params, ['2026-04-01', '2026-04-10', ['spring-sale', 'prospecting-us'], null]);
 
-    return { rows: [] };
+    return {
+      rows: [
+        {
+          source: 'google',
+          medium: 'cpc',
+          campaign: 'spring-sale',
+          platform: 'google_ads',
+          account_id: 'acct-google',
+          entity_id: 'cmp_google_1',
+          fallback_name: 'Google Raw Spring Sale',
+          latest_name: 'Google Spring Sale Latest',
+          last_seen_at: new Date('2026-04-10T08:00:00.000Z'),
+          updated_at: new Date('2026-04-10T08:05:00.000Z'),
+          rank_by_group: 1,
+          rank_by_campaign: 1
+        }
+      ]
+    };
   }) as typeof pool.query;
 
   const server = createServer();
@@ -162,6 +199,7 @@ test('reporting campaigns returns campaign rows sorted for dashboard tables', as
     );
 
     assert.equal(response.status, 200);
+    assert.equal(response.headers.get('x-roas-radar-reporting-schema'), REPORTING_SCHEMA_VERSION);
     assert.deepEqual(body, {
       rows: [
         {
@@ -172,7 +210,19 @@ test('reporting campaigns returns campaign rows sorted for dashboard tables', as
           visits: 420,
           orders: 19,
           revenue: 2110,
-          conversionRate: 19 / 420
+          conversionRate: 19 / 420,
+          campaignDisplayName: 'Google Spring Sale Latest',
+          campaignEntityId: 'cmp_google_1',
+          campaignPlatform: 'google_ads',
+          campaignNameResolutionStatus: 'resolved',
+          campaignLabel: buildCampaignLabel(
+            'Google Spring Sale Latest',
+            'cmp_google_1',
+            'google_ads',
+            'resolved',
+            '2026-04-10T08:00:00.000Z',
+            '2026-04-10T08:05:00.000Z'
+          )
         },
         {
           source: 'meta',
@@ -187,6 +237,10 @@ test('reporting campaigns returns campaign rows sorted for dashboard tables', as
       ],
       nextCursor: null
     });
+    assert.deepEqual(
+      body.rows.map((row: { campaignDisplayName?: string; campaignLabel?: { displayName: string }; campaign: string }) => row.campaignDisplayName ?? row.campaign),
+      body.rows.map((row: { campaignLabel?: { displayName: string }; campaign: string }) => row.campaignLabel?.displayName ?? row.campaign)
+    );
   } finally {
     pool.query = originalPoolQuery as typeof pool.query;
     await closeServer(server);
@@ -224,7 +278,7 @@ test('reporting spend details return channel groups with campaign subtotals in d
       };
     }
 
-    assert.match(text, /FROM ad_platform_entity_metadata/);
+    assert.match(text, /ad_platform_entity_metadata/);
     assert.deepEqual(params, ['2026-04-01', '2026-04-10', ['spring-search', 'brand-search', 'prospecting-us'], null]);
 
     return { rows: [] };
@@ -239,6 +293,7 @@ test('reporting spend details return channel groups with campaign subtotals in d
     );
 
     assert.equal(response.status, 200);
+    assert.equal(response.headers.get('x-roas-radar-reporting-schema'), REPORTING_SCHEMA_VERSION);
     assert.deepEqual(body, {
       summary: {
         totalSpend: 2400.5,
@@ -324,6 +379,7 @@ test('reporting timeseries returns grouped points for the requested dimension', 
     );
 
     assert.equal(response.status, 200);
+    assert.equal(response.headers.get('x-roas-radar-reporting-schema'), REPORTING_SCHEMA_VERSION);
     assert.deepEqual(body, {
       points: [
         {

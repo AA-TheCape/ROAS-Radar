@@ -126,6 +126,14 @@ type CampaignLabelResponseFields = {
   campaignEntityId?: string | null;
   campaignPlatform?: 'google_ads' | 'meta_ads' | null;
   campaignNameResolutionStatus?: 'resolved' | 'fallback_name' | 'unresolved';
+  campaignLabel?: {
+    displayName: string;
+    entityId: string | null;
+    platform: 'google_ads' | 'meta_ads' | null;
+    resolutionStatus: 'resolved' | 'fallback_name' | 'unresolved';
+    lastSeenAt: string | null;
+    updatedAt: string | null;
+  };
 };
 
 type TimeseriesRow = {
@@ -365,15 +373,29 @@ function buildCampaignLabelFields(resolution: CampaignDisplayResolution | undefi
     campaignDisplayName: resolution.campaignDisplayName,
     campaignEntityId: resolution.campaignEntityId,
     campaignPlatform: resolution.campaignPlatform,
-    campaignNameResolutionStatus: resolution.campaignNameResolutionStatus
+    campaignNameResolutionStatus: resolution.campaignNameResolutionStatus,
+    campaignLabel: {
+      displayName: resolution.campaignDisplayName,
+      entityId: resolution.campaignEntityId,
+      platform: resolution.campaignPlatform,
+      resolutionStatus: resolution.campaignNameResolutionStatus,
+      lastSeenAt: resolution.lastSeenAt,
+      updatedAt: resolution.updatedAt
+    }
   };
 }
+
+const REPORTING_SCHEMA_VERSION = '2026-05-02';
 
 export function createReportingRouter(): Router {
   const router = Router();
 
   router.use(attachAuthContext);
   router.use(requireAuthenticated);
+  router.use((_req, res, next) => {
+    res.setHeader('X-ROAS-Radar-Reporting-Schema', REPORTING_SCHEMA_VERSION);
+    next();
+  });
 
   router.get('/summary', async (req, res, next) => {
     try {

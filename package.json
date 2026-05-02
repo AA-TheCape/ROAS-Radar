@@ -1,1 +1,42 @@
-Added `meta-ads:metadata-refresh`, `meta-ads:metadata-refresh:start`, `google-ads:metadata-refresh`, and `google-ads:metadata-refresh:start` scripts.
+{
+  "name": "roas-radar-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/src/server.js",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "test": "node scripts/run-tests.mjs all",
+    "test:unit": "node scripts/run-tests.mjs unit",
+    "test:integration": "node scripts/run-tests.mjs integration",
+    "start:worker": "node dist/src/worker.js",
+    "start:worker-service": "node dist/src/worker-service.js",
+    "session-attribution:retention": "tsx src/session-attribution-retention-worker.ts",
+    "meta-ads:sync": "tsx src/meta-ads-worker.ts",
+    "meta-ads:metadata-refresh": "tsx src/meta-ads-metadata-refresh-worker.ts",
+    "meta-ads:metadata-refresh:start": "node dist/src/meta-ads-metadata-refresh-worker.js",
+    "google-ads:sync": "tsx src/google-ads-worker.ts",
+    "google-ads:metadata-refresh": "tsx src/google-ads-metadata-refresh-worker.ts",
+    "google-ads:metadata-refresh:start": "node dist/src/google-ads-metadata-refresh-worker.js",
+    "data-quality:check": "tsx src/data-quality-worker.ts"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "pg": "^8.13.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.2",
+    "@types/pg": "^8.20.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
