@@ -1706,7 +1706,7 @@ async function enqueueOrderValueSyncJobsForWindow(now: Date): Promise<number> {
 	return enqueuedJobs;
 }
 
-async function claimSyncJobs(workerId: string, limit: number): Promise<MetaAdsOrderValueSyncJobRow[]> {
+async function claimOrderValueSyncJobs(workerId: string, limit: number): Promise<MetaAdsOrderValueSyncJobRow[]> {
   const result = await query<MetaAdsOrderValueSyncJobRow>(
     `
       WITH claimable AS (
@@ -1782,7 +1782,11 @@ async function updateConnectionSyncStarted(connectionId: number): Promise<void> 
   );
 }
 
-async function markSyncJobSucceeded(jobId: number, connectionId: number, client?: MetaAdsQueryable): Promise<void> {
+async function markOrderValueSyncJobSucceeded(
+  jobId: number,
+  connectionId: number,
+  client?: MetaAdsQueryable
+): Promise<void> {
   const executor = client ?? poolQueryExecutor;
 
   await executor.query(
@@ -1814,16 +1818,16 @@ async function markSyncJobSucceeded(jobId: number, connectionId: number, client?
 	);
 }
 
-async function markSyncJobFailed(
+async function markOrderValueSyncJobFailed(
   job: MetaAdsOrderValueSyncJobRow,
   error: unknown,
   client?: MetaAdsQueryable
 ): Promise<void> {
   const message = error instanceof Error ? error.message : String(error);
   const retryDelaySeconds = Math.min(300, Math.max(15, job.attempts * 30));
-  const shouldRetry =
-    (error instanceof MetaAdsApiError && META_ADS_RETRYABLE_STATUS_CODES.has(error.statusCode)) ||
-    job.attempts < META_ADS_SYNC_MAX_RETRIES;
+  const isRetryableApiError = error instanceof MetaAdsApiError && META_ADS_RETRYABLE_STATUS_CODES.has(error.statusCode);
+  const isUnexpectedWorkerError = !(error instanceof MetaAdsApiError);
+  const shouldRetry = job.attempts < META_ADS_SYNC_MAX_RETRIES && (isRetryableApiError || isUnexpectedWorkerError);
   const nextStatus = shouldRetry ? 'retry' : 'failed';
 
   const executor = client ?? poolQueryExecutor;
@@ -2179,7 +2183,7 @@ function emitOrderValueSyncAnomalies(params: {
   }
 }
 
-async function processSyncJob(job: MetaAdsOrderValueSyncJobRow, triggerSource: string): Promise<{
+async function processOrderValueSyncJob(job: MetaAdsOrderValueSyncJobRow, triggerSource: string): Promise<{
   outcome: MetaAdsSyncJobOutcome;
   recordsReceived: number;
   rawRowsFetched: number;
@@ -2238,7 +2242,7 @@ async function processSyncJob(job: MetaAdsOrderValueSyncJobRow, triggerSource: s
         aggregateRowsUpserted: normalized.length,
         client
       });
-      await markSyncJobSucceeded(job.id, job.connection_id, client);
+      await markOrderValueSyncJobSucceeded(job.id, job.connection_id, client);
 
       return {
         persistedRows: persisted,
@@ -2318,7 +2322,7 @@ async function processSyncJob(job: MetaAdsOrderValueSyncJobRow, triggerSource: s
         }));
 
       await markSyncRunFailedWithClient(failedRunId, error, client);
-      await markSyncJobFailed(job, error, client);
+      await markOrderValueSyncJobFailed(job, error, client);
 
       return failedRunId;
     });
@@ -2444,14 +2448,14 @@ export async function runMetaAdsOrderValueSync(options: {
       jobsPlanned = true;
     }
 
-    const jobs = await claimSyncJobs(workerId, env.META_ADS_SYNC_BATCH_SIZE);
+    const jobs = await claimOrderValueSyncJobs(workerId, env.META_ADS_SYNC_BATCH_SIZE);
 
     if (jobs.length === 0) {
       break;
     }
 
     for (const job of jobs) {
-      const result = await processSyncJob(job, triggerSource);
+      const result = await processOrderValueSyncJob(job, triggerSource);
 
       if (result.outcome === 'succeeded') {
         succeededConnections += 1;
