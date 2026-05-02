@@ -29,6 +29,7 @@ const META_ORDER_VALUE_PRIMARY_ACTION_TYPES = [
 ] as const;
 const META_ADS_SYNC_MAX_RETRIES = 3;
 const META_ADS_RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
+const META_ADS_SYNC_TIME_ZONE = 'America/Los_Angeles';
 
 export type CanonicalSelectionMode = 'priority' | 'fallback' | 'none';
 
@@ -313,6 +314,128 @@ function buildOrderValueSyncAnomalies(input: {
   }
 
   return anomalies;
+}
+
+function formatDateOnly(value: Date): string {
+  return value.toISOString().slice(0, 10);
+}
+
+function parseDateOnly(value: string): Date {
+  return new Date(`${value}T00:00:00.000Z`);
+}
+
+function listDateRangeInclusive(startDate: string, endDate: string): string[] {
+  const start = parseDateOnly(startDate);
+  const end = parseDateOnly(endDate);
+
+  if (start.getTime() > end.getTime()) {
+    throw new Error('startDate must be on or before endDate');
+  }
+
+  const dates: string[] = [];
+
+  for (let cursor = start; cursor.getTime() <= end.getTime(); cursor = new Date(cursor.getTime() + 24 * 60 * 60 * 1000)) {
+    dates.push(formatDateOnly(cursor));
+  }
+
+  return dates;
+}
+
+function formatDateInTimeZone(value: Date, timeZone: string): string {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+
+  return formatter.format(value);
+}
+
+function buildPlanningDates(now = new Date(), lastSyncCompletedAt: Date | null = null): string[] {
+  const currentBusinessDate = parseDateOnly(formatDateInTimeZone(now, META_ADS_SYNC_TIME_ZONE));
+  const lookbackDays = lastSyncCompletedAt ? env.META_ADS_SYNC_LOOKBACK_DAYS : env.META_ADS_SYNC_INITIAL_LOOKBACK_DAYS;
+  const firstDate = new Date(currentBusinessDate.getTime() - (lookbackDays - 1) * 24 * 60 * 60 * 1000);
+
+  if (currentBusinessDate.getTime() < firstDate.getTime()) {
+    return [];
+  }
+
+  return listDateRangeInclusive(formatDateOnly(firstDate), formatDateOnly(currentBusinessDate));
+}
+
+async function enqueueSpendSyncDates(connectionId: number, dates: string[]): Promise<number> {
+  let enqueuedJobs = 0;
+
+  for (const date of dates) {
+    await query(
+      `
+        INSERT INTO meta_ads_sync_jobs (connection_id, sync_date, status, available_at, updated_at)
+        VALUES ($1, $2::date, 'pending', now(), now())
+        ON CONFLICT (connection_id, sync_date)
+        DO UPDATE SET
+          status = CASE
+            WHEN meta_ads_sync_jobs.status = 'processing' THEN meta_ads_sync_jobs.status
+            ELSE 'pending'
+          END,
+          available_at = CASE
+            WHEN meta_ads_sync_jobs.status = 'processing' THEN meta_ads_sync_jobs.available_at
+            ELSE now()
+          END,
+          last_error = NULL,
+          completed_at = CASE
+            WHEN meta_ads_sync_jobs.status = 'processing' THEN meta_ads_sync_jobs.completed_at
+            ELSE NULL
+          END,
+          updated_at = now()
+      `,
+      [connectionId, date]
+    );
+
+    enqueuedJobs += 1;
+  }
+
+  return enqueuedJobs;
+}
+
+async function planIncrementalSyncs(now = new Date()): Promise<number> {
+  const result = await query<{
+    id: number;
+    last_sync_completed_at: Date | null;
+    last_sync_planned_for: string | null;
+  }>(
+    `
+      SELECT
+        id,
+        last_sync_completed_at,
+        last_sync_planned_for::text
+      FROM meta_ads_connections
+      WHERE status = 'active'
+    `
+  );
+
+  let plannedJobs = 0;
+  const today = formatDateInTimeZone(now, META_ADS_SYNC_TIME_ZONE);
+
+  for (const row of result.rows) {
+    if (row.last_sync_planned_for === today) {
+      continue;
+    }
+
+    const dates = buildPlanningDates(now, row.last_sync_completed_at);
+
+    if (dates.length === 0) {
+      continue;
+    }
+
+    plannedJobs += await enqueueSpendSyncDates(row.id, dates);
+    await query('UPDATE meta_ads_connections SET last_sync_planned_for = $2::date, updated_at = now() WHERE id = $1', [
+      row.id,
+      today
+    ]);
+  }
+
+  return plannedJobs;
 }
 
 function buildSyncWindowDates(now: Date): string[] {
@@ -695,7 +818,7 @@ async function markSyncRunFailed(runId: number, error: unknown): Promise<void> {
   await markSyncRunFailedWithClient(runId, error, poolQueryExecutor);
 }
 
-async function enqueueSyncJobsForWindow(now: Date): Promise<number> {
+async function enqueueOrderValueSyncJobsForWindow(now: Date): Promise<number> {
   const connections = await query<{ id: number }>(
     `
       SELECT id
@@ -1443,29 +1566,14 @@ export async function processMetaAdsSyncQueue(options: MetaAdsQueueProcessOption
   const startedAt = Date.now();
   const workerId = options.workerId ?? `meta-ads-sync-${randomBytes(6).toString('hex')}`;
   const now = options.now ?? new Date();
-  const limit = options.limit ?? env.META_ADS_SYNC_BATCH_SIZE;
-  const triggerSource = options.triggerSource ?? 'worker';
-  const enqueuedJobs = options.planJobs ? await enqueueSyncJobsForWindow(now) : 0;
-  const jobs = await claimSyncJobs(workerId, limit);
-  let succeededJobs = 0;
-  let failedJobs = 0;
-
-  for (const job of jobs) {
-    const result = await processSyncJob(job, triggerSource);
-
-    if (result.outcome === 'succeeded') {
-      succeededJobs += 1;
-    } else {
-      failedJobs += 1;
-    }
-  }
+  const enqueuedJobs = await planIncrementalSyncs(now);
 
 	const result: MetaAdsQueueProcessResult = {
 		workerId,
 		enqueuedJobs,
-		claimedJobs: jobs.length,
-		succeededJobs,
-		failedJobs,
+		claimedJobs: 0,
+		succeededJobs: 0,
+		failedJobs: 0,
 		durationMs: Date.now() - startedAt,
 	};
 
@@ -1495,7 +1603,7 @@ export async function runMetaAdsOrderValueSync(options: {
 
   while (true) {
     if (!jobsPlanned) {
-      await enqueueSyncJobsForWindow(now);
+      await enqueueOrderValueSyncJobsForWindow(now);
       jobsPlanned = true;
     }
 
@@ -1570,6 +1678,8 @@ export function createMetaAdsAdminRouter(): Router {
 }
 
 export const __metaAdsTestUtils = {
+  buildPlanningDates,
+  listDateRangeInclusive,
   buildMetaAdsApiRequestMetricsAccumulator,
   summarizeOrderValueRecords,
   buildOrderValueSyncAnomalies,
