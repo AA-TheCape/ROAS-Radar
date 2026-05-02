@@ -338,12 +338,12 @@ test("recoverShopifyAttributionHints applies click-id-backed synthetic attributi
 			attributed_medium: "paid_social",
 			attributed_campaign: null,
 			attributed_click_id_type: "fbclid",
-			attributed_click_id_value: "FB-CLICK-123",
-			match_source: "shopify_hint_fallback",
-			confidence_score: "0.55",
-			confidence_label: "low",
-			attribution_reason: "shopify_hint_derived",
-		});
+				attributed_click_id_value: "FB-CLICK-123",
+				match_source: "shopify_hint_fallback",
+				confidence_score: "0.55",
+				confidence_label: "medium",
+				attribution_reason: "shopify_hint_derived",
+			});
 
     const snapshot = await fetchOrderSnapshot('order-shopify-hint-click-id-1');
     assert.ok(snapshot);
@@ -516,12 +516,12 @@ test("recoverShopifyAttributionHints suppresses Shopify fallback when checkout o
 			session_id: checkoutSessionId,
 			attributed_source: "google",
 			attributed_medium: "cpc",
-			attributed_campaign: "brand-search",
-			attributed_click_id_type: "gclid",
-			attributed_click_id_value: "gclid-123",
-			match_source: "landing_session_id",
-			confidence_score: "1.00",
-			confidence_label: "high",
+				attributed_campaign: "brand-search",
+				attributed_click_id_type: "gclid",
+				attributed_click_id_value: "gclid-123",
+				match_source: "matched_by_landing_session",
+				confidence_score: "1.00",
+				confidence_label: "high",
 			attribution_reason: "matched_by_landing_session",
 		});
 

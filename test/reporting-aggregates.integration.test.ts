@@ -203,10 +203,11 @@ test('refreshDailyReportingMetrics excludes non-online-store Shopify orders from
         is_primary,
         attribution_reason,
         match_source,
+        confidence_label,
         model_version
       ) VALUES
-        ('web-order-1', 'last_touch', 1, NULL, $1::timestamptz, 'facebook', 'paid_social', 'prospecting-us', 1.0, 100.00, true, 'matched_by_checkout_token', 'checkout_token', 1),
-        ('pos-order-1', 'last_touch', 1, NULL, $1::timestamptz, 'pos', 'offline', 'retail', 1.0, 50.00, true, 'matched_by_checkout_token', 'checkout_token', 1)
+        ('web-order-1', 'last_touch', 1, NULL, $1::timestamptz, 'facebook', 'paid_social', 'prospecting-us', 1.0, 100.00, true, 'matched_by_checkout_token', 'matched_by_checkout_token', 'high', 1),
+        ('pos-order-1', 'last_touch', 1, NULL, $1::timestamptz, 'pos', 'offline', 'retail', 1.0, 50.00, true, 'matched_by_checkout_token', 'matched_by_checkout_token', 'high', 1)
     `,
     [`${metricDate}T16:55:00.000Z`]
   );
