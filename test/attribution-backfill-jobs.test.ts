@@ -9,6 +9,14 @@ const backfillModule = await import('../src/modules/attribution/backfill.js');
 const { buildBackfillExecutionOptions, processOrderAttributionBackfillRuns } = backfillJobsModule;
 const { OrderAttributionBackfillRunError } = backfillModule;
 
+const emptyTierCounts = {
+  deterministic_first_party: 0,
+  deterministic_shopify_hint: 0,
+  platform_reported_meta: 0,
+  ga4_fallback: 0,
+  unattributed: 0
+};
+
 async function captureStructuredLogs<T>(callback: () => Promise<T>): Promise<{
   entries: Array<Record<string, unknown>>;
   result: T;
@@ -53,6 +61,8 @@ test('buildBackfillExecutionOptions maps submitted options to backfill execution
         endDate: '2026-04-05',
         dryRun: false,
         limit: 275,
+        reclassificationTarget: 'full_rebuild',
+        organizationIds: [],
         webOrdersOnly: false,
         skipShopifyWriteback: true
       }
@@ -66,6 +76,8 @@ test('buildBackfillExecutionOptions maps submitted options to backfill execution
   assert.equal(executionOptions.windowEnd.toISOString(), '2026-04-05T23:59:59.999Z');
   assert.equal(executionOptions.limit, 275);
   assert.equal(executionOptions.dryRun, false);
+  assert.equal(executionOptions.reclassificationTarget, 'full_rebuild');
+  assert.deepEqual(executionOptions.organizationIds, []);
   assert.equal(executionOptions.onlyWebOrders, false);
   assert.equal(executionOptions.writeToShopifyWhenAvailable, false);
 });
@@ -79,6 +91,8 @@ test('buildBackfillExecutionOptions keeps writeback enabled for non-dry-run web-
         endDate: '2026-04-08',
         dryRun: false,
         limit: 5000,
+        reclassificationTarget: 'meta_tier_reclassification',
+        organizationIds: [17, 29],
         webOrdersOnly: true,
         skipShopifyWriteback: false
       }
@@ -90,6 +104,8 @@ test('buildBackfillExecutionOptions keeps writeback enabled for non-dry-run web-
   assert.equal(executionOptions.workerId, 'worker-456');
   assert.equal(executionOptions.limit, 5000);
   assert.equal(executionOptions.dryRun, false);
+  assert.equal(executionOptions.reclassificationTarget, 'meta_tier_reclassification');
+  assert.deepEqual(executionOptions.organizationIds, [17, 29]);
   assert.equal(executionOptions.onlyWebOrders, true);
   assert.equal(executionOptions.writeToShopifyWhenAvailable, true);
 });
@@ -109,6 +125,8 @@ test('processOrderAttributionBackfillRuns completes queued runs with the shared 
           endDate: '2026-04-12',
           dryRun: true,
           limit: 42,
+          reclassificationTarget: 'meta_tier_reclassification',
+          organizationIds: [88],
           webOrdersOnly: true,
           skipShopifyWriteback: false
         }
@@ -125,6 +143,8 @@ test('processOrderAttributionBackfillRuns completes queued runs with the shared 
         windowEnd: options.windowEnd.toISOString(),
         limit: options.limit,
         dryRun: options.dryRun,
+        reclassificationTarget: options.reclassificationTarget,
+        organizationIds: options.organizationIds,
         onlyWebOrders: options.onlyWebOrders,
         writeToShopifyWhenAvailable: options.writeToShopifyWhenAvailable
       });
@@ -137,19 +157,23 @@ test('processOrderAttributionBackfillRuns completes queued runs with the shared 
           windowStart: options.windowStart.toISOString(),
           windowEnd: options.windowEnd.toISOString(),
           onlyWebOrders: true,
-          limit: 42
+          limit: 42,
+          reclassificationTarget: 'meta_tier_reclassification',
+          organizationIds: [88]
         },
         beforeMetrics: {
           totalOrdersInScope: 40,
           ordersMissingAttribution: 17,
           ordersWithAttribution: 23,
-          completenessRate: 0.575
+          completenessRate: 0.575,
+          tierCounts: emptyTierCounts
         },
         afterMetrics: {
           totalOrdersInScope: 40,
           ordersMissingAttribution: 6,
           ordersWithAttribution: 34,
-          completenessRate: 0.85
+          completenessRate: 0.85,
+          tierCounts: emptyTierCounts
         },
         scannedOrders: 40,
         recoverableOrders: 11,
@@ -184,6 +208,8 @@ test('processOrderAttributionBackfillRuns completes queued runs with the shared 
       windowEnd: '2026-04-12T23:59:59.999Z',
       limit: 42,
       dryRun: true,
+      reclassificationTarget: 'meta_tier_reclassification',
+      organizationIds: [88],
       onlyWebOrders: true,
       writeToShopifyWhenAvailable: true
     }
@@ -196,6 +222,11 @@ test('processOrderAttributionBackfillRuns completes queued runs with the shared 
         recovered: 11,
         unrecoverable: 6,
         writebackCompleted: 3,
+        dryRun: true,
+        reclassificationTarget: 'meta_tier_reclassification',
+        organizationIds: [88],
+        beforeCounts: emptyTierCounts,
+        afterCounts: emptyTierCounts,
         failures: [
           {
             orderId: 'order-7',
@@ -224,6 +255,8 @@ test('processOrderAttributionBackfillRuns continues after a failure and preserve
           endDate: '2026-04-12',
           dryRun: false,
           limit: 5000,
+          reclassificationTarget: 'full_rebuild',
+          organizationIds: [],
           webOrdersOnly: false,
           skipShopifyWriteback: true
         }
@@ -236,6 +269,8 @@ test('processOrderAttributionBackfillRuns continues after a failure and preserve
           endDate: '2026-04-13',
           dryRun: true,
           limit: 10,
+          reclassificationTarget: 'meta_tier_reclassification',
+          organizationIds: [41],
           webOrdersOnly: true,
           skipShopifyWriteback: false
         }
@@ -260,6 +295,8 @@ test('processOrderAttributionBackfillRuns continues after a failure and preserve
         workerId: options.workerId,
         limit: options.limit,
         dryRun: options.dryRun,
+        reclassificationTarget: options.reclassificationTarget,
+        organizationIds: options.organizationIds,
         onlyWebOrders: options.onlyWebOrders,
         writeToShopifyWhenAvailable: options.writeToShopifyWhenAvailable
       });
@@ -273,19 +310,23 @@ test('processOrderAttributionBackfillRuns continues after a failure and preserve
             windowStart: options.windowStart.toISOString(),
             windowEnd: options.windowEnd.toISOString(),
             onlyWebOrders: false,
-            limit: 5000
+            limit: 5000,
+            reclassificationTarget: 'full_rebuild',
+            organizationIds: []
           },
           beforeMetrics: {
             totalOrdersInScope: 100,
             ordersMissingAttribution: 18,
             ordersWithAttribution: 82,
-            completenessRate: 0.82
+            completenessRate: 0.82,
+            tierCounts: emptyTierCounts
           },
           afterMetrics: {
             totalOrdersInScope: 100,
             ordersMissingAttribution: 9,
             ordersWithAttribution: 91,
-            completenessRate: 0.91
+            completenessRate: 0.91,
+            tierCounts: emptyTierCounts
           },
           scannedOrders: 100,
           recoverableOrders: 9,
@@ -328,19 +369,23 @@ test('processOrderAttributionBackfillRuns continues after a failure and preserve
     {
       requestedBy: 'internal',
       workerId: 'worker-runner',
-      limit: 5000,
-      dryRun: false,
-      onlyWebOrders: false,
-      writeToShopifyWhenAvailable: false
-    },
+        limit: 5000,
+        dryRun: false,
+        reclassificationTarget: 'full_rebuild',
+        organizationIds: [],
+        onlyWebOrders: false,
+        writeToShopifyWhenAvailable: false
+      },
     {
       requestedBy: 'internal',
       workerId: 'worker-runner',
-      limit: 10,
-      dryRun: true,
-      onlyWebOrders: true,
-      writeToShopifyWhenAvailable: true
-    }
+        limit: 10,
+        dryRun: true,
+        reclassificationTarget: 'meta_tier_reclassification',
+        organizationIds: [41],
+        onlyWebOrders: true,
+        writeToShopifyWhenAvailable: true
+      }
   ]);
   assert.deepEqual(completedRuns, [
     {
@@ -350,6 +395,11 @@ test('processOrderAttributionBackfillRuns continues after a failure and preserve
         recovered: 9,
         unrecoverable: 9,
         writebackCompleted: 0,
+        dryRun: false,
+        reclassificationTarget: 'full_rebuild',
+        organizationIds: [],
+        beforeCounts: emptyTierCounts,
+        afterCounts: emptyTierCounts,
         failures: []
       }
     }
@@ -357,12 +407,17 @@ test('processOrderAttributionBackfillRuns continues after a failure and preserve
   assert.deepEqual(failedRuns, [
     {
       runId: 'job-failed',
-      report: {
-        scanned: 3,
-        recovered: 0,
-        unrecoverable: 1,
-        writebackCompleted: 0,
-        failures: [
+        report: {
+          scanned: 3,
+          recovered: 0,
+          unrecoverable: 1,
+          writebackCompleted: 0,
+          dryRun: false,
+          reclassificationTarget: 'full_rebuild',
+          organizationIds: [],
+          beforeCounts: emptyTierCounts,
+          afterCounts: emptyTierCounts,
+          failures: [
           {
             orderId: 'order-22',
             code: 'shopify_timeout',
@@ -392,6 +447,8 @@ test('processOrderAttributionBackfillRuns marks failed runs without aborting the
           endDate: '2026-04-01',
           dryRun: false,
           limit: 10,
+          reclassificationTarget: 'full_rebuild',
+          organizationIds: [],
           webOrdersOnly: true,
           skipShopifyWriteback: true
         }
@@ -417,6 +474,11 @@ test('processOrderAttributionBackfillRuns marks failed runs without aborting the
           recovered: 0,
           unrecoverable: 0,
           writebackCompleted: 0,
+          dryRun: false,
+          reclassificationTarget: 'full_rebuild',
+          organizationIds: [],
+          beforeCounts: emptyTierCounts,
+          afterCounts: emptyTierCounts,
           failures: []
         },
         cause: error
@@ -437,6 +499,11 @@ test('processOrderAttributionBackfillRuns marks failed runs without aborting the
         recovered: 0,
         unrecoverable: 0,
         writebackCompleted: 0,
+        dryRun: false,
+        reclassificationTarget: 'full_rebuild',
+        organizationIds: [],
+        beforeCounts: emptyTierCounts,
+        afterCounts: emptyTierCounts,
         failures: []
       },
       error: {
@@ -460,6 +527,8 @@ test('processOrderAttributionBackfillRuns emits per-job lifecycle logs with job 
             endDate: '2026-04-21',
             dryRun: true,
             limit: 25,
+            reclassificationTarget: 'full_rebuild',
+            organizationIds: [],
             webOrdersOnly: true,
             skipShopifyWriteback: false
           }
@@ -472,6 +541,8 @@ test('processOrderAttributionBackfillRuns emits per-job lifecycle logs with job 
             endDate: '2026-04-22',
             dryRun: false,
             limit: 10,
+            reclassificationTarget: 'meta_tier_reclassification',
+            organizationIds: [73],
             webOrdersOnly: false,
             skipShopifyWriteback: true
           }
@@ -489,19 +560,23 @@ test('processOrderAttributionBackfillRuns emits per-job lifecycle logs with job 
               windowStart: options.windowStart.toISOString(),
               windowEnd: options.windowEnd.toISOString(),
               onlyWebOrders: options.onlyWebOrders ?? true,
-              limit: options.limit ?? 25
+              limit: options.limit ?? 25,
+              reclassificationTarget: 'full_rebuild',
+              organizationIds: []
             },
             beforeMetrics: {
               totalOrdersInScope: 25,
               ordersMissingAttribution: 9,
               ordersWithAttribution: 16,
-              completenessRate: 0.64
+              completenessRate: 0.64,
+              tierCounts: emptyTierCounts
             },
             afterMetrics: {
               totalOrdersInScope: 25,
               ordersMissingAttribution: 9,
               ordersWithAttribution: 16,
-              completenessRate: 0.64
+              completenessRate: 0.64,
+              tierCounts: emptyTierCounts
             },
             scannedOrders: 25,
             recoverableOrders: 7,
@@ -523,6 +598,11 @@ test('processOrderAttributionBackfillRuns emits per-job lifecycle logs with job 
             recovered: 2,
             unrecoverable: 3,
             writebackCompleted: 1,
+            dryRun: false,
+            reclassificationTarget: 'full_rebuild',
+            organizationIds: [],
+            beforeCounts: emptyTierCounts,
+            afterCounts: emptyTierCounts,
             failures: [
               {
                 orderId: '1003',

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { summarizeMetaAttribution } from './meta-evaluation.js';
 function normalizeResolverTriggeredBy(value) {
     const normalized = value.trim();
     return normalized.length > 0 ? normalized.slice(0, 255) : 'unspecified';
@@ -60,14 +61,17 @@ export function buildResolverInputHash(input, resolverRuleVersion) {
 export async function insertAttributionDecisionArtifact(input) {
     const hasMetaEvidence = (input.resolverInput.platformReportedMeta?.length ?? 0) > 0;
     const hasHigherPrecedenceWinner = input.journey.tier === 'deterministic_first_party' || input.journey.tier === 'deterministic_shopify_hint';
-    const metaEvaluationOutcome = input.journey.tier === 'platform_reported_meta'
-        ? 'eligible_canonical'
-        : 'not_evaluated';
+    const metaSummary = summarizeMetaAttribution(input.resolverInput, input.journey);
+    const metaEvaluationOutcome = metaSummary.metaEvaluationOutcome;
     const decisionReason = input.journey.tier === 'platform_reported_meta'
         ? 'meta_canonical_selected'
         : hasMetaEvidence && hasHigherPrecedenceWinner
             ? 'meta_not_evaluated_higher_precedence_winner'
-            : 'meta_not_evaluated_no_evidence';
+            : metaEvaluationOutcome === 'eligible_parallel_only'
+                ? 'meta_parallel_only_below_confidence_threshold'
+                : metaEvaluationOutcome === 'ineligible'
+                    ? 'meta_ineligible_failed_hard_guard'
+                    : 'meta_not_evaluated_no_evidence';
     const result = await input.client.query(`
       INSERT INTO attribution_decision_artifacts (
         shopify_order_id,
@@ -99,13 +103,12 @@ export async function insertAttributionDecisionArtifact(input) {
       )
       VALUES (
         $1,
-        NULL,
-        $2,
+        $2::uuid,
         $3,
         $4,
         $5,
-        1,
         $6,
+        1,
         $7,
         $8,
         $9,
@@ -114,8 +117,8 @@ export async function insertAttributionDecisionArtifact(input) {
         $12,
         $13,
         $14,
-        NULL,
         $15,
+        NULL,
         $16,
         $17,
         $18,
@@ -123,11 +126,13 @@ export async function insertAttributionDecisionArtifact(input) {
         $20,
         $21,
         $22,
+        $23,
         true
       )
       RETURNING id::text
     `, [
         input.order.shopifyOrderId,
+        metaSummary.metaAttributionEvidenceId,
         input.backfillRunId ?? null,
         input.resolverRunSource,
         normalizeResolverTriggeredBy(input.resolverTriggeredBy),
@@ -135,11 +140,11 @@ export async function insertAttributionDecisionArtifact(input) {
         input.order.attributionTier ?? 'unattributed',
         input.journey.tier,
         metaEvaluationOutcome,
-        input.journey.tier === 'platform_reported_meta',
+        metaSummary.metaAffectedCanonical,
         decisionReason,
         hasMetaEvidence ? 'Meta evidence versioning is not fully wired into this resolver path yet.' : null,
-        input.journey.tier === 'platform_reported_meta' ? input.journey.confidenceScore : null,
-        input.journey.tier === 'platform_reported_meta' ? 0.5 : null,
+        metaSummary.confidenceScore,
+        metaSummary.metaPresent ? 0.5 : null,
         buildResolverInputHash(input.resolverInput, input.journey.resolverRuleVersion),
         input.journey.orderOccurredAtUtc ?? null,
         input.order.payloadHash
@@ -150,7 +155,7 @@ export async function insertAttributionDecisionArtifact(input) {
         input.resolverInput.ga4Fallback.length > 0,
         input.journey.tier,
         input.orderAttributionAudit.source,
-        hasMetaEvidence && input.journey.tier !== 'platform_reported_meta'
+        hasMetaEvidence && !metaSummary.metaAffectedCanonical
     ]);
     return result.rows[0].id;
 }

@@ -45,7 +45,28 @@ function parseLimit(value: string | null): number | undefined {
   return parsed;
 }
 
+function parseOrganizationIds(value: string | null): number[] {
+  if (!value?.trim()) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(
+      value
+        .split(',')
+        .map((entry) => Number.parseInt(entry.trim(), 10))
+        .filter((entry) => Number.isFinite(entry) && entry > 0)
+    )
+  ).sort((left, right) => left - right);
+}
+
 async function run(): Promise<void> {
+  const organizationIds = parseOrganizationIds(readFlag('organization-ids'));
+  const reclassificationTarget =
+    process.argv.includes('--meta-tier-reclassification') || organizationIds.length > 0
+      ? 'meta_tier_reclassification'
+      : 'full_rebuild';
+
   const report = await backfillRecentOrdersWithRecoveredAttribution({
     windowStart: parseIsoDate('from', requireFlag('from')),
     windowEnd: parseIsoDate('to', requireFlag('to')),
@@ -53,6 +74,8 @@ async function run(): Promise<void> {
     workerId: readFlag('worker-id')?.trim() || 'order-attribution-backfill',
     limit: parseLimit(readFlag('limit')),
     dryRun: process.argv.includes('--dry-run'),
+    reclassificationTarget,
+    organizationIds,
     onlyWebOrders: !process.argv.includes('--include-non-web-orders'),
     writeToShopifyWhenAvailable: !process.argv.includes('--skip-shopify-writeback')
   });

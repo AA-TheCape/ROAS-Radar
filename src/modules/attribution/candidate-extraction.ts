@@ -45,13 +45,17 @@ export type AttributionCandidateOrder = {
 };
 
 export type AttributionCandidateNormalizationFailure = {
-  scope: 'order' | 'shopify_hint' | 'ga4_fallback';
+  scope: 'order' | 'shopify_hint' | 'platform_reported_meta' | 'ga4_fallback';
   reason: string;
   sourceKey: string | null;
 };
 
 export type AttributionCandidate = {
-  sourceClass: 'deterministic_first_party' | 'deterministic_shopify_hint' | 'ga4_fallback';
+  sourceClass:
+    | 'deterministic_first_party'
+    | 'deterministic_shopify_hint'
+    | 'platform_reported_meta'
+    | 'ga4_fallback';
   sourceKey: string;
   sessionId: string | null;
   sourceTouchEventId: string | null;
@@ -72,6 +76,12 @@ export type AttributionCandidate = {
   confidenceScore: number;
   isDirect: boolean;
   isSynthetic: boolean;
+  metaAttributionEvidenceId?: string | null;
+  metaSignalId?: string | null;
+  metaMatchBasis?: string | null;
+  metaEligibilityOutcome?: 'eligible_canonical' | 'eligible_parallel_only' | 'ineligible' | null;
+  isClickThrough?: boolean;
+  isViewThrough?: boolean;
 };
 
 export type Ga4AttributionCandidateInput = {
@@ -112,8 +122,23 @@ export type AttributionCandidateExtractionResult = {
   orderTimestampSource: OrderTimestampSource | null;
   deterministicFirstParty: AttributionCandidate[];
   shopifyHint: AttributionCandidate[];
+  platformReportedMeta: AttributionCandidate[];
   ga4Fallback: AttributionCandidate[];
   normalizationFailures: AttributionCandidateNormalizationFailure[];
+};
+
+type MetaAttributionCandidateRow = {
+  id: string;
+  meta_signal_id: string;
+  meta_touchpoint_occurred_at_utc: Date | null;
+  campaign_id: string;
+  campaign_name: string | null;
+  ad_id: string | null;
+  match_basis: string | null;
+  confidence_score: string | number | null;
+  eligibility_outcome: 'eligible_canonical' | 'eligible_parallel_only' | 'ineligible' | 'not_evaluated';
+  is_click_through: boolean;
+  is_view_through: boolean;
 };
 
 function normalizeNullableString(value: string | null | undefined): string | null {
@@ -127,6 +152,18 @@ function clampConfidenceScore(value: number | null | undefined, fallback: number
   }
 
   return Math.min(Math.max(value, 0), 1);
+}
+
+function buildMetaPaidSocialMedium(row: Pick<MetaAttributionCandidateRow, 'is_click_through' | 'is_view_through'>): string {
+  if (row.is_click_through) {
+    return 'paid_social_click';
+  }
+
+  if (row.is_view_through) {
+    return 'paid_social_view';
+  }
+
+  return 'paid_social';
 }
 
 export function normalizeTimestampToUtc(value: Date | string | null | undefined): Date | null {
@@ -508,7 +545,7 @@ function mapGa4Candidate(
 
   return {
     candidate: {
-      sourceClass: 'ga4_fallback',
+      sourceClass: 'platform_reported_meta',
       sourceKey,
       sessionId: normalizeNullableString(rawCandidate.sessionId),
       sourceTouchEventId: normalizeNullableString(rawCandidate.sourceTouchEventId),
@@ -603,6 +640,97 @@ export async function collectDeterministicFirstPartyCandidates(
   return dedupeDeterministicCandidates(candidates).map(mapDeterministicCandidate);
 }
 
+async function collectPlatformReportedMetaCandidates(
+  client: PoolClient,
+  order: AttributionCandidateOrder
+): Promise<{
+  candidates: AttributionCandidate[];
+  failures: AttributionCandidateNormalizationFailure[];
+}> {
+  const result = await client.query<MetaAttributionCandidateRow>(
+    `
+      SELECT
+        id::text,
+        meta_signal_id,
+        meta_touchpoint_occurred_at_utc,
+        campaign_id,
+        campaign_name,
+        ad_id,
+        match_basis,
+        confidence_score,
+        eligibility_outcome,
+        is_click_through,
+        is_view_through
+      FROM meta_order_attribution_evidence
+      WHERE shopify_order_id = $1
+      ORDER BY reported_at_utc DESC, id DESC
+    `,
+    [order.shopifyOrderId]
+  );
+
+  const failures: AttributionCandidateNormalizationFailure[] = [];
+  const candidates: AttributionCandidate[] = [];
+
+  for (const row of result.rows) {
+    if (!(row.meta_touchpoint_occurred_at_utc instanceof Date) || Number.isNaN(row.meta_touchpoint_occurred_at_utc.getTime())) {
+      failures.push({
+        scope: 'platform_reported_meta',
+        reason: 'missing_meta_touchpoint_timestamp',
+        sourceKey: row.meta_signal_id
+      });
+      continue;
+    }
+
+    if (row.eligibility_outcome === 'not_evaluated') {
+      failures.push({
+        scope: 'platform_reported_meta',
+        reason: 'meta_not_evaluated',
+        sourceKey: row.meta_signal_id
+      });
+      continue;
+    }
+
+    const confidenceScore =
+      typeof row.confidence_score === 'number'
+        ? row.confidence_score
+        : Number.parseFloat(String(row.confidence_score ?? '0'));
+
+    candidates.push({
+      sourceClass: 'ga4_fallback',
+      sourceKey: `meta:${row.id}`,
+      sessionId: null,
+      sourceTouchEventId: row.id,
+      ingestionSource: 'meta_platform_reported',
+      occurredAtUtc: row.meta_touchpoint_occurred_at_utc,
+      source: 'meta',
+      medium: buildMetaPaidSocialMedium(row),
+      campaign: row.campaign_name ?? row.campaign_id,
+      content: row.ad_id,
+      term: null,
+      clickIdType:
+        row.match_basis === 'fbclid' || row.match_basis === 'fbc' || row.match_basis === 'fbp'
+          ? row.match_basis
+          : null,
+      clickIdValue: null,
+      attributionReason: 'meta_platform_reported_match',
+      confidenceScore: clampConfidenceScore(confidenceScore, 0.35),
+      isDirect: false,
+      isSynthetic: true,
+      metaAttributionEvidenceId: row.id,
+      metaSignalId: row.meta_signal_id,
+      metaMatchBasis: row.match_basis,
+      metaEligibilityOutcome: row.eligibility_outcome,
+      isClickThrough: row.is_click_through,
+      isViewThrough: row.is_view_through
+    });
+  }
+
+  return {
+    candidates,
+    failures
+  };
+}
+
 export async function extractAttributionCandidatesForOrder(
   client: PoolClient,
   order: AttributionCandidateOrder,
@@ -623,6 +751,7 @@ export async function extractAttributionCandidatesForOrder(
       orderTimestampSource: null,
       deterministicFirstParty: [],
       shopifyHint: [],
+      platformReportedMeta: [],
       ga4Fallback: [],
       normalizationFailures
     };
@@ -645,6 +774,9 @@ export async function extractAttributionCandidatesForOrder(
       sourceKey: order.shopifyOrderId
     });
   }
+
+  const platformReportedMeta = await collectPlatformReportedMetaCandidates(client, order);
+  normalizationFailures.push(...platformReportedMeta.failures);
 
   const rawGa4Candidates = options.loadGa4Candidates
     ? await options.loadGa4Candidates(client, { order, orderOccurredAtUtc })
@@ -674,6 +806,7 @@ export async function extractAttributionCandidatesForOrder(
     orderTimestampSource: source,
     deterministicFirstParty,
     shopifyHint: shopifyHintCandidate ? [shopifyHintCandidate] : [],
+    platformReportedMeta: platformReportedMeta.candidates,
     ga4Fallback: Array.from(ga4BySourceKey.values()).sort(compareGa4Candidates),
     normalizationFailures
   };

@@ -33,6 +33,8 @@ test('enqueueOrderAttributionBackfillRun persists normalized options and returns
         endDate: '2026-04-05',
         dryRun: true,
         limit: 500,
+        reclassificationTarget: 'full_rebuild',
+        organizationIds: [],
         webOrdersOnly: true,
         skipShopifyWriteback: false
       },
@@ -49,6 +51,8 @@ test('enqueueOrderAttributionBackfillRun persists normalized options and returns
       endDate: '2026-04-05',
       dryRun: true,
       limit: 500,
+      reclassificationTarget: 'full_rebuild',
+      organizationIds: [],
       webOrdersOnly: true,
       skipShopifyWriteback: false
     });
@@ -86,6 +90,8 @@ test('claimOrderAttributionBackfillRuns returns normalized claimed runs and rese
               endDate: '2026-04-05',
               dryRun: true,
               limit: 500,
+              reclassificationTarget: 'full_rebuild',
+              organizationIds: [],
               webOrdersOnly: true,
               skipShopifyWriteback: false
             },
@@ -117,6 +123,8 @@ test('claimOrderAttributionBackfillRuns returns normalized claimed runs and rese
           endDate: '2026-04-05',
           dryRun: true,
           limit: 500,
+          reclassificationTarget: 'full_rebuild',
+          organizationIds: [],
           webOrdersOnly: true,
           skipShopifyWriteback: false
         },
@@ -165,6 +173,8 @@ test('getOrderAttributionBackfillRun maps persisted failure details into the sha
           endDate: '2026-04-05',
           dryRun: false,
           limit: 500,
+          reclassificationTarget: 'full_rebuild',
+          organizationIds: [],
           webOrdersOnly: true,
           skipShopifyWriteback: false
         },
@@ -174,6 +184,23 @@ test('getOrderAttributionBackfillRun maps persisted failure details into the sha
           recovered: 4,
           unrecoverable: 3,
           writebackCompleted: 2,
+          dryRun: false,
+          reclassificationTarget: 'full_rebuild',
+          organizationIds: [],
+          beforeCounts: {
+            deterministic_first_party: 0,
+            deterministic_shopify_hint: 0,
+            platform_reported_meta: 0,
+            ga4_fallback: 0,
+            unattributed: 0
+          },
+          afterCounts: {
+            deterministic_first_party: 0,
+            deterministic_shopify_hint: 0,
+            platform_reported_meta: 0,
+            ga4_fallback: 0,
+            unattributed: 0
+          },
           failures: [
             {
               orderId: 'order-9',
@@ -205,6 +232,8 @@ test('getOrderAttributionBackfillRun maps persisted failure details into the sha
         endDate: '2026-04-05',
         dryRun: false,
         limit: 500,
+        reclassificationTarget: 'full_rebuild',
+        organizationIds: [],
         webOrdersOnly: true,
         skipShopifyWriteback: false
       },
@@ -213,6 +242,23 @@ test('getOrderAttributionBackfillRun maps persisted failure details into the sha
         recovered: 4,
         unrecoverable: 3,
         writebackCompleted: 2,
+        dryRun: false,
+        reclassificationTarget: 'full_rebuild',
+        organizationIds: [],
+        beforeCounts: {
+          deterministic_first_party: 0,
+          deterministic_shopify_hint: 0,
+          platform_reported_meta: 0,
+          ga4_fallback: 0,
+          unattributed: 0
+        },
+        afterCounts: {
+          deterministic_first_party: 0,
+          deterministic_shopify_hint: 0,
+          platform_reported_meta: 0,
+          ga4_fallback: 0,
+          unattributed: 0
+        },
         failures: [
           {
             orderId: 'order-9',
@@ -247,6 +293,8 @@ test('getOrderAttributionBackfillRun maps queued, processing, and completed reco
           endDate: '2026-04-05',
           dryRun: true,
           limit: 500,
+          reclassificationTarget: 'full_rebuild',
+          organizationIds: [],
           webOrdersOnly: true,
           skipShopifyWriteback: false
         },
@@ -271,6 +319,8 @@ test('getOrderAttributionBackfillRun maps queued, processing, and completed reco
           endDate: '2026-04-08',
           dryRun: false,
           limit: 5000,
+          reclassificationTarget: 'full_rebuild',
+          organizationIds: [],
           webOrdersOnly: false,
           skipShopifyWriteback: true
         },
@@ -295,6 +345,8 @@ test('getOrderAttributionBackfillRun maps queued, processing, and completed reco
           endDate: '2026-04-12',
           dryRun: false,
           limit: 250,
+          reclassificationTarget: 'full_rebuild',
+          organizationIds: [],
           webOrdersOnly: true,
           skipShopifyWriteback: false
         },
@@ -304,6 +356,23 @@ test('getOrderAttributionBackfillRun maps queued, processing, and completed reco
           recovered: 80,
           unrecoverable: 20,
           writebackCompleted: 80,
+          dryRun: false,
+          reclassificationTarget: 'full_rebuild',
+          organizationIds: [],
+          beforeCounts: {
+            deterministic_first_party: 0,
+            deterministic_shopify_hint: 0,
+            platform_reported_meta: 0,
+            ga4_fallback: 0,
+            unattributed: 0
+          },
+          afterCounts: {
+            deterministic_first_party: 0,
+            deterministic_shopify_hint: 0,
+            platform_reported_meta: 0,
+            ga4_fallback: 0,
+            unattributed: 0
+          },
           failures: [
             {
               orderId: 'order-17',
@@ -341,6 +410,8 @@ test('getOrderAttributionBackfillRun maps queued, processing, and completed reco
         endDate: '2026-04-05',
         dryRun: true,
         limit: 500,
+        reclassificationTarget: 'full_rebuild',
+        organizationIds: [],
         webOrdersOnly: true,
         skipShopifyWriteback: false
       },
@@ -360,6 +431,8 @@ test('getOrderAttributionBackfillRun maps queued, processing, and completed reco
         endDate: '2026-04-08',
         dryRun: false,
         limit: 5000,
+        reclassificationTarget: 'full_rebuild',
+        organizationIds: [],
         webOrdersOnly: false,
         skipShopifyWriteback: true
       },
@@ -379,6 +452,8 @@ test('getOrderAttributionBackfillRun maps queued, processing, and completed reco
         endDate: '2026-04-12',
         dryRun: false,
         limit: 250,
+        reclassificationTarget: 'full_rebuild',
+        organizationIds: [],
         webOrdersOnly: true,
         skipShopifyWriteback: false
       },
@@ -387,6 +462,23 @@ test('getOrderAttributionBackfillRun maps queued, processing, and completed reco
         recovered: 80,
         unrecoverable: 20,
         writebackCompleted: 80,
+        dryRun: false,
+        reclassificationTarget: 'full_rebuild',
+        organizationIds: [],
+        beforeCounts: {
+          deterministic_first_party: 0,
+          deterministic_shopify_hint: 0,
+          platform_reported_meta: 0,
+          ga4_fallback: 0,
+          unattributed: 0
+        },
+        afterCounts: {
+          deterministic_first_party: 0,
+          deterministic_shopify_hint: 0,
+          platform_reported_meta: 0,
+          ga4_fallback: 0,
+          unattributed: 0
+        },
         failures: [
           {
             orderId: 'order-17',
@@ -423,6 +515,23 @@ test('markOrderAttributionBackfillRunCompleted and markOrderAttributionBackfillR
         recovered: 2,
         unrecoverable: 3,
         writebackCompleted: 1,
+        dryRun: false,
+        reclassificationTarget: 'full_rebuild',
+        organizationIds: [],
+        beforeCounts: {
+          deterministic_first_party: 0,
+          deterministic_shopify_hint: 0,
+          platform_reported_meta: 0,
+          ga4_fallback: 0,
+          unattributed: 0
+        },
+        afterCounts: {
+          deterministic_first_party: 0,
+          deterministic_shopify_hint: 0,
+          platform_reported_meta: 0,
+          ga4_fallback: 0,
+          unattributed: 0
+        },
         failures: []
       },
       new Date('2026-04-25T12:20:00.000Z')
@@ -435,6 +544,23 @@ test('markOrderAttributionBackfillRunCompleted and markOrderAttributionBackfillR
         recovered: 0,
         unrecoverable: 1,
         writebackCompleted: 0,
+        dryRun: false,
+        reclassificationTarget: 'full_rebuild',
+        organizationIds: [],
+        beforeCounts: {
+          deterministic_first_party: 0,
+          deterministic_shopify_hint: 0,
+          platform_reported_meta: 0,
+          ga4_fallback: 0,
+          unattributed: 0
+        },
+        afterCounts: {
+          deterministic_first_party: 0,
+          deterministic_shopify_hint: 0,
+          platform_reported_meta: 0,
+          ga4_fallback: 0,
+          unattributed: 0
+        },
         failures: []
       },
       new Date('2026-04-25T12:25:00.000Z')
@@ -447,6 +573,23 @@ test('markOrderAttributionBackfillRunCompleted and markOrderAttributionBackfillR
       recovered: 2,
       unrecoverable: 3,
       writebackCompleted: 1,
+      dryRun: false,
+      reclassificationTarget: 'full_rebuild',
+      organizationIds: [],
+      beforeCounts: {
+        deterministic_first_party: 0,
+        deterministic_shopify_hint: 0,
+        platform_reported_meta: 0,
+        ga4_fallback: 0,
+        unattributed: 0
+      },
+      afterCounts: {
+        deterministic_first_party: 0,
+        deterministic_shopify_hint: 0,
+        platform_reported_meta: 0,
+        ga4_fallback: 0,
+        unattributed: 0
+      },
       failures: []
     });
     assert.match(capturedQueries[1].text, /status = 'failed'/);
@@ -455,6 +598,23 @@ test('markOrderAttributionBackfillRunCompleted and markOrderAttributionBackfillR
       recovered: 0,
       unrecoverable: 1,
       writebackCompleted: 0,
+      dryRun: false,
+      reclassificationTarget: 'full_rebuild',
+      organizationIds: [],
+      beforeCounts: {
+        deterministic_first_party: 0,
+        deterministic_shopify_hint: 0,
+        platform_reported_meta: 0,
+        ga4_fallback: 0,
+        unattributed: 0
+      },
+      afterCounts: {
+        deterministic_first_party: 0,
+        deterministic_shopify_hint: 0,
+        platform_reported_meta: 0,
+        ga4_fallback: 0,
+        unattributed: 0
+      },
       failures: []
     });
     assert.equal(capturedQueries[1].params?.[3], 'Error');

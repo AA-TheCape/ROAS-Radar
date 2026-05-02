@@ -5,6 +5,16 @@ function normalizeNonNegativeNumber(value) {
     const normalized = Number(value ?? 0);
     return Number.isFinite(normalized) && normalized >= 0 ? normalized : 0;
 }
+function normalizeTierCounts(value) {
+    const record = isRecord(value) ? value : {};
+    return {
+        deterministic_first_party: normalizeNonNegativeNumber(record.deterministic_first_party),
+        deterministic_shopify_hint: normalizeNonNegativeNumber(record.deterministic_shopify_hint),
+        platform_reported_meta: normalizeNonNegativeNumber(record.platform_reported_meta),
+        ga4_fallback: normalizeNonNegativeNumber(record.ga4_fallback),
+        unattributed: normalizeNonNegativeNumber(record.unattributed)
+    };
+}
 export function buildEmptyOrderAttributionBackfillProgress() {
     return {
         beforeMetrics: null,
@@ -37,7 +47,8 @@ export function parseOrderAttributionBackfillProgress(value) {
                 totalOrdersInScope: normalizeNonNegativeNumber(beforeMetrics.totalOrdersInScope),
                 ordersMissingAttribution: normalizeNonNegativeNumber(beforeMetrics.ordersMissingAttribution),
                 ordersWithAttribution: normalizeNonNegativeNumber(beforeMetrics.ordersWithAttribution),
-                completenessRate: Number(beforeMetrics.completenessRate ?? 1)
+                completenessRate: Number(beforeMetrics.completenessRate ?? 1),
+                tierCounts: normalizeTierCounts(beforeMetrics.tierCounts)
             }
             : null,
         scannedOrders: normalizeNonNegativeNumber(record.scannedOrders),

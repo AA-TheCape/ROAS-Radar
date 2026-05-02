@@ -25,6 +25,8 @@ export function buildBackfillExecutionOptions(run, workerId) {
         workerId,
         limit: run.options.limit,
         dryRun: run.options.dryRun,
+        reclassificationTarget: 'reclassificationTarget' in run.options ? run.options.reclassificationTarget : 'full_rebuild',
+        organizationIds: 'organizationIds' in run.options ? run.options.organizationIds : [],
         onlyWebOrders: run.options.webOrdersOnly,
         writeToShopifyWhenAvailable: !run.options.skipShopifyWriteback
     };

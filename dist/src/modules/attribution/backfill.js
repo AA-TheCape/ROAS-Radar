@@ -7,6 +7,7 @@ import { extractAttributionCandidatesForOrder } from './candidate-extraction.js'
 import { buildEmptyOrderAttributionBackfillProgress, parseOrderAttributionBackfillProgress } from './backfill-progress.js';
 import { ATTRIBUTION_MODELS, computeAttributionOutputs, computeSingleWinnerCredits } from './engine.js';
 import { buildAttributionConfidenceLabel, buildAttributionMatchSource, buildOrderAttributionAuditRecord } from './order-attribution-audit.js';
+import { summarizeMetaAttribution } from './meta-evaluation.js';
 import { insertAttributionDecisionArtifact } from './decision-artifacts.js';
 import { resolveAttributionTierForVersion } from './resolver.js';
 import { ATTRIBUTION_RESOLVER_RULE_VERSION } from './rule-version.js';
@@ -58,7 +59,14 @@ function buildEmptyScopeMetrics() {
         totalOrdersInScope: 0,
         ordersMissingAttribution: 0,
         ordersWithAttribution: 0,
-        completenessRate: 1
+        completenessRate: 1,
+        tierCounts: {
+            deterministic_first_party: 0,
+            deterministic_shopify_hint: 0,
+            platform_reported_meta: 0,
+            ga4_fallback: 0,
+            unattributed: 0
+        }
     };
 }
 function buildOrderAttributionBackfillReport(input) {
@@ -70,7 +78,9 @@ function buildOrderAttributionBackfillReport(input) {
             windowStart: input.windowStart.toISOString(),
             windowEnd: input.windowEnd.toISOString(),
             onlyWebOrders: input.onlyWebOrders,
-            limit: input.limit
+            limit: input.limit,
+            reclassificationTarget: input.reclassificationTarget,
+            organizationIds: input.organizationIds
         },
         beforeMetrics: input.beforeMetrics,
         afterMetrics: input.afterMetrics,
@@ -162,7 +172,10 @@ async function resolveAttributionJourney(client, order) {
     });
     return {
         resolverInput,
-        journey: resolveAttributionTierForVersion(resolverInput, ATTRIBUTION_RESOLVER_RULE_VERSION)
+        journey: resolveAttributionTierForVersion({
+            ...resolverInput,
+            platformReportedMeta: resolverInput.platformReportedMeta
+        }, ATTRIBUTION_RESOLVER_RULE_VERSION)
     };
 }
 function selectPrimaryCredit(credits) {
@@ -190,6 +203,10 @@ async function persistAttribution(client, order, evaluation, backfillRunId) {
     const orderAttributionAudit = buildOrderAttributionAuditRecord(journey, matchedAt);
     const matchSource = buildAttributionMatchSource(journey);
     const confidenceLabel = buildAttributionConfidenceLabel(journey.confidenceScore);
+    const metaSummary = summarizeMetaAttribution(resolverInput, journey);
+    const metaConfidenceLabel = metaSummary.confidenceScore === null
+        ? null
+        : buildAttributionConfidenceLabel(metaSummary.confidenceScore);
     const decisionArtifactId = await insertAttributionDecisionArtifact({
         client,
         order: {
@@ -292,6 +309,7 @@ async function persistAttribution(client, order, evaluation, backfillRunId) {
         model_version,
         match_source,
         confidence_label,
+        meta_attribution_evidence_id,
         meta_attribution_evaluation_outcome,
         meta_attribution_affected_canonical,
         attribution_decision_artifact_id,
@@ -315,10 +333,11 @@ async function persistAttribution(client, order, evaluation, backfillRunId) {
         $13,
         $14,
         $15,
-        $16,
+        $16::uuid,
         $17,
-        $18::uuid,
-        $19
+        $18,
+        $19::uuid,
+        $20
       )
       ON CONFLICT (shopify_order_id)
       DO UPDATE SET
@@ -337,6 +356,7 @@ async function persistAttribution(client, order, evaluation, backfillRunId) {
         model_version = EXCLUDED.model_version,
         match_source = EXCLUDED.match_source,
         confidence_label = EXCLUDED.confidence_label,
+        meta_attribution_evidence_id = EXCLUDED.meta_attribution_evidence_id,
         meta_attribution_evaluation_outcome = EXCLUDED.meta_attribution_evaluation_outcome,
         meta_attribution_affected_canonical = EXCLUDED.meta_attribution_affected_canonical,
         attribution_decision_artifact_id = EXCLUDED.attribution_decision_artifact_id,
@@ -357,8 +377,9 @@ async function persistAttribution(client, order, evaluation, backfillRunId) {
         ATTRIBUTION_MODEL_VERSION,
         matchSource,
         confidenceLabel,
-        'not_evaluated',
-        false,
+        metaSummary.metaAttributionEvidenceId,
+        metaSummary.metaEvaluationOutcome,
+        metaSummary.metaAffectedCanonical,
         decisionArtifactId,
         journey.resolverRuleVersion
     ]);
@@ -372,10 +393,13 @@ async function persistAttribution(client, order, evaluation, backfillRunId) {
         attribution_snapshot = $6::jsonb,
         attribution_snapshot_updated_at = $4,
         attribution_resolver_rule_version = $7,
-        meta_attribution_evaluation_outcome = 'not_evaluated',
-        meta_attribution_present = false,
-        meta_attribution_affected_canonical = false,
-        latest_attribution_decision_artifact_id = $8::uuid
+        meta_attribution_evidence_id = $8::uuid,
+        meta_attribution_evaluation_outcome = $9,
+        meta_attribution_confidence_score = $10,
+        meta_attribution_confidence_label = $11,
+        meta_attribution_present = $12,
+        meta_attribution_affected_canonical = $13,
+        latest_attribution_decision_artifact_id = $14::uuid
       WHERE shopify_order_id = $1
     `, [
         order.shopify_order_id,
@@ -388,6 +412,7 @@ async function persistAttribution(client, order, evaluation, backfillRunId) {
             resolverRuleVersion: journey.resolverRuleVersion,
             decisionArtifactId,
             attributionReason: journey.attributionReason,
+            metaEvaluationOutcome: metaSummary.metaEvaluationOutcome,
             orderOccurredAtUtc: journey.orderOccurredAtUtc?.toISOString() ?? null,
             normalizationFailures: journey.normalizationFailures,
             confidenceScore: journey.confidenceScore,
@@ -395,6 +420,12 @@ async function persistAttribution(client, order, evaluation, backfillRunId) {
             timeline: journey.touchpoints.map(serializeResolvedTouchpoint)
         }),
         journey.resolverRuleVersion,
+        metaSummary.metaAttributionEvidenceId,
+        metaSummary.metaEvaluationOutcome,
+        metaSummary.confidenceScore,
+        metaConfidenceLabel,
+        metaSummary.metaPresent,
+        metaSummary.metaAffectedCanonical,
         decisionArtifactId
     ]);
     emitAttributionResolverOutcomeLog({
@@ -419,15 +450,40 @@ async function fetchScopeMetrics(client, options) {
         WHERE COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) >= $1
           AND COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) <= $2
           AND ($3::boolean = false OR COALESCE(o.source_name, '') = 'web')
+          AND (
+            $4::text <> 'meta_tier_reclassification'
+            OR EXISTS (
+              SELECT 1
+              FROM meta_order_attribution_evidence meta
+              WHERE meta.shopify_order_id = o.shopify_order_id
+                AND (
+                  COALESCE(cardinality($5::bigint[]), 0) = 0
+                  OR meta.organization_id = ANY($5::bigint[])
+                )
+            )
+          )
       )
       SELECT
         COUNT(*)::text AS total_orders_in_scope,
         COUNT(*) FILTER (WHERE ${MISSING_ATTRIBUTION_SQL})::text AS orders_missing_attribution,
-        COUNT(*) FILTER (WHERE NOT (${MISSING_ATTRIBUTION_SQL}))::text AS orders_with_attribution
+        COUNT(*) FILTER (WHERE NOT (${MISSING_ATTRIBUTION_SQL}))::text AS orders_with_attribution,
+        COUNT(*) FILTER (WHERE COALESCE(scoped_shopify.attribution_tier, 'unattributed') = 'deterministic_first_party')::text AS deterministic_first_party,
+        COUNT(*) FILTER (WHERE COALESCE(scoped_shopify.attribution_tier, 'unattributed') = 'deterministic_shopify_hint')::text AS deterministic_shopify_hint,
+        COUNT(*) FILTER (WHERE COALESCE(scoped_shopify.attribution_tier, 'unattributed') = 'platform_reported_meta')::text AS platform_reported_meta,
+        COUNT(*) FILTER (WHERE COALESCE(scoped_shopify.attribution_tier, 'unattributed') = 'ga4_fallback')::text AS ga4_fallback,
+        COUNT(*) FILTER (WHERE COALESCE(scoped_shopify.attribution_tier, 'unattributed') = 'unattributed')::text AS unattributed
       FROM scoped_orders scoped
+      JOIN shopify_orders scoped_shopify
+        ON scoped_shopify.shopify_order_id = scoped.shopify_order_id
       LEFT JOIN attribution_results attribution
         ON attribution.shopify_order_id = scoped.shopify_order_id
-    `, [options.windowStart, options.windowEnd, options.onlyWebOrders]);
+    `, [
+        options.windowStart,
+        options.windowEnd,
+        options.onlyWebOrders,
+        options.reclassificationTarget,
+        options.organizationIds
+    ]);
     const row = result.rows[0];
     const totalOrdersInScope = Number(row?.total_orders_in_scope ?? '0');
     const ordersMissingAttribution = Number(row?.orders_missing_attribution ?? '0');
@@ -436,7 +492,14 @@ async function fetchScopeMetrics(client, options) {
         totalOrdersInScope,
         ordersMissingAttribution,
         ordersWithAttribution,
-        completenessRate: totalOrdersInScope > 0 ? ordersWithAttribution / totalOrdersInScope : 1
+        completenessRate: totalOrdersInScope > 0 ? ordersWithAttribution / totalOrdersInScope : 1,
+        tierCounts: {
+            deterministic_first_party: Number(row?.deterministic_first_party ?? '0'),
+            deterministic_shopify_hint: Number(row?.deterministic_shopify_hint ?? '0'),
+            platform_reported_meta: Number(row?.platform_reported_meta ?? '0'),
+            ga4_fallback: Number(row?.ga4_fallback ?? '0'),
+            unattributed: Number(row?.unattributed ?? '0')
+        }
     };
 }
 async function fetchBackfillCandidates(client, options) {
@@ -450,6 +513,18 @@ async function fetchBackfillCandidates(client, options) {
         AND COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) <= $2
         AND ($3::boolean = false OR COALESCE(o.source_name, '') = 'web')
         AND (
+          $6::text <> 'meta_tier_reclassification'
+          OR EXISTS (
+            SELECT 1
+            FROM meta_order_attribution_evidence meta
+            WHERE meta.shopify_order_id = o.shopify_order_id
+              AND (
+                COALESCE(cardinality($7::bigint[]), 0) = 0
+                OR meta.organization_id = ANY($7::bigint[])
+              )
+          )
+        )
+        AND (
           $4::timestamptz IS NULL
           OR COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) > $4::timestamptz
           OR (
@@ -458,13 +533,15 @@ async function fetchBackfillCandidates(client, options) {
           )
         )
       ORDER BY COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) ASC, o.id ASC
-      LIMIT $6
+      LIMIT $8
     `, [
         options.windowStart,
         options.windowEnd,
         options.onlyWebOrders,
         options.checkpoint.lastOrderOccurredAt,
         options.checkpoint.lastOrderRowId ?? '0',
+        options.reclassificationTarget,
+        options.organizationIds,
         options.limit
     ]);
     return result.rows;
@@ -476,6 +553,8 @@ function previewRowForOrder(order, journey) {
         recoverable: Boolean(journey.winner),
         touchpointCount: journey.touchpoints.length,
         winnerSessionId: journey.winner?.sessionId ?? null,
+        currentTier: order.attribution_tier ?? 'unattributed',
+        resolvedTier: journey.tier,
         attributionReason: journey.winner?.attributionReason ?? 'unattributed'
     };
 }
@@ -491,6 +570,8 @@ export async function backfillRecentOrdersWithRecoveredAttribution(options) {
     }
     const limit = Math.max(1, options.limit ?? 500);
     const dryRun = options.dryRun ?? false;
+    const reclassificationTarget = options.reclassificationTarget ?? 'full_rebuild';
+    const organizationIds = Array.from(new Set(options.organizationIds ?? [])).sort((left, right) => left - right);
     const onlyWebOrders = options.onlyWebOrders ?? true;
     const writeToShopifyWhenAvailable = options.writeToShopifyWhenAvailable ?? true;
     const applyWriteback = options.applyWriteback ?? applyShopifyOrderWriteback;
@@ -515,6 +596,8 @@ export async function backfillRecentOrdersWithRecoveredAttribution(options) {
             requestedBy: options.requestedBy,
             workerId: options.workerId,
             dryRun,
+            reclassificationTarget,
+            organizationIds,
             onlyWebOrders,
             limit,
             windowStart: options.windowStart.toISOString(),
@@ -524,7 +607,9 @@ export async function backfillRecentOrdersWithRecoveredAttribution(options) {
             beforeMetrics = await withTransaction((client) => fetchScopeMetrics(client, {
                 windowStart: options.windowStart,
                 windowEnd: options.windowEnd,
-                onlyWebOrders
+                onlyWebOrders,
+                reclassificationTarget,
+                organizationIds
             }));
             progress.beforeMetrics = beforeMetrics;
             if (publishProgress) {
@@ -538,6 +623,8 @@ export async function backfillRecentOrdersWithRecoveredAttribution(options) {
                 windowStart: options.windowStart,
                 windowEnd: options.windowEnd,
                 onlyWebOrders,
+                reclassificationTarget,
+                organizationIds,
                 limit,
                 checkpoint: progress.cursor
             }));
@@ -656,7 +743,9 @@ export async function backfillRecentOrdersWithRecoveredAttribution(options) {
             : await withTransaction((client) => fetchScopeMetrics(client, {
                 windowStart: options.windowStart,
                 windowEnd: options.windowEnd,
-                onlyWebOrders
+                onlyWebOrders,
+                reclassificationTarget,
+                organizationIds
             }));
         const report = buildOrderAttributionBackfillReport({
             requestedBy: options.requestedBy,
@@ -666,6 +755,8 @@ export async function backfillRecentOrdersWithRecoveredAttribution(options) {
             windowEnd: options.windowEnd,
             onlyWebOrders,
             limit,
+            reclassificationTarget,
+            organizationIds,
             beforeMetrics,
             afterMetrics,
             scannedOrders,
@@ -691,6 +782,8 @@ export async function backfillRecentOrdersWithRecoveredAttribution(options) {
             windowEnd: options.windowEnd,
             onlyWebOrders,
             limit,
+            reclassificationTarget,
+            organizationIds,
             beforeMetrics,
             afterMetrics,
             scannedOrders,
@@ -726,6 +819,11 @@ export function toOrderAttributionBackfillJobReport(report) {
         recovered: report.recoveredOrders,
         unrecoverable: report.unrecoverableOrders,
         writebackCompleted: report.shopifyWritebackCompleted,
+        dryRun: report.dryRun,
+        reclassificationTarget: report.scope.reclassificationTarget,
+        organizationIds: report.scope.organizationIds,
+        beforeCounts: report.beforeMetrics.tierCounts,
+        afterCounts: report.afterMetrics.tierCounts,
         failures: report.failures
     };
 }

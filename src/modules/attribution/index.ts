@@ -16,6 +16,7 @@ import {
   buildAttributionMatchSource,
   buildOrderAttributionAuditRecord
 } from './order-attribution-audit.js';
+import { summarizeMetaAttribution } from './meta-evaluation.js';
 import { insertAttributionDecisionArtifact } from './decision-artifacts.js';
 import {
   confidenceScoreForWinner,
@@ -364,7 +365,10 @@ async function resolveAttributionJourney(client: PoolClient, order: OrderRow): P
   return {
     resolverInput,
     journey: resolveAttributionTierForVersion(
-      resolverInput,
+      {
+        ...resolverInput,
+        platformReportedMeta: resolverInput.platformReportedMeta
+      },
       selectResolverRuleVersionForForwardProcessing({
         attributionTier: order.attribution_tier,
         attributionResolverRuleVersion: order.attribution_resolver_rule_version
@@ -413,6 +417,10 @@ async function persistAttribution(
   const orderAttributionAudit = buildOrderAttributionAuditRecord(journey, matchedAt);
   const matchSource = buildAttributionMatchSource(journey);
   const confidenceLabel = buildAttributionConfidenceLabel(journey.confidenceScore);
+  const metaSummary = summarizeMetaAttribution(resolverInput, journey);
+  const metaConfidenceLabel = metaSummary.confidenceScore === null
+    ? null
+    : buildAttributionConfidenceLabel(metaSummary.confidenceScore);
   const decisionArtifactId = await insertAttributionDecisionArtifact({
     client,
     order: {
@@ -524,6 +532,7 @@ async function persistAttribution(
         model_version,
         match_source,
         confidence_label,
+        meta_attribution_evidence_id,
         meta_attribution_evaluation_outcome,
         meta_attribution_affected_canonical,
         attribution_decision_artifact_id,
@@ -547,10 +556,11 @@ async function persistAttribution(
         $13,
         $14,
         $15,
-        $16,
+        $16::uuid,
         $17,
-        $18::uuid,
-        $19
+        $18,
+        $19::uuid,
+        $20
       )
       ON CONFLICT (shopify_order_id)
       DO UPDATE SET
@@ -569,6 +579,7 @@ async function persistAttribution(
         model_version = EXCLUDED.model_version,
         match_source = EXCLUDED.match_source,
         confidence_label = EXCLUDED.confidence_label,
+        meta_attribution_evidence_id = EXCLUDED.meta_attribution_evidence_id,
         meta_attribution_evaluation_outcome = EXCLUDED.meta_attribution_evaluation_outcome,
         meta_attribution_affected_canonical = EXCLUDED.meta_attribution_affected_canonical,
         attribution_decision_artifact_id = EXCLUDED.attribution_decision_artifact_id,
@@ -590,8 +601,9 @@ async function persistAttribution(
       ATTRIBUTION_MODEL_VERSION,
       matchSource,
       confidenceLabel,
-      'not_evaluated',
-      false,
+      metaSummary.metaAttributionEvidenceId,
+      metaSummary.metaEvaluationOutcome,
+      metaSummary.metaAffectedCanonical,
       decisionArtifactId,
       journey.resolverRuleVersion
     ]
@@ -608,10 +620,13 @@ async function persistAttribution(
         attribution_snapshot = $6::jsonb,
         attribution_snapshot_updated_at = $4,
         attribution_resolver_rule_version = $7,
-        meta_attribution_evaluation_outcome = 'not_evaluated',
-        meta_attribution_present = false,
-        meta_attribution_affected_canonical = false,
-        latest_attribution_decision_artifact_id = $8::uuid
+        meta_attribution_evidence_id = $8::uuid,
+        meta_attribution_evaluation_outcome = $9,
+        meta_attribution_confidence_score = $10,
+        meta_attribution_confidence_label = $11,
+        meta_attribution_present = $12,
+        meta_attribution_affected_canonical = $13,
+        latest_attribution_decision_artifact_id = $14::uuid
       WHERE shopify_order_id = $1
     `,
     [
@@ -625,6 +640,7 @@ async function persistAttribution(
         resolverRuleVersion: journey.resolverRuleVersion,
         decisionArtifactId,
         attributionReason: journey.attributionReason,
+        metaEvaluationOutcome: metaSummary.metaEvaluationOutcome,
         orderOccurredAtUtc: journey.orderOccurredAtUtc?.toISOString() ?? null,
         normalizationFailures: journey.normalizationFailures,
         confidenceScore: journey.confidenceScore,
@@ -632,6 +648,12 @@ async function persistAttribution(
         timeline: journey.touchpoints.map(serializeResolvedTouchpoint)
       }),
       journey.resolverRuleVersion,
+      metaSummary.metaAttributionEvidenceId,
+      metaSummary.metaEvaluationOutcome,
+      metaSummary.confidenceScore,
+      metaConfidenceLabel,
+      metaSummary.metaPresent,
+      metaSummary.metaAffectedCanonical,
       decisionArtifactId
     ]
   );

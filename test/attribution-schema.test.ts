@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   ORDER_ATTRIBUTION_BACKFILL_DEFAULT_LIMIT,
+  ORDER_ATTRIBUTION_BACKFILL_MAX_ORGANIZATION_IDS,
   ORDER_ATTRIBUTION_BACKFILL_MAX_LIMIT,
   normalizeAttributionCaptureV1,
   normalizeAttributionConsentState,
@@ -92,6 +93,8 @@ test('order attribution backfill request normalizes defaults', () => {
     endDate: '2026-04-15',
     dryRun: true,
     limit: ORDER_ATTRIBUTION_BACKFILL_DEFAULT_LIMIT,
+    reclassificationTarget: 'full_rebuild',
+    organizationIds: [],
     webOrdersOnly: true,
     skipShopifyWriteback: false
   });
@@ -103,6 +106,8 @@ test('order attribution backfill request preserves explicit execution flags at t
     endDate: '2026-04-15',
     dryRun: false,
     limit: ORDER_ATTRIBUTION_BACKFILL_MAX_LIMIT,
+    reclassificationTarget: 'full_rebuild',
+    organizationIds: [],
     webOrdersOnly: false,
     skipShopifyWriteback: true
   });
@@ -112,6 +117,8 @@ test('order attribution backfill request preserves explicit execution flags at t
     endDate: '2026-04-15',
     dryRun: false,
     limit: ORDER_ATTRIBUTION_BACKFILL_MAX_LIMIT,
+    reclassificationTarget: 'full_rebuild',
+    organizationIds: [],
     webOrdersOnly: false,
     skipShopifyWriteback: true
   });
@@ -136,6 +143,16 @@ test('order attribution backfill request rejects invalid date windows and oversi
       }),
     /Limit must be 5000 or less\./
   );
+
+  assert.throws(
+    () =>
+      normalizeOrderAttributionBackfillRequest({
+        startDate: '2026-04-01',
+        endDate: '2026-04-15',
+        organizationIds: [17]
+      }),
+    /Organization ids may only be provided for Meta tier reclassification backfills\./
+  );
 });
 
 test('order attribution backfill request rejects non-positive limits', () => {
@@ -147,6 +164,17 @@ test('order attribution backfill request rejects non-positive limits', () => {
         limit: 0
       }),
     /Limit must be greater than 0\./
+  );
+
+  assert.throws(
+    () =>
+      normalizeOrderAttributionBackfillRequest({
+        startDate: '2026-04-01',
+        endDate: '2026-04-15',
+        reclassificationTarget: 'meta_tier_reclassification',
+        organizationIds: Array.from({ length: ORDER_ATTRIBUTION_BACKFILL_MAX_ORGANIZATION_IDS + 1 }, (_, index) => index + 1)
+      }),
+    /Organization ids must contain 100 entries or less\./
   );
 });
 
@@ -162,6 +190,8 @@ test('order attribution backfill responses accept normalized enqueue and job pay
       endDate: '2026-04-15',
       dryRun: true,
       limit: 250,
+      reclassificationTarget: 'meta_tier_reclassification',
+      organizationIds: [11, 19],
       webOrdersOnly: true,
       skipShopifyWriteback: false
     }
@@ -177,6 +207,23 @@ test('order attribution backfill responses accept normalized enqueue and job pay
       recovered: 120,
       unrecoverable: 130,
       writebackCompleted: 120,
+      dryRun: true,
+      reclassificationTarget: 'meta_tier_reclassification',
+      organizationIds: [11, 19],
+      beforeCounts: {
+        deterministic_first_party: 140,
+        deterministic_shopify_hint: 40,
+        platform_reported_meta: 10,
+        ga4_fallback: 35,
+        unattributed: 25
+      },
+      afterCounts: {
+        deterministic_first_party: 140,
+        deterministic_shopify_hint: 38,
+        platform_reported_meta: 22,
+        ga4_fallback: 30,
+        unattributed: 20
+      },
       failures: [
         {
           orderId: '12345',
@@ -207,6 +254,8 @@ test('order attribution backfill job responses accept queued and processing payl
       endDate: '2026-04-15',
       dryRun: true,
       limit: 500,
+      reclassificationTarget: 'full_rebuild',
+      organizationIds: [],
       webOrdersOnly: true,
       skipShopifyWriteback: false
     },

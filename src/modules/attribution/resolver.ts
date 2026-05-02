@@ -65,6 +65,7 @@ export type TieredAttributionCandidate = {
   isDirect: boolean;
   isSynthetic: boolean;
   metaSignalId?: string | null;
+  metaAttributionEvidenceId?: string | null;
   metaMatchBasis?: string | null;
   metaEligibilityOutcome?: 'eligible_canonical' | 'eligible_parallel_only' | 'ineligible' | null;
   isClickThrough?: boolean;

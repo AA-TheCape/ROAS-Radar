@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 
 import {
   orderAttributionBackfillEnqueueResponseSchema,
@@ -32,6 +33,7 @@ type OrderAttributionBackfillRunRow = {
   error_code: string | null;
   error_message: string | null;
   last_heartbeat_at: Date | null;
+  idempotency_key: string | null;
 };
 
 export type OrderAttributionBackfillClaimedRun = {
@@ -88,6 +90,45 @@ function mapBackfillRunRow(row: OrderAttributionBackfillRunRow): OrderAttributio
   });
 }
 
+function stableSerialize(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableSerialize(entry)).join(',')}]`;
+  }
+
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record).sort();
+  return `{${keys.map((key) => `${JSON.stringify(key)}:${stableSerialize(record[key])}`).join(',')}}`;
+}
+
+function buildIdempotencyKey(options: OrderAttributionBackfillSubmittedOptions): string {
+  const explicitKey = 'idempotencyKey' in options && typeof options.idempotencyKey === 'string'
+    ? options.idempotencyKey.trim()
+    : '';
+
+  if (explicitKey) {
+    return `manual:${explicitKey}`;
+  }
+
+  return createHash('sha256')
+    .update(
+      stableSerialize({
+        startDate: options.startDate,
+        endDate: options.endDate,
+        dryRun: options.dryRun,
+        limit: options.limit,
+        reclassificationTarget: 'reclassificationTarget' in options ? options.reclassificationTarget : 'full_rebuild',
+        organizationIds: 'organizationIds' in options ? options.organizationIds : [],
+        webOrdersOnly: options.webOrdersOnly,
+        skipShopifyWriteback: options.skipShopifyWriteback
+      })
+    )
+    .digest('hex');
+}
+
 export async function enqueueOrderAttributionBackfillRun(
   options: OrderAttributionBackfillSubmittedOptions,
   submittedBy: string,
@@ -95,8 +136,9 @@ export async function enqueueOrderAttributionBackfillRun(
 ): Promise<OrderAttributionBackfillEnqueueResponse> {
   const jobId = randomUUID();
   const submittedAt = now.toISOString();
+  const idempotencyKey = buildIdempotencyKey(options);
 
-  await query(
+  const result = await query<OrderAttributionBackfillRunRow>(
     `
       INSERT INTO order_attribution_backfill_runs (
         id,
@@ -105,7 +147,8 @@ export async function enqueueOrderAttributionBackfillRun(
         submitted_by,
         options,
         progress,
-        last_heartbeat_at
+        last_heartbeat_at,
+        idempotency_key
       )
       VALUES (
         $1,
@@ -114,19 +157,57 @@ export async function enqueueOrderAttributionBackfillRun(
         $3,
         $4::jsonb,
         $5::jsonb,
-        $2::timestamptz
+        $2::timestamptz,
+        $6
       )
+      ON CONFLICT (idempotency_key)
+      DO UPDATE SET idempotency_key = order_attribution_backfill_runs.idempotency_key
+      RETURNING
+        id,
+        status,
+        submitted_at,
+        submitted_by,
+        started_at,
+        completed_at,
+        options,
+        progress,
+        report,
+        error_code,
+        error_message,
+        last_heartbeat_at,
+        idempotency_key
     `,
-    [jobId, submittedAt, submittedBy, JSON.stringify(options), JSON.stringify(buildEmptyOrderAttributionBackfillProgress())]
+    [
+      jobId,
+      submittedAt,
+      submittedBy,
+      JSON.stringify(options),
+      JSON.stringify(buildEmptyOrderAttributionBackfillProgress()),
+      idempotencyKey
+    ]
   );
+
+  const row = result.rows[0];
+  if (!row) {
+    return orderAttributionBackfillEnqueueResponseSchema.parse({
+      ok: true,
+      jobId,
+      status: 'queued',
+      submittedAt,
+      submittedBy,
+      options
+    });
+  }
+
+  const normalizedOptions = orderAttributionBackfillSubmittedOptionsSchema.parse(row.options);
 
   return orderAttributionBackfillEnqueueResponseSchema.parse({
     ok: true,
-    jobId,
-    status: 'queued',
-    submittedAt,
-    submittedBy,
-    options
+    jobId: row.id,
+    status: row.status,
+    submittedAt: row.submitted_at.toISOString(),
+    submittedBy: row.submitted_by,
+    options: normalizedOptions
   });
 }
 
@@ -145,7 +226,8 @@ export async function getOrderAttributionBackfillRun(jobId: string): Promise<Ord
         report,
         error_code,
         error_message,
-        last_heartbeat_at
+        last_heartbeat_at,
+        idempotency_key
       FROM order_attribution_backfill_runs
       WHERE id = $1
       LIMIT 1
@@ -203,7 +285,8 @@ export async function claimOrderAttributionBackfillRuns(
           runs.report,
           runs.error_code,
           runs.error_message,
-          runs.last_heartbeat_at
+          runs.last_heartbeat_at,
+          runs.idempotency_key
       `,
       [now, limit]
     )

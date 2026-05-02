@@ -11,6 +11,13 @@ export type OrderAttributionBackfillProgress = {
     ordersMissingAttribution: number;
     ordersWithAttribution: number;
     completenessRate: number;
+    tierCounts: {
+      deterministic_first_party: number;
+      deterministic_shopify_hint: number;
+      platform_reported_meta: number;
+      ga4_fallback: number;
+      unattributed: number;
+    };
   } | null;
   scannedOrders: number;
   recoverableOrders: number;
@@ -31,6 +38,8 @@ export type OrderAttributionBackfillProgress = {
     recoverable: boolean;
     touchpointCount: number;
     winnerSessionId: string | null;
+    currentTier: 'deterministic_first_party' | 'deterministic_shopify_hint' | 'platform_reported_meta' | 'ga4_fallback' | 'unattributed';
+    resolvedTier: 'deterministic_first_party' | 'deterministic_shopify_hint' | 'platform_reported_meta' | 'ga4_fallback' | 'unattributed';
     attributionReason: string;
   }>;
   cursor: OrderAttributionBackfillCursor;
@@ -43,6 +52,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function normalizeNonNegativeNumber(value: unknown): number {
   const normalized = Number(value ?? 0);
   return Number.isFinite(normalized) && normalized >= 0 ? normalized : 0;
+}
+
+function normalizeTierCounts(value: unknown) {
+  const record = isRecord(value) ? value : {};
+
+  return {
+    deterministic_first_party: normalizeNonNegativeNumber(record.deterministic_first_party),
+    deterministic_shopify_hint: normalizeNonNegativeNumber(record.deterministic_shopify_hint),
+    platform_reported_meta: normalizeNonNegativeNumber(record.platform_reported_meta),
+    ga4_fallback: normalizeNonNegativeNumber(record.ga4_fallback),
+    unattributed: normalizeNonNegativeNumber(record.unattributed)
+  };
 }
 
 export function buildEmptyOrderAttributionBackfillProgress(): OrderAttributionBackfillProgress {
@@ -75,11 +96,12 @@ export function parseOrderAttributionBackfillProgress(value: unknown): OrderAttr
 
   return {
     beforeMetrics: beforeMetrics
-      ? {
+        ? {
           totalOrdersInScope: normalizeNonNegativeNumber(beforeMetrics.totalOrdersInScope),
           ordersMissingAttribution: normalizeNonNegativeNumber(beforeMetrics.ordersMissingAttribution),
           ordersWithAttribution: normalizeNonNegativeNumber(beforeMetrics.ordersWithAttribution),
-          completenessRate: Number(beforeMetrics.completenessRate ?? 1)
+          completenessRate: Number(beforeMetrics.completenessRate ?? 1),
+          tierCounts: normalizeTierCounts(beforeMetrics.tierCounts)
         }
       : null,
     scannedOrders: normalizeNonNegativeNumber(record.scannedOrders),

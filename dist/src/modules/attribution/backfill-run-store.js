@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { orderAttributionBackfillEnqueueResponseSchema, orderAttributionBackfillJobResponseSchema, orderAttributionBackfillReportSchema, orderAttributionBackfillSubmittedOptionsSchema } from '../../../packages/attribution-schema/index.js';
 import { query, withTransaction } from '../../db/pool.js';
 import { buildEmptyOrderAttributionBackfillProgress, parseOrderAttributionBackfillProgress } from './backfill-progress.js';
@@ -40,10 +41,42 @@ function mapBackfillRunRow(row) {
             : null
     });
 }
+function stableSerialize(value) {
+    if (value === null || typeof value !== 'object') {
+        return JSON.stringify(value);
+    }
+    if (Array.isArray(value)) {
+        return `[${value.map((entry) => stableSerialize(entry)).join(',')}]`;
+    }
+    const record = value;
+    const keys = Object.keys(record).sort();
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${stableSerialize(record[key])}`).join(',')}}`;
+}
+function buildIdempotencyKey(options) {
+    const explicitKey = 'idempotencyKey' in options && typeof options.idempotencyKey === 'string'
+        ? options.idempotencyKey.trim()
+        : '';
+    if (explicitKey) {
+        return `manual:${explicitKey}`;
+    }
+    return createHash('sha256')
+        .update(stableSerialize({
+        startDate: options.startDate,
+        endDate: options.endDate,
+        dryRun: options.dryRun,
+        limit: options.limit,
+        reclassificationTarget: 'reclassificationTarget' in options ? options.reclassificationTarget : 'full_rebuild',
+        organizationIds: 'organizationIds' in options ? options.organizationIds : [],
+        webOrdersOnly: options.webOrdersOnly,
+        skipShopifyWriteback: options.skipShopifyWriteback
+    }))
+        .digest('hex');
+}
 export async function enqueueOrderAttributionBackfillRun(options, submittedBy, now = new Date()) {
     const jobId = randomUUID();
     const submittedAt = now.toISOString();
-    await query(`
+    const idempotencyKey = buildIdempotencyKey(options);
+    const result = await query(`
       INSERT INTO order_attribution_backfill_runs (
         id,
         status,
@@ -51,7 +84,8 @@ export async function enqueueOrderAttributionBackfillRun(options, submittedBy, n
         submitted_by,
         options,
         progress,
-        last_heartbeat_at
+        last_heartbeat_at,
+        idempotency_key
       )
       VALUES (
         $1,
@@ -60,16 +94,52 @@ export async function enqueueOrderAttributionBackfillRun(options, submittedBy, n
         $3,
         $4::jsonb,
         $5::jsonb,
-        $2::timestamptz
+        $2::timestamptz,
+        $6
       )
-    `, [jobId, submittedAt, submittedBy, JSON.stringify(options), JSON.stringify(buildEmptyOrderAttributionBackfillProgress())]);
-    return orderAttributionBackfillEnqueueResponseSchema.parse({
-        ok: true,
+      ON CONFLICT (idempotency_key)
+      DO UPDATE SET idempotency_key = order_attribution_backfill_runs.idempotency_key
+      RETURNING
+        id,
+        status,
+        submitted_at,
+        submitted_by,
+        started_at,
+        completed_at,
+        options,
+        progress,
+        report,
+        error_code,
+        error_message,
+        last_heartbeat_at,
+        idempotency_key
+    `, [
         jobId,
-        status: 'queued',
         submittedAt,
         submittedBy,
-        options
+        JSON.stringify(options),
+        JSON.stringify(buildEmptyOrderAttributionBackfillProgress()),
+        idempotencyKey
+    ]);
+    const row = result.rows[0];
+    if (!row) {
+        return orderAttributionBackfillEnqueueResponseSchema.parse({
+            ok: true,
+            jobId,
+            status: 'queued',
+            submittedAt,
+            submittedBy,
+            options
+        });
+    }
+    const normalizedOptions = orderAttributionBackfillSubmittedOptionsSchema.parse(row.options);
+    return orderAttributionBackfillEnqueueResponseSchema.parse({
+        ok: true,
+        jobId: row.id,
+        status: row.status,
+        submittedAt: row.submitted_at.toISOString(),
+        submittedBy: row.submitted_by,
+        options: normalizedOptions
     });
 }
 export async function getOrderAttributionBackfillRun(jobId) {
@@ -86,7 +156,8 @@ export async function getOrderAttributionBackfillRun(jobId) {
         report,
         error_code,
         error_message,
-        last_heartbeat_at
+        last_heartbeat_at,
+        idempotency_key
       FROM order_attribution_backfill_runs
       WHERE id = $1
       LIMIT 1
@@ -133,7 +204,8 @@ export async function claimOrderAttributionBackfillRuns(workerId, now, limit) {
           runs.report,
           runs.error_code,
           runs.error_message,
-          runs.last_heartbeat_at
+          runs.last_heartbeat_at,
+          runs.idempotency_key
       `, [now, limit]));
     return result.rows.map((row) => {
         const options = orderAttributionBackfillSubmittedOptionsSchema.parse(row.options);
