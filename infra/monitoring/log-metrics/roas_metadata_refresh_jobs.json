@@ -1,1 +1,9 @@
-Added a log-based metric for metadata refresh lifecycle events across Google Ads and Meta Ads.
+Replaced placeholder content with a real count metric for
+`campaign_metadata_sync_job_lifecycle` events.
+
+Labels:
+- service
+- stage
+- status
+- worker_id
+- dry_run

@@ -1,0 +1,8 @@
+New distribution metric extracting `jsonPayload.staleEntityCount` from
+`campaign_metadata_freshness_snapshot` logs.
+
+Labels:
+- service
+- platform
+- entity_type
+- worker_id
