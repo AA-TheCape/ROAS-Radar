@@ -13,6 +13,9 @@ const INGESTION_SOURCE_PRECEDENCE = {
 };
 function ingestionSourcePrecedence(source) {
     if (source === 'shopify_marketing_hint') {
+        return Number.MAX_SAFE_INTEGER - 2;
+    }
+    if (source === 'meta_platform_reported') {
         return Number.MAX_SAFE_INTEGER - 1;
     }
     if (source === 'ga4_fallback') {
@@ -124,6 +127,8 @@ export function confidenceScoreForWinner(winner) {
             return 0.6;
         case 'shopify_marketing_hint':
             return 0.55;
+        case 'meta_platform_reported':
+            return 0.5;
         case 'ga4_fallback':
             return 0.35;
     }
@@ -171,6 +176,38 @@ function compareGa4FallbackCandidates(left, right) {
         return Number(Boolean(right.clickIdValue)) - Number(Boolean(left.clickIdValue));
     }
     return left.sourceKey.localeCompare(right.sourceKey);
+}
+const META_MATCH_BASIS_PRECEDENCE = {
+    fbclid: 0,
+    fbc: 1,
+    external_id: 2,
+    email_hash: 3,
+    phone_hash: 4,
+    fbp: 5,
+    meta_order_reference: 6,
+    conversion_api_event_id: 7
+};
+function metaMatchBasisPrecedence(matchBasis) {
+    if (!matchBasis) {
+        return Number.MAX_SAFE_INTEGER;
+    }
+    return META_MATCH_BASIS_PRECEDENCE[matchBasis] ?? Number.MAX_SAFE_INTEGER;
+}
+function compareMetaReportedCandidates(left, right) {
+    if (right.occurredAtUtc.getTime() !== left.occurredAtUtc.getTime()) {
+        return right.occurredAtUtc.getTime() - left.occurredAtUtc.getTime();
+    }
+    const matchBasisComparison = metaMatchBasisPrecedence(left.metaMatchBasis) - metaMatchBasisPrecedence(right.metaMatchBasis);
+    if (matchBasisComparison !== 0) {
+        return matchBasisComparison;
+    }
+    if (Boolean(right.isClickThrough) !== Boolean(left.isClickThrough)) {
+        return Number(Boolean(right.isClickThrough)) - Number(Boolean(left.isClickThrough));
+    }
+    if (right.confidenceScore !== left.confidenceScore) {
+        return right.confidenceScore - left.confidenceScore;
+    }
+    return (left.metaSignalId ?? left.sourceKey).localeCompare(right.metaSignalId ?? right.sourceKey);
 }
 function dedupeTierCandidatesBySourceKey(candidates, compare) {
     const deduped = new Map();
@@ -226,6 +263,23 @@ export function resolveAttributionTier(input) {
             winner: shopifyHintWinner,
             confidenceScore: shopifyHintWinnerCandidate?.confidenceScore ?? confidenceScoreForWinner(shopifyHintWinner),
             attributionReason: shopifyHintWinner.attributionReason,
+            orderOccurredAtUtc,
+            normalizationFailures: input.normalizationFailures ?? []
+        };
+    }
+    const metaReportedTouchpoints = dedupeTierCandidatesBySourceKey((input.platformReportedMeta ?? []).filter((candidate) => candidate.metaEligibilityOutcome === 'eligible_canonical' &&
+        isWithinLookbackWindow(orderOccurredAtUtc, candidate.occurredAtUtc)), compareMetaReportedCandidates);
+    const metaReportedWinnerCandidate = metaReportedTouchpoints[0] ?? null;
+    const metaReportedWinner = metaReportedWinnerCandidate
+        ? mapCandidateToResolvedTouchpoint(metaReportedWinnerCandidate)
+        : null;
+    if (metaReportedWinner) {
+        return {
+            tier: 'platform_reported_meta',
+            touchpoints: metaReportedTouchpoints.map(mapCandidateToResolvedTouchpoint),
+            winner: metaReportedWinner,
+            confidenceScore: metaReportedWinnerCandidate?.confidenceScore ?? confidenceScoreForWinner(metaReportedWinner),
+            attributionReason: metaReportedWinner.attributionReason,
             orderOccurredAtUtc,
             normalizationFailures: input.normalizationFailures ?? []
         };

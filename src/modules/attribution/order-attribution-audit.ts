@@ -3,6 +3,7 @@ import type { DeterministicIngestionSource, ResolvedIngestionSource, ResolvedJou
 export const ORDER_ATTRIBUTION_TIERS = [
   'deterministic_first_party',
   'deterministic_shopify_hint',
+  'platform_reported_meta',
   'ga4_fallback',
   'unattributed'
 ] as const;
@@ -35,6 +36,8 @@ function mapAttributionSource(source: ResolvedIngestionSource): string {
   switch (source) {
     case 'shopify_marketing_hint':
       return 'shopify_marketing_hint';
+    case 'meta_platform_reported':
+      return 'meta_platform_reported';
     case 'ga4_fallback':
       return 'ga4_fallback';
     default:
@@ -68,6 +71,15 @@ export function buildOrderAttributionAuditRecord(
     return {
       tier: 'ga4_fallback',
       source: 'ga4_fallback',
+      matchedAt,
+      reason: journey.attributionReason
+    };
+  }
+
+  if (journey.tier === 'platform_reported_meta') {
+    return {
+      tier: 'platform_reported_meta',
+      source: 'meta_platform_reported',
       matchedAt,
       reason: journey.attributionReason
     };

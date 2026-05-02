@@ -11,10 +11,12 @@ export type DeterministicIngestionSource = (typeof DETERMINISTIC_INGESTION_SOURC
 export type ResolvedIngestionSource =
   | DeterministicIngestionSource
   | 'shopify_marketing_hint'
+  | 'meta_platform_reported'
   | 'ga4_fallback';
 export type ResolvedAttributionTier =
   | 'deterministic_first_party'
   | 'deterministic_shopify_hint'
+  | 'platform_reported_meta'
   | 'ga4_fallback'
   | 'unattributed';
 
@@ -33,7 +35,7 @@ export type ResolvedJourney = {
   attributionReason: string;
   orderOccurredAtUtc: Date | null;
   normalizationFailures: Array<{
-    scope: 'order' | 'shopify_hint' | 'ga4_fallback';
+    scope: 'order' | 'shopify_hint' | 'platform_reported_meta' | 'ga4_fallback';
     reason: string;
     sourceKey: string | null;
   }>;
@@ -56,15 +58,21 @@ export type TieredAttributionCandidate = {
   confidenceScore: number;
   isDirect: boolean;
   isSynthetic: boolean;
+  metaSignalId?: string | null;
+  metaMatchBasis?: string | null;
+  metaEligibilityOutcome?: 'eligible_canonical' | 'eligible_parallel_only' | 'ineligible' | null;
+  isClickThrough?: boolean;
+  isViewThrough?: boolean;
 };
 
 export type TieredAttributionResolverInput = {
   orderOccurredAtUtc: Date | null;
   deterministicFirstParty: TieredAttributionCandidate[];
   shopifyHint: TieredAttributionCandidate[];
+  platformReportedMeta?: TieredAttributionCandidate[];
   ga4Fallback: TieredAttributionCandidate[];
   normalizationFailures?: Array<{
-    scope: 'order' | 'shopify_hint' | 'ga4_fallback';
+    scope: 'order' | 'shopify_hint' | 'platform_reported_meta' | 'ga4_fallback';
     reason: string;
     sourceKey: string | null;
   }>;
@@ -79,6 +87,10 @@ const INGESTION_SOURCE_PRECEDENCE: Record<DeterministicIngestionSource, number> 
 
 function ingestionSourcePrecedence(source: ResolvedIngestionSource): number {
   if (source === 'shopify_marketing_hint') {
+    return Number.MAX_SAFE_INTEGER - 2;
+  }
+
+  if (source === 'meta_platform_reported') {
     return Number.MAX_SAFE_INTEGER - 1;
   }
 
@@ -230,6 +242,8 @@ export function confidenceScoreForWinner(
       return 0.6;
     case 'shopify_marketing_hint':
       return 0.55;
+    case 'meta_platform_reported':
+      return 0.5;
     case 'ga4_fallback':
       return 0.35;
   }
@@ -294,6 +308,47 @@ function compareGa4FallbackCandidates(left: TieredAttributionCandidate, right: T
   }
 
   return left.sourceKey.localeCompare(right.sourceKey);
+}
+
+const META_MATCH_BASIS_PRECEDENCE: Record<string, number> = {
+  fbclid: 0,
+  fbc: 1,
+  external_id: 2,
+  email_hash: 3,
+  phone_hash: 4,
+  fbp: 5,
+  meta_order_reference: 6,
+  conversion_api_event_id: 7
+};
+
+function metaMatchBasisPrecedence(matchBasis: string | null | undefined): number {
+  if (!matchBasis) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+
+  return META_MATCH_BASIS_PRECEDENCE[matchBasis] ?? Number.MAX_SAFE_INTEGER;
+}
+
+function compareMetaReportedCandidates(left: TieredAttributionCandidate, right: TieredAttributionCandidate): number {
+  if (right.occurredAtUtc.getTime() !== left.occurredAtUtc.getTime()) {
+    return right.occurredAtUtc.getTime() - left.occurredAtUtc.getTime();
+  }
+
+  const matchBasisComparison =
+    metaMatchBasisPrecedence(left.metaMatchBasis) - metaMatchBasisPrecedence(right.metaMatchBasis);
+  if (matchBasisComparison !== 0) {
+    return matchBasisComparison;
+  }
+
+  if (Boolean(right.isClickThrough) !== Boolean(left.isClickThrough)) {
+    return Number(Boolean(right.isClickThrough)) - Number(Boolean(left.isClickThrough));
+  }
+
+  if (right.confidenceScore !== left.confidenceScore) {
+    return right.confidenceScore - left.confidenceScore;
+  }
+
+  return (left.metaSignalId ?? left.sourceKey).localeCompare(right.metaSignalId ?? right.sourceKey);
 }
 
 function dedupeTierCandidatesBySourceKey(
@@ -368,6 +423,31 @@ export function resolveAttributionTier(input: TieredAttributionResolverInput): R
       winner: shopifyHintWinner,
       confidenceScore: shopifyHintWinnerCandidate?.confidenceScore ?? confidenceScoreForWinner(shopifyHintWinner),
       attributionReason: shopifyHintWinner.attributionReason,
+      orderOccurredAtUtc,
+      normalizationFailures: input.normalizationFailures ?? []
+    };
+  }
+
+  const metaReportedTouchpoints = dedupeTierCandidatesBySourceKey(
+    (input.platformReportedMeta ?? []).filter(
+      (candidate) =>
+        candidate.metaEligibilityOutcome === 'eligible_canonical' &&
+        isWithinLookbackWindow(orderOccurredAtUtc, candidate.occurredAtUtc)
+    ),
+    compareMetaReportedCandidates
+  );
+  const metaReportedWinnerCandidate = metaReportedTouchpoints[0] ?? null;
+  const metaReportedWinner = metaReportedWinnerCandidate
+    ? mapCandidateToResolvedTouchpoint(metaReportedWinnerCandidate)
+    : null;
+
+  if (metaReportedWinner) {
+    return {
+      tier: 'platform_reported_meta',
+      touchpoints: metaReportedTouchpoints.map(mapCandidateToResolvedTouchpoint),
+      winner: metaReportedWinner,
+      confidenceScore: metaReportedWinnerCandidate?.confidenceScore ?? confidenceScoreForWinner(metaReportedWinner),
+      attributionReason: metaReportedWinner.attributionReason,
       orderOccurredAtUtc,
       normalizationFailures: input.normalizationFailures ?? []
     };

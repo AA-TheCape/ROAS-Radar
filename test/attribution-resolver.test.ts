@@ -308,6 +308,21 @@ test('resolveAttributionTier only considers Shopify hints inside the 7-day lookb
         isSynthetic: true
       })
     ],
+    platformReportedMeta: [
+      buildTierCandidate('meta-eligible', '2026-04-08T11:30:00.000Z', {
+        sessionId: null,
+        sourceTouchEventId: null,
+        ingestionSource: 'meta_platform_reported',
+        attributionReason: 'meta_platform_reported_match',
+        confidenceScore: 0.8,
+        isSynthetic: true,
+        metaSignalId: 'meta-eligible',
+        metaMatchBasis: 'fbclid',
+        metaEligibilityOutcome: 'eligible_canonical',
+        isClickThrough: true,
+        isViewThrough: false
+      })
+    ],
     ga4Fallback: [
       buildTierCandidate('ga4-eligible', '2026-04-08T11:00:00.000Z', {
         sessionId: null,
@@ -341,6 +356,21 @@ test('resolveAttributionTier falls back to GA4 only when higher tiers are missin
         attributionReason: 'shopify_hint_derived',
         confidenceScore: 0.55,
         isSynthetic: true
+      })
+    ],
+    platformReportedMeta: [
+      buildTierCandidate('meta-parallel-only', '2026-04-08T11:30:00.000Z', {
+        sessionId: null,
+        sourceTouchEventId: null,
+        ingestionSource: 'meta_platform_reported',
+        attributionReason: 'meta_platform_reported_match',
+        confidenceScore: 0.4,
+        isSynthetic: true,
+        metaSignalId: 'meta-parallel-only',
+        metaMatchBasis: 'fbclid',
+        metaEligibilityOutcome: 'eligible_parallel_only',
+        isClickThrough: true,
+        isViewThrough: false
       })
     ],
     ga4Fallback: [
@@ -457,7 +487,105 @@ test('confidenceScoreForWinner covers every tier source and null winner', async 
   assert.equal(testUtils.confidenceScoreForWinner({ ingestionSource: 'cart_token' }), 0.9);
   assert.equal(testUtils.confidenceScoreForWinner({ ingestionSource: 'customer_identity' }), 0.6);
   assert.equal(testUtils.confidenceScoreForWinner({ ingestionSource: 'shopify_marketing_hint' }), 0.55);
+  assert.equal(testUtils.confidenceScoreForWinner({ ingestionSource: 'meta_platform_reported' }), 0.5);
   assert.equal(testUtils.confidenceScoreForWinner({ ingestionSource: 'ga4_fallback' }), 0.35);
+});
+
+test('resolveAttributionTier promotes eligible Meta only after deterministic first-party and Shopify hint fail', async () => {
+  const testUtils = await getTestUtils();
+
+  const resolved = testUtils.resolveAttributionTier({
+    orderOccurredAtUtc: new Date('2026-04-08T12:00:00.000Z'),
+    deterministicFirstParty: [],
+    shopifyHint: [],
+    platformReportedMeta: [
+      buildTierCandidate('meta-eligible', '2026-04-08T11:30:00.000Z', {
+        sessionId: null,
+        sourceTouchEventId: null,
+        ingestionSource: 'meta_platform_reported',
+        attributionReason: 'meta_platform_reported_match',
+        confidenceScore: 0.72,
+        source: 'meta',
+        medium: 'paid_social',
+        campaign: 'meta-retargeting',
+        clickIdType: 'fbclid',
+        clickIdValue: 'fbclid-1',
+        isSynthetic: true,
+        metaSignalId: 'meta-eligible',
+        metaMatchBasis: 'fbclid',
+        metaEligibilityOutcome: 'eligible_canonical',
+        isClickThrough: true,
+        isViewThrough: false
+      })
+    ],
+    ga4Fallback: [
+      buildTierCandidate('ga4-eligible', '2026-04-08T10:30:00.000Z', {
+        sessionId: null,
+        sourceTouchEventId: null,
+        ingestionSource: 'ga4_fallback',
+        attributionReason: 'ga4_fallback_match',
+        confidenceScore: 0.35,
+        isSynthetic: true
+      })
+    ]
+  });
+
+  assert.equal(resolved.tier, 'platform_reported_meta');
+  assert.equal(resolved.winner?.ingestionSource, 'meta_platform_reported');
+  assert.equal(resolved.winner?.clickIdType, 'fbclid');
+  assert.equal(resolved.touchpoints.length, 1);
+  assert.equal(resolved.attributionReason, 'meta_platform_reported_match');
+});
+
+test('resolveAttributionTier excludes Meta candidates that are outside the canonical eligibility guardrails', async () => {
+  const testUtils = await getTestUtils();
+
+  const resolved = testUtils.resolveAttributionTier({
+    orderOccurredAtUtc: new Date('2026-04-08T12:00:00.000Z'),
+    deterministicFirstParty: [],
+    shopifyHint: [],
+    platformReportedMeta: [
+      buildTierCandidate('meta-future', '2026-04-08T12:00:01.000Z', {
+        sessionId: null,
+        sourceTouchEventId: null,
+        ingestionSource: 'meta_platform_reported',
+        attributionReason: 'meta_platform_reported_match',
+        confidenceScore: 0.8,
+        isSynthetic: true,
+        metaSignalId: 'meta-future',
+        metaMatchBasis: 'fbclid',
+        metaEligibilityOutcome: 'eligible_canonical',
+        isClickThrough: true,
+        isViewThrough: false
+      }),
+      buildTierCandidate('meta-parallel-only', '2026-04-08T11:00:00.000Z', {
+        sessionId: null,
+        sourceTouchEventId: null,
+        ingestionSource: 'meta_platform_reported',
+        attributionReason: 'meta_platform_reported_match',
+        confidenceScore: 0.4,
+        isSynthetic: true,
+        metaSignalId: 'meta-parallel-only',
+        metaMatchBasis: 'fbclid',
+        metaEligibilityOutcome: 'eligible_parallel_only',
+        isClickThrough: true,
+        isViewThrough: false
+      })
+    ],
+    ga4Fallback: [
+      buildTierCandidate('ga4-eligible', '2026-04-08T10:30:00.000Z', {
+        sessionId: null,
+        sourceTouchEventId: null,
+        ingestionSource: 'ga4_fallback',
+        attributionReason: 'ga4_fallback_match',
+        confidenceScore: 0.35,
+        isSynthetic: true
+      })
+    ]
+  });
+
+  assert.equal(resolved.tier, 'ga4_fallback');
+  assert.equal(resolved.winner?.ingestionSource, 'ga4_fallback');
 });
 
 test('dedupe ignores deterministic candidates without a session id and keeps timeline ordering stable', async () => {
@@ -851,4 +979,183 @@ test('resolveAttributionTier breaks GA4 ties by recency, then click id, then sou
   });
 
   assert.equal(winnerFromLexicalKey.winner?.sourceTouchEventId, 'ga4-a-event');
+});
+
+test('resolveAttributionTier breaks Meta ties by recency, match basis, click-through, confidence, then signal id', async () => {
+  const testUtils = await getTestUtils();
+
+  const winnerFromRecency = testUtils.resolveAttributionTier({
+    orderOccurredAtUtc: new Date('2026-04-08T12:00:00.000Z'),
+    deterministicFirstParty: [],
+    shopifyHint: [],
+    platformReportedMeta: [
+      buildTierCandidate('meta-older', '2026-04-08T10:00:00.000Z', {
+        sessionId: null,
+        ingestionSource: 'meta_platform_reported',
+        attributionReason: 'meta_platform_reported_match',
+        confidenceScore: 0.8,
+        isSynthetic: true,
+        metaSignalId: 'meta-older',
+        metaMatchBasis: 'fbclid',
+        metaEligibilityOutcome: 'eligible_canonical',
+        isClickThrough: true,
+        isViewThrough: false
+      }),
+      buildTierCandidate('meta-newer', '2026-04-08T11:00:00.000Z', {
+        sessionId: null,
+        ingestionSource: 'meta_platform_reported',
+        attributionReason: 'meta_platform_reported_match',
+        confidenceScore: 0.6,
+        isSynthetic: true,
+        metaSignalId: 'meta-newer',
+        metaMatchBasis: 'conversion_api_event_id',
+        metaEligibilityOutcome: 'eligible_canonical',
+        isClickThrough: false,
+        isViewThrough: true
+      })
+    ],
+    ga4Fallback: []
+  });
+
+  assert.equal(winnerFromRecency.winner?.sourceTouchEventId, 'meta-newer-event');
+
+  const winnerFromMatchBasis = testUtils.resolveAttributionTier({
+    orderOccurredAtUtc: new Date('2026-04-08T12:00:00.000Z'),
+    deterministicFirstParty: [],
+    shopifyHint: [],
+    platformReportedMeta: [
+      buildTierCandidate('meta-fbp', '2026-04-08T11:00:00.000Z', {
+        sessionId: null,
+        ingestionSource: 'meta_platform_reported',
+        attributionReason: 'meta_platform_reported_match',
+        confidenceScore: 0.8,
+        isSynthetic: true,
+        metaSignalId: 'meta-fbp',
+        metaMatchBasis: 'fbp',
+        metaEligibilityOutcome: 'eligible_canonical',
+        isClickThrough: true,
+        isViewThrough: false
+      }),
+      buildTierCandidate('meta-fbclid', '2026-04-08T11:00:00.000Z', {
+        sessionId: null,
+        ingestionSource: 'meta_platform_reported',
+        attributionReason: 'meta_platform_reported_match',
+        confidenceScore: 0.6,
+        isSynthetic: true,
+        metaSignalId: 'meta-fbclid',
+        metaMatchBasis: 'fbclid',
+        metaEligibilityOutcome: 'eligible_canonical',
+        isClickThrough: false,
+        isViewThrough: true
+      })
+    ],
+    ga4Fallback: []
+  });
+
+  assert.equal(winnerFromMatchBasis.winner?.sourceTouchEventId, 'meta-fbclid-event');
+
+  const winnerFromClickThrough = testUtils.resolveAttributionTier({
+    orderOccurredAtUtc: new Date('2026-04-08T12:00:00.000Z'),
+    deterministicFirstParty: [],
+    shopifyHint: [],
+    platformReportedMeta: [
+      buildTierCandidate('meta-view-through', '2026-04-08T11:00:00.000Z', {
+        sessionId: null,
+        ingestionSource: 'meta_platform_reported',
+        attributionReason: 'meta_platform_reported_match',
+        confidenceScore: 0.8,
+        isSynthetic: true,
+        metaSignalId: 'meta-view-through',
+        metaMatchBasis: 'external_id',
+        metaEligibilityOutcome: 'eligible_canonical',
+        isClickThrough: false,
+        isViewThrough: true
+      }),
+      buildTierCandidate('meta-click-through', '2026-04-08T11:00:00.000Z', {
+        sessionId: null,
+        ingestionSource: 'meta_platform_reported',
+        attributionReason: 'meta_platform_reported_match',
+        confidenceScore: 0.6,
+        isSynthetic: true,
+        metaSignalId: 'meta-click-through',
+        metaMatchBasis: 'external_id',
+        metaEligibilityOutcome: 'eligible_canonical',
+        isClickThrough: true,
+        isViewThrough: false
+      })
+    ],
+    ga4Fallback: []
+  });
+
+  assert.equal(winnerFromClickThrough.winner?.sourceTouchEventId, 'meta-click-through-event');
+
+  const winnerFromConfidence = testUtils.resolveAttributionTier({
+    orderOccurredAtUtc: new Date('2026-04-08T12:00:00.000Z'),
+    deterministicFirstParty: [],
+    shopifyHint: [],
+    platformReportedMeta: [
+      buildTierCandidate('meta-lower-confidence', '2026-04-08T11:00:00.000Z', {
+        sessionId: null,
+        ingestionSource: 'meta_platform_reported',
+        attributionReason: 'meta_platform_reported_match',
+        confidenceScore: 0.6,
+        isSynthetic: true,
+        metaSignalId: 'meta-lower-confidence',
+        metaMatchBasis: 'external_id',
+        metaEligibilityOutcome: 'eligible_canonical',
+        isClickThrough: true,
+        isViewThrough: false
+      }),
+      buildTierCandidate('meta-higher-confidence', '2026-04-08T11:00:00.000Z', {
+        sessionId: null,
+        ingestionSource: 'meta_platform_reported',
+        attributionReason: 'meta_platform_reported_match',
+        confidenceScore: 0.8,
+        isSynthetic: true,
+        metaSignalId: 'meta-higher-confidence',
+        metaMatchBasis: 'external_id',
+        metaEligibilityOutcome: 'eligible_canonical',
+        isClickThrough: true,
+        isViewThrough: false
+      })
+    ],
+    ga4Fallback: []
+  });
+
+  assert.equal(winnerFromConfidence.winner?.sourceTouchEventId, 'meta-higher-confidence-event');
+
+  const winnerFromSignalId = testUtils.resolveAttributionTier({
+    orderOccurredAtUtc: new Date('2026-04-08T12:00:00.000Z'),
+    deterministicFirstParty: [],
+    shopifyHint: [],
+    platformReportedMeta: [
+      buildTierCandidate('meta-b', '2026-04-08T11:00:00.000Z', {
+        sessionId: null,
+        ingestionSource: 'meta_platform_reported',
+        attributionReason: 'meta_platform_reported_match',
+        confidenceScore: 0.8,
+        isSynthetic: true,
+        metaSignalId: 'meta-b',
+        metaMatchBasis: 'external_id',
+        metaEligibilityOutcome: 'eligible_canonical',
+        isClickThrough: true,
+        isViewThrough: false
+      }),
+      buildTierCandidate('meta-a', '2026-04-08T11:00:00.000Z', {
+        sessionId: null,
+        ingestionSource: 'meta_platform_reported',
+        attributionReason: 'meta_platform_reported_match',
+        confidenceScore: 0.8,
+        isSynthetic: true,
+        metaSignalId: 'meta-a',
+        metaMatchBasis: 'external_id',
+        metaEligibilityOutcome: 'eligible_canonical',
+        isClickThrough: true,
+        isViewThrough: false
+      })
+    ],
+    ga4Fallback: []
+  });
+
+  assert.equal(winnerFromSignalId.winner?.sourceTouchEventId, 'meta-a-event');
 });

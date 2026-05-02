@@ -55,7 +55,11 @@ export type AttributionCandidate = {
   sourceKey: string;
   sessionId: string | null;
   sourceTouchEventId: string | null;
-  ingestionSource: DeterministicIngestionSource | 'shopify_marketing_hint' | 'ga4_fallback';
+  ingestionSource:
+    | DeterministicIngestionSource
+    | 'shopify_marketing_hint'
+    | 'meta_platform_reported'
+    | 'ga4_fallback';
   occurredAtUtc: Date;
   source: string | null;
   medium: string | null;
