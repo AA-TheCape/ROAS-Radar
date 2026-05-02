@@ -34,6 +34,17 @@ const META_ADS_SYNC_MAX_RETRIES = 3;
 const META_ADS_RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
 const META_ADS_SYNC_TIME_ZONE = 'America/Los_Angeles';
 const META_ADS_SPEND_LEVELS = ['account', 'campaign', 'adset', 'ad'] as const;
+const META_ADS_ORDER_VALUE_BLOCKED_SPEND_WRITE_TABLES = [
+  'meta_ads_daily_spend',
+  'meta_ads_raw_spend_records',
+  'meta_ads_sync_jobs'
+] as const;
+const META_ADS_ORDER_VALUE_BLOCKED_SPEND_WRITE_PATTERN = new RegExp(
+  `\\b(?:insert\\s+into|update|delete\\s+from|truncate(?:\\s+table)?|alter\\s+table|drop\\s+table|create\\s+table)\\s+(${META_ADS_ORDER_VALUE_BLOCKED_SPEND_WRITE_TABLES.join(
+    '|'
+  )})\\b`,
+  'i'
+);
 
 export type CanonicalSelectionMode = 'priority' | 'fallback' | 'none';
 
@@ -254,6 +265,31 @@ function safeRatio(numerator: number, denominator: number): number | null {
   }
 
   return Number((numerator / denominator).toFixed(4));
+}
+
+function assertOrderValueQueryDoesNotWriteSpendTables(text: string): void {
+  const normalizedQuery = text.replace(/\s+/g, ' ').trim();
+  const blockedWriteMatch = normalizedQuery.match(META_ADS_ORDER_VALUE_BLOCKED_SPEND_WRITE_PATTERN);
+
+  if (!blockedWriteMatch) {
+    return;
+  }
+
+  throw new Error(
+    `Order-value persistence attempted to write spend-owned table "${blockedWriteMatch[1]}".`
+  );
+}
+
+function createOrderValuePersistenceGuard(executor: MetaAdsQueryable): MetaAdsQueryable {
+  return {
+    query<TResult extends QueryResultRow = QueryResultRow>(
+      text: string,
+      params?: unknown[]
+    ): Promise<QueryResult<TResult>> {
+      assertOrderValueQueryDoesNotWriteSpendTables(text);
+      return executor.query<TResult>(text, params);
+    }
+  };
 }
 
 function buildMetaAdsApiRequestMetricsAccumulator(): MetaAdsApiRequestMetricsAccumulator {
@@ -1988,7 +2024,7 @@ async function fetchAllOrderValueRows(params: {
 }
 
 async function persistRawOrderValueRows(
-  client: PoolClient,
+  client: MetaAdsQueryable,
   params: {
     connectionId: number;
     syncRunId: number;
@@ -2043,7 +2079,7 @@ async function persistRawOrderValueRows(
 }
 
 async function replaceAggregateRows(
-  client: PoolClient,
+  client: MetaAdsQueryable,
   params: {
     connectionId: number;
     adAccountId: string;
@@ -2208,14 +2244,15 @@ async function processOrderValueSyncJob(job: MetaAdsOrderValueSyncJobRow, trigge
     const baseline = await loadOrderValueBaseline(job.connection_id, job.sync_date);
 
     const { persistedRows, normalizedRows, persistedRunId } = await withTransaction(async (client) => {
+      const guardedClient = createOrderValuePersistenceGuard(client);
       const createdRunId = await createSyncRun({
         connectionId: job.connection_id,
         triggerSource,
         syncDate: job.sync_date,
-        client
+        client: guardedClient
       });
 
-      const persisted = await persistRawOrderValueRows(client, {
+      const persisted = await persistRawOrderValueRows(guardedClient, {
         connectionId: job.connection_id,
         syncRunId: createdRunId,
         syncJobId: job.id,
@@ -2226,7 +2263,7 @@ async function processOrderValueSyncJob(job: MetaAdsOrderValueSyncJobRow, trigge
         currency: connection.account_currency
       });
 
-      await replaceAggregateRows(client, {
+      await replaceAggregateRows(guardedClient, {
         connectionId: job.connection_id,
         adAccountId: connection.ad_account_id,
         syncJobId: job.id,
@@ -2240,9 +2277,9 @@ async function processOrderValueSyncJob(job: MetaAdsOrderValueSyncJobRow, trigge
         recordsReceived: normalized.length,
         rawRowsPersisted: persisted.length,
         aggregateRowsUpserted: normalized.length,
-        client
+        client: guardedClient
       });
-      await markOrderValueSyncJobSucceeded(job.id, job.connection_id, client);
+      await markOrderValueSyncJobSucceeded(job.id, job.connection_id, guardedClient);
 
       return {
         persistedRows: persisted,
@@ -2312,17 +2349,18 @@ async function processOrderValueSyncJob(job: MetaAdsOrderValueSyncJobRow, trigge
     };
   } catch (error) {
     runId = await withTransaction(async (client) => {
+      const guardedClient = createOrderValuePersistenceGuard(client);
       const failedRunId =
         runId ??
         (await createSyncRun({
           connectionId: job.connection_id,
           triggerSource,
           syncDate: job.sync_date,
-          client
+          client: guardedClient
         }));
 
-      await markSyncRunFailedWithClient(failedRunId, error, client);
-      await markOrderValueSyncJobFailed(job, error, client);
+      await markSyncRunFailedWithClient(failedRunId, error, guardedClient);
+      await markOrderValueSyncJobFailed(job, error, guardedClient);
 
       return failedRunId;
     });
@@ -2519,6 +2557,7 @@ export function createMetaAdsAdminRouter(): Router {
 }
 
 export const __metaAdsTestUtils = {
+  assertOrderValueQueryDoesNotWriteSpendTables,
   buildPlanningDates,
   listDateRangeInclusive,
   buildMetaAdsApiRequestMetricsAccumulator,
