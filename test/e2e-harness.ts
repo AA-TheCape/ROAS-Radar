@@ -17,6 +17,7 @@ async function getPool() {
 export async function resetE2EDatabase(): Promise<void> {
   const pool = await getPool();
   await resetIntegrationTables(pool, [
+    'campaign_metadata_backfill_runs',
     'ad_sync_api_transactions',
     'ad_platform_entity_metadata',
     'google_ads_reconciliation_runs',

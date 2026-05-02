@@ -23,6 +23,7 @@
     "google-ads:sync": "tsx src/google-ads-worker.ts",
     "google-ads:metadata-refresh": "tsx src/google-ads-metadata-refresh-worker.ts",
     "google-ads:metadata-refresh:start": "node dist/src/google-ads-metadata-refresh-worker.js",
+    "campaign-metadata:backfill": "tsx src/admin/backfill-campaign-metadata.ts",
     "data-quality:check": "tsx src/data-quality-worker.ts"
   },
   "dependencies": {
