@@ -226,12 +226,11 @@ async function insertRecoverableOrder(pool: Pool, input: {
         processed_at,
         checkout_token,
         source_name,
-        payload_external_id,
-        payload_size_bytes,
-        payload_hash,
-        raw_payload,
-        payload_size_bytes,
-        ingested_at
+	        payload_external_id,
+	        payload_size_bytes,
+	        payload_hash,
+	        raw_payload,
+	        ingested_at
       )
       VALUES (
         $1,
