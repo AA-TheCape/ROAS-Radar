@@ -154,6 +154,118 @@ test('reporting dashboard search and order drill-in stay wired for high-traffic 
   }
 });
 
+test('reporting dashboard prefers resolved campaign labels and keeps fallback identifiers visible', async () => {
+  const { default: ReportingDashboard } = await loadDashboardModule<
+    typeof import('../dashboard/src/components/ReportingDashboard')
+  >('dashboard/src/components/ReportingDashboard.tsx');
+
+  const mounted = await mountUi(
+    h(
+      ReportingDashboard,
+      createReportingDashboardProps({
+        filters: {
+          startDate: '2026-04-01',
+          endDate: '2026-04-20',
+          source: '',
+          campaign: '',
+          attributionTier: ''
+        },
+        groupBy: 'campaign',
+        timeseriesSection: {
+          data: [
+            {
+              date: 'clearance',
+              visits: 210,
+              orders: 7,
+              revenue: 900,
+              campaignDisplayName: 'cmp_google_clearance',
+              campaignEntityId: 'cmp_google_clearance',
+              campaignPlatform: 'google_ads',
+              campaignNameResolutionStatus: 'unresolved',
+              campaignLabel: {
+                displayName: 'cmp_google_clearance',
+                entityId: 'cmp_google_clearance',
+                platform: 'google_ads',
+                resolutionStatus: 'unresolved',
+                lastSeenAt: null,
+                updatedAt: null
+              }
+            },
+            {
+              date: 'spring-search',
+              visits: 480,
+              orders: 18,
+              revenue: 2400,
+              campaignDisplayName: 'Spring Search',
+              campaignEntityId: 'cmp_google_spring_search',
+              campaignPlatform: 'google_ads',
+              campaignNameResolutionStatus: 'resolved',
+              campaignLabel: {
+                displayName: 'Spring Search',
+                entityId: 'cmp_google_spring_search',
+                platform: 'google_ads',
+                resolutionStatus: 'resolved',
+                lastSeenAt: '2026-04-20T07:00:00.000Z',
+                updatedAt: '2026-04-20T07:30:00.000Z'
+              }
+            }
+          ],
+          loading: false,
+          error: null
+        },
+        spendDetailsSection: {
+          data: [
+            {
+              source: 'google',
+              medium: 'cpc',
+              channel: 'google / cpc',
+              subtotal: 200,
+              campaigns: [
+                {
+                  campaign: 'clearance',
+                  spend: 200,
+                  campaignDisplayName: 'cmp_google_clearance',
+                  campaignEntityId: 'cmp_google_clearance',
+                  campaignPlatform: 'google_ads',
+                  campaignNameResolutionStatus: 'unresolved',
+                  campaignLabel: {
+                    displayName: 'cmp_google_clearance',
+                    entityId: 'cmp_google_clearance',
+                    platform: 'google_ads',
+                    resolutionStatus: 'unresolved',
+                    lastSeenAt: null,
+                    updatedAt: null
+                  }
+                }
+              ]
+            }
+          ],
+          loading: false,
+          error: null
+        }
+      })
+    ),
+    { width: 1440, height: 900 }
+  );
+
+  try {
+    const text = mounted.container.textContent ?? '';
+
+    assert.match(text, /Spring Search/);
+    assert.match(text, /Prospecting Carousel/);
+    assert.match(text, /ID cmp_google_spring_search/);
+    assert.match(text, /Key clearance/);
+    assert.match(text, /cmp_google_clearance/);
+
+    const campaignSearch = mounted.container.querySelector(
+      'input[placeholder="Campaign name, ID, source, medium, content"]'
+    ) as HTMLInputElement | null;
+    assert.ok(campaignSearch);
+  } finally {
+    mounted.cleanup();
+  }
+});
+
 test('reporting dashboard summary cards keep spend visible alongside the overview KPIs', async () => {
   const { default: ReportingDashboard } = await loadDashboardModule<
     typeof import('../dashboard/src/components/ReportingDashboard')

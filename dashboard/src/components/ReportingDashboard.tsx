@@ -14,6 +14,7 @@ import {
   formatPercent
 } from '../lib/format';
 import type {
+  CampaignLabel,
   CampaignRow,
   OrderRow,
   ReportingFilters,
@@ -51,7 +52,8 @@ import {
   TableSearchField,
   TableFilterBar,
   TableRow,
-  TableWrap
+  TableWrap,
+  Tooltip
 } from './AuthenticatedUi';
 import { AttributionTierBadge } from './AttributionTierBadge';
 import { matchesQuery, paginateRows, sortRows, type SortState } from '../lib/dataTable';
@@ -222,7 +224,19 @@ function buildTrendSummary(points: TimeseriesPoint[], groupBy: TimeseriesGroupBy
   }
 
   const strongestPoint = points.reduce<TimeseriesPoint>((current, point) => (point.revenue > current.revenue ? point : current), points[0]);
-  const strongestLabel = groupBy === 'day' ? formatDateLabel(strongestPoint.date, reportingTimezone) : strongestPoint.date;
+  const strongestLabel =
+    groupBy === 'day'
+      ? formatDateLabel(strongestPoint.date, reportingTimezone)
+      : groupBy === 'campaign'
+        ? getCampaignDisplayInfo({
+            campaign: strongestPoint.date,
+            campaignDisplayName: strongestPoint.campaignDisplayName,
+            campaignEntityId: strongestPoint.campaignEntityId,
+            campaignPlatform: strongestPoint.campaignPlatform,
+            campaignNameResolutionStatus: strongestPoint.campaignNameResolutionStatus,
+            campaignLabel: strongestPoint.campaignLabel
+          }).displayName
+        : strongestPoint.date;
 
   return `${formatNumber(points.length)} buckets plotted. Strongest bucket ${strongestLabel} with ${formatCurrency(strongestPoint.revenue)} from ${formatNumber(strongestPoint.orders)} orders.`;
 }
@@ -258,6 +272,127 @@ function titleCaseToken(value: string) {
     .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
     .join(' ');
 }
+
+type CampaignDisplayFields = {
+  campaign: string | null | undefined;
+  campaignDisplayName?: string | null;
+  campaignEntityId?: string | null;
+  campaignPlatform?: 'google_ads' | 'meta_ads' | null;
+  campaignNameResolutionStatus?: 'resolved' | 'fallback_name' | 'unresolved';
+  campaignLabel?: CampaignLabel;
+};
+
+type CampaignDisplayInfo = {
+  displayName: string;
+  rawCampaign: string | null;
+  entityId: string | null;
+  platform: 'google_ads' | 'meta_ads' | null;
+  resolutionStatus: 'resolved' | 'fallback_name' | 'unresolved';
+  detailLabel: string | null;
+  tooltip: string | null;
+  searchValues: string[];
+};
+
+function normalizeCampaignText(value: string | null | undefined) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function formatCampaignPlatformLabel(platform: 'google_ads' | 'meta_ads' | null) {
+  if (platform === 'google_ads') {
+    return 'Google Ads';
+  }
+
+  if (platform === 'meta_ads') {
+    return 'Meta Ads';
+  }
+
+  return null;
+}
+
+function formatCampaignResolutionLabel(status: 'resolved' | 'fallback_name' | 'unresolved') {
+  if (status === 'resolved') {
+    return 'Resolved name';
+  }
+
+  if (status === 'fallback_name') {
+    return 'Fallback native name';
+  }
+
+  return 'Unresolved name';
+}
+
+function getCampaignDisplayInfo(fields: CampaignDisplayFields): CampaignDisplayInfo {
+  const rawCampaign = normalizeCampaignText(fields.campaign);
+  const labelDisplayName = normalizeCampaignText(fields.campaignLabel?.displayName);
+  const inlineDisplayName = normalizeCampaignText(fields.campaignDisplayName);
+  const labelEntityId = normalizeCampaignText(fields.campaignLabel?.entityId);
+  const inlineEntityId = normalizeCampaignText(fields.campaignEntityId);
+  const entityId = labelEntityId ?? inlineEntityId;
+  const displayName = labelDisplayName ?? inlineDisplayName ?? rawCampaign ?? entityId ?? 'Unknown';
+  const platform = fields.campaignLabel?.platform ?? fields.campaignPlatform ?? null;
+  const resolutionStatus = fields.campaignLabel?.resolutionStatus ?? fields.campaignNameResolutionStatus ?? 'unresolved';
+  const detailLabel =
+    entityId && entityId !== displayName ? `ID ${entityId}` : rawCampaign && rawCampaign !== displayName ? `Key ${rawCampaign}` : null;
+  const tooltipParts = [formatCampaignResolutionLabel(resolutionStatus)];
+  const platformLabel = formatCampaignPlatformLabel(platform);
+
+  if (platformLabel) {
+    tooltipParts.push(platformLabel);
+  }
+
+  if (entityId) {
+    tooltipParts.push(`Entity ID: ${entityId}`);
+  }
+
+  if (rawCampaign && rawCampaign !== displayName) {
+    tooltipParts.push(`Reporting key: ${rawCampaign}`);
+  }
+
+  return {
+    displayName,
+    rawCampaign,
+    entityId,
+    platform,
+    resolutionStatus,
+    detailLabel,
+    tooltip: tooltipParts.length > 0 ? tooltipParts.join(' • ') : null,
+    searchValues: [displayName, rawCampaign, entityId, platformLabel, resolutionStatus].filter(
+      (value): value is string => Boolean(value)
+    )
+  };
+}
+
+const CampaignNameBlock = memo(function CampaignNameBlock({
+  info,
+  secondary,
+  primaryClassName,
+  secondaryClassName
+}: {
+  info: CampaignDisplayInfo;
+  secondary?: string | null;
+  primaryClassName?: string;
+  secondaryClassName?: string;
+}) {
+  const primaryContent = info.tooltip ? (
+    <Tooltip content={info.tooltip}>
+      <span className={primaryClassName}>{info.displayName}</span>
+    </Tooltip>
+  ) : (
+    <span className={primaryClassName}>{info.displayName}</span>
+  );
+
+  const detailLine = info.detailLabel ?? secondary;
+  const supportingLine = info.detailLabel ? secondary : null;
+
+  return (
+    <PrimaryCell>
+      {primaryContent}
+      {detailLine ? <span className={secondaryClassName}>{detailLine}</span> : null}
+      {supportingLine ? <span className={secondaryClassName}>{supportingLine}</span> : null}
+    </PrimaryCell>
+  );
+});
 
 function formatChannelLabel(source: string, medium: string) {
   return `${titleCaseToken(source || 'unknown')} / ${titleCaseToken(medium || 'unknown')}`;
@@ -334,7 +469,16 @@ const DashboardOverview = memo(function DashboardOverview({
                   {peakPoint
                     ? groupBy === 'day'
                       ? formatDateLabel(peakPoint.date, reportingTimezone)
-                      : peakPoint.date
+                      : groupBy === 'campaign'
+                        ? getCampaignDisplayInfo({
+                            campaign: peakPoint.date,
+                            campaignDisplayName: peakPoint.campaignDisplayName,
+                            campaignEntityId: peakPoint.campaignEntityId,
+                            campaignPlatform: peakPoint.campaignPlatform,
+                            campaignNameResolutionStatus: peakPoint.campaignNameResolutionStatus,
+                            campaignLabel: peakPoint.campaignLabel
+                          }).displayName
+                        : peakPoint.date
                     : 'N/A'}
                 </p>
                 <p className="mt-2 text-body text-ink-soft">
@@ -352,7 +496,18 @@ const DashboardOverview = memo(function DashboardOverview({
 
               <Card padding="compact" className="border-white/70 bg-white/80 shadow-inset-soft">
                 <Eyebrow>Leading campaign</Eyebrow>
-                <p className="mt-4 font-display text-title text-ink">{leadingCampaign?.campaign ?? 'N/A'}</p>
+                <div className="mt-4">
+                  {leadingCampaign ? (
+                    <CampaignNameBlock
+                      info={getCampaignDisplayInfo(leadingCampaign)}
+                      secondary={`${leadingCampaign.source} / ${leadingCampaign.medium}`}
+                      primaryClassName="font-display text-title text-ink"
+                      secondaryClassName="text-body text-ink-soft"
+                    />
+                  ) : (
+                    <p className="font-display text-title text-ink">N/A</p>
+                  )}
+                </div>
                 <p className="mt-2 text-body text-ink-soft">
                   {leadingCampaign
                     ? `${formatCurrency(leadingCampaign.revenue)} from ${leadingCampaign.source} / ${leadingCampaign.medium}`
@@ -630,7 +785,19 @@ const TimeseriesTrendPanel = memo(function TimeseriesTrendPanel({
       {
         id: 'Revenue',
         data: points.map((point) => {
-          const bucketLabel = groupBy === 'day' ? formatDateLabel(point.date, reportingTimezone) : point.date;
+          const bucketLabel =
+            groupBy === 'day'
+              ? formatDateLabel(point.date, reportingTimezone)
+              : groupBy === 'campaign'
+                ? getCampaignDisplayInfo({
+                    campaign: point.date,
+                    campaignDisplayName: point.campaignDisplayName,
+                    campaignEntityId: point.campaignEntityId,
+                    campaignPlatform: point.campaignPlatform,
+                    campaignNameResolutionStatus: point.campaignNameResolutionStatus,
+                    campaignLabel: point.campaignLabel
+                  }).displayName
+                : point.date;
           return {
             x: bucketLabel,
             y: point.revenue,
@@ -722,7 +889,18 @@ const TimeseriesTrendPanel = memo(function TimeseriesTrendPanel({
                     >
                       <div className="flex items-start justify-between gap-3">
                         <p className="text-body font-semibold text-ink">
-                          {groupBy === 'day' ? formatDateLabel(point.date, reportingTimezone) : point.date}
+                          {groupBy === 'day'
+                            ? formatDateLabel(point.date, reportingTimezone)
+                            : groupBy === 'campaign'
+                              ? getCampaignDisplayInfo({
+                                  campaign: point.date,
+                                  campaignDisplayName: point.campaignDisplayName,
+                                  campaignEntityId: point.campaignEntityId,
+                                  campaignPlatform: point.campaignPlatform,
+                                  campaignNameResolutionStatus: point.campaignNameResolutionStatus,
+                                  campaignLabel: point.campaignLabel
+                                }).displayName
+                              : point.date}
                         </p>
                         <p className="font-display text-lg text-brand">{formatCompactCurrency(point.revenue)}</p>
                       </div>
@@ -759,7 +937,18 @@ const TimeseriesTrendPanel = memo(function TimeseriesTrendPanel({
                     >
                       <div className="flex items-start justify-between gap-3">
                         <p className="text-body font-semibold text-ink">
-                          {groupBy === 'day' ? formatDateLabel(point.date, reportingTimezone) : point.date}
+                          {groupBy === 'day'
+                            ? formatDateLabel(point.date, reportingTimezone)
+                            : groupBy === 'campaign'
+                              ? getCampaignDisplayInfo({
+                                  campaign: point.date,
+                                  campaignDisplayName: point.campaignDisplayName,
+                                  campaignEntityId: point.campaignEntityId,
+                                  campaignPlatform: point.campaignPlatform,
+                                  campaignNameResolutionStatus: point.campaignNameResolutionStatus,
+                                  campaignLabel: point.campaignLabel
+                                }).displayName
+                              : point.date}
                         </p>
                         <p className="font-display text-lg text-warning">{formatCompactCurrency(point.revenue)}</p>
                       </div>
@@ -819,12 +1008,23 @@ const ReportingDashboard = memo(function ReportingDashboard({
 
   const campaignMixData = useMemo(
     () =>
-      campaigns.map((row) => ({
-        campaign: row.campaign,
-        revenueShare: Number(((totalCampaignRevenue > 0 ? row.revenue / totalCampaignRevenue : 0) * 100).toFixed(2)),
-        revenue: row.revenue,
-        sourceMedium: `${row.source} / ${row.medium}`
-      })),
+      campaigns.map((row) => {
+        const campaignInfo = getCampaignDisplayInfo(row);
+
+        return {
+          campaign: campaignInfo.displayName,
+          campaignMeta: campaignInfo.detailLabel ?? '',
+          campaignTooltip: campaignInfo.tooltip ?? '',
+          campaignKey: row.campaign,
+          resolutionStatus: campaignInfo.resolutionStatus,
+          entityId: campaignInfo.entityId ?? '',
+          rawCampaign: campaignInfo.rawCampaign ?? '',
+          platform: campaignInfo.platform ?? '',
+          sourceMedium: `${row.source} / ${row.medium}`,
+          revenue: row.revenue,
+          revenueShare: Number(((totalCampaignRevenue > 0 ? row.revenue / totalCampaignRevenue : 0) * 100).toFixed(2))
+        };
+      }),
     [campaigns, totalCampaignRevenue]
   );
 
@@ -856,7 +1056,7 @@ const ReportingDashboard = memo(function ReportingDashboard({
     () =>
       campaigns.filter((row) =>
         matchesQuery(
-          [row.campaign, row.source, row.medium, row.content, row.visits, row.orders, row.revenue],
+          [...getCampaignDisplayInfo(row).searchValues, row.source, row.medium, row.content, row.visits, row.orders, row.revenue],
           campaignSearch
         )
       ),
@@ -865,7 +1065,7 @@ const ReportingDashboard = memo(function ReportingDashboard({
   const sortedCampaigns = useMemo(
     () =>
       sortRows(filteredCampaigns, campaignSort, {
-        campaign: (row) => row.campaign,
+        campaign: (row) => getCampaignDisplayInfo(row).displayName,
         source: (row) => `${row.source} ${row.medium}`,
         visits: (row) => row.visits,
         orders: (row) => row.orders,
@@ -999,11 +1199,17 @@ const ReportingDashboard = memo(function ReportingDashboard({
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <Eyebrow>Top campaign</Eyebrow>
-                        <p className="mt-3 font-display text-title text-ink">{row.campaign}</p>
+                        <div className="mt-3">
+                          <CampaignNameBlock
+                            info={getCampaignDisplayInfo(row)}
+                            secondary={`${row.source} / ${row.medium}`}
+                            primaryClassName="font-display text-title text-ink"
+                            secondaryClassName="text-body text-ink-soft"
+                          />
+                        </div>
                       </div>
                       <Badge tone="brand">{formatPercent(row.conversionRate)}</Badge>
                     </div>
-                    <p className="mt-3 break-words text-body text-ink-soft">{row.source} / {row.medium}</p>
                     <p className="mt-5 font-display text-metric text-brand">{formatCompactCurrency(row.revenue)}</p>
                     <div className="mt-4 grid grid-cols-2 gap-3 text-body text-ink-muted">
                       <div className="rounded-card border border-line/50 bg-white/75 px-3 py-3">
@@ -1041,7 +1247,7 @@ const ReportingDashboard = memo(function ReportingDashboard({
                       setCampaignSearch(value);
                       setCampaignPage(1);
                     }}
-                    placeholder="Campaign, source, medium, content"
+                    placeholder="Campaign name, ID, source, medium, content"
                   />
                   <Field label="Sort by" htmlFor="campaign-table-sort">
                     <Select
@@ -1127,10 +1333,12 @@ const ReportingDashboard = memo(function ReportingDashboard({
                     {paginatedCampaigns.rows.map((row) => (
                       <TableRow key={`${row.source}-${row.medium}-${row.campaign}-${row.content ?? 'none'}`}>
                         <TableCell>
-                          <PrimaryCell>
-                            <strong>{row.campaign}</strong>
-                            <span>{row.content ?? 'No content tag'}</span>
-                          </PrimaryCell>
+                          <CampaignNameBlock
+                            info={getCampaignDisplayInfo(row)}
+                            secondary={row.content ?? 'No content tag'}
+                            primaryClassName="font-semibold text-ink"
+                            secondaryClassName="text-ink-muted"
+                          />
                         </TableCell>
                         <TableCell>{`${row.source} / ${row.medium}`}</TableCell>
                         <TableCell>{formatNumber(row.visits)}</TableCell>
@@ -1428,10 +1636,12 @@ const ReportingDashboard = memo(function ReportingDashboard({
                         {group.campaigns.map((campaign) => (
                           <TableRow key={`${group.source}-${group.medium}-${campaign.campaign}`}>
                             <TableCell>
-                              <PrimaryCell>
-                                <strong>{campaign.campaign}</strong>
-                                <span>{formatChannelLabel(group.source, group.medium)}</span>
-                              </PrimaryCell>
+                              <CampaignNameBlock
+                                info={getCampaignDisplayInfo(campaign)}
+                                secondary={formatChannelLabel(group.source, group.medium)}
+                                primaryClassName="font-semibold text-ink"
+                                secondaryClassName="text-ink-muted"
+                              />
                             </TableCell>
                             <TableCell>{formatCurrency(campaign.spend)}</TableCell>
                           </TableRow>

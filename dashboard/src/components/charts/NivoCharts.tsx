@@ -601,8 +601,12 @@ export const NivoBarChart = memo(function NivoBarChart<Datum extends BarDatum>({
                 value: formatMetric(Number(value), valueFormat),
                 color
               },
+              ...(datum.campaignMeta ? [{ label: 'Detail', value: String(datum.campaignMeta) }] : []),
               ...(datum.sourceMedium
                 ? [{ label: 'Traffic', value: String(datum.sourceMedium) }]
+                : []),
+              ...(datum.campaignTooltip
+                ? [{ label: 'Resolution', value: String(datum.campaignTooltip) }]
                 : [])
             ]}
           />

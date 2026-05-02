@@ -329,22 +329,46 @@ export function createReportingDashboardProps(
         {
           source: 'google',
           medium: 'cpc',
-          campaign: 'Spring Search',
+          campaign: 'spring-search',
           content: 'hero',
           visits: 4800,
           orders: 122,
           revenue: 18320,
-          conversionRate: 0.0254
+          conversionRate: 0.0254,
+          campaignDisplayName: 'Spring Search',
+          campaignEntityId: 'cmp_google_spring_search',
+          campaignPlatform: 'google_ads',
+          campaignNameResolutionStatus: 'resolved',
+          campaignLabel: {
+            displayName: 'Spring Search',
+            entityId: 'cmp_google_spring_search',
+            platform: 'google_ads',
+            resolutionStatus: 'resolved',
+            lastSeenAt: '2026-04-20T07:00:00.000Z',
+            updatedAt: '2026-04-20T07:30:00.000Z'
+          }
         },
         {
           source: 'meta',
           medium: 'paid_social',
-          campaign: 'Prospecting Carousel',
+          campaign: 'prospecting-carousel',
           content: 'video',
           visits: 3600,
           orders: 84,
           revenue: 12960,
-          conversionRate: 0.0233
+          conversionRate: 0.0233,
+          campaignDisplayName: 'Prospecting Carousel',
+          campaignEntityId: 'cmp_meta_prospecting_carousel',
+          campaignPlatform: 'meta_ads',
+          campaignNameResolutionStatus: 'fallback_name',
+          campaignLabel: {
+            displayName: 'Prospecting Carousel',
+            entityId: 'cmp_meta_prospecting_carousel',
+            platform: 'meta_ads',
+            resolutionStatus: 'fallback_name',
+            lastSeenAt: '2026-04-20T08:00:00.000Z',
+            updatedAt: '2026-04-20T08:30:00.000Z'
+          }
         }
       ],
       loading: false,
@@ -429,8 +453,38 @@ export function createReportingDashboardProps(
           channel: 'google / cpc',
           subtotal: 7320,
           campaigns: [
-            { campaign: 'Spring Search', spend: 5220 },
-            { campaign: 'Brand Search', spend: 2100 }
+            {
+              campaign: 'spring-search',
+              spend: 5220,
+              campaignDisplayName: 'Spring Search',
+              campaignEntityId: 'cmp_google_spring_search',
+              campaignPlatform: 'google_ads',
+              campaignNameResolutionStatus: 'resolved',
+              campaignLabel: {
+                displayName: 'Spring Search',
+                entityId: 'cmp_google_spring_search',
+                platform: 'google_ads',
+                resolutionStatus: 'resolved',
+                lastSeenAt: '2026-04-20T07:00:00.000Z',
+                updatedAt: '2026-04-20T07:30:00.000Z'
+              }
+            },
+            {
+              campaign: 'brand-search',
+              spend: 2100,
+              campaignDisplayName: 'Brand Search',
+              campaignEntityId: 'cmp_google_brand_search',
+              campaignPlatform: 'google_ads',
+              campaignNameResolutionStatus: 'resolved',
+              campaignLabel: {
+                displayName: 'Brand Search',
+                entityId: 'cmp_google_brand_search',
+                platform: 'google_ads',
+                resolutionStatus: 'resolved',
+                lastSeenAt: '2026-04-20T07:15:00.000Z',
+                updatedAt: '2026-04-20T07:35:00.000Z'
+              }
+            }
           ]
         },
         {
@@ -439,8 +493,38 @@ export function createReportingDashboardProps(
           channel: 'meta / paid_social',
           subtotal: 4056,
           campaigns: [
-            { campaign: 'Prospecting Carousel', spend: 2556 },
-            { campaign: 'Retargeting Video', spend: 1500 }
+            {
+              campaign: 'prospecting-carousel',
+              spend: 2556,
+              campaignDisplayName: 'Prospecting Carousel',
+              campaignEntityId: 'cmp_meta_prospecting_carousel',
+              campaignPlatform: 'meta_ads',
+              campaignNameResolutionStatus: 'fallback_name',
+              campaignLabel: {
+                displayName: 'Prospecting Carousel',
+                entityId: 'cmp_meta_prospecting_carousel',
+                platform: 'meta_ads',
+                resolutionStatus: 'fallback_name',
+                lastSeenAt: '2026-04-20T08:00:00.000Z',
+                updatedAt: '2026-04-20T08:30:00.000Z'
+              }
+            },
+            {
+              campaign: 'retargeting-video',
+              spend: 1500,
+              campaignDisplayName: 'Retargeting Video',
+              campaignEntityId: 'cmp_meta_retargeting_video',
+              campaignPlatform: 'meta_ads',
+              campaignNameResolutionStatus: 'resolved',
+              campaignLabel: {
+                displayName: 'Retargeting Video',
+                entityId: 'cmp_meta_retargeting_video',
+                platform: 'meta_ads',
+                resolutionStatus: 'resolved',
+                lastSeenAt: '2026-04-20T08:20:00.000Z',
+                updatedAt: '2026-04-20T08:35:00.000Z'
+              }
+            }
           ]
         }
       ],
