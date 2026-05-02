@@ -31,10 +31,10 @@ steps:
       - -ceu
       - |
         SHORT_SHA="$SHORT_SHA" \
-        SKIP_BUILDS=true \
         RUN_MIGRATIONS_ON_DEPLOY="${_RUN_MIGRATIONS_ON_DEPLOY}" \
         APPLY_MONITORING_ON_DEPLOY="${_APPLY_MONITORING_ON_DEPLOY}" \
-        bash ./infra/cloud-run/deploy.sh staging
+        SKIP_BUILDS=true \
+        bash ./infra/cloud-run/promote.sh staging
 
 substitutions:
   _REGION: us-central1

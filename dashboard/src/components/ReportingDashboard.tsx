@@ -8,6 +8,19 @@ import React, {
 	useState,
 } from "react";
 
+import {
+  ATTRIBUTION_TIER_PRECEDENCE_TOOLTIP,
+  ATTRIBUTION_TIER_VALUES,
+  formatAttributionTierLabel
+} from '../lib/attributionTier';
+import {
+  formatCompactCurrency,
+  formatCurrency,
+  formatDateLabel,
+  formatDateTimeLabel,
+  formatNumber,
+  formatPercent
+} from '../lib/format';
 import type {
 	CampaignRow,
 	OrderRow,
@@ -18,50 +31,38 @@ import type {
 	TimeseriesPoint,
 } from "../lib/api";
 import {
-	type SortState,
-	matchesQuery,
-	paginateRows,
-	sortRows,
-} from "../lib/dataTable";
-import {
-	formatCompactCurrency,
-	formatCurrency,
-	formatDateLabel,
-	formatDateTimeLabel,
-	formatNumber,
-	formatPercent,
-} from "../lib/format";
-import {
-	Badge,
-	Button,
-	Card,
-	CardDescription,
-	CardHeader,
-	CardTitle,
-	DataTableToolbar,
-	Eyebrow,
-	Field,
-	Input,
-	MetricCopy,
-	MetricValue,
-	Panel,
-	PrimaryCell,
-	SectionState,
-	Select,
-	SortableTableHeaderCell,
-	Table,
-	TableBody,
-	TableCell,
-	TableEmptyRow,
-	TableFilterBar,
-	TableHead,
-	TableHeaderCell,
-	TableMeta,
-	TablePagination,
-	TableRow,
-	TableSearchField,
-	TableWrap,
-} from "./AuthenticatedUi";
+  Badge,
+  Button,
+  Card,
+  DataTableToolbar,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  Eyebrow,
+  Field,
+  Input,
+  MetricCopy,
+  MetricValue,
+  Panel,
+  PrimaryCell,
+  SectionState,
+  SortableTableHeaderCell,
+  Select,
+  Table,
+  TableBody,
+  TableCell,
+  TableEmptyRow,
+  TableHead,
+  TableHeaderCell,
+  TableMeta,
+  TablePagination,
+  TableSearchField,
+  TableFilterBar,
+  TableRow,
+  TableWrap
+} from './AuthenticatedUi';
+import { AttributionTierBadge } from './AttributionTierBadge';
+import { matchesQuery, paginateRows, sortRows, type SortState } from '../lib/dataTable';
 
 const NivoAreaChart = lazy(async () => {
 	const module = await import("./charts");
@@ -536,22 +537,27 @@ const DashboardControlPanel = memo(function DashboardControlPanel({
 	) => void;
 	onClearFilters: () => void;
 }) {
-	const [dateFeedback, setDateFeedback] = useState<string | null>(null);
-	const preserveDateFeedbackRef = useRef(false);
-	const dateRangeKey = `${filters.startDate}:${filters.endDate}`;
-	const previousDateRangeKeyRef = useRef(dateRangeKey);
-	const scopeLabel = useMemo(
-		() =>
-			(filters.source ?? "").trim() || (filters.campaign ?? "").trim()
-				? `Filtered by ${[(filters.source ?? "").trim(), (filters.campaign ?? "").trim()].filter(Boolean).join(" / ")}`
-				: "All attributed traffic",
-		[filters.campaign, filters.source],
-	);
-	const formattedRange = useMemo(
-		() =>
-			`${formatDateLabel(filters.startDate, reportingTimezone)} to ${formatDateLabel(filters.endDate, reportingTimezone)}`,
-		[filters.endDate, filters.startDate, reportingTimezone],
-	);
+  const [dateFeedback, setDateFeedback] = useState<string | null>(null);
+  const preserveDateFeedbackRef = useRef(false);
+  const dateRangeKey = `${filters.startDate}:${filters.endDate}`;
+  const previousDateRangeKeyRef = useRef(dateRangeKey);
+  const scopeLabel = useMemo(
+    () =>
+      (filters.source ?? '').trim() || (filters.campaign ?? '').trim() || (filters.attributionTier ?? '').trim()
+        ? `Filtered by ${[
+            (filters.source ?? '').trim(),
+            (filters.campaign ?? '').trim(),
+            filters.attributionTier ? formatAttributionTierLabel(filters.attributionTier) : ''
+          ]
+            .filter(Boolean)
+            .join(' / ')}`
+        : 'All order attribution rows',
+    [filters.attributionTier, filters.campaign, filters.source]
+  );
+  const formattedRange = useMemo(
+    () => `${formatDateLabel(filters.startDate, reportingTimezone)} to ${formatDateLabel(filters.endDate, reportingTimezone)}`,
+    [filters.endDate, filters.startDate, reportingTimezone]
+  );
 
 	useEffect(() => {
 		if (previousDateRangeKeyRef.current === dateRangeKey) {
@@ -631,73 +637,83 @@ const DashboardControlPanel = memo(function DashboardControlPanel({
 					</div>
 				</div>
 
-				<div className="grid gap-3 xl:grid-cols-[minmax(0,1.8fr)_minmax(18rem,auto)] xl:items-end">
-					<div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-						<Field label="Start date" htmlFor="start-date">
-							<Input
-								id="start-date"
-								type="date"
-								className="min-h-[40px] rounded-card px-3 py-2 text-[0.95rem]"
-								value={filters.startDate}
-								max={filters.endDate}
-								onChange={(event) =>
-									handleDateChange("startDate", event.target.value)
-								}
-							/>
-						</Field>
-						<Field label="End date" htmlFor="end-date">
-							<Input
-								id="end-date"
-								type="date"
-								className="min-h-[40px] rounded-card px-3 py-2 text-[0.95rem]"
-								value={filters.endDate}
-								min={filters.startDate}
-								onChange={(event) =>
-									handleDateChange("endDate", event.target.value)
-								}
-							/>
-						</Field>
-						<Field label="Source" htmlFor="source-filter">
-							<Input
-								id="source-filter"
-								type="text"
-								className="min-h-[40px] rounded-card px-3 py-2 text-[0.95rem]"
-								placeholder="google, meta, facebook"
-								value={filters.source}
-								onChange={(event) =>
-									onFiltersChange({ ...filters, source: event.target.value })
-								}
-							/>
-						</Field>
-						<Field label="Campaign" htmlFor="campaign-filter">
-							<Input
-								id="campaign-filter"
-								type="text"
-								className="min-h-[40px] rounded-card px-3 py-2 text-[0.95rem]"
-								placeholder="spring-sale"
-								value={filters.campaign}
-								onChange={(event) =>
-									onFiltersChange({ ...filters, campaign: event.target.value })
-								}
-							/>
-						</Field>
-						<Field label="Timeseries grouping" htmlFor="group-by">
-							<Select
-								id="group-by"
-								className="min-h-[40px] rounded-card px-3 py-2 text-[0.95rem]"
-								value={groupBy}
-								onChange={(event) =>
-									onGroupByChange(event.target.value as TimeseriesGroupBy)
-								}
-							>
-								{GROUP_BY_OPTIONS.map((option) => (
-									<option key={option.value} value={option.value}>
-										{option.label}
-									</option>
-								))}
-							</Select>
-						</Field>
-					</div>
+        <div className="grid gap-3 xl:grid-cols-[minmax(0,1.8fr)_minmax(18rem,auto)] xl:items-end">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+            <Field label="Start date" htmlFor="start-date">
+              <Input
+                id="start-date"
+                type="date"
+                className="min-h-[40px] rounded-card px-3 py-2 text-[0.95rem]"
+                value={filters.startDate}
+                max={filters.endDate}
+                onChange={(event) => handleDateChange('startDate', event.target.value)}
+              />
+            </Field>
+            <Field label="End date" htmlFor="end-date">
+              <Input
+                id="end-date"
+                type="date"
+                className="min-h-[40px] rounded-card px-3 py-2 text-[0.95rem]"
+                value={filters.endDate}
+                min={filters.startDate}
+                onChange={(event) => handleDateChange('endDate', event.target.value)}
+              />
+            </Field>
+            <Field label="Source" htmlFor="source-filter">
+              <Input
+                id="source-filter"
+                type="text"
+                className="min-h-[40px] rounded-card px-3 py-2 text-[0.95rem]"
+                placeholder="google, meta, facebook"
+                value={filters.source}
+                onChange={(event) => onFiltersChange({ ...filters, source: event.target.value })}
+              />
+            </Field>
+            <Field label="Campaign" htmlFor="campaign-filter">
+              <Input
+                id="campaign-filter"
+                type="text"
+                className="min-h-[40px] rounded-card px-3 py-2 text-[0.95rem]"
+                placeholder="spring-sale"
+                value={filters.campaign}
+                onChange={(event) => onFiltersChange({ ...filters, campaign: event.target.value })}
+              />
+            </Field>
+            <Field label="Attribution tier" htmlFor="attribution-tier-filter">
+              <Select
+                id="attribution-tier-filter"
+                className="min-h-[40px] rounded-card px-3 py-2 text-[0.95rem]"
+                value={filters.attributionTier ?? ''}
+                onChange={(event) =>
+                  onFiltersChange({
+                    ...filters,
+                    attributionTier: event.target.value as ReportingFilters['attributionTier']
+                  })
+                }
+              >
+                <option value="">All tiers</option>
+                {ATTRIBUTION_TIER_VALUES.map((tier) => (
+                  <option key={tier} value={tier}>
+                    {formatAttributionTierLabel(tier)}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Timeseries grouping" htmlFor="group-by">
+              <Select
+                id="group-by"
+                className="min-h-[40px] rounded-card px-3 py-2 text-[0.95rem]"
+                value={groupBy}
+                onChange={(event) => onGroupByChange(event.target.value as TimeseriesGroupBy)}
+              >
+                {GROUP_BY_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          </div>
 
 					<div className="grid gap-3 rounded-card border border-line/60 bg-white/75 px-3 py-3 shadow-inset-soft">
 						<div className="flex flex-wrap items-center gap-2">
@@ -1051,85 +1067,76 @@ const ReportingDashboard = memo(function ReportingDashboard({
 			.sort((left, right) => right.value - left.value);
 	}, [campaigns]);
 
-	const campaignHighlights = useMemo(
-		() =>
-			[...campaigns]
-				.sort((left, right) => right.revenue - left.revenue)
-				.slice(0, 3),
-		[campaigns],
-	);
-	const filteredCampaigns = useMemo(
-		() =>
-			campaigns.filter((row) =>
-				matchesQuery(
-					[
-						row.campaign,
-						row.source,
-						row.medium,
-						row.content,
-						row.visits,
-						row.orders,
-						row.revenue,
-					],
-					campaignSearch,
-				),
-			),
-		[campaignSearch, campaigns],
-	);
-	const sortedCampaigns = useMemo(
-		() =>
-			sortRows(filteredCampaigns, campaignSort, {
-				campaign: (row) => row.campaign,
-				source: (row) => `${row.source} ${row.medium}`,
-				visits: (row) => row.visits,
-				orders: (row) => row.orders,
-				revenue: (row) => row.revenue,
-				conversionRate: (row) => row.conversionRate,
-			}),
-		[campaignSort, filteredCampaigns],
-	);
-	const paginatedCampaigns = useMemo(
-		() => paginateRows(sortedCampaigns, campaignPage, CAMPAIGN_PAGE_SIZE),
-		[campaignPage, sortedCampaigns],
-	);
-	const filteredOrders = useMemo(
-		() =>
-			orders.filter((row) =>
-				matchesQuery(
-					[
-						row.shopifyOrderId,
-						row.source,
-						row.medium,
-						row.campaign,
-						row.matchSource,
-						row.confidenceLabel,
-						row.attributionReason,
-						row.totalPrice,
-					],
-					orderSearch,
-				),
-			),
-		[orderSearch, orders],
-	);
-	const sortedOrders = useMemo(
-		() =>
-			sortRows(filteredOrders, orderSort, {
-				order: (row) => row.shopifyOrderId,
-				processedAt: (row) => row.processedAt ?? "",
-				source: (row) => `${row.source ?? ""} ${row.medium ?? ""}`,
-				campaign: (row) => row.campaign ?? "",
-				totalPrice: (row) => row.totalPrice,
-			}),
-		[filteredOrders, orderSort],
-	);
-	const paginatedOrders = useMemo(
-		() => paginateRows(sortedOrders, orderPage, ORDER_PAGE_SIZE),
-		[orderPage, sortedOrders],
-	);
-	const totalGroupedSpend = useMemo(
-		() => spendGroups.reduce((sum, group) => sum + group.subtotal, 0),
-		[spendGroups],
-	);
+  const campaignHighlights = useMemo(
+    () => [...campaigns].sort((left, right) => right.revenue - left.revenue).slice(0, 3),
+    [campaigns]
+  );
+  const filteredCampaigns = useMemo(
+    () =>
+      campaigns.filter((row) =>
+        matchesQuery(
+          [row.campaign, row.source, row.medium, row.content, row.visits, row.orders, row.revenue],
+          campaignSearch
+        )
+      ),
+    [campaignSearch, campaigns]
+  );
+  const sortedCampaigns = useMemo(
+    () =>
+      sortRows(filteredCampaigns, campaignSort, {
+        campaign: (row) => row.campaign,
+        source: (row) => `${row.source} ${row.medium}`,
+        visits: (row) => row.visits,
+        orders: (row) => row.orders,
+        revenue: (row) => row.revenue,
+        conversionRate: (row) => row.conversionRate
+      }),
+    [campaignSort, filteredCampaigns]
+  );
+  const paginatedCampaigns = useMemo(
+    () => paginateRows(sortedCampaigns, campaignPage, CAMPAIGN_PAGE_SIZE),
+    [campaignPage, sortedCampaigns]
+  );
+  const filteredOrders = useMemo(
+    () =>
+      orders.filter((row) =>
+        matchesQuery(
+          [
+            row.shopifyOrderId,
+            row.source,
+            row.medium,
+            row.campaign,
+            row.attributionReason,
+            row.primaryCreditAttributionReason,
+            row.attributionTier,
+            row.attributionTierLabel,
+            row.totalPrice
+          ],
+          orderSearch
+        )
+      ),
+    [orderSearch, orders]
+  );
+  const sortedOrders = useMemo(
+    () =>
+      sortRows(filteredOrders, orderSort, {
+        order: (row) => row.shopifyOrderId,
+        processedAt: (row) => row.processedAt ?? '',
+        source: (row) => `${row.source ?? ''} ${row.medium ?? ''}`,
+        campaign: (row) => row.campaign ?? '',
+        totalPrice: (row) => row.totalPrice
+      }),
+    [filteredOrders, orderSort]
+  );
+  const paginatedOrders = useMemo(
+    () => paginateRows(sortedOrders, orderPage, ORDER_PAGE_SIZE),
+    [orderPage, sortedOrders]
+  );
+  const activeTierFilterLabel = filters.attributionTier ? formatAttributionTierLabel(filters.attributionTier) : null;
+  const totalGroupedSpend = useMemo(
+    () => spendGroups.reduce((sum, group) => sum + group.subtotal, 0),
+    [spendGroups]
+  );
 
 	function toggleCampaignSort(key: CampaignSortKey) {
 		setCampaignSort((current) => ({
@@ -1431,166 +1438,180 @@ const ReportingDashboard = memo(function ReportingDashboard({
 				</div>
 			</div>
 
-			<Panel
-				title="Attributed orders"
-				description="Order-level attribution rows remain intact so operators can drill into the full payload when something looks off."
-				wide
-			>
-				<SectionState
-					loading={ordersSection.loading}
-					error={ordersSection.error}
-					empty={!orders.length}
-					emptyLabel="No attributed orders were returned for this range."
-				>
-					<>
-						<DataTableToolbar
-							title="Attributed order list"
-							description="Shared list controls keep order lookup, sort, and pagination consistent with every other authenticated table."
-							summary={
-								<>
-									<TableMeta
-										currentCount={filteredOrders.length}
-										totalCount={orders.length}
-										label="orders"
-									/>
-									<TablePagination
-										page={paginatedOrders.currentPage}
-										totalPages={paginatedOrders.totalPages}
-										onPageChange={setOrderPage}
-									/>
-								</>
-							}
-						>
-							<TableFilterBar>
-								<TableSearchField
-									label="Search orders"
-									value={orderSearch}
-									onChange={(value) => {
-										setOrderSearch(value);
-										setOrderPage(1);
-									}}
-									placeholder="Order ID, source, campaign, match source, reason"
-								/>
-								<Field label="Sort by" htmlFor="orders-table-sort">
-									<Select
-										id="orders-table-sort"
-										value={`${orderSort.key}:${orderSort.direction}`}
-										onChange={(event) => {
-											const [key, direction] = event.target.value.split(
-												":",
-											) as [OrderSortKey, "asc" | "desc"];
-											setOrderSort({ key, direction });
-											setOrderPage(1);
-										}}
-									>
-										<option value="processedAt:desc">Processed ↓</option>
-										<option value="processedAt:asc">Processed ↑</option>
-										<option value="totalPrice:desc">Total ↓</option>
-										<option value="totalPrice:asc">Total ↑</option>
-										<option value="order:desc">Order ↓</option>
-										<option value="order:asc">Order ↑</option>
-										<option value="campaign:asc">Campaign A-Z</option>
-										<option value="campaign:desc">Campaign Z-A</option>
-									</Select>
-								</Field>
-							</TableFilterBar>
-						</DataTableToolbar>
+      <Panel
+        title="Order attribution rows"
+        description="Order-level rows lead with the persisted attribution tier contract; match reasons stay visible as secondary diagnostics for the selected model."
+        wide
+      >
+        <SectionState
+          loading={ordersSection.loading}
+          error={ordersSection.error}
+          empty={!orders.length}
+          emptyLabel={
+            activeTierFilterLabel
+              ? `No ${activeTierFilterLabel.toLowerCase()} orders were returned for this range.`
+              : 'No order attribution rows were returned for this range.'
+          }
+        >
+          <>
+            <DataTableToolbar
+              title="Order attribution list"
+              description="Tier contract, source, and model-credit diagnostics stay together so operators do not infer winner strength from reason codes alone."
+              summary={
+                <>
+                  <TableMeta currentCount={filteredOrders.length} totalCount={orders.length} label="orders" />
+                  <TablePagination
+                    page={paginatedOrders.currentPage}
+                    totalPages={paginatedOrders.totalPages}
+                    onPageChange={setOrderPage}
+                  />
+                </>
+              }
+            >
+              <TableFilterBar>
+                <TableSearchField
+                  label="Search orders"
+                  value={orderSearch}
+                  onChange={(value) => {
+                    setOrderSearch(value);
+                    setOrderPage(1);
+                  }}
+                  placeholder="Order ID, source, campaign, tier, reason"
+                />
+                <Field label="Sort by" htmlFor="orders-table-sort">
+                  <Select
+                    id="orders-table-sort"
+                    value={`${orderSort.key}:${orderSort.direction}`}
+                    onChange={(event) => {
+                      const [key, direction] = event.target.value.split(':') as [OrderSortKey, 'asc' | 'desc'];
+                      setOrderSort({ key, direction });
+                      setOrderPage(1);
+                    }}
+                  >
+                    <option value="processedAt:desc">Processed ↓</option>
+                    <option value="processedAt:asc">Processed ↑</option>
+                    <option value="totalPrice:desc">Total ↓</option>
+                    <option value="totalPrice:asc">Total ↑</option>
+                    <option value="order:desc">Order ↓</option>
+                    <option value="order:asc">Order ↑</option>
+                    <option value="campaign:asc">Campaign A-Z</option>
+                    <option value="campaign:desc">Campaign Z-A</option>
+                  </Select>
+                </Field>
+              </TableFilterBar>
+            </DataTableToolbar>
 
-						<TableWrap className="max-h-[34rem]">
-							<Table caption="Attributed orders">
-								<TableHead>
-									<TableRow>
-										<SortableTableHeaderCell
-											sorted={orderSort.key === "order"}
-											direction={orderSort.direction}
-											onSort={() => toggleOrderSort("order")}
-										>
-											Order
-										</SortableTableHeaderCell>
-										<SortableTableHeaderCell
-											sorted={orderSort.key === "processedAt"}
-											direction={orderSort.direction}
-											onSort={() => toggleOrderSort("processedAt")}
-										>
-											Processed
-										</SortableTableHeaderCell>
-										<SortableTableHeaderCell
-											sorted={orderSort.key === "source"}
-											direction={orderSort.direction}
-											onSort={() => toggleOrderSort("source")}
-										>
-											Source
-										</SortableTableHeaderCell>
-										<SortableTableHeaderCell
-											sorted={orderSort.key === "campaign"}
-											direction={orderSort.direction}
-											onSort={() => toggleOrderSort("campaign")}
-										>
-											Campaign
-										</SortableTableHeaderCell>
-										<SortableTableHeaderCell
-											sorted={orderSort.key === "totalPrice"}
-											direction={orderSort.direction}
-											onSort={() => toggleOrderSort("totalPrice")}
-										>
-											Total
-										</SortableTableHeaderCell>
-										<TableHeaderCell>Decision</TableHeaderCell>
-									</TableRow>
-								</TableHead>
-								<TableBody>
-									{paginatedOrders.rows.length === 0 ? (
-										<TableEmptyRow
-											colSpan={6}
-											title="No orders matched"
-											description="Try another search term or widen the reporting window."
-										/>
-									) : null}
-									{paginatedOrders.rows.map((row) => (
-										<TableRow key={row.shopifyOrderId}>
-											<TableCell>
-												<PrimaryCell>
-													<button
-														type="button"
-														className="w-fit rounded-pill border border-line/80 bg-surface px-3 py-1.5 font-semibold text-brand transition hover:-translate-y-0.5 hover:border-brand/30 hover:bg-brand-soft focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-brand/20 focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
-														onClick={() =>
-															onOpenOrderDetails(row.shopifyOrderId)
-														}
-														aria-label={`Open order details for Shopify order ${row.shopifyOrderId}`}
-													>
-														#{row.shopifyOrderId}
-													</button>
-													<span>{row.medium ?? "No medium"}</span>
-												</PrimaryCell>
-											</TableCell>
-											<TableCell>
-												{formatDateTimeLabel(
-													row.processedAt,
-													reportingTimezone,
-												)}
-											</TableCell>
-											<TableCell>{row.source ?? "Unattributed"}</TableCell>
-											<TableCell>{row.campaign ?? "No campaign"}</TableCell>
-											<TableCell>{formatCurrency(row.totalPrice)}</TableCell>
-											<TableCell>
-												<div className="flex flex-wrap items-center gap-2">
-													<Badge tone="teal">
-														{formatContractValue(row.matchSource)}
-													</Badge>
-													<Badge tone="brand">
-														{formatContractValue(row.confidenceLabel)}
-													</Badge>
-													<Badge tone="teal">{row.attributionReason}</Badge>
-												</div>
-											</TableCell>
-										</TableRow>
-									))}
-								</TableBody>
-							</Table>
-						</TableWrap>
-					</>
-				</SectionState>
-			</Panel>
+            <TableWrap className="max-h-[34rem]">
+              <Table caption="Order attribution rows">
+                <TableHead>
+                  <TableRow>
+                    <SortableTableHeaderCell
+                      sorted={orderSort.key === 'order'}
+                      direction={orderSort.direction}
+                      onSort={() => toggleOrderSort('order')}
+                    >
+                      Order
+                    </SortableTableHeaderCell>
+                    <SortableTableHeaderCell
+                      sorted={orderSort.key === 'processedAt'}
+                      direction={orderSort.direction}
+                      onSort={() => toggleOrderSort('processedAt')}
+                    >
+                      Processed
+                    </SortableTableHeaderCell>
+                    <SortableTableHeaderCell
+                      sorted={orderSort.key === 'source'}
+                      direction={orderSort.direction}
+                      onSort={() => toggleOrderSort('source')}
+                    >
+                      Source
+                    </SortableTableHeaderCell>
+                    <TableHeaderCell>
+                      <span className="inline-flex items-center gap-2">
+                        Tier contract
+                        <span
+                          className="cursor-help text-ink-muted"
+                          aria-label={ATTRIBUTION_TIER_PRECEDENCE_TOOLTIP}
+                          title={ATTRIBUTION_TIER_PRECEDENCE_TOOLTIP}
+                        >
+                          ?
+                        </span>
+                      </span>
+                    </TableHeaderCell>
+                    <SortableTableHeaderCell
+                      sorted={orderSort.key === 'campaign'}
+                      direction={orderSort.direction}
+                      onSort={() => toggleOrderSort('campaign')}
+                    >
+                      Campaign
+                    </SortableTableHeaderCell>
+                    <SortableTableHeaderCell
+                      sorted={orderSort.key === 'totalPrice'}
+                      direction={orderSort.direction}
+                      onSort={() => toggleOrderSort('totalPrice')}
+                    >
+                      Total
+                    </SortableTableHeaderCell>
+                    <TableHeaderCell>Match reason</TableHeaderCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {paginatedOrders.rows.length === 0 ? (
+                    <TableEmptyRow
+                      colSpan={7}
+                      title="No orders matched"
+                      description="Try another search term or widen the reporting window."
+                    />
+                  ) : null}
+                  {paginatedOrders.rows.map((row) => (
+                    <TableRow key={row.shopifyOrderId}>
+                      <TableCell>
+                        <PrimaryCell>
+                          <button
+                            type="button"
+                            className="w-fit rounded-pill border border-line/80 bg-surface px-3 py-1.5 font-semibold text-brand transition hover:-translate-y-0.5 hover:border-brand/30 hover:bg-brand-soft focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-brand/20 focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
+                            onClick={() => onOpenOrderDetails(row.shopifyOrderId)}
+                            aria-label={`Open order details for Shopify order ${row.shopifyOrderId}`}
+                          >
+                            #{row.shopifyOrderId}
+                          </button>
+                          <span>{row.medium ?? 'No medium'}</span>
+                        </PrimaryCell>
+                      </TableCell>
+                      <TableCell>{formatDateTimeLabel(row.processedAt, reportingTimezone)}</TableCell>
+                      <TableCell>
+                        <PrimaryCell className="gap-0.5">
+                          <strong>{row.source ?? 'Unattributed'}</strong>
+                          <span>{row.medium ?? (row.attributionTier === 'unattributed' ? 'No attributed medium' : 'No medium')}</span>
+                        </PrimaryCell>
+                      </TableCell>
+                      <TableCell>
+                        <PrimaryCell className="gap-1">
+                          <AttributionTierBadge tier={row.attributionTier} withTooltip />
+                          <span>{row.attributionSource ?? 'No persisted source'}</span>
+                        </PrimaryCell>
+                      </TableCell>
+                      <TableCell>{row.campaign ?? (row.attributionTier === 'unattributed' ? 'No attributed campaign' : 'No campaign')}</TableCell>
+                      <TableCell>{formatCurrency(row.totalPrice)}</TableCell>
+                      <TableCell>
+                        <PrimaryCell className="gap-1">
+                          <strong>{row.attributionReason}</strong>
+                          <span>
+                            Primary credit:{' '}
+                            {row.primaryCreditAttributionReason === row.attributionReason
+                              ? 'Aligned with persisted order reason'
+                              : row.primaryCreditAttributionReason}
+                          </span>
+                        </PrimaryCell>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableWrap>
+          </>
+        </SectionState>
+      </Panel>
 
 			<Panel
 				title="Marketing spend detail"

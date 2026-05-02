@@ -17,18 +17,25 @@ export type {
 	OrderAttributionBackfillSubmittedOptions,
 };
 
+export type AttributionTier =
+  | 'deterministic_first_party'
+  | 'deterministic_shopify_hint'
+  | 'ga4_fallback'
+  | 'unattributed';
+
 export type ReportingFilters = {
-	startDate: string;
-	endDate: string;
-	attributionModel?:
-		| "first_touch"
-		| "last_touch"
-		| "linear"
-		| "time_decay"
-		| "position_based"
-		| "rule_based_weighted";
-	source?: string;
-	campaign?: string;
+  startDate: string;
+  endDate: string;
+  attributionTier?: AttributionTier | '';
+  attributionModel?:
+    | 'first_touch'
+    | 'last_touch'
+    | 'linear'
+    | 'time_decay'
+    | 'position_based'
+    | 'rule_based_weighted';
+  source?: string;
+  campaign?: string;
 };
 
 export type SummaryTotals = {
@@ -119,19 +126,95 @@ export type TimeseriesResponse = {
 };
 
 export type OrderRow = {
-	shopifyOrderId: string;
-	processedAt: string | null;
-	totalPrice: number;
-	source: string | null;
-	medium: string | null;
-	campaign: string | null;
-	matchSource: string;
-	confidenceLabel: string;
-	attributionReason: string;
+  shopifyOrderId: string;
+  processedAt: string | null;
+  orderOccurredAtUtc: string | null;
+  totalPrice: number;
+  source: string | null;
+  medium: string | null;
+  campaign: string | null;
+  attributionReason: string;
+  primaryCreditAttributionReason: string;
+  attributionTier: AttributionTier;
+  attributionTierLabel: string;
+  attributionTierDescription: string;
+  attributionSource: string | null;
+  attributionMatchedAt: string | null;
+  confidenceScore: number | null;
+  sessionId: string | null;
 };
 
 export type OrdersResponse = {
 	rows: OrderRow[];
+};
+
+export type MetaOrderValueSortBy =
+  | 'reportDate'
+  | 'campaignName'
+  | 'attributedRevenue'
+  | 'purchaseCount'
+  | 'spend'
+  | 'roas'
+  | 'actionType';
+
+export type MetaOrderValueSortDirection = 'asc' | 'desc';
+
+export type MetaOrderValueRow = {
+  date: string;
+  campaignId: string;
+  campaignName: string | null;
+  attributedRevenue: number | null;
+  purchaseCount: number | null;
+  spend: number;
+  roas: number | null;
+  calculatedRoas: number | null;
+  canonicalActionType: string | null;
+  canonicalSelectionMode: 'priority' | 'fallback' | 'none';
+  currency: string | null;
+};
+
+export type MetaOrderValueResponse = {
+  scope: {
+    organizationId: number;
+  };
+  range: {
+    startDate: string;
+    endDate: string;
+  };
+  filters: {
+    campaignIds: string[];
+    campaignSearch: string | null;
+    actionType: string | null;
+  };
+  sort: {
+    by: MetaOrderValueSortBy;
+    direction: MetaOrderValueSortDirection;
+  };
+  pagination: {
+    limit: number;
+    offset: number;
+    returned: number;
+    totalRows: number;
+    hasMore: boolean;
+  };
+  totals: {
+    attributedRevenue: number;
+    purchaseCount: number;
+    spend: number;
+    roas: number | null;
+  };
+  rows: MetaOrderValueRow[];
+};
+
+export type MetaOrderValueQuery = {
+  startDate: string;
+  endDate: string;
+  campaignSearch?: string;
+  actionType?: string;
+  sortBy?: MetaOrderValueSortBy;
+  sortDirection?: MetaOrderValueSortDirection;
+  limit?: number;
+  offset?: number;
 };
 
 export type OrderDetailLineItem = {
@@ -175,27 +258,44 @@ export type OrderDetailAttributionCredit = {
 };
 
 export type OrderDetail = {
-	shopifyOrderId: string;
-	shopifyOrderNumber: string | null;
-	shopifyCustomerId: string | null;
-	customerIdentityId: string | null;
-	email: string | null;
-	emailHash: string | null;
-	currencyCode: string;
-	subtotalPrice: number;
-	totalPrice: number;
-	financialStatus: string | null;
-	fulfillmentStatus: string | null;
-	processedAt: string | null;
-	createdAtShopify: string | null;
-	updatedAtShopify: string | null;
-	landingSessionId: string | null;
-	checkoutToken: string | null;
-	cartToken: string | null;
-	sourceName: string | null;
-	ingestedAt: string;
-	attributionSnapshot: unknown;
-	rawPayload: unknown;
+  shopifyOrderId: string;
+  shopifyOrderNumber: string | null;
+  shopifyCustomerId: string | null;
+  customerIdentityId: string | null;
+  email: string | null;
+  emailHash: string | null;
+  currencyCode: string;
+  subtotalPrice: number;
+  totalPrice: number;
+  financialStatus: string | null;
+  fulfillmentStatus: string | null;
+  processedAt: string | null;
+  createdAtShopify: string | null;
+  updatedAtShopify: string | null;
+  landingSessionId: string | null;
+  checkoutToken: string | null;
+  cartToken: string | null;
+  sourceName: string | null;
+  orderOccurredAtUtc: string;
+  attributionTier: AttributionTier;
+  attributionTierLabel: string;
+  attributionTierDescription: string;
+  attributionSource: string | null;
+  attributionMatchedAt: string | null;
+  attributionReason: string;
+  confidenceScore: number | null;
+  sessionId: string | null;
+  attributedSource: string | null;
+  attributedMedium: string | null;
+  attributedCampaign: string | null;
+  attributedContent: string | null;
+  attributedTerm: string | null;
+  attributedClickIdType: string | null;
+  attributedClickIdValue: string | null;
+  attributionSnapshot: unknown;
+  attributionSnapshotUpdatedAt: string | null;
+  ingestedAt: string;
+  rawPayload: unknown;
 };
 
 export type OrderDetailsResponse = {
@@ -516,21 +616,14 @@ declare global {
 }
 
 const runtimeConfig = window.__ROAS_RADAR_RUNTIME_CONFIG__;
-const viteEnv =
-	(import.meta as ImportMeta & { env?: Record<string, string | undefined> })
-		.env ?? {};
-const API_BASE_URL = (
-	runtimeConfig?.apiBaseUrl ??
-	viteEnv.VITE_API_BASE_URL ??
-	""
-).replace(/\/$/, "");
-const REPORTING_TOKEN =
-	runtimeConfig?.reportingToken ?? viteEnv.VITE_REPORTING_API_TOKEN ?? "";
-const TENANT_ID =
-	runtimeConfig?.reportingTenantId ??
-	viteEnv.VITE_REPORTING_TENANT_ID ??
-	"roas-radar";
-const AUTH_TOKEN_STORAGE_KEY = "roas_radar_auth_token";
+const viteEnv = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
+const API_BASE_URL = (runtimeConfig?.apiBaseUrl ?? viteEnv.VITE_API_BASE_URL ?? '').replace(
+  /\/$/,
+  ''
+);
+const REPORTING_TOKEN = runtimeConfig?.reportingToken ?? viteEnv.VITE_REPORTING_API_TOKEN ?? '';
+const TENANT_ID = runtimeConfig?.reportingTenantId ?? viteEnv.VITE_REPORTING_TENANT_ID ?? '1';
+const AUTH_TOKEN_STORAGE_KEY = 'roas_radar_auth_token';
 
 export function getStoredAuthToken(): string {
 	try {
@@ -577,9 +670,13 @@ function buildSearchParams(
 		params.set("attributionModel", filters.attributionModel.trim());
 	}
 
-	for (const [key, value] of Object.entries(extras)) {
-		params.set(key, value);
-	}
+  if (filters.attributionTier?.trim()) {
+    params.set('attributionTier', filters.attributionTier.trim());
+  }
+
+  for (const [key, value] of Object.entries(extras)) {
+    params.set(key, value);
+  }
 
 	return params;
 }
@@ -602,6 +699,39 @@ function buildIdentityHealthSearchParams(
 	}
 
 	return params;
+}
+
+function buildMetaOrderValueSearchParams(query: MetaOrderValueQuery): URLSearchParams {
+  const params = new URLSearchParams({
+    startDate: query.startDate,
+    endDate: query.endDate
+  });
+
+  if (query.campaignSearch?.trim()) {
+    params.set('campaignSearch', query.campaignSearch.trim());
+  }
+
+  if (query.actionType?.trim()) {
+    params.set('actionType', query.actionType.trim());
+  }
+
+  if (query.sortBy) {
+    params.set('sortBy', query.sortBy);
+  }
+
+  if (query.sortDirection) {
+    params.set('sortDirection', query.sortDirection);
+  }
+
+  if (typeof query.limit === 'number') {
+    params.set('limit', `${query.limit}`);
+  }
+
+  if (typeof query.offset === 'number') {
+    params.set('offset', `${query.offset}`);
+  }
+
+  return params;
 }
 
 function buildHeaders(includeJsonBody: boolean): Record<string, string> {
@@ -721,6 +851,12 @@ export function fetchOrders(filters: ReportingFilters, limit = 10) {
 	return requestJson<OrdersResponse>("/api/reporting/orders", {
 		searchParams: buildSearchParams(filters, { limit: `${limit}` }),
 	});
+}
+
+export function fetchMetaOrderValue(query: MetaOrderValueQuery) {
+  return requestJson<MetaOrderValueResponse>('/api/reporting/meta-order-value', {
+    searchParams: buildMetaOrderValueSearchParams(query)
+  });
 }
 
 export function fetchOrderDetails(shopifyOrderId: string) {

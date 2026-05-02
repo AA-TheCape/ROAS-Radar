@@ -1,18 +1,20 @@
 {
-	"displayName": "__DASHBOARD_DISPLAY_NAME__",
-	"mosaicLayout": {
-		"tiles": [
-			{ "widget": { "title": "Capture Rate" } },
-			{ "widget": { "title": "Missing Session ID Rate" } },
-			{ "widget": { "title": "Dual Write Mismatch Rate" } },
-			{ "widget": { "title": "Shopify Writeback Success Rate" } },
-			{ "widget": { "title": "Resolver Outcomes" } },
-			{ "widget": { "title": "Capture Completeness by Source" } },
-			{ "widget": { "title": "GA4 Ingestion Health" } },
-			{ "widget": { "title": "GA4 Ingestion Lag Alerts" } },
-			{ "widget": { "title": "Hourly GA4 Fallback Outcomes" } },
-			{ "widget": { "title": "GA4 Fallback Precedence Skips" } },
-			{ "widget": { "title": "GA4 Fallback Completeness" } }
-		]
-	}
+  "new_tiles": [
+    {
+      "title": "Meta API latency p95 (15m)",
+      "metric": "logging.googleapis.com/user/roas_meta_ads_api_latency_ms"
+    },
+    {
+      "title": "Meta rows fetched (1h)",
+      "metric": "logging.googleapis.com/user/roas_meta_order_value_rows_fetched"
+    },
+    {
+      "title": "Meta rows upserted (1h)",
+      "metric": "logging.googleapis.com/user/roas_meta_order_value_rows_upserted"
+    },
+    {
+      "title": "Meta sync anomalies (6h)",
+      "metric": "logging.googleapis.com/user/roas_meta_order_value_sync_anomalies"
+    }
+  ]
 }

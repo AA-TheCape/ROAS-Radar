@@ -3,11 +3,12 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 import type { Pool } from "pg";
 
-process.env.DATABASE_URL ??=
-	"postgres://postgres:postgres@127.0.0.1:5432/roas_radar";
-process.env.REPORTING_API_TOKEN = "test-reporting-token";
-process.env.SHOPIFY_APP_API_SECRET ??= "test-app-secret";
-process.env.SHOPIFY_WEBHOOK_SECRET ??= "test-webhook-secret";
+import { buildRawPayloadFixture, resetIntegrationTables } from './integration-test-helpers.js';
+
+process.env.DATABASE_URL ??= 'postgres://postgres:postgres@127.0.0.1:5432/roas_radar';
+process.env.REPORTING_API_TOKEN = 'test-reporting-token';
+process.env.SHOPIFY_APP_API_SECRET ??= 'test-app-secret';
+process.env.SHOPIFY_WEBHOOK_SECRET ??= 'test-webhook-secret';
 
 async function getModules() {
 	const poolModule = await import("../src/db/pool.js");
@@ -87,13 +88,11 @@ async function insertTrackingSession(
 	return result.rows[0].id;
 }
 
-async function insertTrackingEvent(
-	pool: Pool,
-	input: TrackingEventInput,
-): Promise<void> {
-	const rawPayload = "{}";
-	await pool.query(
-		`
+async function insertTrackingEvent(pool: Pool, input: TrackingEventInput): Promise<void> {
+  const payload = buildRawPayloadFixture({});
+
+  await pool.query(
+    `
       INSERT INTO tracking_events (
         session_id,
         event_type,
@@ -111,32 +110,32 @@ async function insertTrackingEvent(
       )
       VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13)
     `,
-		[
-			input.sessionId,
-			input.eventType,
-			input.occurredAt,
-			input.pageUrl ?? null,
-			input.utmSource ?? null,
-			input.utmMedium ?? null,
-			input.utmCampaign ?? null,
-			input.gclid ?? null,
-			input.shopifyCheckoutToken ?? null,
-			input.shopifyCartToken ?? null,
-			rawPayload,
-			Buffer.byteLength(rawPayload, "utf8"),
-			createHash("sha256").update(rawPayload).digest("hex"),
-		],
-	);
+    [
+      input.sessionId,
+      input.eventType,
+      input.occurredAt,
+      input.pageUrl ?? null,
+      input.utmSource ?? null,
+      input.utmMedium ?? null,
+      input.utmCampaign ?? null,
+      input.gclid ?? null,
+      input.shopifyCheckoutToken ?? null,
+      input.shopifyCartToken ?? null,
+      payload.rawPayloadJson,
+      payload.payloadSizeBytes,
+      payload.payloadHash
+    ]
+  );
 }
 
-async function insertShopifyOrder(
-	pool: Pool,
-	input: ShopifyOrderInput,
-): Promise<void> {
-	const rawPayload =
-		input.rawPayload ?? JSON.stringify({ id: input.shopifyOrderId });
-	await pool.query(
-		`
+async function insertShopifyOrder(pool: Pool, input: ShopifyOrderInput): Promise<void> {
+  const payload = buildRawPayloadFixture(
+    JSON.parse(input.rawPayload ?? JSON.stringify({ id: input.shopifyOrderId })),
+    input.shopifyOrderId
+  );
+
+  await pool.query(
+    `
       INSERT INTO shopify_orders (
         shopify_order_id,
         currency_code,
@@ -147,6 +146,9 @@ async function insertShopifyOrder(
         checkout_token,
         cart_token,
         source_name,
+        payload_external_id,
+        payload_size_bytes,
+        payload_hash,
         raw_payload,
         payload_size_bytes,
         payload_hash,
@@ -162,48 +164,48 @@ async function insertShopifyOrder(
         $4,
         $5,
         $6,
-        $7::jsonb,
+        $7,
         $8,
         $9,
+        $10::jsonb,
         now()
       )
     `,
-		[
-			input.shopifyOrderId,
-			input.processedAt,
-			input.landingSessionId ?? null,
-			input.checkoutToken ?? null,
-			input.cartToken ?? null,
-			input.sourceName ?? "web",
-			rawPayload,
-			Buffer.byteLength(rawPayload, "utf8"),
-			createHash("sha256").update(rawPayload).digest("hex"),
-		],
-	);
+    [
+      input.shopifyOrderId,
+      input.processedAt,
+      input.landingSessionId ?? null,
+      input.checkoutToken ?? null,
+      input.cartToken ?? null,
+      input.sourceName ?? 'web',
+      payload.payloadExternalId,
+      payload.payloadSizeBytes,
+      payload.payloadHash,
+      payload.rawPayloadJson
+    ]
+  );
 }
 
 async function resetIntegrationDatabase() {
 	const { pool } = await getModules();
 
-	await pool.query(`
-    TRUNCATE TABLE
-      attribution_jobs,
-      shopify_order_writeback_jobs,
-      attribution_order_credits,
-      attribution_results,
-      daily_reporting_metrics,
-      order_attribution_links,
-      session_attribution_touch_events,
-      session_attribution_identities,
-      shopify_order_line_items,
-      shopify_orders,
-      shopify_webhook_receipts,
-      tracking_events,
-      tracking_sessions,
-      shopify_customers,
-      customer_identities
-    RESTART IDENTITY CASCADE
-  `);
+  await resetIntegrationTables(pool, [
+    'attribution_jobs',
+    'shopify_order_writeback_jobs',
+    'attribution_order_credits',
+    'attribution_results',
+    'daily_reporting_metrics',
+    'order_attribution_links',
+    'session_attribution_touch_events',
+    'session_attribution_identities',
+    'shopify_order_line_items',
+    'shopify_orders',
+    'shopify_webhook_receipts',
+    'tracking_events',
+    'tracking_sessions',
+    'shopify_customers',
+    'customer_identities'
+  ]);
 }
 
 async function fetchAttributionResult(shopifyOrderId: string) {
@@ -256,6 +258,29 @@ async function fetchOrderSnapshot(shopifyOrderId: string) {
 	);
 
 	return result.rows[0]?.attribution_snapshot ?? null;
+}
+
+async function fetchOrderAttributionAudit(shopifyOrderId: string) {
+  const { pool } = await getModules();
+  const result = await pool.query<{
+    attribution_tier: string | null;
+    attribution_source: string | null;
+    attribution_matched_at: Date | null;
+    attribution_reason: string | null;
+  }>(
+    `
+      SELECT
+        attribution_tier,
+        attribution_source,
+        attribution_matched_at,
+        attribution_reason
+      FROM shopify_orders
+      WHERE shopify_order_id = $1
+    `,
+    [shopifyOrderId]
+  );
+
+  return result.rows[0] ?? null;
 }
 
 async function fetchPendingAttributionJobs(shopifyOrderId: string) {
@@ -322,37 +347,45 @@ test("recoverShopifyAttributionHints applies click-id-backed synthetic attributi
 			attribution_reason: "shopify_hint_derived",
 		});
 
-		const snapshot = await fetchOrderSnapshot("order-shopify-hint-click-id-1");
-		assert.ok(snapshot);
-		assert.equal(snapshot?.confidenceScore, 0.55);
-		assert.equal(snapshot?.confidenceLabel, "low");
-		assert.deepEqual(snapshot?.winner, {
-			sessionId: null,
-			sourceTouchEventId: null,
-			occurredAt: "2026-04-08T09:05:00.000Z",
-			source: "meta",
-			medium: "paid_social",
-			campaign: null,
-			content: null,
-			term: null,
-			clickIdType: "fbclid",
-			clickIdValue: "FB-CLICK-123",
-			attributionReason: "shopify_hint_derived",
-			matchSource: "shopify_hint_fallback",
-			confidenceLabel: "low",
-			ingestionSource: null,
-			ga4ClientId: null,
-			ga4SessionId: null,
-			isDirect: false,
-		});
-		assert.deepEqual(snapshot?.timeline, [snapshot?.winner]);
-		assert.equal(
-			await fetchPendingAttributionJobs("order-shopify-hint-click-id-1"),
-			0,
-		);
-	} finally {
-		await resetIntegrationDatabase();
-	}
+    const snapshot = await fetchOrderSnapshot('order-shopify-hint-click-id-1');
+    assert.ok(snapshot);
+    assert.equal(snapshot?.confidenceScore, 0.55);
+    assert.deepEqual(snapshot?.winner, {
+      sessionId: null,
+      sourceTouchEventId: null,
+      occurredAt: '2026-04-08T09:05:00.000Z',
+      source: 'meta',
+      medium: 'paid_social',
+      campaign: null,
+      content: null,
+      term: null,
+      clickIdType: 'fbclid',
+      clickIdValue: 'FB-CLICK-123',
+      attributionReason: 'shopify_hint_derived',
+      ingestionSource: 'customer_identity',
+      isDirect: false
+    });
+    assert.deepEqual(snapshot?.timeline, [snapshot?.winner]);
+
+    const orderAudit = await fetchOrderAttributionAudit('order-shopify-hint-click-id-1');
+    assert.deepEqual(
+      {
+        attribution_tier: orderAudit?.attribution_tier,
+        attribution_source: orderAudit?.attribution_source,
+        attribution_reason: orderAudit?.attribution_reason
+      },
+      {
+        attribution_tier: 'deterministic_first_party',
+        attribution_source: 'stitched_identity_journey',
+        attribution_reason: 'shopify_hint_derived'
+      }
+    );
+    assert.ok(orderAudit?.attribution_matched_at instanceof Date);
+
+    assert.equal(await fetchPendingAttributionJobs('order-shopify-hint-click-id-1'), 0);
+  } finally {
+    await resetIntegrationDatabase();
+  }
 });
 
 test("recoverShopifyAttributionHints ignores non-web orders even when Shopify hints are present", async () => {

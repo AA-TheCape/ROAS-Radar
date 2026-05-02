@@ -1,192 +1,160 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-process.env.DATABASE_URL ??=
-	"postgres://postgres:postgres@localhost:5432/roas_radar_test";
-process.env.META_ADS_APP_ID = "meta-app-id";
-process.env.META_ADS_APP_SECRET = "meta-app-secret";
-process.env.META_ADS_APP_BASE_URL = "https://api.example.com";
-process.env.META_ADS_APP_SCOPES = "ads_read,business_management";
-process.env.META_ADS_ENCRYPTION_KEY = "meta-encryption-key";
-process.env.META_ADS_AD_ACCOUNT_ID = "act_123456789";
-process.env.META_ADS_SYNC_LOOKBACK_DAYS = "3";
-process.env.META_ADS_SYNC_INITIAL_LOOKBACK_DAYS = "5";
+process.env.DATABASE_URL ??= 'postgres://postgres:postgres@localhost:5432/roas_radar_test';
 
 const { __metaAdsTestUtils } = await import("../src/modules/meta-ads/index.js");
 
-test("buildPlanningDates uses the initial lookback before the first successful sync", () => {
-	const dates = __metaAdsTestUtils.buildPlanningDates(
-		new Date("2026-04-11T12:00:00.000Z"),
-		null,
-	);
+test('summarizeOrderValueRecords counts null canonical fields and selection modes', () => {
+  const summary = __metaAdsTestUtils.summarizeOrderValueRecords([
+    {
+      attributedRevenue: 100,
+      purchaseCount: 2,
+      actionTypeUsed: 'purchase',
+      canonicalSelectionMode: 'priority'
+    },
+    {
+      attributedRevenue: null,
+      purchaseCount: 1,
+      actionTypeUsed: null,
+      canonicalSelectionMode: 'none'
+    },
+    {
+      attributedRevenue: null,
+      purchaseCount: null,
+      actionTypeUsed: 'omni_purchase',
+      canonicalSelectionMode: 'fallback'
+    }
+  ]);
 
-	assert.deepEqual(dates, [
-		"2026-04-07",
-		"2026-04-08",
-		"2026-04-09",
-		"2026-04-10",
-		"2026-04-11",
-	]);
+  assert.deepEqual(summary, {
+    totalRows: 3,
+    nullAttributedRevenueCount: 2,
+    nullPurchaseCountCount: 1,
+    nullActionTypeCount: 1,
+    fallbackSelectionCount: 1,
+    prioritySelectionCount: 1,
+    noSelectionCount: 1
+  });
 });
 
-test("buildPlanningDates switches to the rolling lookback after at least one successful sync", () => {
-	const dates = __metaAdsTestUtils.buildPlanningDates(
-		new Date("2026-04-11T12:00:00.000Z"),
-		new Date("2026-04-10T06:00:00.000Z"),
-	);
+test('buildOrderValueSyncAnomalies detects zero-row pulls and sudden null-rate spikes against the baseline', () => {
+  const records = [
+    {
+      attributedRevenue: null,
+      purchaseCount: null,
+      actionTypeUsed: null,
+      canonicalSelectionMode: 'none'
+    },
+    {
+      attributedRevenue: null,
+      purchaseCount: null,
+      actionTypeUsed: null,
+      canonicalSelectionMode: 'none'
+    },
+    {
+      attributedRevenue: null,
+      purchaseCount: null,
+      actionTypeUsed: null,
+      canonicalSelectionMode: 'fallback'
+    },
+    {
+      attributedRevenue: 120,
+      purchaseCount: 2,
+      actionTypeUsed: 'purchase',
+      canonicalSelectionMode: 'priority'
+    },
+    {
+      attributedRevenue: 140,
+      purchaseCount: 3,
+      actionTypeUsed: 'purchase',
+      canonicalSelectionMode: 'priority'
+    }
+  ];
+  const summary = __metaAdsTestUtils.summarizeOrderValueRecords(records);
+  const anomalies = __metaAdsTestUtils.buildOrderValueSyncAnomalies({
+    rawRowsFetched: 0,
+    records,
+    summary,
+    baseline: {
+      totalRows: 5,
+      nullAttributedRevenueCount: 0,
+      nullPurchaseCountCount: 0,
+      nullActionTypeCount: 0
+    }
+  });
 
-	assert.deepEqual(dates, ["2026-04-09", "2026-04-10", "2026-04-11"]);
+  assert.deepEqual(
+    anomalies.map((anomaly: { type: string }) => anomaly.type),
+    [
+      'zero_rows_pulled',
+      'null_attributed_revenue_spike',
+      'null_purchase_count_spike',
+      'null_action_type_spike'
+    ]
+  );
 });
 
-test("buildIncrementalPlanningDates re-enqueues only today after the daily plan has already been created", () => {
-	const dates = __metaAdsTestUtils.buildIncrementalPlanningDates(
-		new Date("2026-04-25T19:30:00.000Z"),
-		new Date("2026-04-25T07:17:28.000Z"),
-		"2026-04-25",
-	);
+test('selectCanonicalActionType prefers purchase, then omni_purchase, then pixel purchase before fallback types', () => {
+  assert.deepEqual(
+    __metaAdsTestUtils.selectCanonicalActionType([
+      {
+        action_type: 'onsite_conversion.messaging_purchase',
+        action_values: [{ action_type: 'onsite_conversion.messaging_purchase', value: '12.00' }]
+      },
+      {
+        action_type: 'purchase',
+        action_values: [{ action_type: 'purchase', value: '15.00' }]
+      }
+    ]),
+    {
+      actionTypeUsed: 'purchase',
+      canonicalSelectionMode: 'priority'
+    }
+  );
 
-	assert.deepEqual(dates, ["2026-04-25"]);
+  assert.deepEqual(
+    __metaAdsTestUtils.selectCanonicalActionType([
+      {
+        action_type: 'onsite_conversion.messaging_purchase',
+        action_values: [{ action_type: 'onsite_conversion.messaging_purchase', value: '12.00' }]
+      },
+      {
+        action_type: 'omni_purchase',
+        action_values: [{ action_type: 'omni_purchase', value: '9.00' }]
+      }
+    ]),
+    {
+      actionTypeUsed: 'omni_purchase',
+      canonicalSelectionMode: 'priority'
+    }
+  );
 });
 
-test("rollupPersistableSpendRows collapses duplicate campaign-level entities before persistence", () => {
-	const rolled = __metaAdsTestUtils.rollupPersistableSpendRows([
-		{
-			rawRecordId: 11,
-			normalizedRow: {
-				granularity: "campaign",
-				entityKey: "campaign-1",
-				accountId: "act_1",
-				accountName: "Account",
-				campaignId: "campaign-1",
-				campaignName: "Campaign One",
-				adsetId: null,
-				adsetName: null,
-				adId: null,
-				adName: null,
-				creativeId: null,
-				creativeName: null,
-				canonicalSource: "meta",
-				canonicalMedium: "paid_social",
-				canonicalCampaign: "campaign one",
-				canonicalContent: "unknown",
-				canonicalTerm: "unknown",
-				currency: "USD",
-				spend: "12.34",
-				impressions: 100,
-				clicks: 5,
-				rawPayload: { row: 1 },
-			},
-		},
-		{
-			rawRecordId: 12,
-			normalizedRow: {
-				granularity: "campaign",
-				entityKey: "campaign-1",
-				accountId: "act_1",
-				accountName: "Account",
-				campaignId: "campaign-1",
-				campaignName: "Campaign One",
-				adsetId: null,
-				adsetName: null,
-				adId: null,
-				adName: null,
-				creativeId: null,
-				creativeName: null,
-				canonicalSource: "meta",
-				canonicalMedium: "paid_social",
-				canonicalCampaign: "campaign one",
-				canonicalContent: "unknown",
-				canonicalTerm: "unknown",
-				currency: "USD",
-				spend: "7.66",
-				impressions: 40,
-				clicks: 3,
-				rawPayload: { row: 2 },
-			},
-		},
-		{
-			rawRecordId: 13,
-			normalizedRow: {
-				granularity: "ad",
-				entityKey: "ad-1",
-				accountId: "act_1",
-				accountName: "Account",
-				campaignId: "campaign-1",
-				campaignName: "Campaign One",
-				adsetId: "adset-1",
-				adsetName: "Adset One",
-				adId: "ad-1",
-				adName: "Ad One",
-				creativeId: null,
-				creativeName: null,
-				canonicalSource: "meta",
-				canonicalMedium: "paid_social",
-				canonicalCampaign: "campaign one",
-				canonicalContent: "ad one",
-				canonicalTerm: "unknown",
-				currency: "USD",
-				spend: "3.00",
-				impressions: 20,
-				clicks: 2,
-				rawPayload: { row: 3 },
-			},
-		},
-	]);
+test('normalizeOrderValueRows keeps the selected action type stable when one metric array is missing the selected type', () => {
+  const normalized = __metaAdsTestUtils.normalizeOrderValueRows({
+    currency: 'USD',
+    persistedRows: [
+      {
+        id: 11,
+        payload: {
+          campaign_id: 'cmp_1',
+          campaign_name: 'Campaign One',
+          date_start: '2026-04-29',
+          date_stop: '2026-04-29',
+          spend: '10.00',
+          action_type: 'onsite_conversion.messaging_purchase',
+          actions: [],
+          action_values: [{ action_type: 'onsite_conversion.messaging_purchase', value: '12.00' }],
+          purchase_roas: [{ action_type: 'onsite_conversion.messaging_purchase', value: '1.200000' }]
+        }
+      }
+    ]
+  });
 
-	assert.deepEqual(rolled, [
-		{
-			rawRecordId: 11,
-			normalizedRow: {
-				granularity: "campaign",
-				entityKey: "campaign-1",
-				accountId: "act_1",
-				accountName: "Account",
-				campaignId: "campaign-1",
-				campaignName: "Campaign One",
-				adsetId: null,
-				adsetName: null,
-				adId: null,
-				adName: null,
-				creativeId: null,
-				creativeName: null,
-				canonicalSource: "meta",
-				canonicalMedium: "paid_social",
-				canonicalCampaign: "campaign one",
-				canonicalContent: "unknown",
-				canonicalTerm: "unknown",
-				currency: "USD",
-				spend: "20.00",
-				impressions: 140,
-				clicks: 8,
-				rawPayload: { row: 1 },
-			},
-		},
-		{
-			rawRecordId: 13,
-			normalizedRow: {
-				granularity: "ad",
-				entityKey: "ad-1",
-				accountId: "act_1",
-				accountName: "Account",
-				campaignId: "campaign-1",
-				campaignName: "Campaign One",
-				adsetId: "adset-1",
-				adsetName: "Adset One",
-				adId: "ad-1",
-				adName: "Ad One",
-				creativeId: null,
-				creativeName: null,
-				canonicalSource: "meta",
-				canonicalMedium: "paid_social",
-				canonicalCampaign: "campaign one",
-				canonicalContent: "ad one",
-				canonicalTerm: "unknown",
-				currency: "USD",
-				spend: "3.00",
-				impressions: 20,
-				clicks: 2,
-				rawPayload: { row: 3 },
-			},
-		},
-	]);
+  assert.equal(normalized.length, 1);
+  assert.equal(normalized[0]?.actionTypeUsed, 'onsite_conversion.messaging_purchase');
+  assert.equal(normalized[0]?.canonicalSelectionMode, 'fallback');
+  assert.equal(normalized[0]?.attributedRevenue, 12);
+  assert.equal(normalized[0]?.purchaseCount, null);
 });

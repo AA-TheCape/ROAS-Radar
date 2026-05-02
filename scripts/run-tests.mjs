@@ -90,7 +90,7 @@ if (mode === "integration" || mode === "all") {
 
 const args = ["tsx", "--test"];
 
-if (mode === "integration") {
+if (mode === "integration" || mode === "unit" || mode === "all") {
 	args.push("--test-concurrency=1");
 }
 

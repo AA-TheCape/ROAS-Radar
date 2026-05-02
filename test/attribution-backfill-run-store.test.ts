@@ -80,33 +80,35 @@ test("claimOrderAttributionBackfillRuns returns normalized claimed runs and rese
 				return { rows: [] };
 			}
 
-			assert.match(text, /UPDATE order_attribution_backfill_runs runs/);
-			return {
-				rows: [
-					{
-						id: "job-1",
-						status: "processing",
-						submitted_at: new Date("2026-04-25T11:55:00.000Z"),
-						submitted_by: "internal",
-						started_at: new Date("2026-04-25T12:10:00.000Z"),
-						completed_at: null,
-						options: {
-							startDate: "2026-04-01",
-							endDate: "2026-04-05",
-							dryRun: true,
-							limit: 500,
-							webOrdersOnly: true,
-							skipShopifyWriteback: false,
-						},
-						report: null,
-						error_code: null,
-						error_message: null,
-					},
-				],
-			};
-		},
-		release: () => undefined,
-	};
+      assert.match(text, /UPDATE order_attribution_backfill_runs runs/);
+      return {
+        rows: [
+          {
+            id: 'job-1',
+            status: 'processing',
+            submitted_at: new Date('2026-04-25T11:55:00.000Z'),
+            submitted_by: 'internal',
+            started_at: new Date('2026-04-25T12:10:00.000Z'),
+            completed_at: null,
+            options: {
+              startDate: '2026-04-01',
+              endDate: '2026-04-05',
+              dryRun: true,
+              limit: 500,
+              webOrdersOnly: true,
+              skipShopifyWriteback: false
+            },
+            progress: {},
+            report: null,
+            error_code: null,
+            error_message: null,
+            last_heartbeat_at: new Date('2026-04-25T12:10:00.000Z')
+          }
+        ]
+      };
+    },
+    release: () => undefined
+  };
 
 	pool.connect = (async () => fakeClient) as typeof pool.connect;
 
@@ -117,67 +119,88 @@ test("claimOrderAttributionBackfillRuns returns normalized claimed runs and rese
 			2,
 		);
 
-		assert.deepEqual(claimedRows, [
-			{
-				id: "job-1",
-				submittedBy: "internal",
-				submittedAt: "2026-04-25T11:55:00.000Z",
-				startedAt: "2026-04-25T12:10:00.000Z",
-				options: {
-					startDate: "2026-04-01",
-					endDate: "2026-04-05",
-					dryRun: true,
-					limit: 500,
-					webOrdersOnly: true,
-					skipShopifyWriteback: false,
-				},
-			},
-		]);
-		assert.equal(clientCalls.length, 3);
-		assert.equal(clientCalls[0].text, "BEGIN");
-		assert.match(clientCalls[1].text, /completed_at = NULL/);
-		assert.equal(clientCalls[2].text, "COMMIT");
-	} finally {
-		pool.connect = originalPoolConnect as typeof pool.connect;
-	}
+    assert.deepEqual(claimedRows, [
+      {
+        id: 'job-1',
+        submittedBy: 'internal',
+        submittedAt: '2026-04-25T11:55:00.000Z',
+        startedAt: '2026-04-25T12:10:00.000Z',
+        options: {
+          startDate: '2026-04-01',
+          endDate: '2026-04-05',
+          dryRun: true,
+          limit: 500,
+          webOrdersOnly: true,
+          skipShopifyWriteback: false
+        },
+        progress: {
+          beforeMetrics: null,
+          scannedOrders: 0,
+          recoverableOrders: 0,
+          recoveredOrders: 0,
+          unrecoverableOrders: 0,
+          failedOrders: 0,
+          shopifyWritebackCompleted: 0,
+          shopifyWritebackSkipped: 0,
+          shopifyWritebackFailed: 0,
+          failures: [],
+          preview: [],
+          cursor: {
+            lastOrderOccurredAt: null,
+            lastOrderRowId: null,
+            completed: false,
+            batchesProcessed: 0
+          }
+        }
+      }
+    ]);
+    assert.equal(clientCalls.length, 3);
+    assert.equal(clientCalls[0].text, 'BEGIN');
+    assert.match(clientCalls[1].text, /completed_at = NULL/);
+    assert.equal(clientCalls[2].text, 'COMMIT');
+  } finally {
+    pool.connect = originalPoolConnect as typeof pool.connect;
+  }
 });
 
-test("getOrderAttributionBackfillRun maps persisted failure details into the shared job response", async () => {
-	pool.query = (async () => ({
-		rows: [
-			{
-				id: "job-failed",
-				status: "failed",
-				submitted_at: new Date("2026-04-25T10:00:00.000Z"),
-				submitted_by: "internal",
-				started_at: new Date("2026-04-25T10:00:05.000Z"),
-				completed_at: new Date("2026-04-25T10:01:00.000Z"),
-				options: {
-					startDate: "2026-04-01",
-					endDate: "2026-04-05",
-					dryRun: false,
-					limit: 500,
-					webOrdersOnly: true,
-					skipShopifyWriteback: false,
-				},
-				report: {
-					scanned: 12,
-					recovered: 4,
-					unrecoverable: 3,
-					writebackCompleted: 2,
-					failures: [
-						{
-							orderId: "order-9",
-							code: "order_processing_failed",
-							message: "Timed out while refreshing daily reporting metrics",
-						},
-					],
-				},
-				error_code: "DatabaseTimeout",
-				error_message: "database timeout while scanning orders",
-			},
-		],
-	})) as typeof pool.query;
+test('getOrderAttributionBackfillRun maps persisted failure details into the shared job response', async () => {
+  pool.query = (async () => ({
+    rows: [
+      {
+        id: 'job-failed',
+        status: 'failed',
+        submitted_at: new Date('2026-04-25T10:00:00.000Z'),
+        submitted_by: 'internal',
+        started_at: new Date('2026-04-25T10:00:05.000Z'),
+        completed_at: new Date('2026-04-25T10:01:00.000Z'),
+        options: {
+          startDate: '2026-04-01',
+          endDate: '2026-04-05',
+          dryRun: false,
+          limit: 500,
+          webOrdersOnly: true,
+          skipShopifyWriteback: false
+        },
+        progress: {},
+        report: {
+          scanned: 12,
+          recovered: 4,
+          unrecoverable: 3,
+          writebackCompleted: 2,
+          failures: [
+            {
+              orderId: 'order-9',
+              code: 'order_processing_failed',
+              message: 'Timed out while refreshing daily reporting metrics'
+            }
+          ]
+        },
+        error_code: 'DatabaseTimeout',
+        error_message: 'database timeout while scanning orders',
+        last_heartbeat_at: new Date('2026-04-25T10:01:00.000Z')
+      }
+    ]
+  })) as typeof pool.query;
 
 	try {
 		const response = await getOrderAttributionBackfillRun("job-failed");
@@ -221,87 +244,93 @@ test("getOrderAttributionBackfillRun maps persisted failure details into the sha
 	}
 });
 
-test("getOrderAttributionBackfillRun maps queued, processing, and completed records into the shared status shape", async () => {
-	const rowsByJobId = new Map([
-		[
-			"job-queued",
-			{
-				id: "job-queued",
-				status: "queued",
-				submitted_at: new Date("2026-04-25T09:00:00.000Z"),
-				submitted_by: "internal",
-				started_at: null,
-				completed_at: null,
-				options: {
-					startDate: "2026-04-01",
-					endDate: "2026-04-05",
-					dryRun: true,
-					limit: 500,
-					webOrdersOnly: true,
-					skipShopifyWriteback: false,
-				},
-				report: null,
-				error_code: null,
-				error_message: null,
-			},
-		],
-		[
-			"job-processing",
-			{
-				id: "job-processing",
-				status: "processing",
-				submitted_at: new Date("2026-04-25T09:05:00.000Z"),
-				submitted_by: "admin@example.com",
-				started_at: new Date("2026-04-25T09:06:00.000Z"),
-				completed_at: null,
-				options: {
-					startDate: "2026-04-06",
-					endDate: "2026-04-08",
-					dryRun: false,
-					limit: 5000,
-					webOrdersOnly: false,
-					skipShopifyWriteback: true,
-				},
-				report: null,
-				error_code: null,
-				error_message: null,
-			},
-		],
-		[
-			"job-completed",
-			{
-				id: "job-completed",
-				status: "completed",
-				submitted_at: new Date("2026-04-25T09:10:00.000Z"),
-				submitted_by: "admin@example.com",
-				started_at: new Date("2026-04-25T09:11:00.000Z"),
-				completed_at: new Date("2026-04-25T09:12:00.000Z"),
-				options: {
-					startDate: "2026-04-09",
-					endDate: "2026-04-12",
-					dryRun: false,
-					limit: 250,
-					webOrdersOnly: true,
-					skipShopifyWriteback: false,
-				},
-				report: {
-					scanned: 250,
-					recovered: 80,
-					unrecoverable: 20,
-					writebackCompleted: 80,
-					failures: [
-						{
-							orderId: "order-17",
-							code: "shopify_writeback_failed",
-							message: "Shopify writeback failed for order-17",
-						},
-					],
-				},
-				error_code: null,
-				error_message: null,
-			},
-		],
-	]);
+test('getOrderAttributionBackfillRun maps queued, processing, and completed records into the shared status shape', async () => {
+  const rowsByJobId = new Map([
+    [
+      'job-queued',
+      {
+        id: 'job-queued',
+        status: 'queued',
+        submitted_at: new Date('2026-04-25T09:00:00.000Z'),
+        submitted_by: 'internal',
+        started_at: null,
+        completed_at: null,
+        options: {
+          startDate: '2026-04-01',
+          endDate: '2026-04-05',
+          dryRun: true,
+          limit: 500,
+          webOrdersOnly: true,
+          skipShopifyWriteback: false
+        },
+        progress: {},
+        report: null,
+        error_code: null,
+        error_message: null,
+        last_heartbeat_at: new Date('2026-04-25T09:00:00.000Z')
+      }
+    ],
+    [
+      'job-processing',
+      {
+        id: 'job-processing',
+        status: 'processing',
+        submitted_at: new Date('2026-04-25T09:05:00.000Z'),
+        submitted_by: 'admin@example.com',
+        started_at: new Date('2026-04-25T09:06:00.000Z'),
+        completed_at: null,
+        options: {
+          startDate: '2026-04-06',
+          endDate: '2026-04-08',
+          dryRun: false,
+          limit: 5000,
+          webOrdersOnly: false,
+          skipShopifyWriteback: true
+        },
+        progress: {},
+        report: null,
+        error_code: null,
+        error_message: null,
+        last_heartbeat_at: new Date('2026-04-25T09:06:00.000Z')
+      }
+    ],
+    [
+      'job-completed',
+      {
+        id: 'job-completed',
+        status: 'completed',
+        submitted_at: new Date('2026-04-25T09:10:00.000Z'),
+        submitted_by: 'admin@example.com',
+        started_at: new Date('2026-04-25T09:11:00.000Z'),
+        completed_at: new Date('2026-04-25T09:12:00.000Z'),
+        options: {
+          startDate: '2026-04-09',
+          endDate: '2026-04-12',
+          dryRun: false,
+          limit: 250,
+          webOrdersOnly: true,
+          skipShopifyWriteback: false
+        },
+        progress: {},
+        report: {
+          scanned: 250,
+          recovered: 80,
+          unrecoverable: 20,
+          writebackCompleted: 80,
+          failures: [
+            {
+              orderId: 'order-17',
+              code: 'shopify_writeback_failed',
+              message: 'Shopify writeback failed for order-17'
+            }
+          ]
+        },
+        error_code: null,
+        error_message: null,
+        last_heartbeat_at: new Date('2026-04-25T09:12:00.000Z')
+      }
+    ]
+  ]);
 
 	pool.query = (async (_text: string, params?: unknown[]) => ({
 		rows: params?.[0]

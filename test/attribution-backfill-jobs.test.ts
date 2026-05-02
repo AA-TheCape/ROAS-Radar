@@ -567,60 +567,66 @@ test("processOrderAttributionBackfillRuns emits per-job lifecycle logs with job 
 		failedRuns: 1,
 	});
 
-	const lifecycleEntries = entries.filter(
-		(entry) => entry.event === "order_attribution_backfill_job_lifecycle",
-	);
-	assert.equal(lifecycleEntries.length, 4);
-	assert.deepEqual(
-		lifecycleEntries.map((entry) => ({
-			jobId: entry.jobId,
-			stage: entry.stage,
-			status: entry.status,
-		})),
-		[
-			{
-				jobId: "job-complete",
-				stage: "started",
-				status: "processing",
-			},
-			{
-				jobId: "job-complete",
-				stage: "completed",
-				status: "completed",
-			},
-			{
-				jobId: "job-failed",
-				stage: "started",
-				status: "processing",
-			},
-			{
-				jobId: "job-failed",
-				stage: "failed",
-				status: "failed",
-			},
-		],
-	);
-	assert.deepEqual(lifecycleEntries[1].report, {
-		scanned: 25,
-		recovered: 0,
-		unrecoverable: 2,
-		writebackCompleted: 0,
-		failureCount: 0,
-		sampleFailures: [],
-	});
-	assert.equal(lifecycleEntries[3].code, "report_write_failed");
-	assert.deepEqual(lifecycleEntries[3].report, {
-		scanned: 10,
-		recovered: 2,
-		unrecoverable: 3,
-		writebackCompleted: 1,
-		failureCount: 1,
-		sampleFailures: [
-			{
-				orderId: "1003",
-				code: "shopify_writeback_failed",
-				message: "Shopify writeback failed for order 1003",
-			},
-		],
-	});
+  const lifecycleEntries = entries.filter((entry) => entry.event === 'order_attribution_backfill_job_lifecycle');
+  assert.equal(lifecycleEntries.length, 4);
+  assert.deepEqual(
+    lifecycleEntries.map((entry) => ({
+      jobId: entry.jobId,
+      stage: entry.stage,
+      status: entry.status
+    })),
+    [
+      {
+        jobId: 'job-complete',
+        stage: 'started',
+        status: 'processing'
+      },
+      {
+        jobId: 'job-complete',
+        stage: 'completed',
+        status: 'completed'
+      },
+      {
+        jobId: 'job-failed',
+        stage: 'started',
+        status: 'processing'
+      },
+      {
+        jobId: 'job-failed',
+        stage: 'failed',
+        status: 'failed'
+      }
+    ]
+  );
+  assert.deepEqual(lifecycleEntries[1].report, {
+    scanned: 25,
+    recovered: 0,
+    unrecoverable: 2,
+    writebackCompleted: 0,
+    failures: [],
+    failureCount: 0,
+    sampleFailures: []
+  });
+  assert.equal(lifecycleEntries[3].code, 'report_write_failed');
+  assert.deepEqual(lifecycleEntries[3].report, {
+    scanned: 10,
+    recovered: 2,
+    unrecoverable: 3,
+    writebackCompleted: 1,
+    failures: [
+      {
+        orderId: '1003',
+        code: 'shopify_writeback_failed',
+        message: 'Shopify writeback failed for order 1003'
+      }
+    ],
+    failureCount: 1,
+    sampleFailures: [
+      {
+        orderId: '1003',
+        code: 'shopify_writeback_failed',
+        message: 'Shopify writeback failed for order 1003'
+      }
+    ]
+  });
 });

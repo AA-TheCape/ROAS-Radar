@@ -1,170 +1,100 @@
-import { type Router, Router as createRouter } from "express";
-import { z } from "zod";
+import { type Router, Router as createRouter } from 'express';
+import { z } from 'zod';
 
 import {
-	type OrderAttributionBackfillRequest,
-	normalizeOrderAttributionBackfillRequest,
-} from "../../../packages/attribution-schema/index.js";
-import { query } from "../../db/pool.js";
-import { emitOrderAttributionBackfillJobLifecycleLog } from "../../observability/index.js";
-import {
-	type AuthContext,
-	attachAuthContext,
-	requireAdmin,
-} from "../auth/index.js";
-import {
-	enqueueOrderAttributionBackfillRun,
-	getOrderAttributionBackfillRun,
-} from "./backfill-run-store.js";
-import {
-	fetchGa4FallbackShadowReport,
-	getGa4FallbackRolloutMode,
-} from "./ga4-rollout.js";
+  normalizeOrderAttributionBackfillRequest,
+  type OrderAttributionBackfillRequest
+} from '../../../packages/attribution-schema/index.js';
+import { emitOrderAttributionBackfillJobLifecycleLog } from '../../observability/index.js';
+import { attachAuthContext, requireAdmin, type AuthContext } from '../auth/index.js';
+import { enqueueOrderAttributionBackfillRun, getOrderAttributionBackfillRun } from './backfill-run-store.js';
 
 class AttributionAdminHttpError extends Error {
-	statusCode: number;
-	code: string;
-	details?: unknown;
+  statusCode: number;
+  code: string;
+  details?: unknown;
 
-	constructor(
-		statusCode: number,
-		code: string,
-		message: string,
-		details?: unknown,
-	) {
-		super(message);
-		this.name = "AttributionAdminHttpError";
-		this.statusCode = statusCode;
-		this.code = code;
-		this.details = details;
-	}
+  constructor(statusCode: number, code: string, message: string, details?: unknown) {
+    super(message);
+    this.name = 'AttributionAdminHttpError';
+    this.statusCode = statusCode;
+    this.code = code;
+    this.details = details;
+  }
 }
 
 function parseBackfillRequest(input: unknown): OrderAttributionBackfillRequest {
-	try {
-		return normalizeOrderAttributionBackfillRequest(input);
-	} catch (error) {
-		if (error instanceof z.ZodError) {
-			throw new AttributionAdminHttpError(
-				400,
-				"invalid_request",
-				"Invalid order attribution backfill request",
-				error.flatten(),
-			);
-		}
-		throw error;
-	}
-}
+  try {
+    return normalizeOrderAttributionBackfillRequest(input);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      throw new AttributionAdminHttpError(
+        400,
+        'invalid_request',
+        'Invalid order attribution backfill request',
+        error.flatten()
+      );
+    }
 
-const dateStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
-const ga4ShadowReportQuerySchema = z
-	.object({
-		startDate: dateStringSchema,
-		endDate: dateStringSchema,
-	})
-	.superRefine((value, ctx) => {
-		if (value.startDate > value.endDate) {
-			ctx.addIssue({
-				code: z.ZodIssueCode.custom,
-				message: "startDate must be on or before endDate",
-				path: ["startDate"],
-			});
-		}
-	});
-
-function parseShadowReportQuery(input: unknown) {
-	try {
-		return ga4ShadowReportQuerySchema.parse(input);
-	} catch (error) {
-		if (error instanceof z.ZodError) {
-			throw new AttributionAdminHttpError(
-				400,
-				"invalid_request",
-				"Invalid GA4 fallback shadow report request",
-				error.flatten(),
-			);
-		}
-		throw error;
-	}
+    throw error;
+  }
 }
 
 function getSubmittedBy(auth: AuthContext | null | undefined): string {
-	if (!auth) {
-		throw new AttributionAdminHttpError(
-			401,
-			"unauthorized",
-			"Authentication required",
-		);
-	}
-	if (auth.kind === "internal") {
-		return "internal";
-	}
-	return auth.user.email;
+  if (!auth) {
+    throw new AttributionAdminHttpError(401, 'unauthorized', 'Authentication required');
+  }
+
+  if (auth.kind === 'internal') {
+    return 'internal';
+  }
+
+  return auth.user.email;
 }
 
 async function loadOrderAttributionBackfillRun(jobId: string) {
-	const row = await getOrderAttributionBackfillRun(jobId);
-	if (!row) {
-		throw new AttributionAdminHttpError(
-			404,
-			"backfill_job_not_found",
-			"Order attribution backfill job was not found",
-		);
-	}
-	return row;
+  const row = await getOrderAttributionBackfillRun(jobId);
+
+  if (!row) {
+    throw new AttributionAdminHttpError(404, 'backfill_job_not_found', 'Order attribution backfill job was not found');
+  }
+
+  return row;
 }
 
 export function createAttributionAdminRouter(): Router {
-	const router = createRouter();
-	const queryExecutor = { query };
+  const router = createRouter();
 
-	router.use(attachAuthContext);
-	router.use(requireAdmin);
+  router.use(attachAuthContext);
+  router.use(requireAdmin);
 
-	router.post("/orders/backfill", async (req, res, next) => {
-		try {
-			const auth = res.locals.auth as AuthContext | null | undefined;
-			const options = parseBackfillRequest(req.body ?? {});
-			const response = await enqueueOrderAttributionBackfillRun(
-				options,
-				getSubmittedBy(auth),
-			);
+  router.post('/orders/backfill', async (req, res, next) => {
+    try {
+      const auth = res.locals.auth as AuthContext | null | undefined;
+      const options = parseBackfillRequest(req.body ?? {});
+      const response = await enqueueOrderAttributionBackfillRun(options, getSubmittedBy(auth));
 
-			emitOrderAttributionBackfillJobLifecycleLog({
-				stage: "enqueued",
-				jobId: response.jobId,
-				submittedAt: response.submittedAt,
-				options: response.options,
-			});
+      emitOrderAttributionBackfillJobLifecycleLog({
+        stage: 'enqueued',
+        jobId: response.jobId,
+        submittedAt: response.submittedAt,
+        options: response.options
+      });
 
-			res.status(202).json(response);
-		} catch (error) {
-			next(error);
-		}
-	});
+      res.status(202).json(response);
+    } catch (error) {
+      next(error);
+    }
+  });
 
-	router.get("/orders/backfill/:jobId", async (req, res, next) => {
-		try {
-			const response = await loadOrderAttributionBackfillRun(req.params.jobId);
-			res.status(200).json(response);
-		} catch (error) {
-			next(error);
-		}
-	});
+  router.get('/orders/backfill/:jobId', async (req, res, next) => {
+    try {
+      const response = await loadOrderAttributionBackfillRun(req.params.jobId);
+      res.status(200).json(response);
+    } catch (error) {
+      next(error);
+    }
+  });
 
-	router.get("/ga4-fallback/shadow-report", async (req, res, next) => {
-		try {
-			const input = parseShadowReportQuery(req.query);
-			const report = await fetchGa4FallbackShadowReport(queryExecutor, input);
-
-			res.status(200).json({
-				...report,
-				rolloutMode: getGa4FallbackRolloutMode(),
-			});
-		} catch (error) {
-			next(error);
-		}
-	});
-
-	return router;
+  return router;
 }

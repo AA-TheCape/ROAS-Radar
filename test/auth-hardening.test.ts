@@ -26,17 +26,17 @@ async function request(
 }
 
 function restoreEnv() {
-	if (originalReportingApiToken === undefined) {
-		process.env.REPORTING_API_TOKEN = undefined;
-	} else {
-		process.env.REPORTING_API_TOKEN = originalReportingApiToken;
-	}
+  if (originalReportingApiToken === undefined) {
+    Reflect.deleteProperty(process.env, 'REPORTING_API_TOKEN');
+  } else {
+    process.env.REPORTING_API_TOKEN = originalReportingApiToken;
+  }
 
-	if (originalApiAllowedOrigins === undefined) {
-		process.env.API_ALLOWED_ORIGINS = undefined;
-	} else {
-		process.env.API_ALLOWED_ORIGINS = originalApiAllowedOrigins;
-	}
+  if (originalApiAllowedOrigins === undefined) {
+    Reflect.deleteProperty(process.env, 'API_ALLOWED_ORIGINS');
+  } else {
+    process.env.API_ALLOWED_ORIGINS = originalApiAllowedOrigins;
+  }
 }
 
 test("internal identity routes fail closed when the reporting token is blank", async () => {

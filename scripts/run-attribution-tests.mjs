@@ -12,17 +12,18 @@ if (!VALID_MODES.has(mode)) {
 }
 
 const CRITICAL_TESTS = [
-	"test/tracking-attribution-ingestion.test.ts",
-	"test/tracking-dual-write.test.ts",
-	"test/tracking-request-context-fallback.integration.test.ts",
-	"test/attribution-hardening-acceptance.integration.test.ts",
-	"test/attribution-backfill.integration.test.ts",
-	"test/attribution-resolver.test.ts",
-	"test/attribution-order-finalization.integration.test.ts",
-	"test/shopify-writeback.test.ts",
-	"test/dead-letter-replay.test.ts",
-	"test/tracking-retention.integration.test.ts",
-	"test/attribution-e2e.integration.test.ts",
+  'test/tracking-attribution-ingestion.test.ts',
+  'test/tracking-dual-write.test.ts',
+  'test/tracking-request-context-fallback.integration.test.ts',
+  'test/attribution-hardening-acceptance.integration.test.ts',
+  'test/attribution-backfill.integration.test.ts',
+  'test/attribution-resolver.test.ts',
+  'test/attribution-order-finalization.integration.test.ts',
+  'test/attribution-tier-data-flow.integration.test.ts',
+  'test/shopify-writeback.test.ts',
+  'test/dead-letter-replay.test.ts',
+  'test/tracking-retention.integration.test.ts',
+  'test/attribution-e2e.integration.test.ts'
 ];
 
 const COVERAGE_TESTS = CRITICAL_TESTS.filter(

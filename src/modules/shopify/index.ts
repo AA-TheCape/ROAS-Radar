@@ -1,42 +1,25 @@
-import {
-	createHash,
-	createHmac,
-	randomBytes,
-	timingSafeEqual,
-} from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
-import { type RequestHandler, Router } from "express";
-import type { PoolClient } from "pg";
-import { z } from "zod";
+import { type RequestHandler, Router } from 'express';
+import type { PoolClient } from 'pg';
+import { z } from 'zod';
 
+import { normalizeAttributionString } from '../../../packages/attribution-schema/index.js';
+import { env } from '../../config/env.js';
+import { query, withTransaction } from '../../db/pool.js';
+import { logError, logInfo, logWarning } from '../../observability/index.js';
+import { buildHashedContactProfile, normalizeEmailAddress } from '../../shared/privacy.js';
+import { applySyntheticAttributionForOrder, enqueueAttributionForOrder } from '../attribution/index.js';
+import { attachAuthContext, requireAdmin } from '../auth/index.js';
+import { stitchKnownCustomerIdentity } from '../identity/index.js';
+import { getReportingTimezone } from '../settings/index.js';
 import {
-	normalizeAttributionString,
-	normalizeAttributionUrl,
-} from "../../../packages/attribution-schema/index.js";
-import { env } from "../../config/env.js";
-import { query, withTransaction } from "../../db/pool.js";
-import { logError, logInfo, logWarning } from "../../observability/index.js";
-import {
-	buildHashedContactProfile,
-	normalizeEmailAddress,
-} from "../../shared/privacy.js";
-import {
-	type RawPayloadIntegrityRow,
-	buildRawPayloadStorageMetadata,
-	logRawPayloadIntegrityMismatch,
-} from "../../shared/raw-payload-storage.js";
-import {
-	applySyntheticAttributionForOrder,
-	enqueueAttributionForOrder,
-} from "../attribution/index.js";
-import {
-	type ShopifyHintAttribution,
-	extractShopifyHintAttribution,
-} from "../attribution/shopify-hints.js";
-import { attachAuthContext, requireAdmin } from "../auth/index.js";
-import { stitchKnownCustomerIdentity } from "../identity/index.js";
-import { getReportingTimezone } from "../settings/index.js";
-import { enqueueShopifyOrderWriteback } from "./writeback.js";
+  buildRawPayloadStorageMetadata,
+  logRawPayloadIntegrityMismatch,
+  type RawPayloadIntegrityRow
+} from '../../shared/raw-payload-storage.js';
+import { extractShopifyHintAttribution } from './attribution-hints.js';
+import { enqueueShopifyOrderWriteback } from './writeback.js';
 
 const OAUTH_STATE_TTL_MINUTES = 10;
 
@@ -216,10 +199,10 @@ type ShopifyOrdersRestResponse = {
 };
 
 type ShopifyAttributionRecoveryResponse = {
-	rescannedOrders: number;
-	relinkedOrders: number;
-	requeuedOrders: number;
-	shopifyHintAttributedOrders: number;
+  rescannedOrders: number;
+  relinkedOrders: number;
+  requeuedOrders: number;
+  shopifyHintAttributedOrders: number;
 };
 
 class ShopifyHttpError extends Error {
@@ -1278,20 +1261,6 @@ function getAttributeValue(
 	return normalized ? normalized : null;
 }
 
-function getAttributeValueFromKeys(
-	attributes: Array<z.infer<typeof shopifyAttributeSchema>> | undefined,
-	keys: string[],
-): string | null {
-	for (const key of keys) {
-		const value = getAttributeValue(attributes, key);
-		if (value) {
-			return value;
-		}
-	}
-
-	return null;
-}
-
 function toNumericString(value: string | number | undefined): string {
 	if (value === undefined) {
 		return "0";
@@ -1330,10 +1299,8 @@ function buildLineItemExternalId(
 	return `${orderId}:line:${index + 1}`;
 }
 
-function normalizeLineItemText(
-	value: string | null | undefined,
-): string | null {
-	return normalizeNullableString(value);
+function normalizeLineItemText(value: string | null | undefined): string | null {
+  return normalizeNullableString(value);
 }
 
 async function resolveLandingSessionId(

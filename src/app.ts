@@ -4,36 +4,21 @@ import express, {
 	type Response,
 } from "express";
 
-import { env, getApiAllowedOrigins } from "./config/env.js";
-import { checkDatabaseHealth } from "./db/pool.js";
-import { createAttributionAdminRouter } from "./modules/attribution/admin.js";
-import { assertGa4BigQueryIngestionConfig } from "./modules/attribution/ga4-bigquery-config.js";
-import {
-	createAuthRouter,
-	createUserAdminRouter,
-} from "./modules/auth/index.js";
-import {
-	createGoogleAdsAdminRouter,
-	createGoogleAdsPublicRouter,
-} from "./modules/google-ads/index.js";
-import { createIdentityAdminRouter } from "./modules/identity/admin.js";
-import { createInternalIdentityRouter } from "./modules/identity/read-api.js";
-import {
-	createMetaAdsAdminRouter,
-	createMetaAdsPublicRouter,
-} from "./modules/meta-ads/index.js";
-import { createReportingRouter } from "./modules/reporting/index.js";
-import { createSettingsRouter } from "./modules/settings/index.js";
-import {
-	createShopifyAdminRouter,
-	createShopifyPublicRouter,
-	createShopifyWebhookRouter,
-} from "./modules/shopify/index.js";
-import { createTrackingRouter } from "./modules/tracking/index.js";
-import {
-	createRequestLoggingMiddleware,
-	logHttpError,
-} from "./observability/index.js";
+import { env, getApiAllowedOrigins } from './config/env.js';
+import { checkDatabaseHealth } from './db/pool.js';
+import { createAuthRouter, createUserAdminRouter } from './modules/auth/index.js';
+import { createAttributionAdminRouter } from './modules/attribution/admin.js';
+import { assertGa4BigQueryIngestionConfig } from './modules/attribution/ga4-bigquery-config.js';
+import { createGoogleAdsAdminRouter, createGoogleAdsPublicRouter } from './modules/google-ads/index.js';
+import { createMetaAdsAdminRouter, createMetaAdsPublicRouter } from './modules/meta-ads/index.js';
+import { createMetaOrderValueRouter } from './modules/reporting/meta-order-value.js';
+import { createReportingRouter } from './modules/reporting/index.js';
+import { createSettingsRouter } from './modules/settings/index.js';
+import { createShopifyAdminRouter, createShopifyPublicRouter, createShopifyWebhookRouter } from './modules/shopify/index.js';
+import { createTrackingRouter } from './modules/tracking/index.js';
+import { createIdentityAdminRouter } from './modules/identity/admin.js';
+import { createInternalIdentityRouter } from './modules/identity/read-api.js';
+import { createRequestLoggingMiddleware, logHttpError } from './observability/index.js';
 
 export function createApp() {
 	assertGa4BigQueryIngestionConfig();
@@ -97,31 +82,32 @@ export function createApp() {
 		}
 	});
 
-	app.use(
-		"/webhooks/shopify",
-		express.raw({ type: "*/*", limit: env.SHOPIFY_WEBHOOK_BODY_LIMIT }),
-		createShopifyWebhookRouter(),
-	);
-	app.use(
-		"/track",
-		express.text({ type: "text/plain", limit: env.TRACKING_BODY_LIMIT }),
-		express.json({ type: "application/json", limit: env.TRACKING_BODY_LIMIT }),
-		createTrackingRouter(),
-	);
-	app.use(express.json({ limit: env.API_JSON_BODY_LIMIT }));
-	app.use("/api/auth", createAuthRouter());
-	app.use("/api/settings", createSettingsRouter());
-	app.use("/api/reporting", createReportingRouter());
-	app.use("/api/internal/identity", createInternalIdentityRouter());
-	app.use("/api/admin/identity", createIdentityAdminRouter());
-	app.use("/api/admin/users", createUserAdminRouter());
-	app.use("/api/admin/attribution", createAttributionAdminRouter());
-	app.use("/shopify", createShopifyPublicRouter());
-	app.use("/api/admin/shopify", createShopifyAdminRouter());
-	app.use("/meta-ads", createMetaAdsPublicRouter());
-	app.use("/api/admin/meta-ads", createMetaAdsAdminRouter());
-	app.use("/google-ads", createGoogleAdsPublicRouter());
-	app.use("/api/admin/google-ads", createGoogleAdsAdminRouter());
+  app.use(
+    '/webhooks/shopify',
+    express.raw({ type: '*/*', limit: env.SHOPIFY_WEBHOOK_BODY_LIMIT }),
+    createShopifyWebhookRouter()
+  );
+  app.use(
+    '/track',
+    express.text({ type: 'text/plain', limit: env.TRACKING_BODY_LIMIT }),
+    express.json({ type: 'application/json', limit: env.TRACKING_BODY_LIMIT }),
+    createTrackingRouter()
+  );
+  app.use(express.json({ limit: env.API_JSON_BODY_LIMIT }));
+  app.use('/api/auth', createAuthRouter());
+  app.use('/api/settings', createSettingsRouter());
+  app.use('/api/reporting/meta-order-value', createMetaOrderValueRouter());
+  app.use('/api/reporting', createReportingRouter());
+  app.use('/api/internal/identity', createInternalIdentityRouter());
+  app.use('/api/admin/identity', createIdentityAdminRouter());
+  app.use('/api/admin/users', createUserAdminRouter());
+  app.use('/api/admin/attribution', createAttributionAdminRouter());
+  app.use('/shopify', createShopifyPublicRouter());
+  app.use('/api/admin/shopify', createShopifyAdminRouter());
+  app.use('/meta-ads', createMetaAdsPublicRouter());
+  app.use('/api/admin/meta-ads', createMetaAdsAdminRouter());
+  app.use('/google-ads', createGoogleAdsPublicRouter());
+  app.use('/api/admin/google-ads', createGoogleAdsAdminRouter());
 
 	app.use(
 		(error: unknown, _req: Request, res: Response, _next: NextFunction) => {

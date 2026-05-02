@@ -1,277 +1,294 @@
-function readString(name: string, fallback = ""): string {
-	const value = process.env[name];
-	return typeof value === "string" ? value : fallback;
+import 'dotenv/config';
+
+type EnvValue = string | number | boolean | string[];
+
+type Env = {
+  API_JSON_BODY_LIMIT: string;
+  API_ALLOWED_ORIGINS: string[];
+  APP_SESSION_TTL_HOURS: number;
+  ATTRIBUTION_JOB_BATCH_SIZE: number;
+  ATTRIBUTION_STALE_SCAN_BATCH_SIZE: number;
+  ATTRIBUTION_WORKER_LOOP: boolean;
+  ATTRIBUTION_WORKER_POLL_INTERVAL_MS: number;
+  DATA_QUALITY_ANOMALY_LOOKBACK_DAYS: number;
+  DATA_QUALITY_ANOMALY_MIN_BASELINE: number;
+  DATA_QUALITY_ANOMALY_THRESHOLD_RATIO: number;
+  DATA_QUALITY_CHECK_INTERVAL_MS: number;
+  DATA_QUALITY_CHECK_LOOP: boolean;
+  DATA_QUALITY_CONFLICTING_SHOPIFY_ALERT_THRESHOLD: number;
+  DATA_QUALITY_DUPLICATE_CANONICAL_ALERT_THRESHOLD: number;
+  DATA_QUALITY_HASH_ANOMALY_ALERT_THRESHOLD: number;
+  DATA_QUALITY_ORPHAN_SESSION_ALERT_THRESHOLD: number;
+  DATA_QUALITY_REPORTING_ANOMALY_ALERT_THRESHOLD: number;
+  DATA_QUALITY_SAMPLE_LIMIT: number;
+  DATA_QUALITY_TARGET_LAG_DAYS: number;
+  DATABASE_CONNECTION_TIMEOUT_MS: number;
+  DATABASE_IDLE_TIMEOUT_MS: number;
+  DATABASE_MAX_USES: number;
+  DATABASE_POOL_MAX: number;
+  DATABASE_POOL_MIN: number;
+  DATABASE_QUERY_TIMEOUT_MS: number;
+  DATABASE_SSL: boolean;
+  DATABASE_STATEMENT_TIMEOUT_MS: number;
+  DATABASE_URL: string;
+  DEAD_LETTER_REPLAY_MAX_BATCH_SIZE: number;
+  DEFAULT_ORGANIZATION_ID: number;
+  GCLOUD_PROJECT: string;
+  GA4_BIGQUERY_BACKFILL_HOURS: number;
+  GA4_BIGQUERY_ENABLED: boolean;
+  GA4_BIGQUERY_LOOKBACK_HOURS: number;
+  GA4_FALLBACK_RETENTION_DAYS: number;
+  GOOGLE_ADS_API_VERSION: string;
+  GOOGLE_ADS_APP_BASE_URL: string;
+  GOOGLE_ADS_APP_SCOPES: string[];
+  GOOGLE_ADS_CLIENT_ID: string;
+  GOOGLE_ADS_CLIENT_SECRET: string;
+  GOOGLE_ADS_DEVELOPER_TOKEN: string;
+  GOOGLE_ADS_ENCRYPTION_KEY: string;
+  GOOGLE_ADS_SYNC_BATCH_SIZE: number;
+  GOOGLE_ADS_SYNC_MAX_RETRIES: number;
+  GOOGLE_ADS_TRANSFER_LOOKBACK_DAYS: number;
+  GOOGLE_ADS_WORKER_LOOP: boolean;
+  GOOGLE_ADS_WORKER_POLL_INTERVAL_MS: number;
+  GOOGLE_CLOUD_PROJECT: string;
+  IDENTITY_GRAPH_BACKFILL_REQUESTED_BY: string;
+  IDENTITY_GRAPH_BACKFILL_SOURCES: string;
+  IDENTITY_GRAPH_BACKFILL_WORKER_ID: string;
+  K_JOB: string;
+  K_JOB_EXECUTION: string;
+  K_SERVICE: string;
+  META_ADS_AD_ACCOUNT_ID: string;
+  META_ADS_API_VERSION: string;
+  META_ADS_APP_BASE_URL: string;
+  META_ADS_APP_ID: string;
+  META_ADS_APP_SCOPES: string[];
+  META_ADS_APP_SECRET: string;
+  META_ADS_ENCRYPTION_KEY: string;
+  META_ADS_ORDER_VALUE_ANOMALY_MIN_ROWS: number;
+  META_ADS_ORDER_VALUE_NULL_SPIKE_MIN_RATIO: number;
+  META_ADS_ORDER_VALUE_NULL_SPIKE_RATIO_DELTA: number;
+  META_ADS_ORDER_VALUE_SYNC_ENABLED: boolean;
+  META_ADS_ORDER_VALUE_SYNC_INTERVAL_MS: number;
+  META_ADS_ORDER_VALUE_WINDOW_DAYS: number;
+  META_ADS_SYNC_BATCH_SIZE: number;
+  META_ADS_WORKER_LOOP: boolean;
+  META_ADS_WORKER_POLL_INTERVAL_MS: number;
+  ORDER_ATTRIBUTION_MATERIALIZATION_REQUESTED_BY: string;
+  ORDER_ATTRIBUTION_MATERIALIZATION_WORKER_ID: string;
+  PORT: number;
+  REPORTING_API_TOKEN: string;
+  SESSION_ATTRIBUTION_RETENTION_DAYS: number;
+  SHOPIFY_APP_API_KEY: string;
+  SHOPIFY_APP_API_SECRET: string;
+  SHOPIFY_APP_API_VERSION: string;
+  SHOPIFY_APP_BASE_URL: string;
+  SHOPIFY_APP_ENCRYPTION_KEY: string;
+  SHOPIFY_APP_POST_INSTALL_REDIRECT_URL: string;
+  SHOPIFY_APP_SCOPES: string[];
+  SHOPIFY_ORDER_WRITEBACK_BATCH_SIZE: number;
+  SHOPIFY_ORDER_WRITEBACK_MAX_RETRIES: number;
+  SHOPIFY_RECONCILIATION_BATCH_SIZE: number;
+  SHOPIFY_RECONCILIATION_LOOKBACK_DAYS: number;
+  SHOPIFY_WEBHOOK_BODY_LIMIT: string;
+  SHOPIFY_WEBHOOK_SECRET: string;
+  TRACKING_ALLOWED_ORIGINS: string[];
+  TRACKING_BODY_LIMIT: string;
+  TRACKING_MAX_EVENT_AGE_HOURS: number;
+  TRACKING_MAX_FUTURE_SKEW_SECONDS: number;
+  TRACKING_RATE_LIMIT_MAX: number;
+  TRACKING_RATE_LIMIT_WINDOW_MS: number;
+};
+
+type EnvParser<TValue extends EnvValue> = (name: string) => TValue;
+
+const truthyValues = new Set(['1', 'true', 'yes', 'on']);
+
+function readRaw(name: string): string | undefined {
+  const value = process.env[name];
+  return typeof value === 'string' ? value.trim() : undefined;
 }
 
-function readTrimmedString(name: string, fallback = ""): string {
-	return readString(name, fallback).trim();
+function parseString(name: string, fallback = ''): string {
+  return readRaw(name) ?? fallback;
 }
 
-function readBoolean(name: string, fallback = false): boolean {
-	const value = readTrimmedString(name);
-	if (!value) {
-		return fallback;
-	}
+function parseInteger(name: string, fallback: number): number {
+  const raw = readRaw(name);
 
-	switch (value.toLowerCase()) {
-		case "1":
-		case "true":
-		case "yes":
-		case "on":
-			return true;
-		case "0":
-		case "false":
-		case "no":
-		case "off":
-			return false;
-		default:
-			return fallback;
-	}
+  if (!raw) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(raw, 10);
+
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`Invalid integer environment variable ${name}: ${raw}`);
+  }
+
+  return parsed;
 }
 
-function readNumber(name: string, fallback: number): number {
-	const value = Number(readTrimmedString(name));
-	return Number.isFinite(value) ? value : fallback;
+function parseNumber(name: string, fallback: number): number {
+  const raw = readRaw(name);
+
+  if (!raw) {
+    return fallback;
+  }
+
+  const parsed = Number(raw);
+
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`Invalid numeric environment variable ${name}: ${raw}`);
+  }
+
+  return parsed;
 }
 
-function readPositiveInteger(name: string, fallback: number): number {
-	const value = Math.trunc(readNumber(name, fallback));
-	return value > 0 ? value : fallback;
+function parseBoolean(name: string, fallback: boolean): boolean {
+  const raw = readRaw(name);
+
+  if (!raw) {
+    return fallback;
+  }
+
+  return truthyValues.has(raw.toLowerCase());
 }
 
-function readNonNegativeInteger(name: string, fallback: number): number {
-	const value = Math.trunc(readNumber(name, fallback));
-	return value >= 0 ? value : fallback;
+function parseStringList(name: string, fallback: string[] = []): string[] {
+  const raw = readRaw(name);
+
+  if (!raw) {
+    return [...fallback];
+  }
+
+  return raw
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
 }
 
-function readList(name: string): string[] {
-	return readString(name)
-		.split(",")
-		.map((entry) => entry.trim())
-		.filter(Boolean);
+const parsers: { [TKey in keyof Env]: EnvParser<Env[TKey]> } = {
+  API_JSON_BODY_LIMIT: (name) => parseString(name, '1mb'),
+  API_ALLOWED_ORIGINS: (name) => parseStringList(name, []),
+  APP_SESSION_TTL_HOURS: (name) => parseInteger(name, 168),
+  ATTRIBUTION_JOB_BATCH_SIZE: (name) => parseInteger(name, 50),
+  ATTRIBUTION_STALE_SCAN_BATCH_SIZE: (name) => parseInteger(name, 100),
+  ATTRIBUTION_WORKER_LOOP: (name) => parseBoolean(name, true),
+  ATTRIBUTION_WORKER_POLL_INTERVAL_MS: (name) => parseInteger(name, 30000),
+  DATA_QUALITY_ANOMALY_LOOKBACK_DAYS: (name) => parseInteger(name, 7),
+  DATA_QUALITY_ANOMALY_MIN_BASELINE: (name) => parseInteger(name, 5),
+  DATA_QUALITY_ANOMALY_THRESHOLD_RATIO: (name) => parseNumber(name, 0.35),
+  DATA_QUALITY_CHECK_INTERVAL_MS: (name) => parseInteger(name, 60 * 60 * 1000),
+  DATA_QUALITY_CHECK_LOOP: (name) => parseBoolean(name, true),
+  DATA_QUALITY_CONFLICTING_SHOPIFY_ALERT_THRESHOLD: (name) => parseInteger(name, 0),
+  DATA_QUALITY_DUPLICATE_CANONICAL_ALERT_THRESHOLD: (name) => parseInteger(name, 0),
+  DATA_QUALITY_HASH_ANOMALY_ALERT_THRESHOLD: (name) => parseInteger(name, 0),
+  DATA_QUALITY_ORPHAN_SESSION_ALERT_THRESHOLD: (name) => parseInteger(name, 0),
+  DATA_QUALITY_REPORTING_ANOMALY_ALERT_THRESHOLD: (name) => parseInteger(name, 0),
+  DATA_QUALITY_SAMPLE_LIMIT: (name) => parseInteger(name, 25),
+  DATA_QUALITY_TARGET_LAG_DAYS: (name) => parseInteger(name, 1),
+  DATABASE_CONNECTION_TIMEOUT_MS: (name) => parseInteger(name, 10000),
+  DATABASE_IDLE_TIMEOUT_MS: (name) => parseInteger(name, 30000),
+  DATABASE_MAX_USES: (name) => parseInteger(name, 7500),
+  DATABASE_POOL_MAX: (name) => parseInteger(name, 10),
+  DATABASE_POOL_MIN: (name) => parseInteger(name, 0),
+  DATABASE_QUERY_TIMEOUT_MS: (name) => parseInteger(name, 15000),
+  DATABASE_SSL: (name) => parseBoolean(name, false),
+  DATABASE_STATEMENT_TIMEOUT_MS: (name) => parseInteger(name, 15000),
+  DATABASE_URL: (name) => parseString(name, 'postgres://postgres:postgres@127.0.0.1:5432/roas_radar_test'),
+  DEAD_LETTER_REPLAY_MAX_BATCH_SIZE: (name) => parseInteger(name, 100),
+  DEFAULT_ORGANIZATION_ID: (name) => parseInteger(name, 1),
+  GCLOUD_PROJECT: (name) => parseString(name, ''),
+  GA4_BIGQUERY_BACKFILL_HOURS: (name) => parseInteger(name, 168),
+  GA4_BIGQUERY_ENABLED: (name) => parseBoolean(name, false),
+  GA4_BIGQUERY_LOOKBACK_HOURS: (name) => parseInteger(name, 24),
+  GA4_FALLBACK_RETENTION_DAYS: (name) => parseInteger(name, 30),
+  GOOGLE_ADS_API_VERSION: (name) => parseString(name, 'v22'),
+  GOOGLE_ADS_APP_BASE_URL: (name) => parseString(name, ''),
+  GOOGLE_ADS_APP_SCOPES: (name) => parseStringList(name, []),
+  GOOGLE_ADS_CLIENT_ID: (name) => parseString(name, ''),
+  GOOGLE_ADS_CLIENT_SECRET: (name) => parseString(name, ''),
+  GOOGLE_ADS_DEVELOPER_TOKEN: (name) => parseString(name, ''),
+  GOOGLE_ADS_ENCRYPTION_KEY: (name) => parseString(name, ''),
+  GOOGLE_ADS_SYNC_BATCH_SIZE: (name) => parseInteger(name, 5),
+  GOOGLE_ADS_SYNC_MAX_RETRIES: (name) => parseInteger(name, 3),
+  GOOGLE_ADS_TRANSFER_LOOKBACK_DAYS: (name) => parseInteger(name, 30),
+  GOOGLE_ADS_WORKER_LOOP: (name) => parseBoolean(name, true),
+  GOOGLE_ADS_WORKER_POLL_INTERVAL_MS: (name) => parseInteger(name, 60 * 1000),
+  GOOGLE_CLOUD_PROJECT: (name) => parseString(name, ''),
+  IDENTITY_GRAPH_BACKFILL_REQUESTED_BY: (name) => parseString(name, ''),
+  IDENTITY_GRAPH_BACKFILL_SOURCES: (name) => parseString(name, ''),
+  IDENTITY_GRAPH_BACKFILL_WORKER_ID: (name) => parseString(name, ''),
+  K_JOB: (name) => parseString(name, ''),
+  K_JOB_EXECUTION: (name) => parseString(name, ''),
+  K_SERVICE: (name) => parseString(name, ''),
+  META_ADS_AD_ACCOUNT_ID: (name) => parseString(name, ''),
+  META_ADS_API_VERSION: (name) => parseString(name, 'v25.0'),
+  META_ADS_APP_BASE_URL: (name) => parseString(name, ''),
+  META_ADS_APP_ID: (name) => parseString(name, ''),
+  META_ADS_APP_SCOPES: (name) => parseStringList(name, []),
+  META_ADS_APP_SECRET: (name) => parseString(name, ''),
+  META_ADS_ENCRYPTION_KEY: (name) => parseString(name, ''),
+  META_ADS_ORDER_VALUE_ANOMALY_MIN_ROWS: (name) => parseInteger(name, 5),
+  META_ADS_ORDER_VALUE_NULL_SPIKE_MIN_RATIO: (name) => parseNumber(name, 0.5),
+  META_ADS_ORDER_VALUE_NULL_SPIKE_RATIO_DELTA: (name) => parseNumber(name, 0.3),
+  META_ADS_ORDER_VALUE_SYNC_ENABLED: (name) => parseBoolean(name, true),
+  META_ADS_ORDER_VALUE_SYNC_INTERVAL_MS: (name) => parseInteger(name, 60 * 60 * 1000),
+  META_ADS_ORDER_VALUE_WINDOW_DAYS: (name) => parseInteger(name, 2),
+  META_ADS_SYNC_BATCH_SIZE: (name) => parseInteger(name, 5),
+  META_ADS_WORKER_LOOP: (name) => parseBoolean(name, true),
+  META_ADS_WORKER_POLL_INTERVAL_MS: (name) => parseInteger(name, 60 * 1000),
+  ORDER_ATTRIBUTION_MATERIALIZATION_REQUESTED_BY: (name) => parseString(name, ''),
+  ORDER_ATTRIBUTION_MATERIALIZATION_WORKER_ID: (name) => parseString(name, ''),
+  PORT: (name) => parseInteger(name, 8080),
+  REPORTING_API_TOKEN: (name) => parseString(name, ''),
+  SESSION_ATTRIBUTION_RETENTION_DAYS: (name) => parseInteger(name, 30),
+  SHOPIFY_APP_API_KEY: (name) => parseString(name, ''),
+  SHOPIFY_APP_API_SECRET: (name) => parseString(name, ''),
+  SHOPIFY_APP_API_VERSION: (name) => parseString(name, '2025-01'),
+  SHOPIFY_APP_BASE_URL: (name) => parseString(name, ''),
+  SHOPIFY_APP_ENCRYPTION_KEY: (name) => parseString(name, ''),
+  SHOPIFY_APP_POST_INSTALL_REDIRECT_URL: (name) => parseString(name, ''),
+  SHOPIFY_APP_SCOPES: (name) => parseStringList(name, []),
+  SHOPIFY_ORDER_WRITEBACK_BATCH_SIZE: (name) => parseInteger(name, 50),
+  SHOPIFY_ORDER_WRITEBACK_MAX_RETRIES: (name) => parseInteger(name, 3),
+  SHOPIFY_RECONCILIATION_BATCH_SIZE: (name) => parseInteger(name, 100),
+  SHOPIFY_RECONCILIATION_LOOKBACK_DAYS: (name) => parseInteger(name, 7),
+  SHOPIFY_WEBHOOK_BODY_LIMIT: (name) => parseString(name, '1mb'),
+  SHOPIFY_WEBHOOK_SECRET: (name) => parseString(name, ''),
+  TRACKING_ALLOWED_ORIGINS: (name) => parseStringList(name, []),
+  TRACKING_BODY_LIMIT: (name) => parseString(name, '256kb'),
+  TRACKING_MAX_EVENT_AGE_HOURS: (name) => parseInteger(name, 24),
+  TRACKING_MAX_FUTURE_SKEW_SECONDS: (name) => parseInteger(name, 300),
+  TRACKING_RATE_LIMIT_MAX: (name) => parseInteger(name, 120),
+  TRACKING_RATE_LIMIT_WINDOW_MS: (name) => parseInteger(name, 60 * 1000)
+};
+
+function readEnvValue<TKey extends keyof Env>(key: TKey): Env[TKey] {
+  return parsers[key](key);
 }
+
+export const env = new Proxy({} as Env, {
+  get: (_target, property) => {
+    if (typeof property !== 'string' || !(property in parsers)) {
+      return undefined;
+    }
+
+    return readEnvValue(property as keyof Env);
+  },
+  has: (_target, property) => typeof property === 'string' && property in parsers,
+  ownKeys: () => Object.keys(parsers),
+  getOwnPropertyDescriptor: () => ({
+    enumerable: true,
+    configurable: true
+  })
+});
 
 export function getConfiguredReportingApiToken(): string | null {
-	const value = readTrimmedString("REPORTING_API_TOKEN");
-	return value.length > 0 ? value : null;
+  const token = readRaw('REPORTING_API_TOKEN');
+  return token && token.length > 0 ? token : null;
 }
 
 export function getApiAllowedOrigins(): string[] {
-	return readList("API_ALLOWED_ORIGINS");
+  return readEnvValue('API_ALLOWED_ORIGINS');
 }
-
-export const env = {
-	PORT: readPositiveInteger("PORT", 3000),
-	DATABASE_URL: readTrimmedString(
-		"DATABASE_URL",
-		"postgres://postgres:postgres@127.0.0.1:5432/roas_radar",
-	),
-	DATABASE_SSL: readBoolean("DATABASE_SSL", false),
-	DATABASE_POOL_MAX: readPositiveInteger("DATABASE_POOL_MAX", 10),
-	DATABASE_POOL_MIN: readNonNegativeInteger("DATABASE_POOL_MIN", 0),
-	DATABASE_IDLE_TIMEOUT_MS: readPositiveInteger(
-		"DATABASE_IDLE_TIMEOUT_MS",
-		30_000,
-	),
-	DATABASE_CONNECTION_TIMEOUT_MS: readPositiveInteger(
-		"DATABASE_CONNECTION_TIMEOUT_MS",
-		10_000,
-	),
-	DATABASE_STATEMENT_TIMEOUT_MS: readPositiveInteger(
-		"DATABASE_STATEMENT_TIMEOUT_MS",
-		30_000,
-	),
-	DATABASE_QUERY_TIMEOUT_MS: readPositiveInteger(
-		"DATABASE_QUERY_TIMEOUT_MS",
-		30_000,
-	),
-	DATABASE_MAX_USES: readPositiveInteger("DATABASE_MAX_USES", 7_500),
-	API_JSON_BODY_LIMIT: readTrimmedString("API_JSON_BODY_LIMIT", "1mb"),
-	SHOPIFY_WEBHOOK_BODY_LIMIT: readTrimmedString(
-		"SHOPIFY_WEBHOOK_BODY_LIMIT",
-		"2mb",
-	),
-	TRACKING_BODY_LIMIT: readTrimmedString("TRACKING_BODY_LIMIT", "256kb"),
-	REPORTING_API_TOKEN: getConfiguredReportingApiToken() ?? "",
-	API_ALLOWED_ORIGINS: getApiAllowedOrigins(),
-	APP_SESSION_TTL_HOURS: readPositiveInteger("APP_SESSION_TTL_HOURS", 24 * 14),
-	TRACKING_ALLOWED_ORIGINS: readList("TRACKING_ALLOWED_ORIGINS"),
-	TRACKING_MAX_EVENT_AGE_HOURS: readPositiveInteger(
-		"TRACKING_MAX_EVENT_AGE_HOURS",
-		168,
-	),
-	TRACKING_MAX_FUTURE_SKEW_SECONDS: readPositiveInteger(
-		"TRACKING_MAX_FUTURE_SKEW_SECONDS",
-		300,
-	),
-	TRACKING_RATE_LIMIT_MAX: readPositiveInteger("TRACKING_RATE_LIMIT_MAX", 120),
-	TRACKING_RATE_LIMIT_WINDOW_MS: readPositiveInteger(
-		"TRACKING_RATE_LIMIT_WINDOW_MS",
-		60_000,
-	),
-	SESSION_ATTRIBUTION_RETENTION_DAYS: readPositiveInteger(
-		"SESSION_ATTRIBUTION_RETENTION_DAYS",
-		30,
-	),
-	GA4_FALLBACK_RETENTION_DAYS: readPositiveInteger(
-		"GA4_FALLBACK_RETENTION_DAYS",
-		30,
-	),
-	ATTRIBUTION_JOB_BATCH_SIZE: readPositiveInteger(
-		"ATTRIBUTION_JOB_BATCH_SIZE",
-		25,
-	),
-	ATTRIBUTION_STALE_SCAN_BATCH_SIZE: readPositiveInteger(
-		"ATTRIBUTION_STALE_SCAN_BATCH_SIZE",
-		50,
-	),
-	ATTRIBUTION_WORKER_LOOP: readBoolean("ATTRIBUTION_WORKER_LOOP", false),
-	ATTRIBUTION_WORKER_POLL_INTERVAL_MS: readPositiveInteger(
-		"ATTRIBUTION_WORKER_POLL_INTERVAL_MS",
-		30_000,
-	),
-	DATA_QUALITY_CHECK_LOOP: readBoolean("DATA_QUALITY_CHECK_LOOP", false),
-	DATA_QUALITY_CHECK_INTERVAL_MS: readPositiveInteger(
-		"DATA_QUALITY_CHECK_INTERVAL_MS",
-		3_600_000,
-	),
-	DATA_QUALITY_TARGET_LAG_DAYS: readNonNegativeInteger(
-		"DATA_QUALITY_TARGET_LAG_DAYS",
-		1,
-	),
-	DATA_QUALITY_ANOMALY_LOOKBACK_DAYS: readPositiveInteger(
-		"DATA_QUALITY_ANOMALY_LOOKBACK_DAYS",
-		7,
-	),
-	DATA_QUALITY_ANOMALY_THRESHOLD_RATIO: readNumber(
-		"DATA_QUALITY_ANOMALY_THRESHOLD_RATIO",
-		0.35,
-	),
-	DATA_QUALITY_ANOMALY_MIN_BASELINE: readPositiveInteger(
-		"DATA_QUALITY_ANOMALY_MIN_BASELINE",
-		5,
-	),
-	DATA_QUALITY_REPORTING_ANOMALY_ALERT_THRESHOLD: readNonNegativeInteger(
-		"DATA_QUALITY_REPORTING_ANOMALY_ALERT_THRESHOLD",
-		0,
-	),
-	DATA_QUALITY_ORPHAN_SESSION_ALERT_THRESHOLD: readNonNegativeInteger(
-		"DATA_QUALITY_ORPHAN_SESSION_ALERT_THRESHOLD",
-		0,
-	),
-	DATA_QUALITY_DUPLICATE_CANONICAL_ALERT_THRESHOLD: readNonNegativeInteger(
-		"DATA_QUALITY_DUPLICATE_CANONICAL_ALERT_THRESHOLD",
-		0,
-	),
-	DATA_QUALITY_CONFLICTING_SHOPIFY_ALERT_THRESHOLD: readNonNegativeInteger(
-		"DATA_QUALITY_CONFLICTING_SHOPIFY_ALERT_THRESHOLD",
-		0,
-	),
-	DATA_QUALITY_HASH_ANOMALY_ALERT_THRESHOLD: readNonNegativeInteger(
-		"DATA_QUALITY_HASH_ANOMALY_ALERT_THRESHOLD",
-		0,
-	),
-	DATA_QUALITY_SAMPLE_LIMIT: readPositiveInteger(
-		"DATA_QUALITY_SAMPLE_LIMIT",
-		25,
-	),
-	SHOPIFY_APP_API_KEY: readTrimmedString("SHOPIFY_APP_API_KEY"),
-	SHOPIFY_APP_API_SECRET: readTrimmedString("SHOPIFY_APP_API_SECRET"),
-	SHOPIFY_APP_API_VERSION: readTrimmedString(
-		"SHOPIFY_APP_API_VERSION",
-		"2025-01",
-	),
-	SHOPIFY_APP_BASE_URL: readTrimmedString("SHOPIFY_APP_BASE_URL"),
-	SHOPIFY_APP_ENCRYPTION_KEY: readTrimmedString("SHOPIFY_APP_ENCRYPTION_KEY"),
-	SHOPIFY_APP_POST_INSTALL_REDIRECT_URL: readTrimmedString(
-		"SHOPIFY_APP_POST_INSTALL_REDIRECT_URL",
-	),
-	SHOPIFY_APP_SCOPES: readList("SHOPIFY_APP_SCOPES"),
-	SHOPIFY_WEBHOOK_SECRET: readTrimmedString("SHOPIFY_WEBHOOK_SECRET"),
-	SHOPIFY_ORDER_WRITEBACK_BATCH_SIZE: readPositiveInteger(
-		"SHOPIFY_ORDER_WRITEBACK_BATCH_SIZE",
-		25,
-	),
-	SHOPIFY_ORDER_WRITEBACK_MAX_RETRIES: readPositiveInteger(
-		"SHOPIFY_ORDER_WRITEBACK_MAX_RETRIES",
-		5,
-	),
-	SHOPIFY_RECONCILIATION_BATCH_SIZE: readPositiveInteger(
-		"SHOPIFY_RECONCILIATION_BATCH_SIZE",
-		50,
-	),
-	SHOPIFY_RECONCILIATION_LOOKBACK_DAYS: readPositiveInteger(
-		"SHOPIFY_RECONCILIATION_LOOKBACK_DAYS",
-		7,
-	),
-	META_ADS_APP_ID: readTrimmedString("META_ADS_APP_ID"),
-	META_ADS_APP_SECRET: readTrimmedString("META_ADS_APP_SECRET"),
-	META_ADS_APP_BASE_URL: readTrimmedString("META_ADS_APP_BASE_URL"),
-	META_ADS_APP_SCOPES: readList("META_ADS_APP_SCOPES"),
-	META_ADS_AD_ACCOUNT_ID: readTrimmedString("META_ADS_AD_ACCOUNT_ID"),
-	META_ADS_ENCRYPTION_KEY: readTrimmedString("META_ADS_ENCRYPTION_KEY"),
-	META_ADS_API_VERSION: readTrimmedString("META_ADS_API_VERSION", "v20.0"),
-	META_ADS_SYNC_LOOKBACK_DAYS: readPositiveInteger(
-		"META_ADS_SYNC_LOOKBACK_DAYS",
-		3,
-	),
-	META_ADS_SYNC_INITIAL_LOOKBACK_DAYS: readPositiveInteger(
-		"META_ADS_SYNC_INITIAL_LOOKBACK_DAYS",
-		7,
-	),
-	META_ADS_SYNC_BATCH_SIZE: readPositiveInteger("META_ADS_SYNC_BATCH_SIZE", 10),
-	META_ADS_SYNC_MAX_RETRIES: readPositiveInteger(
-		"META_ADS_SYNC_MAX_RETRIES",
-		5,
-	),
-	META_ADS_TOKEN_REFRESH_LEEWAY_HOURS: readPositiveInteger(
-		"META_ADS_TOKEN_REFRESH_LEEWAY_HOURS",
-		24,
-	),
-	META_ADS_WORKER_LOOP: readBoolean("META_ADS_WORKER_LOOP", false),
-	META_ADS_WORKER_POLL_INTERVAL_MS: readPositiveInteger(
-		"META_ADS_WORKER_POLL_INTERVAL_MS",
-		300_000,
-	),
-	GOOGLE_ADS_CLIENT_ID: readTrimmedString("GOOGLE_ADS_CLIENT_ID"),
-	GOOGLE_ADS_CLIENT_SECRET: readTrimmedString("GOOGLE_ADS_CLIENT_SECRET"),
-	GOOGLE_ADS_DEVELOPER_TOKEN: readTrimmedString("GOOGLE_ADS_DEVELOPER_TOKEN"),
-	GOOGLE_ADS_APP_BASE_URL: readTrimmedString("GOOGLE_ADS_APP_BASE_URL"),
-	GOOGLE_ADS_APP_SCOPES: readList("GOOGLE_ADS_APP_SCOPES"),
-	GOOGLE_ADS_ENCRYPTION_KEY: readTrimmedString("GOOGLE_ADS_ENCRYPTION_KEY"),
-	GOOGLE_ADS_API_VERSION: readTrimmedString("GOOGLE_ADS_API_VERSION", "v18"),
-	GOOGLE_ADS_SYNC_LOOKBACK_DAYS: readPositiveInteger(
-		"GOOGLE_ADS_SYNC_LOOKBACK_DAYS",
-		3,
-	),
-	GOOGLE_ADS_SYNC_INITIAL_LOOKBACK_DAYS: readPositiveInteger(
-		"GOOGLE_ADS_SYNC_INITIAL_LOOKBACK_DAYS",
-		7,
-	),
-	GOOGLE_ADS_SYNC_BATCH_SIZE: readPositiveInteger(
-		"GOOGLE_ADS_SYNC_BATCH_SIZE",
-		10,
-	),
-	GOOGLE_ADS_SYNC_MAX_RETRIES: readPositiveInteger(
-		"GOOGLE_ADS_SYNC_MAX_RETRIES",
-		5,
-	),
-	GOOGLE_ADS_TRANSFER_LOOKBACK_DAYS: readPositiveInteger(
-		"GOOGLE_ADS_TRANSFER_LOOKBACK_DAYS",
-		30,
-	),
-	GOOGLE_ADS_WORKER_LOOP: readBoolean("GOOGLE_ADS_WORKER_LOOP", false),
-	GOOGLE_ADS_WORKER_POLL_INTERVAL_MS: readPositiveInteger(
-		"GOOGLE_ADS_WORKER_POLL_INTERVAL_MS",
-		300_000,
-	),
-	GA4_BIGQUERY_ENABLED: readBoolean("GA4_BIGQUERY_ENABLED", false),
-	GA4_BIGQUERY_LOOKBACK_HOURS: readPositiveInteger(
-		"GA4_BIGQUERY_LOOKBACK_HOURS",
-		24,
-	),
-	GA4_BIGQUERY_BACKFILL_HOURS: readPositiveInteger(
-		"GA4_BIGQUERY_BACKFILL_HOURS",
-		168,
-	),
-} as const;

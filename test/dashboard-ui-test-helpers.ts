@@ -352,147 +352,169 @@ export function createShellProps(overrides: Record<string, unknown> = {}) {
 export function createReportingDashboardProps(
 	overrides: Record<string, unknown> = {},
 ) {
-	const base = {
-		filters: {
-			startDate: "2026-04-01",
-			endDate: "2026-04-20",
-			source: "",
-			campaign: "",
-		},
-		onFiltersChange: noop,
-		groupBy: "day" as const,
-		onGroupByChange: noop,
-		reportingTimezone: "America/Los_Angeles",
-		quickRanges: [
-			{
-				label: "Today",
-				value: () => ({ startDate: "2026-04-20", endDate: "2026-04-20" }),
-			},
-			{
-				label: "Last 7D",
-				value: () => ({ startDate: "2026-04-14", endDate: "2026-04-20" }),
-			},
-			{
-				label: "Last 30D",
-				value: () => ({ startDate: "2026-03-22", endDate: "2026-04-20" }),
-			},
-		],
-		onApplyQuickRange: noop,
-		onClearFilters: noop,
-		summaryCards: [
-			{ label: "Visits", value: "12,480", detail: "Apr 1 to Apr 20" },
-			{ label: "Orders", value: "324", detail: "2.6% conversion" },
-			{ label: "Revenue", value: "$48,920.00", detail: "4.3 ROAS" },
-			{ label: "Spend", value: "$11,376.00", detail: "Apr 1 to Apr 20" },
-			{ label: "AOV", value: "$150.99", detail: "324 attributed orders" },
-		],
-		summarySection: {
-			data: {
-				visits: 12480,
-				orders: 324,
-				revenue: 48920,
-				spend: 11376,
-				conversionRate: 0.02596,
-				roas: 4.3,
-			},
-			loading: false,
-			error: null,
-		} satisfies AsyncSection<import("../dashboard/src/lib/api").SummaryTotals>,
-		campaignsSection: {
-			data: [
-				{
-					source: "google",
-					medium: "cpc",
-					campaign: "Spring Search",
-					content: "hero",
-					visits: 4800,
-					orders: 122,
-					revenue: 18320,
-					conversionRate: 0.0254,
-				},
-				{
-					source: "meta",
-					medium: "paid_social",
-					campaign: "Prospecting Carousel",
-					content: "video",
-					visits: 3600,
-					orders: 84,
-					revenue: 12960,
-					conversionRate: 0.0233,
-				},
-			],
-			loading: false,
-			error: null,
-		} satisfies AsyncSection<import("../dashboard/src/lib/api").CampaignRow[]>,
-		timeseriesSection: {
-			data: [
-				{ date: "2026-04-18", visits: 540, orders: 21, revenue: 3210 },
-				{ date: "2026-04-19", visits: 610, orders: 24, revenue: 4020 },
-				{ date: "2026-04-20", visits: 575, orders: 23, revenue: 3680 },
-			],
-			loading: false,
-			error: null,
-		} satisfies AsyncSection<
-			import("../dashboard/src/lib/api").TimeseriesPoint[]
-		>,
-		ordersSection: {
-			data: [
-				{
-					shopifyOrderId: "1105",
-					processedAt: "2026-04-20T18:00:00.000Z",
-					source: "google",
-					medium: "cpc",
-					campaign: "Spring Search",
-					totalPrice: 195,
-					matchSource: "checkout_token",
-					confidenceLabel: "high",
-					attributionReason: "last-touch",
-				},
-				{
-					shopifyOrderId: "1104",
-					processedAt: "2026-04-19T18:00:00.000Z",
-					source: "meta",
-					medium: "paid_social",
-					campaign: "Prospecting Carousel",
-					totalPrice: 150,
-					matchSource: "ga4_fallback",
-					confidenceLabel: "low",
-					attributionReason: "linear",
-				},
-			],
-			loading: false,
-			error: null,
-		} satisfies AsyncSection<import("../dashboard/src/lib/api").OrderRow[]>,
-		spendDetailsSection: {
-			data: [
-				{
-					source: "google",
-					medium: "cpc",
-					channel: "google / cpc",
-					subtotal: 7320,
-					campaigns: [
-						{ campaign: "Spring Search", spend: 5220 },
-						{ campaign: "Brand Search", spend: 2100 },
-					],
-				},
-				{
-					source: "meta",
-					medium: "paid_social",
-					channel: "meta / paid_social",
-					subtotal: 4056,
-					campaigns: [
-						{ campaign: "Prospecting Carousel", spend: 2556 },
-						{ campaign: "Retargeting Video", spend: 1500 },
-					],
-				},
-			],
-			loading: false,
-			error: null,
-		} satisfies AsyncSection<
-			import("../dashboard/src/lib/api").SpendDetailChannelGroup[]
-		>,
-		onOpenOrderDetails: noop,
-	};
+  const base = {
+    filters: {
+      startDate: '2026-04-01',
+      endDate: '2026-04-20',
+      source: '',
+      campaign: '',
+      attributionTier: ''
+    },
+    onFiltersChange: noop,
+    groupBy: 'day' as const,
+    onGroupByChange: noop,
+    reportingTimezone: 'America/Los_Angeles',
+    quickRanges: [
+      { label: 'Today', value: () => ({ startDate: '2026-04-20', endDate: '2026-04-20' }) },
+      { label: 'Last 7D', value: () => ({ startDate: '2026-04-14', endDate: '2026-04-20' }) },
+      { label: 'Last 30D', value: () => ({ startDate: '2026-03-22', endDate: '2026-04-20' }) }
+    ],
+    onApplyQuickRange: noop,
+    onClearFilters: noop,
+    summaryCards: [
+      { label: 'Visits', value: '12,480', detail: 'Apr 1 to Apr 20' },
+      { label: 'Orders', value: '324', detail: '2.6% conversion' },
+      { label: 'Revenue', value: '$48,920.00', detail: '4.3 ROAS' },
+      { label: 'Spend', value: '$11,376.00', detail: 'Apr 1 to Apr 20' },
+      { label: 'AOV', value: '$150.99', detail: '324 attributed orders' }
+    ],
+    summarySection: {
+      data: {
+        visits: 12480,
+        orders: 324,
+        revenue: 48920,
+        spend: 11376,
+        conversionRate: 0.02596,
+        roas: 4.3
+      },
+      loading: false,
+      error: null
+    } satisfies AsyncSection<import('../dashboard/src/lib/api').SummaryTotals>,
+    campaignsSection: {
+      data: [
+        {
+          source: 'google',
+          medium: 'cpc',
+          campaign: 'Spring Search',
+          content: 'hero',
+          visits: 4800,
+          orders: 122,
+          revenue: 18320,
+          conversionRate: 0.0254
+        },
+        {
+          source: 'meta',
+          medium: 'paid_social',
+          campaign: 'Prospecting Carousel',
+          content: 'video',
+          visits: 3600,
+          orders: 84,
+          revenue: 12960,
+          conversionRate: 0.0233
+        }
+      ],
+      loading: false,
+      error: null
+    } satisfies AsyncSection<import('../dashboard/src/lib/api').CampaignRow[]>,
+    timeseriesSection: {
+      data: [
+        { date: '2026-04-18', visits: 540, orders: 21, revenue: 3210 },
+        { date: '2026-04-19', visits: 610, orders: 24, revenue: 4020 },
+        { date: '2026-04-20', visits: 575, orders: 23, revenue: 3680 }
+      ],
+      loading: false,
+      error: null
+    } satisfies AsyncSection<import('../dashboard/src/lib/api').TimeseriesPoint[]>,
+    ordersSection: {
+      data: [
+        {
+          shopifyOrderId: '1105',
+          processedAt: '2026-04-20T18:00:00.000Z',
+          orderOccurredAtUtc: '2026-04-20T18:00:00.000Z',
+          source: 'google',
+          medium: 'cpc',
+          campaign: 'Spring Search',
+          totalPrice: 195,
+          attributionReason: 'matched_by_landing_session',
+          primaryCreditAttributionReason: 'matched_by_landing_session',
+          attributionTier: 'deterministic_first_party',
+          attributionTierLabel: 'Deterministic first-party',
+          attributionTierDescription:
+            'Resolved from durable ROAS Radar first-party evidence such as a landing session, checkout token, cart token, or stitched identity path.',
+          attributionSource: 'landing_session_id',
+          attributionMatchedAt: '2026-04-20T18:00:30.000Z',
+          confidenceScore: 1,
+          sessionId: 'sess_123'
+        },
+        {
+          shopifyOrderId: '1104',
+          processedAt: '2026-04-19T18:00:00.000Z',
+          orderOccurredAtUtc: '2026-04-19T18:00:00.000Z',
+          source: 'meta',
+          medium: 'paid_social',
+          campaign: 'Prospecting Carousel',
+          totalPrice: 150,
+          attributionReason: 'shopify_hint_derived',
+          primaryCreditAttributionReason: 'shopify_hint_derived',
+          attributionTier: 'deterministic_shopify_hint',
+          attributionTierLabel: 'Deterministic Shopify hint',
+          attributionTierDescription: 'Recovered synthetically from Shopify marketing hints after first-party resolution failed.',
+          attributionSource: 'shopify_marketing_hint',
+          attributionMatchedAt: '2026-04-19T18:00:15.000Z',
+          confidenceScore: 0.55,
+          sessionId: null
+        },
+        {
+          shopifyOrderId: '1103',
+          processedAt: '2026-04-18T18:00:00.000Z',
+          orderOccurredAtUtc: '2026-04-18T18:00:00.000Z',
+          source: null,
+          medium: null,
+          campaign: null,
+          totalPrice: 89,
+          attributionReason: 'unattributed',
+          primaryCreditAttributionReason: 'unattributed',
+          attributionTier: 'unattributed',
+          attributionTierLabel: 'Unattributed',
+          attributionTierDescription:
+            'No eligible first-party, Shopify hint, or GA4 fallback match qualified, or the required timing data could not be normalized.',
+          attributionSource: 'unattributed',
+          attributionMatchedAt: null,
+          confidenceScore: null,
+          sessionId: null
+        }
+      ],
+      loading: false,
+      error: null
+    } satisfies AsyncSection<import('../dashboard/src/lib/api').OrderRow[]>,
+    spendDetailsSection: {
+      data: [
+        {
+          source: 'google',
+          medium: 'cpc',
+          channel: 'google / cpc',
+          subtotal: 7320,
+          campaigns: [
+            { campaign: 'Spring Search', spend: 5220 },
+            { campaign: 'Brand Search', spend: 2100 }
+          ]
+        },
+        {
+          source: 'meta',
+          medium: 'paid_social',
+          channel: 'meta / paid_social',
+          subtotal: 4056,
+          campaigns: [
+            { campaign: 'Prospecting Carousel', spend: 2556 },
+            { campaign: 'Retargeting Video', spend: 1500 }
+          ]
+        }
+      ],
+      loading: false,
+      error: null
+    } satisfies AsyncSection<import('../dashboard/src/lib/api').SpendDetailChannelGroup[]>,
+    onOpenOrderDetails: noop
+  };
 
 	return {
 		...base,
@@ -503,130 +525,143 @@ export function createReportingDashboardProps(
 export function createOrderDetailsProps(
 	overrides: Record<string, unknown> = {},
 ) {
-	const base = {
-		selectedOrderId: "1105",
-		reportingTimezone: "America/Los_Angeles",
-		orderDetailsSection: {
-			loading: false,
-			error: null,
-			data: {
-				order: {
-					shopifyOrderId: "1105",
-					shopifyOrderNumber: "RR-1105",
-					shopifyCustomerId: "gid://shopify/Customer/99",
-					customerIdentityId: "cust_449",
-					email: "alex@example.com",
-					emailHash: "hash_abc123",
-					currencyCode: "USD",
-					subtotalPrice: 180,
-					totalPrice: 195,
-					financialStatus: "paid",
-					fulfillmentStatus: "fulfilled",
-					processedAt: "2026-04-20T18:00:00.000Z",
-					createdAtShopify: "2026-04-20T17:42:00.000Z",
-					updatedAtShopify: "2026-04-20T18:30:00.000Z",
-					landingSessionId: "sess_123",
-					checkoutToken: "check_456",
-					cartToken: "cart_789",
-					sourceName: "web",
-					ingestedAt: "2026-04-20T18:31:00.000Z",
-					attributionSnapshot: {
-						confidenceScore: 1,
-						confidenceLabel: "high",
-						winner: {
-							sessionId: "sess_123",
-							matchSource: "checkout_token",
-							confidenceLabel: "high",
-						},
-						timeline: [],
-					},
-					rawPayload: { orderNumber: "RR-1105", note: "vip customer" },
-				},
-				lineItems: [
-					{
-						shopifyLineItemId: "line_1",
-						shopifyProductId: "prod_1",
-						shopifyVariantId: "var_1",
-						sku: "SKU-RED-01",
-						title: "Performance Hoodie",
-						variantTitle: "Red / Medium",
-						vendor: "ROAS Radar",
-						quantity: 2,
-						price: 90,
-						totalDiscount: 15,
-						fulfillmentStatus: "fulfilled",
-						requiresShipping: true,
-						taxable: true,
-						ingestedAt: "2026-04-20T18:31:00.000Z",
-						rawPayload: { lineItemId: "line_1" },
-					},
-					{
-						shopifyLineItemId: "line_2",
-						shopifyProductId: "prod_2",
-						shopifyVariantId: "var_2",
-						sku: "SKU-BLK-02",
-						title: "Attribution Tee",
-						variantTitle: "Black / Large",
-						vendor: "ROAS Radar",
-						quantity: 1,
-						price: 15,
-						totalDiscount: 0,
-						fulfillmentStatus: "fulfilled",
-						requiresShipping: true,
-						taxable: true,
-						ingestedAt: "2026-04-20T18:31:00.000Z",
-						rawPayload: { lineItemId: "line_2" },
-					},
-				],
-				attributionCredits: [
-					{
-						attributionModel: "last_touch",
-						touchpointPosition: 1,
-						sessionId: "sess_123",
-						touchpointOccurredAt: "2026-04-20T16:15:00.000Z",
-						source: "google",
-						medium: "cpc",
-						campaign: "brand-search",
-						content: null,
-						term: null,
-						clickIdType: "gclid",
-						clickIdValue: "abc-123",
-						creditWeight: 1,
-						revenueCredit: 195,
-						isPrimary: true,
-						attributionReason: "matched checkout token",
-						matchSource: "checkout_token",
-						confidenceLabel: "high",
-						createdAt: "2026-04-20T18:31:00.000Z",
-						modelVersion: 2,
-					},
-					{
-						attributionModel: "linear",
-						touchpointPosition: 2,
-						sessionId: "sess_124",
-						touchpointOccurredAt: "2026-04-20T15:45:00.000Z",
-						source: "meta",
-						medium: "paid_social",
-						campaign: "prospecting",
-						content: "video",
-						term: null,
-						clickIdType: "fbclid",
-						clickIdValue: "xyz-987",
-						creditWeight: 0.5,
-						revenueCredit: 97.5,
-						isPrimary: false,
-						attributionReason: "modeled credit",
-						matchSource: "ga4_fallback",
-						confidenceLabel: "low",
-						createdAt: "2026-04-20T18:31:00.000Z",
-						modelVersion: 2,
-					},
-				],
-			},
-		} satisfies AsyncSection<
-			import("../dashboard/src/lib/api").OrderDetailsResponse
-		>,
-	};
+  const base = {
+    selectedOrderId: '1105',
+    reportingTimezone: 'America/Los_Angeles',
+    orderDetailsSection: {
+      loading: false,
+      error: null,
+      data: {
+        order: {
+          shopifyOrderId: '1105',
+          shopifyOrderNumber: 'RR-1105',
+          shopifyCustomerId: 'gid://shopify/Customer/99',
+          customerIdentityId: 'cust_449',
+          email: 'alex@example.com',
+          emailHash: 'hash_abc123',
+          currencyCode: 'USD',
+          subtotalPrice: 180,
+          totalPrice: 195,
+          financialStatus: 'paid',
+          fulfillmentStatus: 'fulfilled',
+          processedAt: '2026-04-20T18:00:00.000Z',
+          createdAtShopify: '2026-04-20T17:42:00.000Z',
+          updatedAtShopify: '2026-04-20T18:30:00.000Z',
+          landingSessionId: 'sess_123',
+          checkoutToken: 'check_456',
+          cartToken: 'cart_789',
+          sourceName: 'web',
+          orderOccurredAtUtc: '2026-04-20T18:00:00.000Z',
+          attributionTier: 'deterministic_first_party',
+          attributionTierLabel: 'Deterministic first-party',
+          attributionTierDescription:
+            'Resolved from durable ROAS Radar first-party evidence such as a landing session, checkout token, cart token, or stitched identity path.',
+          attributionSource: 'landing_session_id',
+          attributionMatchedAt: '2026-04-20T18:00:30.000Z',
+          attributionReason: 'matched_by_landing_session',
+          confidenceScore: 1,
+          sessionId: 'sess_123',
+          attributedSource: 'google',
+          attributedMedium: 'cpc',
+          attributedCampaign: 'brand-search',
+          attributedContent: null,
+          attributedTerm: null,
+          attributedClickIdType: 'gclid',
+          attributedClickIdValue: 'abc-123',
+          attributionSnapshot: {
+            confidenceScore: 1,
+            winner: {
+              sessionId: 'sess_123',
+              source: 'google',
+              medium: 'cpc',
+              campaign: 'brand-search',
+              clickIdType: 'gclid',
+              clickIdValue: 'abc-123'
+            }
+          },
+          attributionSnapshotUpdatedAt: '2026-04-20T18:00:30.000Z',
+          ingestedAt: '2026-04-20T18:31:00.000Z',
+          rawPayload: { orderNumber: 'RR-1105', note: 'vip customer' }
+        },
+        lineItems: [
+          {
+            shopifyLineItemId: 'line_1',
+            shopifyProductId: 'prod_1',
+            shopifyVariantId: 'var_1',
+            sku: 'SKU-RED-01',
+            title: 'Performance Hoodie',
+            variantTitle: 'Red / Medium',
+            vendor: 'ROAS Radar',
+            quantity: 2,
+            price: 90,
+            totalDiscount: 15,
+            fulfillmentStatus: 'fulfilled',
+            requiresShipping: true,
+            taxable: true,
+            ingestedAt: '2026-04-20T18:31:00.000Z',
+            rawPayload: { lineItemId: 'line_1' }
+          },
+          {
+            shopifyLineItemId: 'line_2',
+            shopifyProductId: 'prod_2',
+            shopifyVariantId: 'var_2',
+            sku: 'SKU-BLK-02',
+            title: 'Attribution Tee',
+            variantTitle: 'Black / Large',
+            vendor: 'ROAS Radar',
+            quantity: 1,
+            price: 15,
+            totalDiscount: 0,
+            fulfillmentStatus: 'fulfilled',
+            requiresShipping: true,
+            taxable: true,
+            ingestedAt: '2026-04-20T18:31:00.000Z',
+            rawPayload: { lineItemId: 'line_2' }
+          }
+        ],
+        attributionCredits: [
+          {
+            attributionModel: 'last_touch',
+            touchpointPosition: 1,
+            sessionId: 'sess_123',
+            touchpointOccurredAt: '2026-04-20T16:15:00.000Z',
+            source: 'google',
+            medium: 'cpc',
+            campaign: 'brand-search',
+            content: null,
+            term: null,
+            clickIdType: 'gclid',
+            clickIdValue: 'abc-123',
+            creditWeight: 1,
+            revenueCredit: 195,
+            isPrimary: true,
+            attributionReason: 'matched checkout token',
+            createdAt: '2026-04-20T18:31:00.000Z',
+            modelVersion: 2
+          },
+          {
+            attributionModel: 'linear',
+            touchpointPosition: 2,
+            sessionId: 'sess_124',
+            touchpointOccurredAt: '2026-04-20T15:45:00.000Z',
+            source: 'meta',
+            medium: 'paid_social',
+            campaign: 'prospecting',
+            content: 'video',
+            term: null,
+            clickIdType: 'fbclid',
+            clickIdValue: 'xyz-987',
+            creditWeight: 0.5,
+            revenueCredit: 97.5,
+            isPrimary: false,
+            attributionReason: 'modeled credit',
+            createdAt: '2026-04-20T18:31:00.000Z',
+            modelVersion: 2
+          }
+        ]
+      }
+    } satisfies AsyncSection<import('../dashboard/src/lib/api').OrderDetailsResponse>
+  };
 
 	return {
 		...base,

@@ -1,0 +1,22 @@
+steps:
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        SHORT_SHA="$SHORT_SHA" \
+        RUN_MIGRATIONS_ON_DEPLOY="${_RUN_MIGRATIONS_ON_DEPLOY}" \
+        APPLY_MONITORING_ON_DEPLOY="${_APPLY_MONITORING_ON_DEPLOY}" \
+        RUN_STAGING_ROLLBACK_DRILL="${_RUN_STAGING_ROLLBACK_DRILL}" \
+        SKIP_BUILDS="${_SKIP_BUILDS}" \
+        bash ./infra/cloud-run/promote.sh "${_PROMOTION_TARGET}"
+
+substitutions:
+  _PROMOTION_TARGET: production
+  _RUN_MIGRATIONS_ON_DEPLOY: "true"
+  _APPLY_MONITORING_ON_DEPLOY: "true"
+  _RUN_STAGING_ROLLBACK_DRILL: "true"
+  _SKIP_BUILDS: "false"
+
+options:
+  logging: CLOUD_LOGGING_ONLY

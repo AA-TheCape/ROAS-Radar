@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Pool, PoolClient } from "pg";
 
-process.env.DATABASE_URL ??=
-	"postgres://postgres:postgres@127.0.0.1:5432/roas_radar";
+import { buildRawPayloadFixture, resetIntegrationTables } from './integration-test-helpers.js';
+
+process.env.DATABASE_URL ??= 'postgres://postgres:postgres@127.0.0.1:5432/roas_radar';
 
 async function getModules() {
 	const poolModule = await import("../src/db/pool.js");
@@ -196,18 +197,16 @@ async function resetDatabase(): Promise<void> {
 	const { pool } = await getModules();
 	await ensureDeadLetterTables(pool);
 
-	await pool.query(`
-    TRUNCATE TABLE
-      event_replay_run_items,
-      event_replay_runs,
-      event_dead_letters,
-      shopify_order_writeback_jobs,
-      attribution_jobs,
-      shopify_orders,
-      tracking_events,
-      tracking_sessions
-    RESTART IDENTITY CASCADE
-  `);
+  await resetIntegrationTables(pool, [
+    'event_replay_run_items',
+    'event_replay_runs',
+    'event_dead_letters',
+    'shopify_order_writeback_jobs',
+    'attribution_jobs',
+    'shopify_orders',
+    'tracking_events',
+    'tracking_sessions'
+  ]);
 }
 
 async function insertTrackingSession(
@@ -233,13 +232,11 @@ async function insertTrackingSession(
 	);
 }
 
-async function insertShopifyOrder(
-	pool: Pool,
-	orderId: string,
-	sessionId: string,
-): Promise<void> {
-	await pool.query(
-		`
+async function insertShopifyOrder(pool: Pool, orderId: string, sessionId: string): Promise<void> {
+  const rawPayloadFixture = buildRawPayloadFixture({}, orderId);
+
+  await pool.query(
+    `
       INSERT INTO shopify_orders (
         shopify_order_id,
         currency_code,
@@ -247,6 +244,9 @@ async function insertShopifyOrder(
         total_price,
         landing_session_id,
         processed_at,
+        payload_external_id,
+        payload_size_bytes,
+        payload_hash,
         raw_payload,
         payload_size_bytes,
         ingested_at
@@ -258,13 +258,22 @@ async function insertShopifyOrder(
         '100.00',
         $2::uuid,
         '2026-04-22T12:00:00.000Z',
-        '{}'::jsonb,
-        octet_length(convert_to('{}', 'utf8')),
+        $3,
+        $4,
+        $5,
+        $6::jsonb,
         now()
       )
     `,
-		[orderId, sessionId],
-	);
+    [
+      orderId,
+      sessionId,
+      rawPayloadFixture.payloadExternalId,
+      rawPayloadFixture.payloadSizeBytes,
+      rawPayloadFixture.payloadHash,
+      rawPayloadFixture.rawPayloadJson
+    ]
+  );
 }
 
 async function insertShopifyWritebackJob(pool: Pool, orderId: string) {

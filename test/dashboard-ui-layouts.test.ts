@@ -162,9 +162,11 @@ test("reporting dashboard search and order drill-in stay wired for high-traffic 
 		),
 	);
 
-	try {
-		assert.match(mounted.container.textContent ?? "", /Campaign performance/);
-		assert.match(mounted.container.textContent ?? "", /Attributed orders/);
+  try {
+    assert.match(mounted.container.textContent ?? '', /Campaign performance/);
+    assert.match(mounted.container.textContent ?? '', /Order attribution rows/);
+    assert.match(mounted.container.textContent ?? '', /Deterministic first-party/);
+    assert.match(mounted.container.textContent ?? '', /Unattributed/);
 
 		const orderButton = mounted.container.querySelector(
 			'button[aria-label="Open order details for Shopify order 1105"]',
@@ -230,113 +232,128 @@ test("reporting dashboard keeps overview, charts, and report tables internally c
 		typeof import("../dashboard/src/components/ReportingDashboard")
 	>("dashboard/src/components/ReportingDashboard.tsx");
 
-	const props = createReportingDashboardProps({
-		summaryCards: [
-			{ label: "Visits", value: "1,500", detail: "Apr 1 to Apr 3" },
-			{ label: "Orders", value: "12", detail: "0.8% conversion" },
-			{ label: "Revenue", value: "$1,200.00", detail: "2 ROAS" },
-			{ label: "Spend", value: "$600.00", detail: "Apr 1 to Apr 3" },
-			{ label: "AOV", value: "$100.00", detail: "12 attributed orders" },
-		],
-		summarySection: {
-			data: {
-				visits: 1500,
-				orders: 12,
-				revenue: 1200,
-				spend: 600,
-				conversionRate: 0.008,
-				roas: 2,
-			},
-			loading: false,
-			error: null,
-		},
-		campaignsSection: {
-			data: [
-				{
-					source: "google",
-					medium: "cpc",
-					campaign: "Brand Search",
-					content: "hero",
-					visits: 900,
-					orders: 7,
-					revenue: 700,
-					conversionRate: 0.0078,
-				},
-				{
-					source: "meta",
-					medium: "paid_social",
-					campaign: "Prospecting Video",
-					content: "video",
-					visits: 600,
-					orders: 5,
-					revenue: 500,
-					conversionRate: 0.0083,
-				},
-			],
-			loading: false,
-			error: null,
-		},
-		timeseriesSection: {
-			data: [
-				{ date: "2026-04-01", visits: 500, orders: 4, revenue: 400 },
-				{ date: "2026-04-02", visits: 450, orders: 3, revenue: 300 },
-				{ date: "2026-04-03", visits: 550, orders: 5, revenue: 500 },
-			],
-			loading: false,
-			error: null,
-		},
-		ordersSection: {
-			data: [
-				{
-					shopifyOrderId: "1201",
-					processedAt: "2026-04-03T18:00:00.000Z",
-					source: "google",
-					medium: "cpc",
-					campaign: "Brand Search",
-					totalPrice: 700,
-					matchSource: "checkout_token",
-					confidenceLabel: "high",
-					attributionReason: "last-touch",
-				},
-				{
-					shopifyOrderId: "1200",
-					processedAt: "2026-04-02T18:00:00.000Z",
-					source: "meta",
-					medium: "paid_social",
-					campaign: "Prospecting Video",
-					totalPrice: 500,
-					matchSource: "ga4_fallback",
-					confidenceLabel: "low",
-					attributionReason: "linear",
-				},
-			],
-			loading: false,
-			error: null,
-		},
-		spendDetailsSection: {
-			data: [
-				{
-					source: "google",
-					medium: "cpc",
-					channel: "google / cpc",
-					subtotal: 350,
-					campaigns: [
-						{ campaign: "Brand Search", spend: 200 },
-						{ campaign: "Non-Brand Search", spend: 150 },
-					],
-				},
-				{
-					source: "meta",
-					medium: "paid_social",
-					channel: "meta / paid_social",
-					subtotal: 250,
-					campaigns: [{ campaign: "Prospecting Video", spend: 250 }],
-				},
-			],
-			loading: false,
-			error: null,
-		},
-	});
+  const props = createReportingDashboardProps({
+    summaryCards: [
+      { label: 'Visits', value: '1,500', detail: 'Apr 1 to Apr 3' },
+      { label: 'Orders', value: '12', detail: '0.8% conversion' },
+      { label: 'Revenue', value: '$1,200.00', detail: '2 ROAS' },
+      { label: 'Spend', value: '$600.00', detail: 'Apr 1 to Apr 3' },
+      { label: 'AOV', value: '$100.00', detail: '12 attributed orders' }
+    ],
+    summarySection: {
+      data: {
+        visits: 1500,
+        orders: 12,
+        revenue: 1200,
+        spend: 600,
+        conversionRate: 0.008,
+        roas: 2
+      },
+      loading: false,
+      error: null
+    },
+    campaignsSection: {
+      data: [
+        {
+          source: 'google',
+          medium: 'cpc',
+          campaign: 'Brand Search',
+          content: 'hero',
+          visits: 900,
+          orders: 7,
+          revenue: 700,
+          conversionRate: 0.0078
+        },
+        {
+          source: 'meta',
+          medium: 'paid_social',
+          campaign: 'Prospecting Video',
+          content: 'video',
+          visits: 600,
+          orders: 5,
+          revenue: 500,
+          conversionRate: 0.0083
+        }
+      ],
+      loading: false,
+      error: null
+    },
+    timeseriesSection: {
+      data: [
+        { date: '2026-04-01', visits: 500, orders: 4, revenue: 400 },
+        { date: '2026-04-02', visits: 450, orders: 3, revenue: 300 },
+        { date: '2026-04-03', visits: 550, orders: 5, revenue: 500 }
+      ],
+      loading: false,
+      error: null
+    },
+    ordersSection: {
+      data: [
+        {
+          shopifyOrderId: '1201',
+          processedAt: '2026-04-03T18:00:00.000Z',
+          orderOccurredAtUtc: '2026-04-03T18:00:00.000Z',
+          source: 'google',
+          medium: 'cpc',
+          campaign: 'Brand Search',
+          totalPrice: 700,
+          attributionReason: 'matched_by_landing_session',
+          primaryCreditAttributionReason: 'matched_by_landing_session',
+          attributionTier: 'deterministic_first_party',
+          attributionTierLabel: 'Deterministic first-party',
+          attributionTierDescription:
+            'Resolved from durable ROAS Radar first-party evidence such as a landing session, checkout token, cart token, or stitched identity path.',
+          attributionSource: 'landing_session_id',
+          attributionMatchedAt: '2026-04-03T18:00:15.000Z',
+          confidenceScore: 1,
+          sessionId: 'sess_1201'
+        },
+        {
+          shopifyOrderId: '1200',
+          processedAt: '2026-04-02T18:00:00.000Z',
+          orderOccurredAtUtc: '2026-04-02T18:00:00.000Z',
+          source: 'meta',
+          medium: 'paid_social',
+          campaign: 'Prospecting Video',
+          totalPrice: 500,
+          attributionReason: 'shopify_hint_derived',
+          primaryCreditAttributionReason: 'shopify_hint_derived',
+          attributionTier: 'deterministic_shopify_hint',
+          attributionTierLabel: 'Deterministic Shopify hint',
+          attributionTierDescription: 'Recovered synthetically from Shopify marketing hints after first-party resolution failed.',
+          attributionSource: 'shopify_marketing_hint',
+          attributionMatchedAt: '2026-04-02T18:00:20.000Z',
+          confidenceScore: 0.55,
+          sessionId: null
+        }
+      ],
+      loading: false,
+      error: null
+    },
+    spendDetailsSection: {
+      data: [
+        {
+          source: 'google',
+          medium: 'cpc',
+          channel: 'google / cpc',
+          subtotal: 350,
+          campaigns: [
+            { campaign: 'Brand Search', spend: 200 },
+            { campaign: 'Non-Brand Search', spend: 150 }
+          ]
+        },
+        {
+          source: 'meta',
+          medium: 'paid_social',
+          channel: 'meta / paid_social',
+          subtotal: 250,
+          campaigns: [{ campaign: 'Prospecting Video', spend: 250 }]
+        }
+      ],
+      loading: false,
+      error: null
+    }
+  });
 
 	const summary = props.summarySection.data;
 	const campaigns = props.campaignsSection.data ?? [];

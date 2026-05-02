@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Pool } from "pg";
 
-process.env.DATABASE_URL ??=
-	"postgres://postgres:postgres@127.0.0.1:5432/roas_radar";
+import { buildRawPayloadFixture, resetIntegrationTables } from './integration-test-helpers.js';
+
+process.env.DATABASE_URL ??= 'postgres://postgres:postgres@127.0.0.1:5432/roas_radar';
 
 async function getModules() {
 	const poolModule = await import("../src/db/pool.js");
@@ -118,19 +119,17 @@ async function resetDatabase(): Promise<void> {
 	const { pool } = await getModules();
 	await ensureDeadLetterTables(pool);
 
-	await pool.query(`
-    TRUNCATE TABLE
-      shopify_order_writeback_jobs,
-      shopify_orders,
-      session_attribution_touch_events,
-      session_attribution_identities,
-      tracking_events,
-      tracking_sessions,
-      event_replay_run_items,
-      event_replay_runs,
-      event_dead_letters
-    RESTART IDENTITY CASCADE
-  `);
+  await resetIntegrationTables(pool, [
+    'shopify_order_writeback_jobs',
+    'shopify_orders',
+    'session_attribution_touch_events',
+    'session_attribution_identities',
+    'tracking_events',
+    'tracking_sessions',
+    'event_replay_run_items',
+    'event_replay_runs',
+    'event_dead_letters'
+  ]);
 }
 
 async function insertTrackingSession(
@@ -217,12 +216,10 @@ async function insertSessionAttributionIdentity(
 	);
 }
 
-async function insertSessionAttributionTouchEvent(
-	pool: Pool,
-	sessionId: string,
-): Promise<void> {
-	await pool.query(
-		`
+async function insertSessionAttributionTouchEvent(pool: Pool, sessionId: string): Promise<void> {
+  const rawPayloadFixture = buildRawPayloadFixture({});
+  await pool.query(
+    `
       INSERT INTO session_attribution_touch_events (
         roas_radar_session_id,
         event_type,
@@ -240,6 +237,7 @@ async function insertSessionAttributionTouchEvent(
         gbraid,
         wbraid,
         payload_size_bytes,
+        payload_hash,
         raw_payload
       )
       VALUES (
@@ -258,12 +256,13 @@ async function insertSessionAttributionTouchEvent(
         'GCLID-123',
         'GBRAID-123',
         'WBRAID-123',
-        octet_length(convert_to('{}', 'utf8')),
-        '{}'::jsonb
+        $2,
+        $3,
+        $4::jsonb
       )
     `,
-		[sessionId],
-	);
+    [sessionId, rawPayloadFixture.payloadSizeBytes, rawPayloadFixture.payloadHash, rawPayloadFixture.rawPayloadJson]
+  );
 }
 
 async function insertShopifyOrder(
@@ -275,8 +274,13 @@ async function insertShopifyOrder(
 		processedAt?: string;
 	},
 ): Promise<void> {
-	await pool.query(
-		`
+  const rawPayloadFixture = buildRawPayloadFixture(
+    JSON.parse(input.rawPayload ?? buildRawPayload()) as Record<string, unknown>,
+    input.shopifyOrderId
+  );
+
+  await pool.query(
+    `
       INSERT INTO shopify_orders (
         shopify_order_id,
         currency_code,
@@ -284,29 +288,25 @@ async function insertShopifyOrder(
         total_price,
         processed_at,
         landing_session_id,
+        payload_external_id,
+        payload_size_bytes,
+        payload_hash,
         raw_payload,
         payload_size_bytes,
         ingested_at
       )
-      VALUES (
-        $1,
-        'USD',
-        '100.00',
-        '100.00',
-        $2,
-        $3::uuid,
-        $4::jsonb,
-        octet_length(convert_to($4::text, 'utf8')),
-        now()
-      )
+      VALUES ($1, 'USD', '100.00', '100.00', $2, $3::uuid, $4, $5, $6, $7::jsonb, now())
     `,
-		[
-			input.shopifyOrderId,
-			input.processedAt ?? "2026-04-22T12:00:00.000Z",
-			input.sessionId ?? null,
-			input.rawPayload ?? buildRawPayload(),
-		],
-	);
+    [
+      input.shopifyOrderId,
+      input.processedAt ?? '2026-04-22T12:00:00.000Z',
+      input.sessionId ?? null,
+      rawPayloadFixture.payloadExternalId,
+      rawPayloadFixture.payloadSizeBytes,
+      rawPayloadFixture.payloadHash,
+      rawPayloadFixture.rawPayloadJson
+    ]
+  );
 }
 
 async function seedCanonicalOrder(

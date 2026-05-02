@@ -6,26 +6,11 @@ import React, {
 	type ReactNode,
 } from "react";
 
-import {
-	type BarDatum,
-	type BarSvgProps,
-	type BarTooltipProps,
-	ResponsiveBar,
-} from "@nivo/bar";
-import type { Margin } from "@nivo/core";
-import type { LegendProps } from "@nivo/legends";
-import {
-	type LineSeries,
-	type LineSvgProps,
-	type PointTooltipProps,
-	ResponsiveLine,
-} from "@nivo/line";
-import {
-	type DefaultRawDatum,
-	type PieSvgProps,
-	type PieTooltipProps,
-	ResponsivePie,
-} from "@nivo/pie";
+import { ResponsiveBar, type BarDatum, type BarSvgProps, type BarTooltipProps } from '@nivo/bar';
+import type { Margin } from '@nivo/core';
+import type { LegendProps } from '@nivo/legends';
+import { ResponsiveLine, type LineSeries, type LineSvgProps, type PointTooltipProps } from '@nivo/line';
+import { ResponsivePie, type ComputedDatum, type DefaultRawDatum, type PieSvgProps, type PieTooltipProps } from '@nivo/pie';
 
 import { EmptyState, Skeleton } from "../AuthenticatedUi";
 
@@ -94,14 +79,9 @@ type SharedPieChartProps = SharedChartProps & {
 	margin?: Partial<Margin>;
 };
 
-const chartPalette = [
-	"#cb6332",
-	"#1f7a74",
-	"#d8a542",
-	"#7c8aa5",
-	"#5c6f7b",
-	"#b64c46",
-];
+type PieArcDatum = ComputedDatum<SharedPieDatum>;
+
+const chartPalette = ['#cb6332', '#1f7a74', '#d8a542', '#7c8aa5', '#5c6f7b', '#b64c46'];
 
 const sharedTheme = {
 	background: "transparent",
@@ -738,54 +718,52 @@ export const NivoPieChart = memo(function NivoPieChart({
 		[isCompact, isTablet, margin],
 	);
 
-	return (
-		<ChartFrame
-			loading={loading}
-			error={error}
-			empty={empty}
-			emptyLabel={emptyLabel}
-			height={effectiveHeight}
-			className={className}
-			label={label}
-			description={description}
-			summary={summary}
-		>
-			<ResponsivePie
-				data={data}
-				theme={sharedTheme}
-				colors={chartPalette}
-				margin={effectiveMargin}
-				sortByValue
-				innerRadius={isCompact ? 0.58 : 0.62}
-				padAngle={0.8}
-				cornerRadius={4}
-				activeOuterRadiusOffset={8}
-				arcLinkLabelsSkipAngle={isCompact ? 360 : 12}
-				arcLinkLabelsThickness={1}
-				arcLinkLabelsColor="#627180"
-				arcLabelsSkipAngle={isCompact ? 360 : 12}
-				arcLabel={(datum) => pieValueFormat(datum.value)}
-				arcLabelsTextColor="#17212b"
-				valueFormat={pieValueFormat}
-				legends={effectiveLegends}
-				tooltip={({ datum }: PieTooltipProps<SharedPieDatum>) => (
-					<ChartTooltip
-						title={String(datum.label ?? datum.id)}
-						rows={[
-							{
-								label: "Value",
-								value: pieValueFormat(datum.value),
-								color: datum.color,
-							},
-							...(datum.data?.revenueLabel
-								? [{ label: "Revenue", value: String(datum.data.revenueLabel) }]
-								: []),
-						]}
-					/>
-				)}
-			/>
-		</ChartFrame>
-	);
+  return (
+    <ChartFrame
+      loading={loading}
+      error={error}
+      empty={empty}
+      emptyLabel={emptyLabel}
+      height={effectiveHeight}
+      className={className}
+      label={label}
+      description={description}
+      summary={summary}
+    >
+      <ResponsivePie
+        data={data}
+        theme={sharedTheme}
+        colors={chartPalette}
+        margin={effectiveMargin}
+        sortByValue
+        innerRadius={isCompact ? 0.58 : 0.62}
+        padAngle={0.8}
+        cornerRadius={4}
+        activeOuterRadiusOffset={8}
+        arcLinkLabelsSkipAngle={isCompact ? 360 : 12}
+        arcLinkLabelsThickness={1}
+        arcLinkLabelsColor="#627180"
+        arcLabelsSkipAngle={isCompact ? 360 : 12}
+        arcLabel={(datum: PieArcDatum) => pieValueFormat(datum.value)}
+        arcLabelsTextColor="#17212b"
+        valueFormat={pieValueFormat}
+        legends={effectiveLegends}
+        tooltip={({ datum }: PieTooltipProps<SharedPieDatum>) => (
+          <ChartTooltip
+            title={String(datum.label ?? datum.id)}
+            rows={[
+              {
+                label: 'Value',
+                value: pieValueFormat(datum.value),
+                color: datum.color
+              },
+              ...(datum.data?.revenueLabel ? [{ label: 'Revenue', value: String(datum.data.revenueLabel) }] : [])
+            ]}
+          />
+        )}
+      />
+    </ChartFrame>
+  );
 });
 
 export { chartPalette };

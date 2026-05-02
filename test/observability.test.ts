@@ -1,116 +1,270 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import assert from 'node:assert/strict';
+import test from 'node:test';
 
-import { __observabilityTestUtils } from "../src/observability/index.js";
+const { __observabilityTestUtils } = await import('../src/observability/index.js');
 
-test("summarizeResolverOutcome reports unattributed and non-direct winners deterministically", () => {
-	const unattributed = __observabilityTestUtils.summarizeResolverOutcome({
-		touchpoints: [],
-		winner: null,
-	});
+function captureStructuredLogs<T>(callback: () => T): { entries: Array<Record<string, unknown>>; result: T } {
+  const stdoutChunks: string[] = [];
+  const stderrChunks: string[] = [];
+  const originalStdoutWrite = process.stdout.write.bind(process.stdout);
+  const originalStderrWrite = process.stderr.write.bind(process.stderr);
 
-	assert.equal(unattributed.resolverOutcome, "unattributed");
-	assert.equal(unattributed.winnerMatchSource, "unattributed");
-	assert.equal(unattributed.ga4SkippedDueToPrecedence, false);
+  process.stdout.write = ((chunk: string | Uint8Array) => {
+    stdoutChunks.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+    return true;
+  }) as typeof process.stdout.write;
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    stderrChunks.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+    return true;
+  }) as typeof process.stderr.write;
 
-	const ga4FallbackWinner = __observabilityTestUtils.summarizeResolverOutcome({
-		touchpoints: [{}],
-		winner: {
-			isDirect: false,
-			ingestionSource: null,
-			sessionId: null,
-			matchSource: "ga4_fallback",
-			source: "google",
-			medium: "cpc",
-			campaign: "brand",
-			clickIdValue: "GCLID-123",
-		},
-	});
+  try {
+    const result = callback();
+    const entries = [...stdoutChunks, ...stderrChunks]
+      .join('')
+      .trim()
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith('{') && line.endsWith('}'))
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
 
-	assert.equal(ga4FallbackWinner.winnerMatchSource, "ga4_fallback");
-	assert.equal(ga4FallbackWinner.fallbackUsed, true);
-	assert.equal(ga4FallbackWinner.hasClickId, true);
-	assert.equal(ga4FallbackWinner.ga4SkippedDueToPrecedence, false);
+    return { entries, result };
+  } finally {
+    process.stdout.write = originalStdoutWrite as typeof process.stdout.write;
+    process.stderr.write = originalStderrWrite as typeof process.stderr.write;
+  }
+}
+
+test('summarizeAttributionObservation classifies complete captures and missing session ids', () => {
+  const complete = __observabilityTestUtils.summarizeAttributionObservation({
+    roas_radar_session_id: '123e4567-e89b-42d3-a456-426614174000',
+    landing_url: 'https://store.example/?utm_source=google',
+    page_url: 'https://store.example/products/widget',
+    utm_source: 'google',
+    gclid: 'GCLID-123'
+  });
+
+  assert.equal(complete.captureStatus, 'complete');
 });
 
-test("summarizeGa4IngestionResult reports lag and fill rates for hourly ingestion health", () => {
-	const summary = __observabilityTestUtils.summarizeGa4IngestionResult({
-		watermarkBefore: "2026-04-27T08:00:00.000Z",
-		watermarkAfter: "2026-04-27T09:00:00.000Z",
-		processedHours: ["2026-04-27T09:00:00.000Z"],
-		extractedRows: 2,
-		upsertedRows: 2,
-		now: new Date("2026-04-27T12:35:00.000Z"),
-		lagAlertThresholdHours: 2,
-		rows: [
-			{
-				source: "google",
-				medium: "cpc",
-				campaign: "spring",
-				clickIdValue: "GCLID-123",
-			},
-			{ source: null, medium: "email", campaign: null, clickIdValue: null },
-		],
-	});
-
-	assert.equal(summary.lagHours, 2);
-	assert.equal(summary.lagStatus, "lagging");
-	assert.equal(summary.sourcePresentRows, 1);
-	assert.equal(summary.mediumPresentRows, 2);
-	assert.equal(summary.campaignPresentRows, 1);
-	assert.equal(summary.clickIdPresentRows, 1);
-	assert.equal(summary.sourceFillRate, 0.5);
-	assert.equal(summary.mediumFillRate, 1);
-	assert.equal(summary.campaignFillRate, 0.5);
-	assert.equal(summary.clickIdFillRate, 0.5);
+test('summarizeDualWriteConsistency flags failed server legs as mismatches', () => {
+  assert.deepEqual(
+    __observabilityTestUtils.summarizeDualWriteConsistency({
+      browserOutcome: 'accepted',
+      serverOutcome: 'failed'
+    }),
+    {
+      consistencyStatus: 'mismatched',
+      browserOutcome: 'accepted',
+      serverOutcome: 'failed'
+    }
+  );
 });
 
-test("emitOrderAttributionBackfillJobLifecycleLog emits structured lifecycle logs with job ids and failure metadata", () => {
-	const entries: Array<Record<string, unknown>> = [];
-	const originalWrite = process.stdout.write.bind(process.stdout);
+test('summarizeOrderAttributionBackfillReport keeps operational counters and bounded failure samples', () => {
+  assert.deepEqual(
+    __observabilityTestUtils.summarizeOrderAttributionBackfillReport({
+      scanned: 24,
+      recovered: 7,
+      unrecoverable: 5,
+      writebackCompleted: 4,
+      failures: [
+        {
+          orderId: '1001',
+          code: 'shopify_writeback_failed',
+          message: 'Writeback request timed out'
+        }
+      ]
+    }),
+    {
+      scanned: 24,
+      recovered: 7,
+      unrecoverable: 5,
+      writebackCompleted: 4,
+      failures: [
+        {
+          orderId: '1001',
+          code: 'shopify_writeback_failed',
+          message: 'Writeback request timed out'
+        }
+      ],
+      failureCount: 1,
+      sampleFailures: [
+        {
+          orderId: '1001',
+          code: 'shopify_writeback_failed',
+          message: 'Writeback request timed out'
+        }
+      ]
+    }
+  );
+});
 
-	process.stdout.write = ((chunk: string | Uint8Array) => {
-		const text =
-			typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
-		entries.push(JSON.parse(text.trim()) as Record<string, unknown>);
-		return true;
-	}) as typeof process.stdout.write;
+test('emitOrderAttributionBackfillJobLifecycleLog emits structured lifecycle logs with job ids and failure metadata', () => {
+  const { entries } = captureStructuredLogs(() => {
+    __observabilityTestUtils.emitOrderAttributionBackfillJobLifecycleLog({
+      stage: 'enqueued',
+      jobId: 'job-enqueued',
+      submittedAt: '2026-04-25T10:00:00.000Z',
+      options: {
+        startDate: '2026-04-01',
+        endDate: '2026-04-05',
+        dryRun: true,
+        limit: 500,
+        webOrdersOnly: true,
+        skipShopifyWriteback: false
+      }
+    });
 
-	try {
-		__observabilityTestUtils.emitOrderAttributionBackfillJobLifecycleLog({
-			stage: "started",
-			jobId: "job-1",
-			workerId: "worker-1",
-			options: {
-				startDate: "2026-04-10",
-				endDate: "2026-04-12",
-				dryRun: true,
-				limit: 42,
-			},
-		});
-		__observabilityTestUtils.emitOrderAttributionBackfillJobLifecycleLog({
-			stage: "failed",
-			jobId: "job-1",
-			workerId: "worker-1",
-			report: {
-				recoveredOrders: 1,
-				failedOrders: 2,
-				recoverableOrders: 3,
-				scannedOrders: 4,
-				dryRun: true,
-			},
-			error: new Error("worker failed"),
-		});
-	} finally {
-		process.stdout.write = originalWrite;
-	}
+    __observabilityTestUtils.emitOrderAttributionBackfillJobLifecycleLog({
+      stage: 'failed',
+      jobId: 'job-failed',
+      workerId: 'worker-1',
+      startedAt: '2026-04-25T10:01:00.000Z',
+      completedAt: '2026-04-25T10:02:00.000Z',
+      options: {
+        startDate: '2026-04-06',
+        endDate: '2026-04-07',
+        dryRun: false,
+        limit: 50,
+        webOrdersOnly: false,
+        skipShopifyWriteback: true
+      },
+      report: {
+        scanned: 12,
+        recovered: 3,
+        unrecoverable: 4,
+        writebackCompleted: 2,
+        failures: [
+          {
+            orderId: '1002',
+            code: 'order_not_found',
+            message: 'Shopify order 1002 was not found'
+          }
+        ]
+      },
+      error: Object.assign(new Error('Database timeout while persisting backfill results'), {
+        code: 'database_timeout'
+      })
+    });
+  });
 
-	assert.equal(entries.length, 2);
-	assert.equal(entries[0].correlationId, "job-1");
-	assert.equal(entries[0].status, "processing");
-	assert.equal(entries[1].correlationId, "job-1");
-	assert.equal(entries[1].status, "failed");
-	assert.equal(entries[1].errorMessage, "worker failed");
-	assert.equal(entries[1].recoveredOrders, 1);
-	assert.equal(entries[1].failedOrders, 2);
+  assert.equal(entries.length, 2);
+  assert.equal(entries[0].event, 'order_attribution_backfill_job_lifecycle');
+  assert.equal(entries[0].jobId, 'job-enqueued');
+  assert.equal(entries[0].stage, 'enqueued');
+  assert.equal(entries[0].status, 'queued');
+  assert.equal(entries[0].dryRun, true);
+
+  assert.equal(entries[1].event, 'order_attribution_backfill_job_lifecycle');
+  assert.equal(entries[1].jobId, 'job-failed');
+  assert.equal(entries[1].stage, 'failed');
+  assert.equal(entries[1].status, 'failed');
+  assert.equal(entries[1].alertable, true);
+  assert.equal(entries[1].code, 'database_timeout');
+  assert.equal(entries[1].failureMessage, 'Database timeout while persisting backfill results');
+  assert.deepEqual(entries[1].report, {
+    scanned: 12,
+    recovered: 3,
+    unrecoverable: 4,
+    writebackCompleted: 2,
+    failures: [
+      {
+        orderId: '1002',
+        code: 'order_not_found',
+        message: 'Shopify order 1002 was not found'
+      }
+    ],
+    failureCount: 1,
+    sampleFailures: [
+      {
+        orderId: '1002',
+        code: 'order_not_found',
+        message: 'Shopify order 1002 was not found'
+      }
+    ]
+  });
+});
+
+test('summarizeResolverOutcome reports unattributed and non-direct winners deterministically', () => {
+  const unattributed = __observabilityTestUtils.summarizeResolverOutcome({
+    touchpoints: [],
+    winner: null,
+    tier: 'unattributed',
+    attributionReason: 'missing_order_timestamp',
+    confidenceScore: 0,
+    pipeline: 'realtime_queue',
+    shopifyOrderId: 'order-1',
+    normalizationFailures: [
+      {
+        scope: 'order',
+        reason: 'missing_order_timestamp',
+        sourceKey: null
+      }
+    ]
+  });
+
+  assert.equal(unattributed.resolverOutcome, 'unattributed');
+  assert.equal(unattributed.attributionTier, 'unattributed');
+  assert.equal(unattributed.resolverFallthroughDepth, 3);
+  assert.equal(unattributed.fallthroughStage, 'fell_through_to_unattributed');
+  assert.equal(unattributed.firstNormalizationFailureReason, 'missing_order_timestamp');
+
+  const resolved = __observabilityTestUtils.summarizeResolverOutcome({
+    touchpoints: [{ occurredAt: '2026-04-01T10:00:00.000Z' }],
+    winner: {
+      isDirect: false,
+      ingestionSource: 'checkout_token',
+      sessionId: 'session-123'
+    },
+    tier: 'deterministic_first_party',
+    attributionReason: 'matched_by_checkout_token',
+    confidenceScore: 1,
+    pipeline: 'order_backfill',
+    shopifyOrderId: 'order-2',
+    orderOccurredAtUtc: '2026-04-02T10:00:00.000Z',
+    normalizationFailures: []
+  });
+
+  assert.equal(resolved.resolverOutcome, 'non_direct_winner');
+  assert.equal(resolved.attributionTier, 'deterministic_first_party');
+  assert.equal(resolved.resolverFallthroughDepth, 0);
+  assert.equal(resolved.hasWinningSessionId, true);
+});
+
+test('emitAttributionResolverOutcomeLog emits tier and fallthrough metrics for dashboards and alerts', () => {
+  const { entries } = captureStructuredLogs(() => {
+    __observabilityTestUtils.emitAttributionResolverOutcomeLog({
+      shopifyOrderId: 'shopify-order-123',
+      orderOccurredAtUtc: new Date('2026-04-25T10:00:00.000Z'),
+      tier: 'deterministic_shopify_hint',
+      attributionReason: 'matched_by_shopify_landing_page_gclid',
+      confidenceScore: 0.55,
+      pipeline: 'order_backfill',
+      touchpoints: [{ id: 'synthetic-touchpoint' }],
+      winner: {
+        isDirect: false,
+        ingestionSource: 'shopify_marketing_hint',
+        sessionId: null
+      },
+      normalizationFailures: [
+        {
+          scope: 'shopify_hint',
+          reason: 'missing_first_party_candidate_timestamp',
+          sourceKey: 'utm:gclid'
+        }
+      ]
+    });
+  });
+
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].event, 'attribution_resolver_outcome');
+  assert.equal(entries[0].attributionTier, 'deterministic_shopify_hint');
+  assert.equal(entries[0].resolverFallthroughDepth, 1);
+  assert.equal(entries[0].fallthroughStage, 'fell_through_to_shopify_hint');
+  assert.equal(entries[0].pipeline, 'order_backfill');
+  assert.equal(entries[0].winningIngestionSource, 'shopify_marketing_hint');
+  assert.equal(entries[0].hasWinningSessionId, false);
+  assert.equal(entries[0].normalizationFailureCount, 1);
+  assert.equal(entries[0].firstNormalizationFailureScope, 'shopify_hint');
 });

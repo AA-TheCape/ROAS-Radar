@@ -1,38 +1,27 @@
-import type { PoolClient } from "pg";
+import type { PoolClient } from 'pg';
 
-import type { OrderAttributionBackfillReport as OrderAttributionBackfillJobReport } from "../../../packages/attribution-schema/index.js";
-
-import { withTransaction } from "../../db/pool.js";
-import { logError, logInfo } from "../../observability/index.js";
-import { refreshDailyReportingMetrics } from "../reporting/aggregates.js";
+import type { OrderAttributionBackfillReport as OrderAttributionBackfillJobReport } from '../../../packages/attribution-schema/index.js';
+import { withTransaction } from '../../db/pool.js';
+import { emitAttributionResolverOutcomeLog, logError, logInfo } from '../../observability/index.js';
+import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
+import { formatDateInTimezone, getReportingTimezone } from '../settings/index.js';
+import { applyShopifyOrderWriteback } from '../shopify/writeback.js';
+import { extractAttributionCandidatesForOrder } from './candidate-extraction.js';
+import { buildEmptyOrderAttributionBackfillProgress, parseOrderAttributionBackfillProgress, type OrderAttributionBackfillProgress } from './backfill-progress.js';
 import {
-	formatDateInTimezone,
-	getReportingTimezone,
-} from "../settings/index.js";
-import { applyShopifyOrderWriteback } from "../shopify/writeback.js";
+  ATTRIBUTION_MODELS,
+  computeAttributionOutputs,
+  computeSingleWinnerCredits,
+  type AttributionCredit
+} from './engine.js';
 import {
-	ATTRIBUTION_MODELS,
-	type AttributionCredit,
-	computeAttributionOutputs,
-	computeSingleWinnerCredits,
-} from "./engine.js";
-import { lookupGa4FallbackCandidates } from "./ga4-fallback-candidates.js";
-import {
-	type AttributionMatchSource,
-	type DeterministicIngestionSource,
-	type ResolvedAttributionTouchpoint,
-	type ResolvedJourney,
-	confidenceLabelForScore,
-	confidenceScoreForWinner,
-	dedupeDeterministicCandidates,
-	isDirectTouchpoint,
-	selectGa4FallbackWinner,
-	selectLastNonDirectWinner,
-} from "./resolver.js";
-import { extractShopifyHintAttribution } from "./shopify-hints.js";
+  buildAttributionConfidenceLabel,
+  buildAttributionMatchSource,
+  buildOrderAttributionAuditRecord
+} from './order-attribution-audit.js';
+import { resolveAttributionTier, type ResolvedAttributionTouchpoint, type ResolvedJourney } from './resolver.js';
 
 const ATTRIBUTION_MODEL_VERSION = 1;
-const ATTRIBUTION_WINDOW_DAYS = 7;
 const MAX_PREVIEW_ORDERS = 25;
 const MAX_REPORTED_FAILURES = 100;
 const MISSING_ATTRIBUTION_SQL = `
@@ -49,738 +38,332 @@ const MISSING_ATTRIBUTION_SQL = `
 `;
 
 type OrderRow = {
-	shopify_order_id: string;
-	total_price: string;
-	processed_at: Date | null;
-	created_at_shopify: Date | null;
-	ingested_at: Date;
-	source_name: string | null;
-	raw_payload: unknown;
-	landing_session_id: string | null;
-	checkout_token: string | null;
-	cart_token: string | null;
-	email_hash: string | null;
-	customer_identity_id: string | null;
+  id: string;
+  shopify_order_id: string;
+  total_price: string;
+  processed_at: Date | null;
+  created_at_shopify: Date | null;
+  ingested_at: Date;
+  landing_session_id: string | null;
+  checkout_token: string | null;
+  cart_token: string | null;
+  email_hash: string | null;
+  customer_identity_id: string | null;
+  source_name: string | null;
+  raw_payload: unknown;
 };
 
-type SessionCandidateRow = {
-	session_id: string;
-	source_touch_event_id: string | null;
-	occurred_at: Date;
-	source: string | null;
-	medium: string | null;
-	campaign: string | null;
-	content: string | null;
-	term: string | null;
-	click_id_type: string | null;
-	click_id_value: string | null;
+type ScopeMetrics = {
+  totalOrdersInScope: number;
+  ordersMissingAttribution: number;
+  ordersWithAttribution: number;
+  completenessRate: number;
 };
 
-type BackfillCandidateRow = {
-	shopify_order_id: string;
-	order_occurred_at: Date;
-};
-
-type BackfillScopeMetrics = {
-	totalOrdersInScope: number;
-	ordersMissingAttribution: number;
-	ordersWithAttribution: number;
-	completenessRate: number;
+type BackfillFailure = {
+  orderId: string | null;
+  code: string;
+  message: string;
 };
 
 type BackfillPreviewRow = {
-	shopifyOrderId: string;
-	orderOccurredAt: string;
-	recoverable: boolean;
-	touchpointCount: number;
-	winnerSessionId: string | null;
-	attributionReason: string;
+  shopifyOrderId: string;
+  orderOccurredAt: string;
+  recoverable: boolean;
+  touchpointCount: number;
+  winnerSessionId: string | null;
+  attributionReason: string;
+};
+
+type BackfillReport = {
+  requestedBy: string;
+  workerId: string;
+  dryRun: boolean;
+  scope: {
+    windowStart: string;
+    windowEnd: string;
+    onlyWebOrders: boolean;
+    limit: number;
+  };
+  beforeMetrics: ScopeMetrics;
+  afterMetrics: ScopeMetrics;
+  scannedOrders: number;
+  recoverableOrders: number;
+  recoveredOrders: number;
+  unrecoverableOrders: number;
+  failedOrders: number;
+  shopifyWritebackCompleted: number;
+  shopifyWritebackSkipped: number;
+  shopifyWritebackFailed: number;
+  failures: BackfillFailure[];
+  preview: BackfillPreviewRow[];
+};
+
+type BackfillCursorCheckpoint = OrderAttributionBackfillProgress['cursor'];
+
+type BackfillCandidateRow = {
+  order_row_id: string;
+  shopify_order_id: string;
+  order_occurred_at: Date;
+};
+
+type BackfillScopeOptions = {
+  windowStart: Date;
+  windowEnd: Date;
+  onlyWebOrders: boolean;
+};
+
+type BackfillCandidateFetchOptions = BackfillScopeOptions & {
+  limit: number;
+  checkpoint: BackfillCursorCheckpoint;
+};
+
+type ApplyWritebackInput = {
+  workerId: string;
+  shopifyOrderId: string;
+  requestedReason: string;
+};
+
+type ApplyWritebackResult = {
+  status: 'completed' | 'skipped';
+  attributesCount: number;
 };
 
 export type OrderAttributionBackfillOptions = {
-	windowStart: Date;
-	windowEnd: Date;
-	requestedBy: string;
-	workerId: string;
-	limit?: number;
-	dryRun?: boolean;
-	onlyWebOrders?: boolean;
-	writeToShopifyWhenAvailable?: boolean;
-	applyWriteback?: typeof applyShopifyOrderWriteback;
-};
-
-export type OrderAttributionBackfillFailure = {
-	orderId: string | null;
-	code: string;
-	message: string;
-};
-
-export type OrderAttributionBackfillReport = {
-	requestedBy: string;
-	workerId: string;
-	dryRun: boolean;
-	scope: {
-		windowStart: string;
-		windowEnd: string;
-		onlyWebOrders: boolean;
-		limit: number;
-	};
-	beforeMetrics: BackfillScopeMetrics;
-	afterMetrics: BackfillScopeMetrics;
-	scannedOrders: number;
-	recoverableOrders: number;
-	recoveredOrders: number;
-	unrecoverableOrders: number;
-	failedOrders: number;
-	shopifyWritebackCompleted: number;
-	shopifyWritebackSkipped: number;
-	shopifyWritebackFailed: number;
-	failures: OrderAttributionBackfillFailure[];
-	preview: BackfillPreviewRow[];
+  requestedBy: string;
+  workerId: string;
+  windowStart: Date;
+  windowEnd: Date;
+  limit?: number;
+  dryRun?: boolean;
+  onlyWebOrders?: boolean;
+  writeToShopifyWhenAvailable?: boolean;
+  applyWriteback?: (input: ApplyWritebackInput) => Promise<ApplyWritebackResult>;
+  runId?: string;
+  progress?: OrderAttributionBackfillProgress;
+  onProgress?: (progress: OrderAttributionBackfillProgress) => Promise<void> | void;
 };
 
 export class OrderAttributionBackfillRunError extends Error {
-	code: string;
-	report: OrderAttributionBackfillJobReport;
+  code: string;
+  report: OrderAttributionBackfillJobReport;
 
-	constructor(
-		message: string,
-		options: {
-			code: string;
-			report: OrderAttributionBackfillJobReport;
-			cause?: unknown;
-		},
-	) {
-		super(
-			message,
-			options.cause === undefined ? undefined : { cause: options.cause },
-		);
-		this.name = "OrderAttributionBackfillRunError";
-		this.code = options.code;
-		this.report = options.report;
-	}
+  constructor(message: string, options: { code: string; report: OrderAttributionBackfillJobReport; cause?: unknown }) {
+    super(message, options.cause === undefined ? undefined : { cause: options.cause });
+    this.name = 'OrderAttributionBackfillRunError';
+    this.code = options.code;
+    this.report = options.report;
+  }
 }
 
 function normalizeFailureCode(error: unknown, fallback: string): string {
-	if (
-		typeof error === "object" &&
-		error !== null &&
-		"code" in error &&
-		typeof error.code === "string" &&
-		error.code.trim()
-	) {
-		return error.code.trim();
-	}
+  if (typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string' && error.code.trim()) {
+    return error.code.trim();
+  }
 
-	if (error instanceof Error && error.name.trim()) {
-		return error.name.trim();
-	}
+  if (error instanceof Error && error.name.trim()) {
+    return error.name.trim();
+  }
 
-	return fallback;
+  return fallback;
 }
 
 function normalizeFailureMessage(error: unknown, fallback: string): string {
-	if (error instanceof Error && error.message.trim()) {
-		return error.message.trim();
-	}
+  if (error instanceof Error && error.message.trim()) {
+    return error.message.trim();
+  }
 
-	if (typeof error === "string" && error.trim()) {
-		return error.trim();
-	}
+  if (typeof error === 'string' && error.trim()) {
+    return error.trim();
+  }
 
-	return fallback;
+  return fallback;
 }
 
-function buildEmptyScopeMetrics(): BackfillScopeMetrics {
-	return {
-		totalOrdersInScope: 0,
-		ordersMissingAttribution: 0,
-		ordersWithAttribution: 0,
-		completenessRate: 1,
-	};
+function buildEmptyScopeMetrics(): ScopeMetrics {
+  return {
+    totalOrdersInScope: 0,
+    ordersMissingAttribution: 0,
+    ordersWithAttribution: 0,
+    completenessRate: 1
+  };
 }
 
 function buildOrderAttributionBackfillReport(input: {
-	requestedBy: string;
-	workerId: string;
-	dryRun: boolean;
-	windowStart: Date;
-	windowEnd: Date;
-	onlyWebOrders: boolean;
-	limit: number;
-	beforeMetrics: BackfillScopeMetrics;
-	afterMetrics: BackfillScopeMetrics;
-	scannedOrders: number;
-	recoverableOrders: number;
-	recoveredOrders: number;
-	unrecoverableOrders: number;
-	failedOrders: number;
-	shopifyWritebackCompleted: number;
-	shopifyWritebackSkipped: number;
-	shopifyWritebackFailed: number;
-	failures: OrderAttributionBackfillFailure[];
-	preview: BackfillPreviewRow[];
-}): OrderAttributionBackfillReport {
-	return {
-		requestedBy: input.requestedBy,
-		workerId: input.workerId,
-		dryRun: input.dryRun,
-		scope: {
-			windowStart: input.windowStart.toISOString(),
-			windowEnd: input.windowEnd.toISOString(),
-			onlyWebOrders: input.onlyWebOrders,
-			limit: input.limit,
-		},
-		beforeMetrics: input.beforeMetrics,
-		afterMetrics: input.afterMetrics,
-		scannedOrders: input.scannedOrders,
-		recoverableOrders: input.recoverableOrders,
-		recoveredOrders: input.recoveredOrders,
-		unrecoverableOrders: input.unrecoverableOrders,
-		failedOrders: input.failedOrders,
-		shopifyWritebackCompleted: input.shopifyWritebackCompleted,
-		shopifyWritebackSkipped: input.shopifyWritebackSkipped,
-		shopifyWritebackFailed: input.shopifyWritebackFailed,
-		failures: input.failures,
-		preview: input.preview,
-	};
+  requestedBy: string;
+  workerId: string;
+  dryRun: boolean;
+  windowStart: Date;
+  windowEnd: Date;
+  onlyWebOrders: boolean;
+  limit: number;
+  beforeMetrics: ScopeMetrics;
+  afterMetrics: ScopeMetrics;
+  scannedOrders: number;
+  recoverableOrders: number;
+  recoveredOrders: number;
+  unrecoverableOrders: number;
+  failedOrders: number;
+  shopifyWritebackCompleted: number;
+  shopifyWritebackSkipped: number;
+  shopifyWritebackFailed: number;
+  failures: BackfillFailure[];
+  preview: BackfillPreviewRow[];
+}): BackfillReport {
+  return {
+    requestedBy: input.requestedBy,
+    workerId: input.workerId,
+    dryRun: input.dryRun,
+    scope: {
+      windowStart: input.windowStart.toISOString(),
+      windowEnd: input.windowEnd.toISOString(),
+      onlyWebOrders: input.onlyWebOrders,
+      limit: input.limit
+    },
+    beforeMetrics: input.beforeMetrics,
+    afterMetrics: input.afterMetrics,
+    scannedOrders: input.scannedOrders,
+    recoverableOrders: input.recoverableOrders,
+    recoveredOrders: input.recoveredOrders,
+    unrecoverableOrders: input.unrecoverableOrders,
+    failedOrders: input.failedOrders,
+    shopifyWritebackCompleted: input.shopifyWritebackCompleted,
+    shopifyWritebackSkipped: input.shopifyWritebackSkipped,
+    shopifyWritebackFailed: input.shopifyWritebackFailed,
+    failures: input.failures,
+    preview: input.preview
+  };
 }
 
-function recordFailure(
-	failures: OrderAttributionBackfillFailure[],
-	failure: OrderAttributionBackfillFailure,
-): void {
-	if (failures.length >= MAX_REPORTED_FAILURES) {
-		return;
-	}
+function recordFailure(failures: BackfillFailure[], failure: BackfillFailure): void {
+  if (failures.length >= MAX_REPORTED_FAILURES) {
+    return;
+  }
 
-	failures.push(failure);
+  failures.push(failure);
 }
 
-function normalizeNullableString(
-	value: string | null | undefined,
-): string | null {
-	const normalized = value?.trim();
-	return normalized ? normalized : null;
+function normalizeNullableString(value: string | null | undefined): string | null {
+  const normalized = value?.trim();
+  return normalized ? normalized : null;
 }
 
-function resolveOrderOccurredAt(order: OrderRow): Date {
-	return order.processed_at ?? order.created_at_shopify ?? order.ingested_at;
+function resolveOrderOccurredAt(order: Pick<OrderRow, 'processed_at' | 'created_at_shopify' | 'ingested_at'>): Date {
+  return order.processed_at ?? order.created_at_shopify ?? order.ingested_at;
 }
 
-function buildResolvedTouchpointFromValues(input: {
-	sessionId: string | null;
-	sourceTouchEventId: string | null;
-	occurredAt: Date;
-	source: string | null;
-	medium: string | null;
-	campaign: string | null;
-	content: string | null;
-	term: string | null;
-	clickIdType: string | null;
-	clickIdValue: string | null;
-	attributionReason: string;
-	matchSource: AttributionMatchSource;
-	ingestionSource: DeterministicIngestionSource | null;
-	ga4ClientId?: string | null;
-	ga4SessionId?: string | null;
-}): ResolvedAttributionTouchpoint {
-	const confidenceScore = confidenceScoreForWinner({
-		matchSource: input.matchSource,
-		clickIdValue: input.clickIdValue,
-	});
-
-	return {
-		sessionId: input.sessionId,
-		sourceTouchEventId: input.sourceTouchEventId,
-		occurredAt: input.occurredAt,
-		source: input.source,
-		medium: input.medium,
-		campaign: input.campaign,
-		content: input.content,
-		term: input.term,
-		clickIdType: input.clickIdType,
-		clickIdValue: input.clickIdValue,
-		attributionReason: input.attributionReason,
-		matchSource: input.matchSource,
-		ingestionSource: input.ingestionSource,
-		confidenceLabel: confidenceLabelForScore(confidenceScore),
-		ga4ClientId: input.ga4ClientId ?? null,
-		ga4SessionId: input.ga4SessionId ?? null,
-		isDirect: isDirectTouchpoint({
-			source: input.source,
-			medium: input.medium,
-			campaign: input.campaign,
-			content: input.content,
-			term: input.term,
-			clickIdValue: input.clickIdValue,
-		}),
-		isForced: input.sessionId === null,
-	};
+function isSameResolvedTouchpoint(
+  left: ResolvedAttributionTouchpoint,
+  right: ResolvedAttributionTouchpoint
+): boolean {
+  return (
+    left.sessionId === right.sessionId &&
+    left.sourceTouchEventId === right.sourceTouchEventId &&
+    left.ingestionSource === right.ingestionSource &&
+    left.occurredAt.getTime() === right.occurredAt.getTime()
+  );
 }
 
-function buildResolvedTouchpoint(
-	row: SessionCandidateRow,
-	ingestionSource: DeterministicIngestionSource,
-	attributionReason: string,
-): ResolvedAttributionTouchpoint {
-	return buildResolvedTouchpointFromValues({
-		sessionId: row.session_id,
-		sourceTouchEventId: row.source_touch_event_id,
-		occurredAt: row.occurred_at,
-		source: normalizeNullableString(row.source),
-		medium: normalizeNullableString(row.medium),
-		campaign: normalizeNullableString(row.campaign),
-		content: normalizeNullableString(row.content),
-		term: normalizeNullableString(row.term),
-		clickIdType: normalizeNullableString(row.click_id_type),
-		clickIdValue: normalizeNullableString(row.click_id_value),
-		attributionReason,
-		matchSource: ingestionSource,
-		ingestionSource,
-	});
+function serializeResolvedTouchpoint(touchpoint: ResolvedAttributionTouchpoint) {
+  return {
+    sessionId: touchpoint.sessionId,
+    sourceTouchEventId: touchpoint.sourceTouchEventId,
+    occurredAt: touchpoint.occurredAt.toISOString(),
+    source: touchpoint.source,
+    medium: touchpoint.medium,
+    campaign: touchpoint.campaign,
+    content: touchpoint.content,
+    term: touchpoint.term,
+    clickIdType: touchpoint.clickIdType,
+    clickIdValue: touchpoint.clickIdValue,
+    attributionReason: touchpoint.attributionReason,
+    ingestionSource: touchpoint.ingestionSource,
+    isDirect: touchpoint.isDirect
+  };
 }
 
-async function fetchOrder(
-	client: PoolClient,
-	shopifyOrderId: string,
-): Promise<OrderRow | null> {
-	const result = await client.query<OrderRow>(
-		`
+async function fetchOrder(client: PoolClient, shopifyOrderId: string): Promise<OrderRow | null> {
+  const result = await client.query<OrderRow>(
+    `
       SELECT
+        id::text,
         shopify_order_id,
         total_price,
         processed_at,
         created_at_shopify,
         ingested_at,
-        source_name,
-        raw_payload,
         landing_session_id::text AS landing_session_id,
         checkout_token,
         cart_token,
         email_hash,
-        customer_identity_id::text AS customer_identity_id
+        customer_identity_id::text AS customer_identity_id,
+        source_name,
+        raw_payload
       FROM shopify_orders
       WHERE shopify_order_id = $1
       LIMIT 1
     `,
-		[shopifyOrderId],
-	);
+    [shopifyOrderId]
+  );
 
-	return result.rows[0] ?? null;
+  return result.rows[0] ?? null;
 }
 
-async function fetchLandingSessionCandidate(
-	client: PoolClient,
-	landingSessionId: string,
-): Promise<ResolvedAttributionTouchpoint | null> {
-	const result = await client.query<SessionCandidateRow>(
-		`
-      SELECT
-        s.id::text AS session_id,
-        event.id::text AS source_touch_event_id,
-        COALESCE(event.occurred_at, s.first_seen_at) AS occurred_at,
-        COALESCE(event.utm_source, s.initial_utm_source) AS source,
-        COALESCE(event.utm_medium, s.initial_utm_medium) AS medium,
-        COALESCE(event.utm_campaign, s.initial_utm_campaign) AS campaign,
-        COALESCE(event.utm_content, s.initial_utm_content) AS content,
-        COALESCE(event.utm_term, s.initial_utm_term) AS term,
-        CASE
-          WHEN COALESCE(event.gclid, s.initial_gclid) IS NOT NULL THEN 'gclid'
-          WHEN COALESCE(event.gbraid, s.initial_gbraid) IS NOT NULL THEN 'gbraid'
-          WHEN COALESCE(event.wbraid, s.initial_wbraid) IS NOT NULL THEN 'wbraid'
-          WHEN COALESCE(event.fbclid, s.initial_fbclid) IS NOT NULL THEN 'fbclid'
-          WHEN COALESCE(event.ttclid, s.initial_ttclid) IS NOT NULL THEN 'ttclid'
-          WHEN COALESCE(event.msclkid, s.initial_msclkid) IS NOT NULL THEN 'msclkid'
-          ELSE NULL
-        END AS click_id_type,
-        COALESCE(
-          event.gclid,
-          s.initial_gclid,
-          event.gbraid,
-          s.initial_gbraid,
-          event.wbraid,
-          s.initial_wbraid,
-          event.fbclid,
-          s.initial_fbclid,
-          event.ttclid,
-          s.initial_ttclid,
-          event.msclkid,
-          s.initial_msclkid
-        ) AS click_id_value
-      FROM tracking_sessions s
-      LEFT JOIN LATERAL (
-        SELECT
-          te.id,
-          te.occurred_at,
-          te.utm_source,
-          te.utm_medium,
-          te.utm_campaign,
-          te.utm_content,
-          te.utm_term,
-          te.gclid,
-          te.gbraid,
-          te.wbraid,
-          te.fbclid,
-          te.ttclid,
-          te.msclkid
-        FROM tracking_events te
-        WHERE te.session_id = s.id
-        ORDER BY te.occurred_at ASC, te.id ASC
-        LIMIT 1
-      ) AS event ON TRUE
-      WHERE s.id = $1::uuid
-      LIMIT 1
-    `,
-		[landingSessionId],
-	);
+async function resolveAttributionJourney(client: PoolClient, order: OrderRow): Promise<ResolvedJourney> {
+  const candidates = await extractAttributionCandidatesForOrder(client, {
+    shopifyOrderId: order.shopify_order_id,
+    processedAt: order.processed_at,
+    createdAtShopify: order.created_at_shopify,
+    ingestedAt: order.ingested_at,
+    landingSessionId: order.landing_session_id,
+    checkoutToken: order.checkout_token,
+    cartToken: order.cart_token,
+    emailHash: order.email_hash,
+    customerIdentityId: order.customer_identity_id,
+    sourceName: order.source_name,
+    rawPayload: order.raw_payload
+  });
 
-	const row = result.rows[0];
-	return row
-		? buildResolvedTouchpoint(
-				row,
-				"landing_session_id",
-				"matched_by_landing_session",
-			)
-		: null;
+  return resolveAttributionTier(candidates);
 }
 
-async function fetchLatestTokenCandidate(
-	client: PoolClient,
-	tokenColumn: "shopify_checkout_token" | "shopify_cart_token",
-	tokenValue: string,
-	orderOccurredAt: Date,
-	ingestionSource: DeterministicIngestionSource,
-	attributionReason: string,
-): Promise<ResolvedAttributionTouchpoint | null> {
-	const result = await client.query<SessionCandidateRow>(
-		`
-      SELECT
-        te.session_id::text AS session_id,
-        te.id::text AS source_touch_event_id,
-        te.occurred_at,
-        te.utm_source AS source,
-        te.utm_medium AS medium,
-        te.utm_campaign AS campaign,
-        te.utm_content AS content,
-        te.utm_term AS term,
-        CASE
-          WHEN te.gclid IS NOT NULL THEN 'gclid'
-          WHEN te.gbraid IS NOT NULL THEN 'gbraid'
-          WHEN te.wbraid IS NOT NULL THEN 'wbraid'
-          WHEN te.fbclid IS NOT NULL THEN 'fbclid'
-          WHEN te.ttclid IS NOT NULL THEN 'ttclid'
-          WHEN te.msclkid IS NOT NULL THEN 'msclkid'
-          ELSE NULL
-        END AS click_id_type,
-        COALESCE(te.gclid, te.gbraid, te.wbraid, te.fbclid, te.ttclid, te.msclkid) AS click_id_value
-      FROM tracking_events te
-      WHERE te.${tokenColumn} = $1
-        AND te.occurred_at <= $2
-        AND te.occurred_at >= $2 - ($3::int * interval '1 day')
-      ORDER BY te.occurred_at DESC, te.id DESC
-      LIMIT 1
-    `,
-		[tokenValue, orderOccurredAt, ATTRIBUTION_WINDOW_DAYS],
-	);
-
-	const row = result.rows[0];
-	return row
-		? buildResolvedTouchpoint(row, ingestionSource, attributionReason)
-		: null;
+function selectPrimaryCredit(credits: AttributionCredit[]): AttributionCredit | undefined {
+  return credits.find((credit) => credit.isPrimary) ?? credits[credits.length - 1];
 }
 
-async function fetchIdentityCandidates(
-	client: PoolClient,
-	order: OrderRow,
-	orderOccurredAt: Date,
-): Promise<ResolvedAttributionTouchpoint[]> {
-	if (!order.customer_identity_id) {
-		return [];
-	}
+async function persistAttribution(client: PoolClient, order: OrderRow, journey: ResolvedJourney): Promise<void> {
+  const orderOccurredAt = journey.orderOccurredAtUtc ?? resolveOrderOccurredAt(order);
+  const outputs = computeAttributionOutputs(journey.touchpoints, {
+    orderOccurredAt,
+    orderRevenue: order.total_price
+  });
 
-	const result = await client.query<SessionCandidateRow>(
-		`
-      SELECT
-        s.id::text AS session_id,
-        event.id::text AS source_touch_event_id,
-        COALESCE(event.occurred_at, s.first_seen_at) AS occurred_at,
-        COALESCE(event.utm_source, s.initial_utm_source) AS source,
-        COALESCE(event.utm_medium, s.initial_utm_medium) AS medium,
-        COALESCE(event.utm_campaign, s.initial_utm_campaign) AS campaign,
-        COALESCE(event.utm_content, s.initial_utm_content) AS content,
-        COALESCE(event.utm_term, s.initial_utm_term) AS term,
-        CASE
-          WHEN COALESCE(event.gclid, s.initial_gclid) IS NOT NULL THEN 'gclid'
-          WHEN COALESCE(event.gbraid, s.initial_gbraid) IS NOT NULL THEN 'gbraid'
-          WHEN COALESCE(event.wbraid, s.initial_wbraid) IS NOT NULL THEN 'wbraid'
-          WHEN COALESCE(event.fbclid, s.initial_fbclid) IS NOT NULL THEN 'fbclid'
-          WHEN COALESCE(event.ttclid, s.initial_ttclid) IS NOT NULL THEN 'ttclid'
-          WHEN COALESCE(event.msclkid, s.initial_msclkid) IS NOT NULL THEN 'msclkid'
-          ELSE NULL
-        END AS click_id_type,
-        COALESCE(
-          event.gclid,
-          s.initial_gclid,
-          event.gbraid,
-          s.initial_gbraid,
-          event.wbraid,
-          s.initial_wbraid,
-          event.fbclid,
-          s.initial_fbclid,
-          event.ttclid,
-          s.initial_ttclid,
-          event.msclkid,
-          s.initial_msclkid
-        ) AS click_id_value
-      FROM tracking_sessions s
-      LEFT JOIN LATERAL (
-        SELECT
-          te.id,
-          te.occurred_at,
-          te.utm_source,
-          te.utm_medium,
-          te.utm_campaign,
-          te.utm_content,
-          te.utm_term,
-          te.gclid,
-          te.gbraid,
-          te.wbraid,
-          te.fbclid,
-          te.ttclid,
-          te.msclkid
-        FROM tracking_events te
-        WHERE te.session_id = s.id
-        ORDER BY te.occurred_at ASC, te.id ASC
-        LIMIT 1
-      ) AS event ON TRUE
-      WHERE s.customer_identity_id = $1::uuid
-        AND s.first_seen_at <= $2
-        AND s.first_seen_at >= $2 - ($3::int * interval '1 day')
-      ORDER BY s.first_seen_at ASC, s.id ASC
-    `,
-		[order.customer_identity_id, orderOccurredAt, ATTRIBUTION_WINDOW_DAYS],
-	);
+  if (journey.winner) {
+    const winner = journey.winner;
+    const winnerIndex = journey.touchpoints.findIndex((touchpoint) => isSameResolvedTouchpoint(touchpoint, winner));
 
-	return result.rows.map((row) =>
-		buildResolvedTouchpoint(
-			row,
-			"customer_identity",
-			"matched_by_customer_identity",
-		),
-	);
-}
+    if (winnerIndex >= 0) {
+      outputs.last_touch = computeSingleWinnerCredits('last_touch', journey.touchpoints, winnerIndex, order.total_price);
+    }
+  }
 
-async function collectDeterministicCandidates(
-	client: PoolClient,
-	order: OrderRow,
-): Promise<ResolvedAttributionTouchpoint[]> {
-	const orderOccurredAt = resolveOrderOccurredAt(order);
-	const candidates: ResolvedAttributionTouchpoint[] = [];
+  const primaryCredit = selectPrimaryCredit(outputs.last_touch);
 
-	if (order.landing_session_id) {
-		const landingCandidate = await fetchLandingSessionCandidate(
-			client,
-			order.landing_session_id,
-		);
-		if (landingCandidate) {
-			candidates.push(landingCandidate);
-		}
-	}
+  if (!primaryCredit) {
+    throw new Error(`Failed to compute attribution credits for Shopify order ${order.shopify_order_id}`);
+  }
 
-	if (order.checkout_token) {
-		const checkoutCandidate = await fetchLatestTokenCandidate(
-			client,
-			"shopify_checkout_token",
-			order.checkout_token,
-			orderOccurredAt,
-			"checkout_token",
-			"matched_by_checkout_token",
-		);
+  const matchedAt = new Date();
+  const orderAttributionAudit = buildOrderAttributionAuditRecord(journey, matchedAt);
+  const matchSource = buildAttributionMatchSource(journey);
+  const confidenceLabel = buildAttributionConfidenceLabel(journey.confidenceScore);
 
-		if (checkoutCandidate) {
-			candidates.push(checkoutCandidate);
-		}
-	}
+  await client.query('DELETE FROM attribution_order_credits WHERE shopify_order_id = $1', [order.shopify_order_id]);
 
-	if (order.cart_token) {
-		const cartCandidate = await fetchLatestTokenCandidate(
-			client,
-			"shopify_cart_token",
-			order.cart_token,
-			orderOccurredAt,
-			"cart_token",
-			"matched_by_cart_token",
-		);
-
-		if (cartCandidate) {
-			candidates.push(cartCandidate);
-		}
-	}
-
-	candidates.push(
-		...(await fetchIdentityCandidates(client, order, orderOccurredAt)),
-	);
-	return candidates;
-}
-
-function resolveShopifyHintFallback(
-	order: OrderRow,
-): ResolvedAttributionTouchpoint | null {
-	if (normalizeNullableString(order.source_name) !== "web") {
-		return null;
-	}
-
-	const hint = extractShopifyHintAttribution(order.raw_payload);
-	if (!hint) {
-		return null;
-	}
-
-	return buildResolvedTouchpointFromValues({
-		sessionId: null,
-		sourceTouchEventId: null,
-		occurredAt: resolveOrderOccurredAt(order),
-		source: normalizeNullableString(hint.source),
-		medium: normalizeNullableString(hint.medium),
-		campaign: normalizeNullableString(hint.campaign),
-		content: normalizeNullableString(hint.content),
-		term: normalizeNullableString(hint.term),
-		clickIdType: normalizeNullableString(hint.clickIdType),
-		clickIdValue: normalizeNullableString(hint.clickIdValue),
-		attributionReason: "shopify_hint_derived",
-		matchSource: "shopify_hint_fallback",
-		ingestionSource: null,
-	});
-}
-
-async function resolveGa4Fallback(
-	client: PoolClient,
-	order: OrderRow,
-	orderOccurredAt: Date,
-): Promise<ResolvedAttributionTouchpoint | null> {
-	if (normalizeNullableString(order.source_name) !== "web") {
-		return null;
-	}
-
-	const winner = selectGa4FallbackWinner(
-		await lookupGa4FallbackCandidates(
-			{
-				orderOccurredAt: orderOccurredAt.toISOString(),
-				customerIdentityId: order.customer_identity_id,
-				emailHash: order.email_hash,
-				transactionId: order.shopify_order_id,
-			},
-			client,
-		),
-		orderOccurredAt,
-	);
-
-	if (!winner) {
-		return null;
-	}
-
-	return buildResolvedTouchpointFromValues({
-		sessionId: null,
-		sourceTouchEventId: null,
-		occurredAt: new Date(winner.occurredAt),
-		source: normalizeNullableString(winner.source),
-		medium: normalizeNullableString(winner.medium),
-		campaign: normalizeNullableString(winner.campaign),
-		content: normalizeNullableString(winner.content),
-		term: normalizeNullableString(winner.term),
-		clickIdType: normalizeNullableString(winner.clickIdType),
-		clickIdValue: normalizeNullableString(winner.clickIdValue),
-		attributionReason: "ga4_fallback_derived",
-		matchSource: "ga4_fallback",
-		ingestionSource: null,
-		ga4ClientId: normalizeNullableString(winner.ga4ClientId),
-		ga4SessionId: normalizeNullableString(winner.ga4SessionId),
-	});
-}
-
-async function resolveAttributionJourney(
-	client: PoolClient,
-	order: OrderRow,
-): Promise<ResolvedJourney> {
-	const orderOccurredAt = resolveOrderOccurredAt(order);
-	const candidates = await collectDeterministicCandidates(client, order);
-	const touchpoints = dedupeDeterministicCandidates(candidates);
-	const winner =
-		selectLastNonDirectWinner(touchpoints) ??
-		resolveShopifyHintFallback(order) ??
-		(await resolveGa4Fallback(client, order, orderOccurredAt));
-	const confidenceScore = confidenceScoreForWinner(winner);
-
-	return {
-		touchpoints: winner && touchpoints.length === 0 ? [winner] : touchpoints,
-		winner,
-		confidenceScore,
-		confidenceLabel: confidenceLabelForScore(confidenceScore),
-	};
-}
-
-function selectPrimaryCredit(
-	credits: AttributionCredit[],
-): AttributionCredit | undefined {
-	return (
-		credits.find((credit) => credit.isPrimary) ?? credits[credits.length - 1]
-	);
-}
-
-function touchpointForCredit(
-	journey: ResolvedJourney,
-	credit: AttributionCredit,
-): Pick<ResolvedAttributionTouchpoint, "matchSource" | "confidenceLabel"> {
-	return (
-		journey.touchpoints[credit.touchpointPosition] ?? {
-			matchSource: "unattributed",
-			confidenceLabel: "none",
-		}
-	);
-}
-
-async function persistAttribution(
-	client: PoolClient,
-	order: OrderRow,
-	journey: ResolvedJourney,
-): Promise<void> {
-	const orderOccurredAt = resolveOrderOccurredAt(order);
-	const outputs = computeAttributionOutputs(journey.touchpoints, {
-		orderOccurredAt,
-		orderRevenue: order.total_price,
-	});
-
-	if (journey.winner) {
-		const winnerIndex = journey.touchpoints.findIndex(
-			(touchpoint) => touchpoint.sessionId === journey.winner?.sessionId,
-		);
-		if (winnerIndex >= 0) {
-			outputs.last_touch = computeSingleWinnerCredits(
-				"last_touch",
-				journey.touchpoints,
-				winnerIndex,
-				order.total_price,
-			);
-		}
-	}
-
-	const primaryCredit = selectPrimaryCredit(outputs.last_touch);
-	if (!primaryCredit) {
-		throw new Error(
-			`Failed to compute attribution credits for Shopify order ${order.shopify_order_id}`,
-		);
-	}
-
-	await client.query(
-		"DELETE FROM attribution_order_credits WHERE shopify_order_id = $1",
-		[order.shopify_order_id],
-	);
-
-	for (const model of ATTRIBUTION_MODELS) {
-		for (const credit of outputs[model]) {
-			const touchpoint = touchpointForCredit(journey, credit);
-			await client.query(
-				`
+  for (const model of ATTRIBUTION_MODELS) {
+    for (const credit of outputs[model]) {
+      await client.query(
+        `
           INSERT INTO attribution_order_credits (
             shopify_order_id,
             attribution_model,
@@ -798,9 +381,9 @@ async function persistAttribution(
             revenue_credit,
             is_primary,
             attribution_reason,
+            model_version,
             match_source,
-            confidence_label,
-            model_version
+            confidence_label
           )
           VALUES (
             $1,
@@ -824,33 +407,33 @@ async function persistAttribution(
             $19
           )
         `,
-				[
-					order.shopify_order_id,
-					credit.attributionModel,
-					credit.touchpointPosition,
-					credit.sessionId,
-					credit.touchpointOccurredAt,
-					normalizeNullableString(credit.source),
-					normalizeNullableString(credit.medium),
-					normalizeNullableString(credit.campaign),
-					normalizeNullableString(credit.content),
-					normalizeNullableString(credit.term),
-					normalizeNullableString(credit.clickIdType),
-					normalizeNullableString(credit.clickIdValue),
-					credit.creditWeight,
-					credit.revenueCredit,
-					credit.isPrimary,
-					credit.attributionReason,
-					touchpoint.matchSource,
-					touchpoint.confidenceLabel,
-					ATTRIBUTION_MODEL_VERSION,
-				],
-			);
-		}
-	}
+        [
+          order.shopify_order_id,
+          credit.attributionModel,
+          credit.touchpointPosition,
+          credit.sessionId,
+          credit.touchpointOccurredAt,
+          normalizeNullableString(credit.source),
+          normalizeNullableString(credit.medium),
+          normalizeNullableString(credit.campaign),
+          normalizeNullableString(credit.content),
+          normalizeNullableString(credit.term),
+          normalizeNullableString(credit.clickIdType),
+          normalizeNullableString(credit.clickIdValue),
+          credit.creditWeight,
+          credit.revenueCredit,
+          credit.isPrimary,
+          credit.attributionReason,
+          ATTRIBUTION_MODEL_VERSION,
+          matchSource,
+          confidenceLabel
+        ]
+      );
+    }
+  }
 
-	await client.query(
-		`
+  await client.query(
+    `
       INSERT INTO attribution_results (
         shopify_order_id,
         session_id,
@@ -862,15 +445,13 @@ async function persistAttribution(
         attributed_term,
         attributed_click_id_type,
         attributed_click_id_value,
-        match_source,
         confidence_score,
-        confidence_label,
         attribution_reason,
-        ga4_client_id,
-        ga4_session_id,
         attributed_at,
         reprocess_version,
-        model_version
+        model_version,
+        match_source,
+        confidence_label
       )
       VALUES (
         $1,
@@ -886,12 +467,10 @@ async function persistAttribution(
         $10,
         $11,
         $12,
+        1,
         $13,
         $14,
-        $15,
-        now(),
-        1,
-        $16
+        $15
       )
       ON CONFLICT (shopify_order_id)
       DO UPDATE SET
@@ -904,107 +483,82 @@ async function persistAttribution(
         attributed_term = EXCLUDED.attributed_term,
         attributed_click_id_type = EXCLUDED.attributed_click_id_type,
         attributed_click_id_value = EXCLUDED.attributed_click_id_value,
-        match_source = EXCLUDED.match_source,
         confidence_score = EXCLUDED.confidence_score,
-        confidence_label = EXCLUDED.confidence_label,
         attribution_reason = EXCLUDED.attribution_reason,
-        ga4_client_id = EXCLUDED.ga4_client_id,
-        ga4_session_id = EXCLUDED.ga4_session_id,
-        attributed_at = now(),
-        model_version = EXCLUDED.model_version
+        attributed_at = EXCLUDED.attributed_at,
+        model_version = EXCLUDED.model_version,
+        match_source = EXCLUDED.match_source,
+        confidence_label = EXCLUDED.confidence_label
     `,
-		[
-			order.shopify_order_id,
-			primaryCredit.sessionId,
-			normalizeNullableString(primaryCredit.source),
-			normalizeNullableString(primaryCredit.medium),
-			normalizeNullableString(primaryCredit.campaign),
-			normalizeNullableString(primaryCredit.content),
-			normalizeNullableString(primaryCredit.term),
-			normalizeNullableString(primaryCredit.clickIdType),
-			normalizeNullableString(primaryCredit.clickIdValue),
-			journey.winner?.matchSource ?? "unattributed",
-			journey.confidenceScore,
-			journey.confidenceLabel,
-			primaryCredit.attributionReason,
-			journey.winner?.ga4ClientId ?? null,
-			journey.winner?.ga4SessionId ?? null,
-			ATTRIBUTION_MODEL_VERSION,
-		],
-	);
+    [
+      order.shopify_order_id,
+      primaryCredit.sessionId,
+      normalizeNullableString(primaryCredit.source),
+      normalizeNullableString(primaryCredit.medium),
+      normalizeNullableString(primaryCredit.campaign),
+      normalizeNullableString(primaryCredit.content),
+      normalizeNullableString(primaryCredit.term),
+      normalizeNullableString(primaryCredit.clickIdType),
+      normalizeNullableString(primaryCredit.clickIdValue),
+      journey.confidenceScore,
+      primaryCredit.attributionReason,
+      matchedAt,
+      ATTRIBUTION_MODEL_VERSION,
+      matchSource,
+      confidenceLabel
+    ]
+  );
 
-	await client.query(
-		`
+  await client.query(
+    `
       UPDATE shopify_orders
       SET
-        attribution_snapshot = $2::jsonb,
-        attribution_snapshot_updated_at = now()
+        attribution_tier = $2,
+        attribution_source = $3,
+        attribution_matched_at = $4,
+        attribution_reason = $5,
+        attribution_snapshot = $6::jsonb,
+        attribution_snapshot_updated_at = $4
       WHERE shopify_order_id = $1
     `,
-		[
-			order.shopify_order_id,
-			JSON.stringify({
-				confidenceScore: journey.confidenceScore,
-				confidenceLabel: journey.confidenceLabel,
-				winner: journey.winner
-					? {
-							sessionId: journey.winner.sessionId,
-							sourceTouchEventId: journey.winner.sourceTouchEventId,
-							occurredAt: journey.winner.occurredAt.toISOString(),
-							source: journey.winner.source,
-							medium: journey.winner.medium,
-							campaign: journey.winner.campaign,
-							content: journey.winner.content,
-							term: journey.winner.term,
-							clickIdType: journey.winner.clickIdType,
-							clickIdValue: journey.winner.clickIdValue,
-							attributionReason: journey.winner.attributionReason,
-							matchSource: journey.winner.matchSource,
-							confidenceLabel: journey.winner.confidenceLabel,
-							ingestionSource: journey.winner.ingestionSource,
-							ga4ClientId: journey.winner.ga4ClientId,
-							ga4SessionId: journey.winner.ga4SessionId,
-							isDirect: journey.winner.isDirect,
-						}
-					: null,
-				timeline: journey.touchpoints.map((touchpoint) => ({
-					sessionId: touchpoint.sessionId,
-					sourceTouchEventId: touchpoint.sourceTouchEventId,
-					occurredAt: touchpoint.occurredAt.toISOString(),
-					source: touchpoint.source,
-					medium: touchpoint.medium,
-					campaign: touchpoint.campaign,
-					content: touchpoint.content,
-					term: touchpoint.term,
-					clickIdType: touchpoint.clickIdType,
-					clickIdValue: touchpoint.clickIdValue,
-					attributionReason: touchpoint.attributionReason,
-					matchSource: touchpoint.matchSource,
-					confidenceLabel: touchpoint.confidenceLabel,
-					ingestionSource: touchpoint.ingestionSource,
-					ga4ClientId: touchpoint.ga4ClientId,
-					ga4SessionId: touchpoint.ga4SessionId,
-					isDirect: touchpoint.isDirect,
-				})),
-			}),
-		],
-	);
+    [
+      order.shopify_order_id,
+      orderAttributionAudit.tier,
+      orderAttributionAudit.source,
+      orderAttributionAudit.matchedAt,
+      orderAttributionAudit.reason,
+      JSON.stringify({
+        tier: journey.tier,
+        attributionReason: journey.attributionReason,
+        orderOccurredAtUtc: journey.orderOccurredAtUtc?.toISOString() ?? null,
+        normalizationFailures: journey.normalizationFailures,
+        confidenceScore: journey.confidenceScore,
+        winner: journey.winner ? serializeResolvedTouchpoint(journey.winner) : null,
+        timeline: journey.touchpoints.map(serializeResolvedTouchpoint)
+      })
+    ]
+  );
+
+  emitAttributionResolverOutcomeLog({
+    shopifyOrderId: order.shopify_order_id,
+    orderOccurredAtUtc: journey.orderOccurredAtUtc,
+    tier: journey.tier,
+    attributionReason: journey.attributionReason,
+    confidenceScore: journey.confidenceScore,
+    pipeline: 'order_backfill',
+    touchpoints: journey.touchpoints,
+    winner: journey.winner,
+    normalizationFailures: journey.normalizationFailures
+  });
 }
 
-async function fetchScopeMetrics(
-	client: PoolClient,
-	options: {
-		windowStart: Date;
-		windowEnd: Date;
-		onlyWebOrders: boolean;
-	},
-): Promise<BackfillScopeMetrics> {
-	const result = await client.query<{
-		total_orders_in_scope: string;
-		orders_missing_attribution: string;
-		orders_with_attribution: string;
-	}>(
-		`
+async function fetchScopeMetrics(client: PoolClient, options: BackfillScopeOptions): Promise<ScopeMetrics> {
+  const result = await client.query<{
+    total_orders_in_scope: string;
+    orders_missing_attribution: string;
+    orders_with_attribution: string;
+  }>(
+    `
       WITH scoped_orders AS (
         SELECT o.shopify_order_id
         FROM shopify_orders o
@@ -1020,355 +574,356 @@ async function fetchScopeMetrics(
       LEFT JOIN attribution_results attribution
         ON attribution.shopify_order_id = scoped.shopify_order_id
     `,
-		[options.windowStart, options.windowEnd, options.onlyWebOrders],
-	);
+    [options.windowStart, options.windowEnd, options.onlyWebOrders]
+  );
+  const row = result.rows[0];
+  const totalOrdersInScope = Number(row?.total_orders_in_scope ?? '0');
+  const ordersMissingAttribution = Number(row?.orders_missing_attribution ?? '0');
+  const ordersWithAttribution = Number(row?.orders_with_attribution ?? '0');
 
-	const row = result.rows[0];
-	const totalOrdersInScope = Number(row?.total_orders_in_scope ?? "0");
-	const ordersMissingAttribution = Number(
-		row?.orders_missing_attribution ?? "0",
-	);
-	const ordersWithAttribution = Number(row?.orders_with_attribution ?? "0");
-
-	return {
-		totalOrdersInScope,
-		ordersMissingAttribution,
-		ordersWithAttribution,
-		completenessRate:
-			totalOrdersInScope > 0 ? ordersWithAttribution / totalOrdersInScope : 1,
-	};
+  return {
+    totalOrdersInScope,
+    ordersMissingAttribution,
+    ordersWithAttribution,
+    completenessRate: totalOrdersInScope > 0 ? ordersWithAttribution / totalOrdersInScope : 1
+  };
 }
 
 async function fetchBackfillCandidates(
-	client: PoolClient,
-	options: {
-		windowStart: Date;
-		windowEnd: Date;
-		onlyWebOrders: boolean;
-		limit: number;
-	},
+  client: PoolClient,
+  options: BackfillCandidateFetchOptions
 ): Promise<BackfillCandidateRow[]> {
-	const result = await client.query<BackfillCandidateRow>(
-		`
+  const result = await client.query<BackfillCandidateRow>(
+    `
       SELECT
+        o.id::text AS order_row_id,
         o.shopify_order_id,
         COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) AS order_occurred_at
       FROM shopify_orders o
-      LEFT JOIN attribution_results attribution
-        ON attribution.shopify_order_id = o.shopify_order_id
       WHERE COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) >= $1
         AND COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) <= $2
         AND ($3::boolean = false OR COALESCE(o.source_name, '') = 'web')
-        AND (${MISSING_ATTRIBUTION_SQL})
-      ORDER BY COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) DESC, o.id DESC
-      LIMIT $4
+        AND (
+          $4::timestamptz IS NULL
+          OR COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) > $4::timestamptz
+          OR (
+            COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) = $4::timestamptz
+            AND o.id > $5::bigint
+          )
+        )
+      ORDER BY COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) ASC, o.id ASC
+      LIMIT $6
     `,
-		[
-			options.windowStart,
-			options.windowEnd,
-			options.onlyWebOrders,
-			options.limit,
-		],
-	);
+    [
+      options.windowStart,
+      options.windowEnd,
+      options.onlyWebOrders,
+      options.checkpoint.lastOrderOccurredAt,
+      options.checkpoint.lastOrderRowId ?? '0',
+      options.limit
+    ]
+  );
 
-	return result.rows;
+  return result.rows;
 }
 
-function previewRowForOrder(
-	order: OrderRow,
-	journey: ResolvedJourney,
-): BackfillPreviewRow {
-	return {
-		shopifyOrderId: order.shopify_order_id,
-		orderOccurredAt: resolveOrderOccurredAt(order).toISOString(),
-		recoverable: Boolean(journey.winner),
-		touchpointCount: journey.touchpoints.length,
-		winnerSessionId: journey.winner?.sessionId ?? null,
-		attributionReason: journey.winner?.attributionReason ?? "unrecoverable",
-	};
+function previewRowForOrder(order: OrderRow, journey: ResolvedJourney): BackfillPreviewRow {
+  return {
+    shopifyOrderId: order.shopify_order_id,
+    orderOccurredAt: resolveOrderOccurredAt(order).toISOString(),
+    recoverable: Boolean(journey.winner),
+    touchpointCount: journey.touchpoints.length,
+    winnerSessionId: journey.winner?.sessionId ?? null,
+    attributionReason: journey.winner?.attributionReason ?? 'unattributed'
+  };
 }
 
-export async function backfillRecentOrdersWithRecoveredAttribution(
-	options: OrderAttributionBackfillOptions,
-): Promise<OrderAttributionBackfillReport> {
-	if (
-		!(options.windowStart instanceof Date) ||
-		Number.isNaN(options.windowStart.getTime())
-	) {
-		throw new Error("windowStart must be a valid Date");
-	}
+export async function backfillRecentOrdersWithRecoveredAttribution(options: OrderAttributionBackfillOptions): Promise<BackfillReport> {
+  if (!(options.windowStart instanceof Date) || Number.isNaN(options.windowStart.getTime())) {
+    throw new Error('windowStart must be a valid Date');
+  }
 
-	if (
-		!(options.windowEnd instanceof Date) ||
-		Number.isNaN(options.windowEnd.getTime())
-	) {
-		throw new Error("windowEnd must be a valid Date");
-	}
+  if (!(options.windowEnd instanceof Date) || Number.isNaN(options.windowEnd.getTime())) {
+    throw new Error('windowEnd must be a valid Date');
+  }
 
-	if (options.windowStart > options.windowEnd) {
-		throw new Error("windowStart must be on or before windowEnd");
-	}
+  if (options.windowStart > options.windowEnd) {
+    throw new Error('windowStart must be on or before windowEnd');
+  }
 
-	const limit = Math.max(1, options.limit ?? 500);
-	const dryRun = options.dryRun ?? false;
-	const onlyWebOrders = options.onlyWebOrders ?? true;
-	const writeToShopifyWhenAvailable =
-		options.writeToShopifyWhenAvailable ?? true;
-	const applyWriteback = options.applyWriteback ?? applyShopifyOrderWriteback;
-	let beforeMetrics = buildEmptyScopeMetrics();
-	let afterMetrics = buildEmptyScopeMetrics();
-	let scannedOrders = 0;
-	let recoverableOrders = 0;
-	let recoveredOrders = 0;
-	let unrecoverableOrders = 0;
-	let failedOrders = 0;
-	let shopifyWritebackCompleted = 0;
-	let shopifyWritebackSkipped = 0;
-	let shopifyWritebackFailed = 0;
-	const failures: OrderAttributionBackfillFailure[] = [];
-	const preview: BackfillPreviewRow[] = [];
+  const limit = Math.max(1, options.limit ?? 500);
+  const dryRun = options.dryRun ?? false;
+  const onlyWebOrders = options.onlyWebOrders ?? true;
+  const writeToShopifyWhenAvailable = options.writeToShopifyWhenAvailable ?? true;
+  const applyWriteback = options.applyWriteback ?? applyShopifyOrderWriteback;
+  const progress = parseOrderAttributionBackfillProgress(options.progress ?? buildEmptyOrderAttributionBackfillProgress());
+  const publishProgress = options.onProgress
+    ? async () => options.onProgress?.(parseOrderAttributionBackfillProgress(progress))
+    : null;
 
-	try {
-		logInfo("order_attribution_backfill_started", {
-			requestedBy: options.requestedBy,
-			workerId: options.workerId,
-			dryRun,
-			onlyWebOrders,
-			limit,
-			windowStart: options.windowStart.toISOString(),
-			windowEnd: options.windowEnd.toISOString(),
-		});
+  let beforeMetrics = progress.beforeMetrics ?? buildEmptyScopeMetrics();
+  let afterMetrics = buildEmptyScopeMetrics();
+  let scannedOrders = progress.scannedOrders;
+  let recoverableOrders = progress.recoverableOrders;
+  let recoveredOrders = progress.recoveredOrders;
+  let unrecoverableOrders = progress.unrecoverableOrders;
+  let failedOrders = progress.failedOrders;
+  let shopifyWritebackCompleted = progress.shopifyWritebackCompleted;
+  let shopifyWritebackSkipped = progress.shopifyWritebackSkipped;
+  let shopifyWritebackFailed = progress.shopifyWritebackFailed;
+  const failures = [...progress.failures];
+  const preview = [...progress.preview];
 
-		beforeMetrics = await withTransaction((client) =>
-			fetchScopeMetrics(client, {
-				windowStart: options.windowStart,
-				windowEnd: options.windowEnd,
-				onlyWebOrders,
-			}),
-		);
+  try {
+    logInfo('order_attribution_backfill_started', {
+      requestedBy: options.requestedBy,
+      workerId: options.workerId,
+      dryRun,
+      onlyWebOrders,
+      limit,
+      windowStart: options.windowStart.toISOString(),
+      windowEnd: options.windowEnd.toISOString()
+    });
 
-		const candidateRows = await withTransaction((client) =>
-			fetchBackfillCandidates(client, {
-				windowStart: options.windowStart,
-				windowEnd: options.windowEnd,
-				onlyWebOrders,
-				limit,
-			}),
-		);
+    if (progress.beforeMetrics === null) {
+      beforeMetrics = await withTransaction((client) =>
+        fetchScopeMetrics(client, {
+          windowStart: options.windowStart,
+          windowEnd: options.windowEnd,
+          onlyWebOrders
+        })
+      );
+      progress.beforeMetrics = beforeMetrics;
 
-		scannedOrders = candidateRows.length;
-		const reportingDates = new Set<string>();
-		const reportingTimezone = dryRun
-			? null
-			: await withTransaction((client) => getReportingTimezone(client));
+      if (publishProgress) {
+        await publishProgress();
+      }
+    }
 
-		for (const candidate of candidateRows) {
-			try {
-				const resolved = await withTransaction(async (client) => {
-					const order = await fetchOrder(client, candidate.shopify_order_id);
-					if (!order) {
-						return null;
-					}
+    const reportingDates = new Set<string>();
+    const reportingTimezone = dryRun ? null : await withTransaction((client) => getReportingTimezone(client));
 
-					const journey = await resolveAttributionJourney(client, order);
-					return { order, journey };
-				});
+    while (!progress.cursor.completed) {
+      const candidateRows = await withTransaction((client) =>
+        fetchBackfillCandidates(client, {
+          windowStart: options.windowStart,
+          windowEnd: options.windowEnd,
+          onlyWebOrders,
+          limit,
+          checkpoint: progress.cursor
+        })
+      );
 
-				if (!resolved) {
-					failedOrders += 1;
-					recordFailure(failures, {
-						orderId: candidate.shopify_order_id,
-						code: "order_not_found",
-						message: `Shopify order ${candidate.shopify_order_id} was not found during backfill processing`,
-					});
-					continue;
-				}
+      if (candidateRows.length === 0) {
+        progress.cursor.completed = true;
 
-				if (preview.length < MAX_PREVIEW_ORDERS) {
-					preview.push(previewRowForOrder(resolved.order, resolved.journey));
-				}
+        if (publishProgress) {
+          await publishProgress();
+        }
 
-				if (!resolved.journey.winner) {
-					unrecoverableOrders += 1;
-					continue;
-				}
+        break;
+      }
 
-				recoverableOrders += 1;
+      for (const candidate of candidateRows) {
+        try {
+          const resolved = await withTransaction(async (client) => {
+            const order = await fetchOrder(client, candidate.shopify_order_id);
 
-				if (dryRun) {
-					continue;
-				}
+            if (!order) {
+              return null;
+            }
 
-				await withTransaction(async (client) => {
-					await persistAttribution(client, resolved.order, resolved.journey);
+            const journey = await resolveAttributionJourney(client, order);
+            return { order, journey };
+          });
 
-					if (reportingTimezone) {
-						reportingDates.add(
-							formatDateInTimezone(
-								resolveOrderOccurredAt(resolved.order),
-								reportingTimezone,
-							),
-						);
-					}
-				});
+          scannedOrders += 1;
 
-				recoveredOrders += 1;
+          if (!resolved) {
+            failedOrders += 1;
+            recordFailure(failures, {
+              orderId: candidate.shopify_order_id,
+              code: 'order_not_found',
+              message: `Shopify order ${candidate.shopify_order_id} was not found during backfill processing`
+            });
+            continue;
+          }
 
-				if (writeToShopifyWhenAvailable) {
-					try {
-						const writeback = await applyWriteback({
-							workerId: options.workerId,
-							shopifyOrderId: resolved.order.shopify_order_id,
-							requestedReason: "recent_order_attribution_backfill",
-						});
+          if (preview.length < MAX_PREVIEW_ORDERS) {
+            preview.push(previewRowForOrder(resolved.order, resolved.journey));
+          }
 
-						if (writeback.status === "completed") {
-							shopifyWritebackCompleted += 1;
-						} else {
-							shopifyWritebackSkipped += 1;
-						}
-					} catch (error) {
-						shopifyWritebackFailed += 1;
-						recordFailure(failures, {
-							orderId: resolved.order.shopify_order_id,
-							code: normalizeFailureCode(error, "shopify_writeback_failed"),
-							message: normalizeFailureMessage(
-								error,
-								`Shopify writeback failed for Shopify order ${resolved.order.shopify_order_id}`,
-							),
-						});
-						logError(
-							"order_attribution_backfill_shopify_writeback_failed",
-							error,
-							{
-								requestedBy: options.requestedBy,
-								workerId: options.workerId,
-								shopifyOrderId: resolved.order.shopify_order_id,
-							},
-						);
-					}
-				}
-			} catch (error) {
-				failedOrders += 1;
-				recordFailure(failures, {
-					orderId: candidate.shopify_order_id,
-					code: normalizeFailureCode(
-						error,
-						"order_attribution_backfill_failed",
-					),
-					message: normalizeFailureMessage(
-						error,
-						`Failed to backfill Shopify order ${candidate.shopify_order_id}`,
-					),
-				});
-				logError("order_attribution_backfill_order_failed", error, {
-					requestedBy: options.requestedBy,
-					workerId: options.workerId,
-					shopifyOrderId: candidate.shopify_order_id,
-				});
-			}
-		}
+          if (resolved.journey.winner) {
+            recoverableOrders += 1;
+          } else {
+            unrecoverableOrders += 1;
+          }
 
-		if (!dryRun && reportingDates.size > 0) {
-			await withTransaction((client) =>
-				refreshDailyReportingMetrics(client, [...reportingDates]),
-			);
-		}
+          if (!dryRun) {
+            await withTransaction(async (client) => {
+              await persistAttribution(client, resolved.order, resolved.journey);
 
-		afterMetrics = dryRun
-			? beforeMetrics
-			: await withTransaction((client) =>
-					fetchScopeMetrics(client, {
-						windowStart: options.windowStart,
-						windowEnd: options.windowEnd,
-						onlyWebOrders,
-					}),
-				);
+              if (reportingTimezone) {
+                reportingDates.add(formatDateInTimezone(resolveOrderOccurredAt(resolved.order), reportingTimezone));
+              }
+            });
+            recoveredOrders += 1;
 
-		const report = buildOrderAttributionBackfillReport({
-			requestedBy: options.requestedBy,
-			workerId: options.workerId,
-			dryRun,
-			windowStart: options.windowStart,
-			windowEnd: options.windowEnd,
-			onlyWebOrders,
-			limit,
-			beforeMetrics,
-			afterMetrics,
-			scannedOrders,
-			recoverableOrders,
-			recoveredOrders,
-			unrecoverableOrders,
-			failedOrders,
-			shopifyWritebackCompleted,
-			shopifyWritebackSkipped,
-			shopifyWritebackFailed,
-			failures,
-			preview,
-		});
+            if (writeToShopifyWhenAvailable) {
+              try {
+                const writeback = await applyWriteback({
+                  workerId: options.workerId,
+                  shopifyOrderId: resolved.order.shopify_order_id,
+                  requestedReason: 'recent_order_attribution_backfill'
+                });
 
-		logInfo(
-			dryRun
-				? "order_attribution_backfill_dry_run_completed"
-				: "order_attribution_backfill_completed",
-			report,
-		);
-		return report;
-	} catch (error) {
-		const partialReport = buildOrderAttributionBackfillReport({
-			requestedBy: options.requestedBy,
-			workerId: options.workerId,
-			dryRun,
-			windowStart: options.windowStart,
-			windowEnd: options.windowEnd,
-			onlyWebOrders,
-			limit,
-			beforeMetrics,
-			afterMetrics,
-			scannedOrders,
-			recoverableOrders,
-			recoveredOrders,
-			unrecoverableOrders,
-			failedOrders,
-			shopifyWritebackCompleted,
-			shopifyWritebackSkipped,
-			shopifyWritebackFailed,
-			failures,
-			preview,
-		});
+                if (writeback.status === 'completed') {
+                  shopifyWritebackCompleted += 1;
+                } else {
+                  shopifyWritebackSkipped += 1;
+                }
+              } catch (error) {
+                shopifyWritebackFailed += 1;
+                recordFailure(failures, {
+                  orderId: resolved.order.shopify_order_id,
+                  code: normalizeFailureCode(error, 'shopify_writeback_failed'),
+                  message: normalizeFailureMessage(
+                    error,
+                    `Shopify writeback failed for Shopify order ${resolved.order.shopify_order_id}`
+                  )
+                });
+                logError('order_attribution_backfill_shopify_writeback_failed', error, {
+                  requestedBy: options.requestedBy,
+                  workerId: options.workerId,
+                  shopifyOrderId: resolved.order.shopify_order_id
+                });
+              }
+            }
+          }
+        } catch (error) {
+          scannedOrders += 1;
+          failedOrders += 1;
+          recordFailure(failures, {
+            orderId: candidate.shopify_order_id,
+            code: normalizeFailureCode(error, 'order_attribution_backfill_failed'),
+            message: normalizeFailureMessage(error, `Failed to backfill Shopify order ${candidate.shopify_order_id}`)
+          });
+          logError('order_attribution_backfill_order_failed', error, {
+            requestedBy: options.requestedBy,
+            workerId: options.workerId,
+            shopifyOrderId: candidate.shopify_order_id
+          });
+        }
+      }
 
-		logError("order_attribution_backfill_run_failed", error, {
-			requestedBy: options.requestedBy,
-			workerId: options.workerId,
-			scannedOrders,
-			recoveredOrders,
-			unrecoverableOrders,
-			writebackCompleted: shopifyWritebackCompleted,
-			failedOrders,
-		});
+      const lastCandidate = candidateRows[candidateRows.length - 1];
+      progress.scannedOrders = scannedOrders;
+      progress.recoverableOrders = recoverableOrders;
+      progress.recoveredOrders = recoveredOrders;
+      progress.unrecoverableOrders = unrecoverableOrders;
+      progress.failedOrders = failedOrders;
+      progress.shopifyWritebackCompleted = shopifyWritebackCompleted;
+      progress.shopifyWritebackSkipped = shopifyWritebackSkipped;
+      progress.shopifyWritebackFailed = shopifyWritebackFailed;
+      progress.failures = failures;
+      progress.preview = preview;
+      progress.cursor.lastOrderOccurredAt = lastCandidate.order_occurred_at.toISOString();
+      progress.cursor.lastOrderRowId = lastCandidate.order_row_id;
+      progress.cursor.batchesProcessed += 1;
 
-		throw new OrderAttributionBackfillRunError(
-			normalizeFailureMessage(error, "Order attribution backfill job failed"),
-			{
-				code: normalizeFailureCode(
-					error,
-					"order_attribution_backfill_run_failed",
-				),
-				report: toOrderAttributionBackfillJobReport(partialReport),
-				cause: error,
-			},
-		);
-	}
+      if (publishProgress) {
+        await publishProgress();
+      }
+    }
+
+    if (!dryRun && reportingDates.size > 0) {
+      await withTransaction((client) => refreshDailyReportingMetrics(client, [...reportingDates]));
+    }
+
+    afterMetrics = dryRun
+      ? beforeMetrics
+      : await withTransaction((client) =>
+          fetchScopeMetrics(client, {
+            windowStart: options.windowStart,
+            windowEnd: options.windowEnd,
+            onlyWebOrders
+          })
+        );
+
+    const report = buildOrderAttributionBackfillReport({
+      requestedBy: options.requestedBy,
+      workerId: options.workerId,
+      dryRun,
+      windowStart: options.windowStart,
+      windowEnd: options.windowEnd,
+      onlyWebOrders,
+      limit,
+      beforeMetrics,
+      afterMetrics,
+      scannedOrders,
+      recoverableOrders,
+      recoveredOrders,
+      unrecoverableOrders,
+      failedOrders,
+      shopifyWritebackCompleted,
+      shopifyWritebackSkipped,
+      shopifyWritebackFailed,
+      failures,
+      preview
+    });
+
+    logInfo(dryRun ? 'order_attribution_backfill_dry_run_completed' : 'order_attribution_backfill_completed', report);
+    return report;
+  } catch (error) {
+    const partialReport = buildOrderAttributionBackfillReport({
+      requestedBy: options.requestedBy,
+      workerId: options.workerId,
+      dryRun,
+      windowStart: options.windowStart,
+      windowEnd: options.windowEnd,
+      onlyWebOrders,
+      limit,
+      beforeMetrics,
+      afterMetrics,
+      scannedOrders,
+      recoverableOrders,
+      recoveredOrders,
+      unrecoverableOrders,
+      failedOrders,
+      shopifyWritebackCompleted,
+      shopifyWritebackSkipped,
+      shopifyWritebackFailed,
+      failures,
+      preview
+    });
+
+    logError('order_attribution_backfill_run_failed', error, {
+      requestedBy: options.requestedBy,
+      workerId: options.workerId,
+      scannedOrders,
+      recoveredOrders,
+      unrecoverableOrders,
+      writebackCompleted: shopifyWritebackCompleted,
+      failedOrders
+    });
+
+    throw new OrderAttributionBackfillRunError(
+      normalizeFailureMessage(error, 'Order attribution backfill job failed'),
+      {
+        code: normalizeFailureCode(error, 'order_attribution_backfill_run_failed'),
+        report: toOrderAttributionBackfillJobReport(partialReport),
+        cause: error
+      }
+    );
+  }
 }
 
-export function toOrderAttributionBackfillJobReport(
-	report: OrderAttributionBackfillReport,
-): OrderAttributionBackfillJobReport {
-	return {
-		scanned: report.scannedOrders,
-		recovered: report.recoveredOrders,
-		unrecoverable: report.unrecoverableOrders,
-		writebackCompleted: report.shopifyWritebackCompleted,
-		failures: report.failures,
-	};
+export function toOrderAttributionBackfillJobReport(report: BackfillReport): OrderAttributionBackfillJobReport {
+  return {
+    scanned: report.scannedOrders,
+    recovered: report.recoveredOrders,
+    unrecoverable: report.unrecoverableOrders,
+    writebackCompleted: report.shopifyWritebackCompleted,
+    failures: report.failures
+  };
 }

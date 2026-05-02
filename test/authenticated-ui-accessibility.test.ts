@@ -183,330 +183,330 @@ test("authenticated dashboard, order details, and settings pass automated access
 		),
 	]);
 
-	const dashboardMarkup = renderRouteShell(
-		AuthenticatedAppShell,
-		"dashboard",
-		h(ReportingDashboard, {
-			filters: {
-				startDate: "2026-04-01",
-				endDate: "2026-04-20",
-				source: "",
-				campaign: "",
-			},
-			onFiltersChange() {},
-			groupBy: "day",
-			onGroupByChange() {},
-			reportingTimezone: "America/Los_Angeles",
-			quickRanges: [
-				{
-					label: "Today",
-					value: () => ({ startDate: "2026-04-20", endDate: "2026-04-20" }),
-				},
-				{
-					label: "Last 7D",
-					value: () => ({ startDate: "2026-04-14", endDate: "2026-04-20" }),
-				},
-			],
-			onApplyQuickRange() {},
-			onClearFilters() {},
-			summaryCards: [
-				{ label: "Visits", value: "12,480", detail: "Apr 1 to Apr 20" },
-				{ label: "Orders", value: "324", detail: "2.6% conversion" },
-				{ label: "Revenue", value: "$48,920.00", detail: "4.3 ROAS" },
-				{ label: "AOV", value: "$150.99", detail: "324 attributed orders" },
-			],
-			summarySection: {
-				data: {
-					visits: 12480,
-					orders: 324,
-					revenue: 48920,
-					spend: 11376,
-					conversionRate: 0.02596,
-					roas: 4.3,
-				},
-				loading: false,
-				error: null,
-			},
-			campaignsSection: {
-				data: [
-					{
-						source: "google",
-						medium: "cpc",
-						campaign: "Spring Search",
-						content: "hero",
-						visits: 4800,
-						orders: 122,
-						revenue: 18320,
-						conversionRate: 0.0254,
-					},
-				],
-				loading: false,
-				error: null,
-			},
-			timeseriesSection: {
-				data: [
-					{ date: "2026-04-18", visits: 540, orders: 21, revenue: 3210 },
-					{ date: "2026-04-19", visits: 610, orders: 24, revenue: 4020 },
-					{ date: "2026-04-20", visits: 575, orders: 23, revenue: 3680 },
-				],
-				loading: false,
-				error: null,
-			},
-			ordersSection: {
-				data: [
-					{
-						shopifyOrderId: "1105",
-						processedAt: "2026-04-20T18:00:00.000Z",
-						source: "google",
-						medium: "cpc",
-						campaign: "Spring Search",
-						totalPrice: 195,
-						attributionReason: "last-touch",
-					},
-				],
-				loading: false,
-				error: null,
-			},
-			spendDetailsSection: {
-				data: [
-					{
-						source: "google",
-						medium: "cpc",
-						channel: "google / cpc",
-						subtotal: 7320,
-						campaigns: [
-							{ campaign: "Spring Search", spend: 5220 },
-							{ campaign: "Brand Search", spend: 2100 },
-						],
-					},
-				],
-				loading: false,
-				error: null,
-			},
-			onOpenOrderDetails() {},
-		}),
-	);
+  const dashboardMarkup = renderRouteShell(
+    AuthenticatedAppShell,
+    'dashboard',
+    h(ReportingDashboard, {
+      filters: { startDate: '2026-04-01', endDate: '2026-04-20', source: '', campaign: '', attributionTier: '' },
+      onFiltersChange() {},
+      groupBy: 'day',
+      onGroupByChange() {},
+      reportingTimezone: 'America/Los_Angeles',
+      quickRanges: [
+        { label: 'Today', value: () => ({ startDate: '2026-04-20', endDate: '2026-04-20' }) },
+        { label: 'Last 7D', value: () => ({ startDate: '2026-04-14', endDate: '2026-04-20' }) }
+      ],
+      onApplyQuickRange() {},
+      onClearFilters() {},
+      summaryCards: [
+        { label: 'Visits', value: '12,480', detail: 'Apr 1 to Apr 20' },
+        { label: 'Orders', value: '324', detail: '2.6% conversion' },
+        { label: 'Revenue', value: '$48,920.00', detail: '4.3 ROAS' },
+        { label: 'AOV', value: '$150.99', detail: '324 attributed orders' }
+      ],
+      summarySection: {
+        data: { visits: 12480, orders: 324, revenue: 48920, spend: 11376, conversionRate: 0.02596, roas: 4.3 },
+        loading: false,
+        error: null
+      },
+      campaignsSection: {
+        data: [
+          {
+            source: 'google',
+            medium: 'cpc',
+            campaign: 'Spring Search',
+            content: 'hero',
+            visits: 4800,
+            orders: 122,
+            revenue: 18320,
+            conversionRate: 0.0254
+          }
+        ],
+        loading: false,
+        error: null
+      },
+      timeseriesSection: {
+        data: [
+          { date: '2026-04-18', visits: 540, orders: 21, revenue: 3210 },
+          { date: '2026-04-19', visits: 610, orders: 24, revenue: 4020 },
+          { date: '2026-04-20', visits: 575, orders: 23, revenue: 3680 }
+        ],
+        loading: false,
+        error: null
+      },
+      ordersSection: {
+        data: [
+          {
+            shopifyOrderId: '1105',
+            processedAt: '2026-04-20T18:00:00.000Z',
+            orderOccurredAtUtc: '2026-04-20T18:00:00.000Z',
+            source: 'google',
+            medium: 'cpc',
+            campaign: 'Spring Search',
+            totalPrice: 195,
+            attributionReason: 'matched_by_landing_session',
+            primaryCreditAttributionReason: 'matched_by_landing_session',
+            attributionTier: 'deterministic_first_party',
+            attributionTierLabel: 'Deterministic first-party',
+            attributionTierDescription:
+              'Resolved from durable ROAS Radar first-party evidence such as a landing session, checkout token, cart token, or stitched identity path.',
+            attributionSource: 'landing_session_id',
+            attributionMatchedAt: '2026-04-20T18:00:30.000Z',
+            confidenceScore: 1,
+            sessionId: 'sess_123'
+          }
+        ],
+        loading: false,
+        error: null
+      },
+      spendDetailsSection: {
+        data: [
+          {
+            source: 'google',
+            medium: 'cpc',
+            channel: 'google / cpc',
+            subtotal: 7320,
+            campaigns: [
+              { campaign: 'Spring Search', spend: 5220 },
+              { campaign: 'Brand Search', spend: 2100 }
+            ]
+          }
+        ],
+        loading: false,
+        error: null
+      },
+      onOpenOrderDetails() {}
+    })
+  );
 
-	const orderDetailsMarkup = renderRouteShell(
-		AuthenticatedAppShell,
-		"order-details",
-		h(OrderDetailsView, {
-			selectedOrderId: "1105",
-			reportingTimezone: "America/Los_Angeles",
-			orderDetailsSection: {
-				loading: false,
-				error: null,
-				data: {
-					order: {
-						shopifyOrderId: "1105",
-						shopifyOrderNumber: "RR-1105",
-						shopifyCustomerId: "gid://shopify/Customer/99",
-						customerIdentityId: "cust_449",
-						email: "alex@example.com",
-						emailHash: "hash_abc123",
-						currencyCode: "USD",
-						subtotalPrice: 180,
-						totalPrice: 195,
-						financialStatus: "paid",
-						fulfillmentStatus: "fulfilled",
-						processedAt: "2026-04-20T18:00:00.000Z",
-						createdAtShopify: "2026-04-20T17:42:00.000Z",
-						updatedAtShopify: "2026-04-20T18:30:00.000Z",
-						landingSessionId: "sess_123",
-						checkoutToken: "check_456",
-						cartToken: "cart_789",
-						sourceName: "web",
-						ingestedAt: "2026-04-20T18:31:00.000Z",
-						rawPayload: { orderNumber: "RR-1105" },
-					},
-					lineItems: [
-						{
-							shopifyLineItemId: "line_1",
-							shopifyOrderId: "1105",
-							title: "Performance Hoodie",
-							variantTitle: "Black / Large",
-							sku: "HOODIE-BLK-L",
-							vendor: "ROAS Radar",
-							quantity: 1,
-							price: 95,
-							fulfillmentStatus: "fulfilled",
-							rawPayload: { sku: "HOODIE-BLK-L" },
-						},
-					],
-					attributionCredits: [
-						{
-							attributionModel: "last-touch",
-							touchpointPosition: 1,
-							source: "google",
-							medium: "cpc",
-							campaign: "Spring Search",
-							touchpointOccurredAt: "2026-04-20T17:00:00.000Z",
-							revenueCredit: 195,
-							creditWeight: 1,
-							attributionReason: "last-touch",
-							clickIdType: "gclid",
-							clickIdValue: "gclid_123",
-						},
-					],
-				},
-			},
-		}),
-	);
+  const orderDetailsMarkup = renderRouteShell(
+    AuthenticatedAppShell,
+    'order-details',
+    h(OrderDetailsView, {
+      selectedOrderId: '1105',
+      reportingTimezone: 'America/Los_Angeles',
+      orderDetailsSection: {
+        loading: false,
+        error: null,
+        data: {
+          order: {
+            shopifyOrderId: '1105',
+            shopifyOrderNumber: 'RR-1105',
+            shopifyCustomerId: 'gid://shopify/Customer/99',
+            customerIdentityId: 'cust_449',
+            email: 'alex@example.com',
+            emailHash: 'hash_abc123',
+            currencyCode: 'USD',
+            subtotalPrice: 180,
+            totalPrice: 195,
+            financialStatus: 'paid',
+            fulfillmentStatus: 'fulfilled',
+            processedAt: '2026-04-20T18:00:00.000Z',
+            createdAtShopify: '2026-04-20T17:42:00.000Z',
+            updatedAtShopify: '2026-04-20T18:30:00.000Z',
+            landingSessionId: 'sess_123',
+            checkoutToken: 'check_456',
+            cartToken: 'cart_789',
+            sourceName: 'web',
+            orderOccurredAtUtc: '2026-04-20T18:00:00.000Z',
+            attributionTier: 'deterministic_first_party',
+            attributionTierLabel: 'Deterministic first-party',
+            attributionTierDescription:
+              'Resolved from durable ROAS Radar first-party evidence such as a landing session, checkout token, cart token, or stitched identity path.',
+            attributionSource: 'landing_session_id',
+            attributionMatchedAt: '2026-04-20T18:00:30.000Z',
+            attributionReason: 'matched_by_landing_session',
+            confidenceScore: 1,
+            sessionId: 'sess_123',
+            attributedSource: 'google',
+            attributedMedium: 'cpc',
+            attributedCampaign: 'brand-search',
+            attributedContent: null,
+            attributedTerm: null,
+            attributedClickIdType: 'gclid',
+            attributedClickIdValue: 'abc-123',
+            attributionSnapshot: {
+              confidenceScore: 1,
+              winner: {
+                sessionId: 'sess_123',
+                source: 'google',
+                medium: 'cpc',
+                campaign: 'brand-search'
+              }
+            },
+            attributionSnapshotUpdatedAt: '2026-04-20T18:00:30.000Z',
+            ingestedAt: '2026-04-20T18:31:00.000Z',
+            rawPayload: { orderNumber: 'RR-1105' }
+          },
+          lineItems: [
+            {
+              shopifyLineItemId: 'line_1',
+              shopifyOrderId: '1105',
+              title: 'Performance Hoodie',
+              variantTitle: 'Black / Large',
+              sku: 'HOODIE-BLK-L',
+              vendor: 'ROAS Radar',
+              quantity: 1,
+              price: 95,
+              fulfillmentStatus: 'fulfilled',
+              rawPayload: { sku: 'HOODIE-BLK-L' }
+            }
+          ],
+          attributionCredits: [
+            {
+              attributionModel: 'last-touch',
+              touchpointPosition: 1,
+              source: 'google',
+              medium: 'cpc',
+              campaign: 'Spring Search',
+              touchpointOccurredAt: '2026-04-20T17:00:00.000Z',
+              revenueCredit: 195,
+              creditWeight: 1,
+              attributionReason: 'last-touch',
+              clickIdType: 'gclid',
+              clickIdValue: 'gclid_123'
+            }
+          ]
+        }
+      }
+    })
+  );
 
-	const settingsMarkup = renderRouteShell(
-		AuthenticatedAppShell,
-		"settings",
-		h(SettingsAdminView, {
-			isAdmin: true,
-			reportingTimezone: "America/Los_Angeles",
-			defaultReportingTimezone: "America/Los_Angeles",
-			reportingTimezoneOptions: ["America/Los_Angeles", "UTC"],
-			filters: { startDate: "2026-04-01", endDate: "2026-04-20" },
-			appSettings: {
-				data: {
-					reportingTimezone: "America/Los_Angeles",
-					updatedAt: "2026-04-20T12:00:00.000Z",
-				},
-				loading: false,
-				error: null,
-			},
-			settingsForm: { reportingTimezone: "America/Los_Angeles" },
-			setSettingsForm() {},
-			usersSection: {
-				data: [
-					{
-						id: "user_1",
-						email: "taylor@roasradar.dev",
-						displayName: "Taylor Operator",
-						status: "active",
-						isAdmin: true,
-						lastLoginAt: "2026-04-20T16:45:00.000Z",
-					},
-				],
-				loading: false,
-				error: null,
-			},
-			newUserForm: {
-				email: "alex@roasradar.dev",
-				password: "supersecurepass",
-				displayName: "Alex",
-				isAdmin: false,
-			},
-			setNewUserForm() {},
-			shopifyConnection: {
-				data: {
-					connected: true,
-					storeDomain: "example.myshopify.com",
-					webhookConfigured: true,
-					lastSyncAt: "2026-04-20T15:00:00.000Z",
-				},
-				loading: false,
-				error: null,
-			},
-			shopifyBackfillRange: { startDate: "2026-04-01", endDate: "2026-04-20" },
-			setShopifyBackfillRange() {},
-			shopifyOrderAttributionBackfillOptions: {
-				dryRun: true,
-				limit: "500",
-				webOrdersOnly: true,
-				skipShopifyWriteback: false,
-			},
-			setShopifyOrderAttributionBackfillOptions() {},
-			orderAttributionBackfillJob: {
-				data: null,
-				loading: false,
-				error: null,
-			},
-			metaConnection: {
-				data: {
-					config: {
-						appId: "meta-app",
-						appBaseUrl: "https://example.com",
-						appScopes: ["ads_read"],
-						adAccountId: "act_123",
-						missingFields: [],
-					},
-					connection: {
-						account_id: "act_123",
-						account_name: "Meta Account",
-						status: "connected",
-						last_sync_at: "2026-04-20T15:30:00.000Z",
-						last_sync_status: "success",
-					},
-				},
-				loading: false,
-				error: null,
-			},
-			metaConfigForm: {
-				appId: "meta-app",
-				appSecret: "",
-				appBaseUrl: "https://example.com",
-				appScopes: "ads_read",
-				adAccountId: "act_123",
-			},
-			setMetaConfigForm() {},
-			googleConnection: {
-				data: {
-					config: {
-						source: "database",
-						developerTokenConfigured: true,
-						appBaseUrl: "https://example.com",
-						appScopes: ["https://www.googleapis.com/auth/adwords"],
-						clientId: "client-id",
-						clientSecretConfigured: true,
-						missingFields: [],
-					},
-					connection: {
-						customer_id: "123-456-7890",
-						login_customer_id: "111-222-3333",
-						status: "connected",
-						last_sync_at: "2026-04-20T15:30:00.000Z",
-						last_sync_status: "success",
-					},
-				},
-				loading: false,
-				error: null,
-			},
-			googleConfigForm: {
-				developerToken: "token",
-				clientId: "client-id",
-				clientSecret: "client-secret",
-				appBaseUrl: "https://example.com",
-				appScopes: "https://www.googleapis.com/auth/adwords",
-			},
-			setGoogleConfigForm() {},
-			googleForm: {
-				customerId: "123-456-7890",
-				loginCustomerId: "111-222-3333",
-				developerToken: "token",
-				clientId: "client-id",
-				clientSecret: "client-secret",
-				refreshToken: "refresh-token",
-			},
-			setGoogleForm() {},
-			actionFeedback: {
-				context: null,
-				loading: null,
-				error: null,
-				message: null,
-			},
-			onSettingsSave() {},
-			onCreateUser() {},
-			onShopifyBackfill() {},
-			onMetaConfigSave() {},
-			onGoogleConfigSave() {},
-			onGoogleConnect() {},
-			onShopifyTest() {},
-			onShopifyWebhookSync() {},
-			onShopifyAttributionRecovery() {},
-			onShopifyOrderAttributionBackfill() {},
-			onOrderAttributionBackfillRefresh() {},
-			onMetaConnect() {},
-			onMetaSync() {},
-			onGoogleSync() {},
-			onGoogleReconcile() {},
-		}),
-	);
+  const settingsMarkup = renderRouteShell(
+    AuthenticatedAppShell,
+    'settings',
+    h(SettingsAdminView, {
+      isAdmin: true,
+      reportingTimezone: 'America/Los_Angeles',
+      defaultReportingTimezone: 'America/Los_Angeles',
+      reportingTimezoneOptions: ['America/Los_Angeles', 'UTC'],
+      filters: { startDate: '2026-04-01', endDate: '2026-04-20' },
+      appSettings: {
+        data: { reportingTimezone: 'America/Los_Angeles', updatedAt: '2026-04-20T12:00:00.000Z' },
+        loading: false,
+        error: null
+      },
+      settingsForm: { reportingTimezone: 'America/Los_Angeles' },
+      setSettingsForm() {},
+      usersSection: {
+        data: [
+          {
+            id: 'user_1',
+            email: 'taylor@roasradar.dev',
+            displayName: 'Taylor Operator',
+            status: 'active',
+            isAdmin: true,
+            lastLoginAt: '2026-04-20T16:45:00.000Z'
+          }
+        ],
+        loading: false,
+        error: null
+      },
+      newUserForm: { email: 'alex@roasradar.dev', password: 'supersecurepass', displayName: 'Alex', isAdmin: false },
+      setNewUserForm() {},
+      shopifyConnection: {
+        data: { connected: true, storeDomain: 'example.myshopify.com', webhookConfigured: true, lastSyncAt: '2026-04-20T15:00:00.000Z' },
+        loading: false,
+        error: null
+      },
+      shopifyBackfillRange: { startDate: '2026-04-01', endDate: '2026-04-20' },
+      setShopifyBackfillRange() {},
+      shopifyOrderAttributionBackfillOptions: {
+        dryRun: true,
+        limit: '500',
+        webOrdersOnly: true,
+        skipShopifyWriteback: false
+      },
+      setShopifyOrderAttributionBackfillOptions() {},
+      orderAttributionBackfillJob: {
+        data: null,
+        loading: false,
+        error: null
+      },
+      metaConnection: {
+        data: {
+          config: {
+            appId: 'meta-app',
+            appBaseUrl: 'https://example.com',
+            appScopes: ['ads_read'],
+            adAccountId: 'act_123',
+            missingFields: []
+          },
+          connection: {
+            account_id: 'act_123',
+            account_name: 'Meta Account',
+            status: 'connected',
+            last_sync_at: '2026-04-20T15:30:00.000Z',
+            last_sync_status: 'success'
+          }
+        },
+        loading: false,
+        error: null
+      },
+      metaConfigForm: {
+        appId: 'meta-app',
+        appSecret: '',
+        appBaseUrl: 'https://example.com',
+        appScopes: 'ads_read',
+        adAccountId: 'act_123'
+      },
+      setMetaConfigForm() {},
+      googleConnection: {
+        data: {
+          config: {
+            source: 'database',
+            developerTokenConfigured: true,
+            appBaseUrl: 'https://example.com',
+            appScopes: ['https://www.googleapis.com/auth/adwords'],
+            clientId: 'client-id',
+            clientSecretConfigured: true,
+            missingFields: []
+          },
+          connection: {
+            customer_id: '123-456-7890',
+            login_customer_id: '111-222-3333',
+            status: 'connected',
+            last_sync_at: '2026-04-20T15:30:00.000Z',
+            last_sync_status: 'success'
+          }
+        },
+        loading: false,
+        error: null
+      },
+      googleConfigForm: {
+        developerToken: 'token',
+        clientId: 'client-id',
+        clientSecret: 'client-secret',
+        appBaseUrl: 'https://example.com',
+        appScopes: 'https://www.googleapis.com/auth/adwords'
+      },
+      setGoogleConfigForm() {},
+      googleForm: {
+        customerId: '123-456-7890',
+        loginCustomerId: '111-222-3333',
+        developerToken: 'token',
+        clientId: 'client-id',
+        clientSecret: 'client-secret',
+        refreshToken: 'refresh-token'
+      },
+      setGoogleForm() {},
+      actionFeedback: { context: null, loading: null, error: null, message: null },
+      onSettingsSave() {},
+      onCreateUser() {},
+      onShopifyBackfill() {},
+      onMetaConfigSave() {},
+      onGoogleConnect() {},
+      onShopifyTest() {},
+      onShopifyWebhookSync() {},
+      onShopifyAttributionRecovery() {},
+      onShopifyOrderAttributionBackfill() {},
+      onOrderAttributionBackfillRefresh() {},
+      onMetaConnect() {},
+      onMetaSync() {},
+      onGoogleSync() {},
+      onGoogleReconcile() {}
+    })
+  );
 
 	for (const [surface, markup] of [
 		["dashboard", dashboardMarkup],
