@@ -13,9 +13,13 @@ let cachedModules: {
 	originalPoolConnect: typeof import("../src/db/pool.js").pool.connect;
 } | null = null;
 
+function buildRecentOccurredAt(): string {
+	return new Date(Date.now() - 60_000).toISOString();
+}
+
 const validTrackPayload = {
 	eventType: "page_view",
-	occurredAt: "2026-04-23T12:00:00.000Z",
+	occurredAt: buildRecentOccurredAt(),
 	sessionId: "123e4567-e89b-42d3-a456-426614174000",
 	pageUrl:
 		"https://example.com/products/widget?utm_source=Google&utm_medium=CPC&utm_campaign=Spring&gclid=ABC123",
