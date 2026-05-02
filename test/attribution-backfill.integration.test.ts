@@ -399,6 +399,8 @@ test('production backfill recovers internal attribution and writes canonical Sho
       attributed_medium: string | null;
       attributed_campaign: string | null;
       attribution_reason: string;
+      resolver_rule_version: string;
+      attribution_decision_artifact_id: string | null;
     }>(
       `
         SELECT
@@ -406,7 +408,9 @@ test('production backfill recovers internal attribution and writes canonical Sho
           attributed_source,
           attributed_medium,
           attributed_campaign,
-          attribution_reason
+          attribution_reason,
+          resolver_rule_version,
+          attribution_decision_artifact_id::text AS attribution_decision_artifact_id
         FROM attribution_results
         WHERE shopify_order_id = 'order-backfill-run-1'
       `
@@ -418,18 +422,34 @@ test('production backfill recovers internal attribution and writes canonical Sho
       attributed_source: 'google',
       attributed_medium: 'cpc',
       attributed_campaign: 'spring-sale',
-      attribution_reason: 'matched_by_checkout_token'
+      attribution_reason: 'matched_by_checkout_token',
+      resolver_rule_version: 'attribution_resolver_v2',
+      attribution_decision_artifact_id: attributionResult.rows[0].attribution_decision_artifact_id
     });
+    assert.ok(attributionResult.rows[0].attribution_decision_artifact_id);
 
-    const orderSnapshot = await pool.query<{ attribution_snapshot: Record<string, unknown> | null }>(
+    const orderSnapshot = await pool.query<{
+      attribution_snapshot: Record<string, unknown> | null;
+      attribution_resolver_rule_version: string | null;
+      latest_attribution_decision_artifact_id: string | null;
+    }>(
       `
-        SELECT attribution_snapshot
+        SELECT
+          attribution_snapshot,
+          attribution_resolver_rule_version,
+          latest_attribution_decision_artifact_id::text AS latest_attribution_decision_artifact_id
         FROM shopify_orders
         WHERE shopify_order_id = 'order-backfill-run-1'
       `
     );
 
     assert.ok(orderSnapshot.rows[0].attribution_snapshot);
+    assert.equal(orderSnapshot.rows[0].attribution_resolver_rule_version, 'attribution_resolver_v2');
+    assert.equal(
+      orderSnapshot.rows[0].latest_attribution_decision_artifact_id,
+      attributionResult.rows[0].attribution_decision_artifact_id
+    );
+    assert.equal(orderSnapshot.rows[0].attribution_snapshot?.resolverRuleVersion, 'attribution_resolver_v2');
 
     assert.equal(capturedWritebacks.length, 1);
     assert.equal(capturedWritebacks[0].shopifyOrderId, 'order-backfill-run-1');
@@ -441,6 +461,30 @@ test('production backfill recovers internal attribution and writes canonical Sho
     assert.equal(attributeMap.get('utm_campaign'), 'spring-sale');
     assert.equal(attributeMap.get('gbraid'), 'GBRAID-123');
     assert.equal(attributeMap.get('page_url'), 'https://store.example/products/widget?utm_source=google&utm_medium=cpc&utm_campaign=spring-sale&gbraid=GBRAID-123');
+
+    const decisionArtifact = await pool.query<{
+      resolver_rule_version: string;
+      resolver_run_source: string;
+      backfill_run_id: string | null;
+    }>(
+      `
+        SELECT
+          resolver_rule_version,
+          resolver_run_source,
+          backfill_run_id
+        FROM attribution_decision_artifacts
+        WHERE id = $1::uuid
+      `,
+      [attributionResult.rows[0].attribution_decision_artifact_id]
+    );
+
+    assert.equal(decisionArtifact.rowCount, 1);
+    assert.equal(decisionArtifact.rows[0].resolver_rule_version, 'attribution_resolver_v2');
+    assert.equal(
+      decisionArtifact.rows[0].resolver_run_source === 'manual_backfill' ||
+        decisionArtifact.rows[0].resolver_run_source === 'forward_processing',
+      true
+    );
   } finally {
     await resetIntegrationDatabase();
   }

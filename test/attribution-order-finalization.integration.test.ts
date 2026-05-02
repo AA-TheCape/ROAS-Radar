@@ -589,6 +589,8 @@ test('order finalization persists a deterministic last non-direct winner snapsho
       attributed_medium: string | null;
       attributed_campaign: string | null;
       attribution_reason: string;
+      resolver_rule_version: string;
+      attribution_decision_artifact_id: string | null;
     }>(
       `
         SELECT
@@ -596,7 +598,9 @@ test('order finalization persists a deterministic last non-direct winner snapsho
           attributed_source,
           attributed_medium,
           attributed_campaign,
-          attribution_reason
+          attribution_reason,
+          resolver_rule_version,
+          attribution_decision_artifact_id::text AS attribution_decision_artifact_id
         FROM attribution_results
         WHERE shopify_order_id = 'order-finalization-1'
       `
@@ -608,8 +612,11 @@ test('order finalization persists a deterministic last non-direct winner snapsho
       attributed_source: 'google',
       attributed_medium: 'cpc',
       attributed_campaign: 'brand-search',
-      attribution_reason: 'matched_by_landing_session'
+      attribution_reason: 'matched_by_landing_session',
+      resolver_rule_version: 'attribution_resolver_v2',
+      attribution_decision_artifact_id: attributionResult.rows[0].attribution_decision_artifact_id
     });
+    assert.ok(attributionResult.rows[0].attribution_decision_artifact_id);
 
     const orderAudit = await fetchOrderAttributionAudit('order-finalization-1');
     assert.equal(orderAudit.attribution_tier, 'deterministic_first_party');
@@ -617,9 +624,16 @@ test('order finalization persists a deterministic last non-direct winner snapsho
     assert.equal(orderAudit.attribution_reason, 'matched_by_landing_session');
     assert.ok(orderAudit.attribution_matched_at instanceof Date);
 
-    const orderSnapshotResult = await pool.query<{ attribution_snapshot: Record<string, unknown> | null }>(
+    const orderSnapshotResult = await pool.query<{
+      attribution_snapshot: Record<string, unknown> | null;
+      attribution_resolver_rule_version: string | null;
+      latest_attribution_decision_artifact_id: string | null;
+    }>(
       `
-        SELECT attribution_snapshot
+        SELECT
+          attribution_snapshot,
+          attribution_resolver_rule_version,
+          latest_attribution_decision_artifact_id::text AS latest_attribution_decision_artifact_id
         FROM shopify_orders
         WHERE shopify_order_id = 'order-finalization-1'
       `
@@ -627,6 +641,13 @@ test('order finalization persists a deterministic last non-direct winner snapsho
 
     const snapshot = orderSnapshotResult.rows[0].attribution_snapshot;
     assert.ok(snapshot);
+    assert.equal(orderSnapshotResult.rows[0].attribution_resolver_rule_version, 'attribution_resolver_v2');
+    assert.equal(
+      orderSnapshotResult.rows[0].latest_attribution_decision_artifact_id,
+      attributionResult.rows[0].attribution_decision_artifact_id
+    );
+    assert.equal(snapshot?.resolverRuleVersion, 'attribution_resolver_v2');
+    assert.equal(snapshot?.decisionArtifactId, attributionResult.rows[0].attribution_decision_artifact_id);
     assert.deepEqual(snapshot?.winner, {
       sessionId: paidSessionId,
       sourceTouchEventId: paidEventId,
@@ -644,6 +665,27 @@ test('order finalization persists a deterministic last non-direct winner snapsho
     });
     assert.equal(Array.isArray(snapshot?.timeline), true);
     assert.equal((snapshot?.timeline as unknown[]).length, 2);
+
+    const decisionArtifact = await pool.query<{
+      resolver_rule_version: string;
+      canonical_tier_after: string;
+      rule_inputs_hash: string;
+    }>(
+      `
+        SELECT
+          resolver_rule_version,
+          canonical_tier_after,
+          rule_inputs_hash
+        FROM attribution_decision_artifacts
+        WHERE id = $1::uuid
+      `,
+      [attributionResult.rows[0].attribution_decision_artifact_id]
+    );
+
+    assert.equal(decisionArtifact.rowCount, 1);
+    assert.equal(decisionArtifact.rows[0].resolver_rule_version, 'attribution_resolver_v2');
+    assert.equal(decisionArtifact.rows[0].canonical_tier_after, 'deterministic_first_party');
+    assert.match(decisionArtifact.rows[0].rule_inputs_hash, /^[a-f0-9]{64}$/);
   } finally {
     await resetIntegrationDatabase();
   }

@@ -206,7 +206,7 @@ test('summarizeResolverOutcome reports unattributed and non-direct winners deter
 
   assert.equal(unattributed.resolverOutcome, 'unattributed');
   assert.equal(unattributed.attributionTier, 'unattributed');
-  assert.equal(unattributed.resolverFallthroughDepth, 3);
+  assert.equal(unattributed.resolverFallthroughDepth, 4);
   assert.equal(unattributed.fallthroughStage, 'fell_through_to_unattributed');
   assert.equal(unattributed.firstNormalizationFailureReason, 'missing_order_timestamp');
 

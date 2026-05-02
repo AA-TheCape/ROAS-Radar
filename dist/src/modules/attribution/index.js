@@ -5,7 +5,9 @@ import { formatDateInTimezone, getReportingTimezone } from '../settings/index.js
 import { collectDeterministicFirstPartyCandidates, extractAttributionCandidatesForOrder } from './candidate-extraction.js';
 import { ATTRIBUTION_MODELS, computeAttributionOutputs, computeSingleWinnerCredits } from './engine.js';
 import { buildAttributionConfidenceLabel, buildAttributionMatchSource, buildOrderAttributionAuditRecord } from './order-attribution-audit.js';
-import { confidenceScoreForWinner, dedupeDeterministicCandidates, isDirectTouchpoint, resolveAttributionTier, selectLastNonDirectWinner } from './resolver.js';
+import { insertAttributionDecisionArtifact } from './decision-artifacts.js';
+import { confidenceScoreForWinner, dedupeDeterministicCandidates, isDirectTouchpoint, resolveAttributionTier, resolveAttributionTierForVersion, selectLastNonDirectWinner } from './resolver.js';
+import { ATTRIBUTION_RESOLVER_RULE_VERSION } from './rule-version.js';
 const ATTRIBUTION_MODEL_VERSION = 1;
 const JOB_STALE_AFTER_MINUTES = 15;
 const MAX_RETRY_DELAY_SECONDS = 1_800;
@@ -149,7 +151,7 @@ async function claimJobs(client, workerId, limit) {
         updated_at = now()
       FROM candidate_jobs
       WHERE j.id = candidate_jobs.id
-      RETURNING j.id, j.shopify_order_id, j.attempts
+      RETURNING j.id, j.shopify_order_id, j.attempts, j.requested_reason
     `, [workerId, Math.max(limit, 0)]);
     return result.rows;
 }
@@ -161,12 +163,14 @@ async function fetchOrder(client, shopifyOrderId) {
         processed_at,
         created_at_shopify,
         ingested_at,
+        payload_hash,
         landing_session_id::text,
         checkout_token,
         cart_token,
         email_hash,
         customer_identity_id::text,
         source_name,
+        attribution_tier,
         raw_payload
       FROM shopify_orders
       WHERE shopify_order_id = $1
@@ -201,7 +205,7 @@ function isSameResolvedTouchpoint(left, right) {
         left.occurredAt.getTime() === right.occurredAt.getTime());
 }
 async function resolveAttributionJourney(client, order) {
-    const candidates = await extractAttributionCandidatesForOrder(client, {
+    const resolverInput = await extractAttributionCandidatesForOrder(client, {
         shopifyOrderId: order.shopify_order_id,
         processedAt: order.processed_at,
         createdAtShopify: order.created_at_shopify,
@@ -214,12 +218,16 @@ async function resolveAttributionJourney(client, order) {
         sourceName: order.source_name,
         rawPayload: order.raw_payload
     });
-    return resolveAttributionTier(candidates);
+    return {
+        resolverInput,
+        journey: resolveAttributionTierForVersion(resolverInput, ATTRIBUTION_RESOLVER_RULE_VERSION)
+    };
 }
 function selectPrimaryCredit(credits) {
     return credits.find((credit) => credit.isPrimary) ?? credits[credits.length - 1];
 }
-async function persistAttribution(client, order, journey) {
+async function persistAttribution(client, order, evaluation, context) {
+    const { journey, resolverInput } = evaluation;
     const orderOccurredAt = journey.orderOccurredAtUtc ?? resolveOrderOccurredAt(order);
     const outputs = computeAttributionOutputs(journey.touchpoints, {
         orderOccurredAt,
@@ -240,6 +248,20 @@ async function persistAttribution(client, order, journey) {
     const orderAttributionAudit = buildOrderAttributionAuditRecord(journey, matchedAt);
     const matchSource = buildAttributionMatchSource(journey);
     const confidenceLabel = buildAttributionConfidenceLabel(journey.confidenceScore);
+    const decisionArtifactId = await insertAttributionDecisionArtifact({
+        client,
+        order: {
+            shopifyOrderId: order.shopify_order_id,
+            payloadHash: order.payload_hash,
+            attributionTier: order.attribution_tier
+        },
+        journey,
+        resolverInput,
+        orderAttributionAudit,
+        resolverRunSource: context.resolverRunSource,
+        resolverTriggeredBy: context.resolverTriggeredBy,
+        backfillRunId: context.backfillRunId
+    });
     await client.query('DELETE FROM attribution_order_credits WHERE shopify_order_id = $1', [order.shopify_order_id]);
     for (const model of ATTRIBUTION_MODELS) {
         const modelCredits = outputs[model];
@@ -328,7 +350,11 @@ async function persistAttribution(client, order, journey) {
         reprocess_version,
         model_version,
         match_source,
-        confidence_label
+        confidence_label,
+        meta_attribution_evaluation_outcome,
+        meta_attribution_affected_canonical,
+        attribution_decision_artifact_id,
+        resolver_rule_version
       )
       VALUES (
         $1,
@@ -347,7 +373,11 @@ async function persistAttribution(client, order, journey) {
         1,
         $13,
         $14,
-        $15
+        $15,
+        $16,
+        $17,
+        $18::uuid,
+        $19
       )
       ON CONFLICT (shopify_order_id)
       DO UPDATE SET
@@ -365,7 +395,11 @@ async function persistAttribution(client, order, journey) {
         attributed_at = EXCLUDED.attributed_at,
         model_version = EXCLUDED.model_version,
         match_source = EXCLUDED.match_source,
-        confidence_label = EXCLUDED.confidence_label
+        confidence_label = EXCLUDED.confidence_label,
+        meta_attribution_evaluation_outcome = EXCLUDED.meta_attribution_evaluation_outcome,
+        meta_attribution_affected_canonical = EXCLUDED.meta_attribution_affected_canonical,
+        attribution_decision_artifact_id = EXCLUDED.attribution_decision_artifact_id,
+        resolver_rule_version = EXCLUDED.resolver_rule_version
     `, [
         order.shopify_order_id,
         primaryCredit.sessionId,
@@ -381,7 +415,11 @@ async function persistAttribution(client, order, journey) {
         matchedAt,
         ATTRIBUTION_MODEL_VERSION,
         matchSource,
-        confidenceLabel
+        confidenceLabel,
+        'not_evaluated',
+        false,
+        decisionArtifactId,
+        journey.resolverRuleVersion
     ]);
     await client.query(`
       UPDATE shopify_orders
@@ -391,7 +429,12 @@ async function persistAttribution(client, order, journey) {
         attribution_matched_at = $4,
         attribution_reason = $5,
         attribution_snapshot = $6::jsonb,
-        attribution_snapshot_updated_at = $4
+        attribution_snapshot_updated_at = $4,
+        attribution_resolver_rule_version = $7,
+        meta_attribution_evaluation_outcome = 'not_evaluated',
+        meta_attribution_present = false,
+        meta_attribution_affected_canonical = false,
+        latest_attribution_decision_artifact_id = $8::uuid
       WHERE shopify_order_id = $1
     `, [
         order.shopify_order_id,
@@ -401,13 +444,17 @@ async function persistAttribution(client, order, journey) {
         orderAttributionAudit.reason,
         JSON.stringify({
             tier: journey.tier,
+            resolverRuleVersion: journey.resolverRuleVersion,
+            decisionArtifactId,
             attributionReason: journey.attributionReason,
             orderOccurredAtUtc: journey.orderOccurredAtUtc?.toISOString() ?? null,
             normalizationFailures: journey.normalizationFailures,
             confidenceScore: journey.confidenceScore,
             winner: journey.winner ? serializeResolvedTouchpoint(journey.winner) : null,
             timeline: journey.touchpoints.map(serializeResolvedTouchpoint)
-        })
+        }),
+        journey.resolverRuleVersion,
+        decisionArtifactId
     ]);
     emitAttributionResolverOutcomeLog({
         shopifyOrderId: order.shopify_order_id,
@@ -415,6 +462,8 @@ async function persistAttribution(client, order, journey) {
         tier: journey.tier,
         attributionReason: journey.attributionReason,
         confidenceScore: journey.confidenceScore,
+        resolverRuleVersion: journey.resolverRuleVersion,
+        decisionArtifactId,
         pipeline: 'realtime_queue',
         touchpoints: journey.touchpoints,
         winner: journey.winner,
@@ -449,8 +498,11 @@ async function processClaimedJob(client, job, workerId) {
         })}\n`);
         return;
     }
-    const journey = await resolveAttributionJourney(client, order);
-    await persistAttribution(client, order, journey);
+    const evaluation = await resolveAttributionJourney(client, order);
+    await persistAttribution(client, order, evaluation, {
+        resolverRunSource: 'forward_processing',
+        resolverTriggeredBy: `attribution_job:${job.requested_reason}`
+    });
     const metricDate = formatDateInTimezone(resolveOrderOccurredAt(order), await getReportingTimezone(client));
     await refreshDailyReportingMetrics(client, [metricDate]);
     await client.query(`
@@ -472,9 +524,9 @@ async function processClaimedJob(client, job, workerId) {
         timestamp: new Date().toISOString(),
         workerId,
         shopifyOrderId: job.shopify_order_id,
-        confidenceScore: journey.confidenceScore,
-        touchpointCount: journey.touchpoints.length,
-        attributionReason: primaryCreditReason(journey)
+        confidenceScore: evaluation.journey.confidenceScore,
+        touchpointCount: evaluation.journey.touchpoints.length,
+        attributionReason: primaryCreditReason(evaluation.journey)
     })}\n`);
 }
 export async function applySyntheticAttributionForOrder(shopifyOrderId, input, client) {
@@ -515,13 +567,45 @@ export async function applySyntheticAttributionForOrder(shopifyOrderId, input, c
             isForced: true
         };
         await persistAttribution(db, order, {
-            tier: 'deterministic_first_party',
-            touchpoints: [touchpoint],
-            winner: touchpoint,
-            confidenceScore: input.confidenceScore ?? 0.35,
-            attributionReason: input.attributionReason,
-            orderOccurredAtUtc: orderOccurredAt,
-            normalizationFailures: []
+            resolverInput: {
+                orderOccurredAtUtc: orderOccurredAt,
+                deterministicFirstParty: [
+                    {
+                        sourceKey: `synthetic:${shopifyOrderId}`,
+                        sessionId: null,
+                        sourceTouchEventId: null,
+                        ingestionSource: 'customer_identity',
+                        occurredAtUtc: touchpoint.occurredAt,
+                        source: normalizedSource,
+                        medium: normalizedMedium,
+                        campaign: normalizedCampaign,
+                        content: normalizedContent,
+                        term: normalizedTerm,
+                        clickIdType: normalizedClickIdType,
+                        clickIdValue: normalizedClickIdValue,
+                        attributionReason: input.attributionReason,
+                        confidenceScore: input.confidenceScore ?? 0.35,
+                        isDirect: touchpoint.isDirect,
+                        isSynthetic: true
+                    }
+                ],
+                shopifyHint: [],
+                ga4Fallback: [],
+                normalizationFailures: []
+            },
+            journey: {
+                tier: 'deterministic_first_party',
+                touchpoints: [touchpoint],
+                winner: touchpoint,
+                confidenceScore: input.confidenceScore ?? 0.35,
+                attributionReason: input.attributionReason,
+                resolverRuleVersion: ATTRIBUTION_RESOLVER_RULE_VERSION,
+                orderOccurredAtUtc: orderOccurredAt,
+                normalizationFailures: []
+            }
+        }, {
+            resolverRunSource: 'forward_processing',
+            resolverTriggeredBy: 'synthetic_attribution_override'
         });
         const metricDate = formatDateInTimezone(orderOccurredAt, await getReportingTimezone(db));
         await refreshDailyReportingMetrics(db, [metricDate]);
@@ -602,6 +686,7 @@ export const __attributionTestUtils = {
     selectLastNonDirectWinner,
     confidenceScoreForWinner,
     resolveAttributionTier,
+    resolveAttributionTierForVersion,
     collectDeterministicFirstPartyCandidates,
     extractAttributionCandidatesForOrder
 };

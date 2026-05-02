@@ -204,21 +204,27 @@ export function summarizeResolverOutcome(input) {
         ? 0
         : normalizedTier === 'deterministic_shopify_hint'
             ? 1
-            : normalizedTier === 'ga4_fallback'
+            : normalizedTier === 'platform_reported_meta'
                 ? 2
-                : 3;
+                : normalizedTier === 'ga4_fallback'
+                    ? 3
+                    : 4;
     const fallthroughStage = normalizedTier === 'deterministic_first_party'
         ? 'resolved_in_first_party'
         : normalizedTier === 'deterministic_shopify_hint'
             ? 'fell_through_to_shopify_hint'
-            : normalizedTier === 'ga4_fallback'
-                ? 'fell_through_to_ga4_fallback'
-                : 'fell_through_to_unattributed';
+            : normalizedTier === 'platform_reported_meta'
+                ? 'fell_through_to_platform_reported_meta'
+                : normalizedTier === 'ga4_fallback'
+                    ? 'fell_through_to_ga4_fallback'
+                    : 'fell_through_to_unattributed';
     const baseFields = {
         attributionTier: normalizedTier,
         attributionReason: normalizeString(input.attributionReason) ?? null,
         confidenceScore: typeof input.confidenceScore === 'number' ? input.confidenceScore : null,
         pipeline: normalizeString(input.pipeline) ?? 'unknown',
+        resolverRuleVersion: normalizeString(input.resolverRuleVersion) ?? null,
+        decisionArtifactId: normalizeString(input.decisionArtifactId) ?? null,
         shopifyOrderId: normalizeString(input.shopifyOrderId) ?? null,
         orderOccurredAtUtc: input.orderOccurredAtUtc instanceof Date
             ? input.orderOccurredAtUtc.toISOString()

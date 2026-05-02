@@ -491,6 +491,74 @@ test('confidenceScoreForWinner covers every tier source and null winner', async 
   assert.equal(testUtils.confidenceScoreForWinner({ ingestionSource: 'ga4_fallback' }), 0.35);
 });
 
+test('resolveAttributionTierForVersion replays deterministically and keeps Meta behind a version gate', async () => {
+  const testUtils = await getTestUtils();
+
+  const input: TierResolverInput = {
+    orderOccurredAtUtc: new Date('2026-04-08T12:00:00.000Z'),
+    deterministicFirstParty: [],
+    shopifyHint: [],
+    platformReportedMeta: [
+      buildTierCandidate('meta-eligible', '2026-04-08T11:30:00.000Z', {
+        sessionId: null,
+        sourceTouchEventId: null,
+        ingestionSource: 'meta_platform_reported',
+        attributionReason: 'meta_platform_reported_match',
+        confidenceScore: 0.72,
+        source: 'meta',
+        medium: 'paid_social',
+        campaign: 'meta-retargeting',
+        clickIdType: 'fbclid',
+        clickIdValue: 'fbclid-1',
+        isSynthetic: true,
+        metaSignalId: 'meta-eligible',
+        metaMatchBasis: 'fbclid',
+        metaEligibilityOutcome: 'eligible_canonical',
+        isClickThrough: true,
+        isViewThrough: false
+      })
+    ],
+    ga4Fallback: [
+      buildTierCandidate('ga4-fallback', '2026-04-08T11:00:00.000Z', {
+        sessionId: null,
+        sourceTouchEventId: null,
+        ingestionSource: 'ga4_fallback',
+        attributionReason: 'ga4_fallback_match',
+        confidenceScore: 0.35,
+        source: 'google',
+        medium: 'cpc',
+        campaign: 'brand-search',
+        isSynthetic: true
+      })
+    ]
+  };
+
+  const v1 = testUtils.resolveAttributionTierForVersion(input, 'attribution_resolver_v1');
+  const v2 = testUtils.resolveAttributionTierForVersion(input, 'attribution_resolver_v2');
+  const replay = testUtils.resolveAttributionTierForVersion(input, 'attribution_resolver_v2');
+
+  assert.equal(v1.tier, 'ga4_fallback');
+  assert.equal(v1.resolverRuleVersion, 'attribution_resolver_v1');
+  assert.equal(v2.tier, 'platform_reported_meta');
+  assert.equal(v2.resolverRuleVersion, 'attribution_resolver_v2');
+  assert.deepEqual(
+    {
+      tier: v2.tier,
+      attributionReason: v2.attributionReason,
+      winner: v2.winner?.sourceTouchEventId ?? null,
+      confidenceScore: v2.confidenceScore,
+      resolverRuleVersion: v2.resolverRuleVersion
+    },
+    {
+      tier: replay.tier,
+      attributionReason: replay.attributionReason,
+      winner: replay.winner?.sourceTouchEventId ?? null,
+      confidenceScore: replay.confidenceScore,
+      resolverRuleVersion: replay.resolverRuleVersion
+    }
+  );
+});
+
 test('resolveAttributionTier promotes eligible Meta only after deterministic first-party and Shopify hint fail', async () => {
   const testUtils = await getTestUtils();
 

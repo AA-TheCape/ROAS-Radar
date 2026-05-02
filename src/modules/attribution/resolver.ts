@@ -1,4 +1,9 @@
 import type { AttributionTouchpoint } from './engine.js';
+import {
+  ATTRIBUTION_RESOLVER_RULE_VERSION,
+  assertSupportedAttributionResolverRuleVersion,
+  type AttributionResolverRuleVersion
+} from './rule-version.js';
 
 export const DETERMINISTIC_INGESTION_SOURCES = [
   'landing_session_id',
@@ -33,6 +38,7 @@ export type ResolvedJourney = {
   winner: ResolvedAttributionTouchpoint | null;
   confidenceScore: number;
   attributionReason: string;
+  resolverRuleVersion: AttributionResolverRuleVersion;
   orderOccurredAtUtc: Date | null;
   normalizationFailures: Array<{
     scope: 'order' | 'shopify_hint' | 'platform_reported_meta' | 'ga4_fallback';
@@ -376,6 +382,14 @@ function resolveUnattributedReason(input: TieredAttributionResolverInput): strin
 }
 
 export function resolveAttributionTier(input: TieredAttributionResolverInput): ResolvedJourney {
+  return resolveAttributionTierForVersion(input, ATTRIBUTION_RESOLVER_RULE_VERSION);
+}
+
+export function resolveAttributionTierForVersion(
+  input: TieredAttributionResolverInput,
+  ruleVersion: AttributionResolverRuleVersion
+): ResolvedJourney {
+  const normalizedRuleVersion = assertSupportedAttributionResolverRuleVersion(ruleVersion);
   const orderOccurredAtUtc = input.orderOccurredAtUtc;
 
   if (!orderOccurredAtUtc) {
@@ -385,6 +399,7 @@ export function resolveAttributionTier(input: TieredAttributionResolverInput): R
       winner: null,
       confidenceScore: 0,
       attributionReason: resolveUnattributedReason(input),
+      resolverRuleVersion: normalizedRuleVersion,
       orderOccurredAtUtc: null,
       normalizationFailures: input.normalizationFailures ?? []
     };
@@ -404,6 +419,7 @@ export function resolveAttributionTier(input: TieredAttributionResolverInput): R
       winner: deterministicWinner,
       confidenceScore: confidenceScoreForWinner(deterministicWinner),
       attributionReason: deterministicWinner.attributionReason,
+      resolverRuleVersion: normalizedRuleVersion,
       orderOccurredAtUtc,
       normalizationFailures: input.normalizationFailures ?? []
     };
@@ -423,34 +439,38 @@ export function resolveAttributionTier(input: TieredAttributionResolverInput): R
       winner: shopifyHintWinner,
       confidenceScore: shopifyHintWinnerCandidate?.confidenceScore ?? confidenceScoreForWinner(shopifyHintWinner),
       attributionReason: shopifyHintWinner.attributionReason,
+      resolverRuleVersion: normalizedRuleVersion,
       orderOccurredAtUtc,
       normalizationFailures: input.normalizationFailures ?? []
     };
   }
 
-  const metaReportedTouchpoints = dedupeTierCandidatesBySourceKey(
-    (input.platformReportedMeta ?? []).filter(
-      (candidate) =>
-        candidate.metaEligibilityOutcome === 'eligible_canonical' &&
-        isWithinLookbackWindow(orderOccurredAtUtc, candidate.occurredAtUtc)
-    ),
-    compareMetaReportedCandidates
-  );
-  const metaReportedWinnerCandidate = metaReportedTouchpoints[0] ?? null;
-  const metaReportedWinner = metaReportedWinnerCandidate
-    ? mapCandidateToResolvedTouchpoint(metaReportedWinnerCandidate)
-    : null;
+  if (normalizedRuleVersion !== 'attribution_resolver_v1') {
+    const metaReportedTouchpoints = dedupeTierCandidatesBySourceKey(
+      (input.platformReportedMeta ?? []).filter(
+        (candidate) =>
+          candidate.metaEligibilityOutcome === 'eligible_canonical' &&
+          isWithinLookbackWindow(orderOccurredAtUtc, candidate.occurredAtUtc)
+      ),
+      compareMetaReportedCandidates
+    );
+    const metaReportedWinnerCandidate = metaReportedTouchpoints[0] ?? null;
+    const metaReportedWinner = metaReportedWinnerCandidate
+      ? mapCandidateToResolvedTouchpoint(metaReportedWinnerCandidate)
+      : null;
 
-  if (metaReportedWinner) {
-    return {
-      tier: 'platform_reported_meta',
-      touchpoints: metaReportedTouchpoints.map(mapCandidateToResolvedTouchpoint),
-      winner: metaReportedWinner,
-      confidenceScore: metaReportedWinnerCandidate?.confidenceScore ?? confidenceScoreForWinner(metaReportedWinner),
-      attributionReason: metaReportedWinner.attributionReason,
-      orderOccurredAtUtc,
-      normalizationFailures: input.normalizationFailures ?? []
-    };
+    if (metaReportedWinner) {
+      return {
+        tier: 'platform_reported_meta',
+        touchpoints: metaReportedTouchpoints.map(mapCandidateToResolvedTouchpoint),
+        winner: metaReportedWinner,
+        confidenceScore: metaReportedWinnerCandidate?.confidenceScore ?? confidenceScoreForWinner(metaReportedWinner),
+        attributionReason: metaReportedWinner.attributionReason,
+        resolverRuleVersion: normalizedRuleVersion,
+        orderOccurredAtUtc,
+        normalizationFailures: input.normalizationFailures ?? []
+      };
+    }
   }
 
   const ga4FallbackTouchpoints = dedupeTierCandidatesBySourceKey(
@@ -467,6 +487,7 @@ export function resolveAttributionTier(input: TieredAttributionResolverInput): R
       winner: ga4FallbackWinner,
       confidenceScore: ga4FallbackWinnerCandidate?.confidenceScore ?? confidenceScoreForWinner(ga4FallbackWinner),
       attributionReason: ga4FallbackWinner.attributionReason,
+      resolverRuleVersion: normalizedRuleVersion,
       orderOccurredAtUtc,
       normalizationFailures: input.normalizationFailures ?? []
     };
@@ -478,6 +499,7 @@ export function resolveAttributionTier(input: TieredAttributionResolverInput): R
     winner: null,
     confidenceScore: 0,
     attributionReason: resolveUnattributedReason(input),
+    resolverRuleVersion: normalizedRuleVersion,
     orderOccurredAtUtc,
     normalizationFailures: input.normalizationFailures ?? []
   };
