@@ -168,7 +168,7 @@ async function loadOrderValuePersistence() {
     pool.query<{ status: string }>(
       `
         SELECT status
-        FROM meta_ads_sync_jobs
+        FROM meta_ads_order_value_sync_jobs
         ORDER BY id ASC
       `
     )

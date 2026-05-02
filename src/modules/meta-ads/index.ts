@@ -97,7 +97,7 @@ type MetaAdsOrderValueSyncAnomaly = {
   details: Record<string, unknown>;
 };
 
-type MetaAdsConnectionSyncJobRow = {
+type MetaAdsOrderValueSyncJobRow = {
   id: number;
   connection_id: number;
   ad_account_id: string;
@@ -711,7 +711,7 @@ async function enqueueSyncJobsForWindow(now: Date): Promise<number> {
     for (const syncDate of syncDates) {
       await query(
         `
-          INSERT INTO meta_ads_sync_jobs (
+          INSERT INTO meta_ads_order_value_sync_jobs (
             connection_id,
             sync_date,
             status,
@@ -727,27 +727,27 @@ async function enqueueSyncJobsForWindow(now: Date): Promise<number> {
           ON CONFLICT (connection_id, sync_date)
           DO UPDATE SET
             status = CASE
-              WHEN meta_ads_sync_jobs.status = 'processing' THEN meta_ads_sync_jobs.status
+              WHEN meta_ads_order_value_sync_jobs.status = 'processing' THEN meta_ads_order_value_sync_jobs.status
               ELSE 'pending'
             END,
             available_at = CASE
-              WHEN meta_ads_sync_jobs.status = 'processing' THEN meta_ads_sync_jobs.available_at
+              WHEN meta_ads_order_value_sync_jobs.status = 'processing' THEN meta_ads_order_value_sync_jobs.available_at
               ELSE now()
             END,
             locked_at = CASE
-              WHEN meta_ads_sync_jobs.status = 'processing' THEN meta_ads_sync_jobs.locked_at
+              WHEN meta_ads_order_value_sync_jobs.status = 'processing' THEN meta_ads_order_value_sync_jobs.locked_at
               ELSE NULL
             END,
             locked_by = CASE
-              WHEN meta_ads_sync_jobs.status = 'processing' THEN meta_ads_sync_jobs.locked_by
+              WHEN meta_ads_order_value_sync_jobs.status = 'processing' THEN meta_ads_order_value_sync_jobs.locked_by
               ELSE NULL
             END,
             last_error = CASE
-              WHEN meta_ads_sync_jobs.status = 'processing' THEN meta_ads_sync_jobs.last_error
+              WHEN meta_ads_order_value_sync_jobs.status = 'processing' THEN meta_ads_order_value_sync_jobs.last_error
               ELSE NULL
             END,
             completed_at = CASE
-              WHEN meta_ads_sync_jobs.status = 'processing' THEN meta_ads_sync_jobs.completed_at
+              WHEN meta_ads_order_value_sync_jobs.status = 'processing' THEN meta_ads_order_value_sync_jobs.completed_at
               ELSE NULL
             END,
             updated_at = now()
@@ -761,12 +761,12 @@ async function enqueueSyncJobsForWindow(now: Date): Promise<number> {
 	return enqueuedJobs;
 }
 
-async function claimSyncJobs(workerId: string, limit: number): Promise<MetaAdsConnectionSyncJobRow[]> {
-  const result = await query<MetaAdsConnectionSyncJobRow>(
+async function claimSyncJobs(workerId: string, limit: number): Promise<MetaAdsOrderValueSyncJobRow[]> {
+  const result = await query<MetaAdsOrderValueSyncJobRow>(
     `
       WITH claimable AS (
         SELECT j.id, j.connection_id
-        FROM meta_ads_sync_jobs j
+        FROM meta_ads_order_value_sync_jobs j
         JOIN meta_ads_connections c ON c.id = j.connection_id
         WHERE j.status IN ('pending', 'retry')
           AND j.available_at <= now()
@@ -775,7 +775,7 @@ async function claimSyncJobs(workerId: string, limit: number): Promise<MetaAdsCo
         LIMIT $2
         FOR UPDATE SKIP LOCKED
       )
-      UPDATE meta_ads_sync_jobs j
+      UPDATE meta_ads_order_value_sync_jobs j
       SET
         status = 'processing',
         locked_at = now(),
@@ -842,7 +842,7 @@ async function markSyncJobSucceeded(jobId: number, connectionId: number, client?
 
   await executor.query(
     `
-      UPDATE meta_ads_sync_jobs
+      UPDATE meta_ads_order_value_sync_jobs
       SET
         status = 'completed',
         completed_at = now(),
@@ -870,7 +870,7 @@ async function markSyncJobSucceeded(jobId: number, connectionId: number, client?
 }
 
 async function markSyncJobFailed(
-  job: MetaAdsConnectionSyncJobRow,
+  job: MetaAdsOrderValueSyncJobRow,
   error: unknown,
   client?: MetaAdsQueryable
 ): Promise<void> {
@@ -885,7 +885,7 @@ async function markSyncJobFailed(
 
   await executor.query(
     `
-      UPDATE meta_ads_sync_jobs
+      UPDATE meta_ads_order_value_sync_jobs
       SET
         status = $2,
         available_at = CASE
@@ -916,7 +916,7 @@ async function markSyncJobFailed(
 }
 
 async function performMetaApiRequest(params: {
-  job: MetaAdsConnectionSyncJobRow;
+  job: MetaAdsOrderValueSyncJobRow;
   connection: MetaAdsConnectionSecretRow;
   url: URL;
   apiMetrics: MetaAdsApiRequestMetricsAccumulator;
@@ -992,7 +992,7 @@ async function performMetaApiRequest(params: {
 }
 
 async function fetchAllOrderValueRows(params: {
-  job: MetaAdsConnectionSyncJobRow;
+  job: MetaAdsOrderValueSyncJobRow;
   connection: MetaAdsConnectionSecretRow;
   apiMetrics: MetaAdsApiRequestMetricsAccumulator;
   triggerSource: string;
@@ -1234,7 +1234,7 @@ function emitOrderValueSyncAnomalies(params: {
   }
 }
 
-async function processSyncJob(job: MetaAdsConnectionSyncJobRow, triggerSource: string): Promise<{
+async function processSyncJob(job: MetaAdsOrderValueSyncJobRow, triggerSource: string): Promise<{
   outcome: MetaAdsSyncJobOutcome;
   recordsReceived: number;
   rawRowsFetched: number;

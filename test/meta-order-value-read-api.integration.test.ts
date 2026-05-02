@@ -82,7 +82,7 @@ async function seedMetaConnection(adAccountId: string) {
 async function seedSyncJob(connectionId: number, syncDate: string) {
   const result = await pool.query<{ id: number }>(
     `
-      INSERT INTO meta_ads_sync_jobs (connection_id, sync_date)
+      INSERT INTO meta_ads_order_value_sync_jobs (connection_id, sync_date)
       VALUES ($1, $2::date)
       RETURNING id
     `,

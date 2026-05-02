@@ -418,7 +418,7 @@ async function seedMetaSyncJob(): Promise<SeededMetaConnection> {
 
   const syncJobResult = await pool.query<{ id: number }>(
     `
-      INSERT INTO meta_ads_sync_jobs (
+      INSERT INTO meta_ads_order_value_sync_jobs (
         connection_id,
         sync_date,
         status,
