@@ -285,9 +285,20 @@ async function insertShopifyOrder(
         processed_at,
         landing_session_id,
         raw_payload,
+        payload_size_bytes,
         ingested_at
       )
-      VALUES ($1, 'USD', '100.00', '100.00', $2, $3::uuid, $4::jsonb, now())
+      VALUES (
+        $1,
+        'USD',
+        '100.00',
+        '100.00',
+        $2,
+        $3::uuid,
+        $4::jsonb,
+        octet_length(convert_to($4::text, 'utf8')),
+        now()
+      )
     `,
 		[
 			input.shopifyOrderId,
