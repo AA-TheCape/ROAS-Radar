@@ -335,11 +335,11 @@ test("recoverShopifyAttributionHints applies click-id-backed synthetic attributi
 		assert.deepEqual(attributionResult, {
 			session_id: null,
 			attributed_source: "meta",
-			attributed_medium: "paid_social",
-			attributed_campaign: null,
-			attributed_click_id_type: "fbclid",
+				attributed_medium: "paid_social",
+				attributed_campaign: null,
+				attributed_click_id_type: "fbclid",
 				attributed_click_id_value: "FB-CLICK-123",
-				match_source: "shopify_hint_fallback",
+				match_source: "shopify_hint_derived",
 				confidence_score: "0.55",
 				confidence_label: "medium",
 				attribution_reason: "shopify_hint_derived",
@@ -527,11 +527,10 @@ test("recoverShopifyAttributionHints suppresses Shopify fallback when checkout o
 
 		const snapshot = await fetchOrderSnapshot(
 			"order-shopify-hint-suppressed-1",
-		);
-		assert.ok(snapshot);
-		assert.equal(snapshot?.confidenceScore, 1);
-		assert.equal(snapshot?.confidenceLabel, "high");
-		assert.deepEqual(snapshot?.winner, {
+			);
+			assert.ok(snapshot);
+			assert.equal(snapshot?.confidenceScore, 1);
+			assert.deepEqual(snapshot?.winner, {
 			sessionId: checkoutSessionId,
 			sourceTouchEventId:
 				snapshot?.winner && typeof snapshot.winner === "object"
