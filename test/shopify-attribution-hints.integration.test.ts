@@ -542,16 +542,12 @@ test("recoverShopifyAttributionHints suppresses Shopify fallback when checkout o
 			campaign: "brand-search",
 			content: null,
 			term: null,
-			clickIdType: "gclid",
-			clickIdValue: "gclid-123",
-			attributionReason: "matched_by_landing_session",
-			matchSource: "landing_session_id",
-			confidenceLabel: "high",
-			ingestionSource: "landing_session_id",
-			ga4ClientId: null,
-			ga4SessionId: null,
-			isDirect: false,
-		});
+				clickIdType: "gclid",
+				clickIdValue: "gclid-123",
+				attributionReason: "matched_by_landing_session",
+				ingestionSource: "landing_session_id",
+				isDirect: false,
+			});
 	} finally {
 		await resetIntegrationDatabase();
 	}
