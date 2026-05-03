@@ -3,7 +3,12 @@ import test from 'node:test';
 
 process.env.DATABASE_URL ??= 'postgres://postgres:postgres@127.0.0.1:5432/roas_radar';
 
-const [{ pool }, { backfillCampaignMetadataHistory }, { resolveCampaignDisplayMetadata }, { resetE2EDatabase }] =
+const [
+  { pool },
+  { backfillCampaignMetadataHistory },
+  { buildCampaignResolutionGroupKey, resolveCampaignDisplayMetadata },
+  { resetE2EDatabase }
+] =
   await Promise.all([
     import('../src/db/pool.js'),
     import('../src/modules/ad-platform-metadata-refresh/index.js'),
@@ -366,6 +371,97 @@ test('campaign metadata resolution keeps duplicate platform entity ids isolated 
       lastSeenAt: '2026-04-10T09:00:00.000Z',
       updatedAt: '2026-04-10T09:05:00.000Z'
     });
+  } finally {
+    await resetE2EDatabase();
+  }
+});
+
+test('campaign metadata resolution avoids cross-account label collapse for shared reporting groups', async () => {
+  await resetE2EDatabase();
+
+  try {
+    await pool.query(
+      `
+        INSERT INTO google_ads_connections (
+          id,
+          customer_id,
+          developer_token_encrypted,
+          client_id,
+          client_secret_encrypted,
+          refresh_token_encrypted,
+          status,
+          raw_customer_data,
+          raw_customer_source,
+          raw_customer_received_at,
+          raw_customer_external_id,
+          raw_customer_payload_size_bytes,
+          raw_customer_payload_hash
+        )
+        VALUES
+          (1, 'acct-google-1', '\\x00'::bytea, 'client', '\\x00'::bytea, '\\x00'::bytea, 'active', '{}'::jsonb, 'google_ads_customer', now(), 'acct-google-1', 2, 'seed-1'),
+          (2, 'acct-google-2', '\\x00'::bytea, 'client', '\\x00'::bytea, '\\x00'::bytea, 'active', '{}'::jsonb, 'google_ads_customer', now(), 'acct-google-2', 2, 'seed-2')
+      `
+    );
+
+    await pool.query(
+      `
+        INSERT INTO google_ads_sync_jobs (id, connection_id, sync_date, status)
+        VALUES
+          (1, 1, '2026-04-10'::date, 'completed'),
+          (2, 2, '2026-04-10'::date, 'completed')
+      `
+    );
+
+    await pool.query(
+      `
+        INSERT INTO google_ads_daily_spend (
+          connection_id,
+          sync_job_id,
+          report_date,
+          granularity,
+          entity_key,
+          account_id,
+          account_name,
+          campaign_id,
+          campaign_name,
+          canonical_source,
+          canonical_medium,
+          canonical_campaign,
+          canonical_content,
+          canonical_term,
+          currency,
+          spend,
+          impressions,
+          clicks,
+          raw_payload
+        )
+        VALUES
+          (1, 1, '2026-04-10'::date, 'campaign', 'shared-row-east', 'acct-google-1', 'Google East', 'cmp_shared', 'Brand Search East Raw', 'google', 'cpc', 'brand-search', 'unknown', 'unknown', 'USD', '120.00', 0, 0, '{}'::jsonb),
+          (2, 2, '2026-04-10'::date, 'campaign', 'shared-row-west', 'acct-google-2', 'Google West', 'cmp_shared', 'Brand Search West Raw', 'google', 'cpc', 'brand-search', 'unknown', 'unknown', 'USD', '150.00', 0, 0, '{}'::jsonb)
+      `
+    );
+
+    await pool.query(
+      `
+        INSERT INTO ad_platform_entity_metadata (
+          platform,
+          account_id,
+          entity_type,
+          entity_id,
+          latest_name,
+          last_seen_at,
+          updated_at
+        )
+        VALUES
+          ('google_ads', 'acct-google-1', 'campaign', 'cmp_shared', 'Brand Search East Latest', '2026-04-10T08:00:00.000Z', '2026-04-10T08:05:00.000Z'),
+          ('google_ads', 'acct-google-2', 'campaign', 'cmp_shared', 'Brand Search West Latest', '2026-04-10T09:00:00.000Z', '2026-04-10T09:05:00.000Z')
+      `
+    );
+
+    const result = await resolveCampaignDisplayMetadata('2026-04-10', '2026-04-10', ['brand-search'], 'google');
+
+    assert.equal(result.byCampaign.get('brand-search'), undefined);
+    assert.equal(result.byGroup.get(buildCampaignResolutionGroupKey('google', 'cpc', 'brand-search')), undefined);
   } finally {
     await resetE2EDatabase();
   }

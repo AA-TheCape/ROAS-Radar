@@ -82,6 +82,37 @@ function chooseBetterResolution(
   return current;
 }
 
+function buildResolutionFingerprint(resolution: CampaignDisplayResolution): string {
+  return [
+    resolution.campaignDisplayName,
+    resolution.campaignEntityId ?? '',
+    resolution.campaignPlatform ?? '',
+    resolution.campaignNameResolutionStatus
+  ].join('\u0000');
+}
+
+function collapseScopedResolutions(
+  resolutions: CampaignDisplayResolution[]
+): CampaignDisplayResolution | undefined {
+  if (resolutions.length === 0) {
+    return undefined;
+  }
+
+  const fingerprints = new Set(resolutions.map(buildResolutionFingerprint));
+
+  if (fingerprints.size > 1) {
+    return undefined;
+  }
+
+  let winner: CampaignDisplayResolution | undefined;
+
+  for (const resolution of resolutions) {
+    winner = chooseBetterResolution(winner, resolution);
+  }
+
+  return winner;
+}
+
 function buildResolution(row: CampaignResolutionRow): CampaignDisplayResolution {
   const resolvedName = collapseWhitespace(row.latest_name);
   const fallbackName = collapseWhitespace(row.fallback_name);
@@ -226,21 +257,40 @@ export async function resolveCampaignDisplayMetadata(
   const byCampaign = new Map<string, CampaignDisplayResolution>();
   const byGroup = new Map<string, CampaignDisplayResolution>();
   const rowsByPlatform = new Map<'google_ads' | 'meta_ads', CampaignDisplayResolution[]>();
+  const scopedCampaignCandidates = new Map<string, CampaignDisplayResolution[]>();
+  const scopedGroupCandidates = new Map<string, CampaignDisplayResolution[]>();
 
   for (const row of result.rows) {
     const resolution = buildResolution(row);
-    const existingByCampaign = byCampaign.get(row.campaign);
-    const existingByGroup = byGroup.get(buildCampaignResolutionGroupKey(row.source, row.medium, row.campaign));
+    const groupKey = buildCampaignResolutionGroupKey(row.source, row.medium, row.campaign);
+    const campaignCandidates = scopedCampaignCandidates.get(row.campaign) ?? [];
+    const groupCandidates = scopedGroupCandidates.get(groupKey) ?? [];
 
-    byCampaign.set(row.campaign, chooseBetterResolution(existingByCampaign, resolution));
-    byGroup.set(
-      buildCampaignResolutionGroupKey(row.source, row.medium, row.campaign),
-      chooseBetterResolution(existingByGroup, resolution)
-    );
+    campaignCandidates.push(resolution);
+    groupCandidates.push(resolution);
+
+    scopedCampaignCandidates.set(row.campaign, campaignCandidates);
+    scopedGroupCandidates.set(groupKey, groupCandidates);
 
     const platformEntries = rowsByPlatform.get(row.platform) ?? [];
     platformEntries.push(resolution);
     rowsByPlatform.set(row.platform, platformEntries);
+  }
+
+  for (const [campaign, resolutions] of scopedCampaignCandidates) {
+    const collapsed = collapseScopedResolutions(resolutions);
+
+    if (collapsed) {
+      byCampaign.set(campaign, collapsed);
+    }
+  }
+
+  for (const [groupKey, resolutions] of scopedGroupCandidates) {
+    const collapsed = collapseScopedResolutions(resolutions);
+
+    if (collapsed) {
+      byGroup.set(groupKey, collapsed);
+    }
   }
 
   for (const [platform, resolutions] of rowsByPlatform) {
