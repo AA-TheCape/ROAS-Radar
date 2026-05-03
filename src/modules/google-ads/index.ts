@@ -319,7 +319,8 @@ async function upsertGoogleMetadataRecords(records: GoogleMetadataRecord[]): Pro
 export async function refreshGoogleAdsMetadataForConnection(
   connection: GoogleAdsConnection,
   now = new Date(),
-  workerId = 'google-ads-metadata-refresh'
+  workerId = 'google-ads-metadata-refresh',
+  requestedBy?: string
 ): Promise<{ skipped: boolean; recordCount: number }> {
   const acquired = await acquireMetadataRefreshLock('google_ads', connection.customer_id);
 
@@ -333,6 +334,7 @@ export async function refreshGoogleAdsMetadataForConnection(
     platform: 'google_ads',
     workerId,
     jobId: String(connection.id),
+    requestedBy,
     startedAt: startedAt.toISOString()
   });
 
@@ -371,6 +373,7 @@ export async function refreshGoogleAdsMetadataForConnection(
       platform: 'google_ads',
       workerId,
       jobId: String(connection.id),
+      requestedBy,
       startedAt: startedAt.toISOString(),
       completedAt: new Date().toISOString()
     });
@@ -382,6 +385,7 @@ export async function refreshGoogleAdsMetadataForConnection(
       platform: 'google_ads',
       workerId,
       jobId: String(connection.id),
+      requestedBy,
       startedAt: startedAt.toISOString(),
       completedAt: new Date().toISOString(),
       error
@@ -395,6 +399,7 @@ export async function refreshGoogleAdsMetadataForConnection(
 export async function refreshActiveGoogleAdsMetadataConnections(options?: {
   now?: Date;
   workerId?: string;
+  requestedBy?: string;
 }): Promise<{ attempted: number; refreshed: number; skipped: number }> {
   const connections = await loadActiveGoogleAdsConnections();
   let refreshed = 0;
@@ -404,7 +409,8 @@ export async function refreshActiveGoogleAdsMetadataConnections(options?: {
     const result = await refreshGoogleAdsMetadataForConnection(
       connection,
       options?.now ?? new Date(),
-      options?.workerId ?? 'google-ads-metadata-refresh'
+      options?.workerId ?? 'google-ads-metadata-refresh',
+      options?.requestedBy
     );
 
     if (result.skipped) {

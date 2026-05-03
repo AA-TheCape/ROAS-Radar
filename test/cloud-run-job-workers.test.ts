@@ -4,9 +4,13 @@ import test from 'node:test';
 process.env.DATABASE_URL ??= 'postgres://postgres:postgres@localhost:5432/roas_radar_test';
 
 const identityGraphWorkerModule = await import('../src/identity-graph-backfill-worker.js');
+const googleAdsMetadataWorkerModule = await import('../src/google-ads-metadata-refresh-worker.js');
+const metaAdsMetadataWorkerModule = await import('../src/meta-ads-metadata-refresh-worker.js');
 const orderAttributionWorkerModule = await import('../src/order-attribution-materialization-worker.js');
 
 const { resolveIdentityGraphBackfillExecution } = identityGraphWorkerModule;
+const { resolveGoogleAdsMetadataRefreshExecution } = googleAdsMetadataWorkerModule;
+const { resolveMetaAdsMetadataRefreshExecution } = metaAdsMetadataWorkerModule;
 const { resolveOrderAttributionMaterializationExecution } = orderAttributionWorkerModule;
 
 function withEnv<T>(overrides: Record<string, string | undefined>, callback: () => T): T {
@@ -79,4 +83,30 @@ test('resolveOrderAttributionMaterializationExecution derives a lagged UTC date 
   assert.equal(execution.dryRun, true);
   assert.equal(execution.onlyWebOrders, false);
   assert.equal(execution.writeToShopifyWhenAvailable, false);
+});
+
+test('resolveMetaAdsMetadataRefreshExecution uses explicit requested-by values for scheduler runs', () => {
+  const execution = withEnv(
+    {
+      K_SERVICE: 'meta-ads-metadata-refresh-staging',
+      META_ADS_METADATA_REFRESH_REQUESTED_BY: 'scheduler-meta-staging@roas-radar'
+    },
+    () => resolveMetaAdsMetadataRefreshExecution()
+  );
+
+  assert.equal(execution.requestedBy, 'scheduler-meta-staging@roas-radar');
+  assert.equal(execution.workerId, 'meta-ads-metadata-refresh-staging');
+});
+
+test('resolveGoogleAdsMetadataRefreshExecution falls back to the Cloud Run scheduler marker', () => {
+  const execution = withEnv(
+    {
+      K_SERVICE: 'google-ads-metadata-refresh-production',
+      GOOGLE_ADS_METADATA_REFRESH_REQUESTED_BY: undefined
+    },
+    () => resolveGoogleAdsMetadataRefreshExecution()
+  );
+
+  assert.equal(execution.requestedBy, 'cloud-run-scheduler');
+  assert.equal(execution.workerId, 'google-ads-metadata-refresh-production');
 });

@@ -311,7 +311,8 @@ async function upsertMetaMetadataRecords(records: MetaMetadataRecord[]): Promise
 export async function refreshMetaAdsMetadataForConnection(
   connection: MetaAdsConnection,
   now = new Date(),
-  workerId = 'meta-ads-metadata-refresh'
+  workerId = 'meta-ads-metadata-refresh',
+  requestedBy?: string
 ): Promise<{ skipped: boolean; recordCount: number }> {
   const acquired = await acquireMetadataRefreshLock('meta_ads', connection.ad_account_id);
 
@@ -325,6 +326,7 @@ export async function refreshMetaAdsMetadataForConnection(
     platform: 'meta_ads',
     workerId,
     jobId: String(connection.id),
+    requestedBy,
     startedAt: startedAt.toISOString()
   });
 
@@ -350,6 +352,7 @@ export async function refreshMetaAdsMetadataForConnection(
       platform: 'meta_ads',
       workerId,
       jobId: String(connection.id),
+      requestedBy,
       startedAt: startedAt.toISOString(),
       completedAt: new Date().toISOString()
     });
@@ -361,6 +364,7 @@ export async function refreshMetaAdsMetadataForConnection(
       platform: 'meta_ads',
       workerId,
       jobId: String(connection.id),
+      requestedBy,
       startedAt: startedAt.toISOString(),
       completedAt: new Date().toISOString(),
       error
@@ -374,6 +378,7 @@ export async function refreshMetaAdsMetadataForConnection(
 export async function refreshActiveMetaAdsMetadataConnections(options?: {
   now?: Date;
   workerId?: string;
+  requestedBy?: string;
 }): Promise<{ attempted: number; refreshed: number; skipped: number }> {
   const connections = await loadActiveMetaAdsConnections();
   let refreshed = 0;
@@ -383,7 +388,8 @@ export async function refreshActiveMetaAdsMetadataConnections(options?: {
     const result = await refreshMetaAdsMetadataForConnection(
       connection,
       options?.now ?? new Date(),
-      options?.workerId ?? 'meta-ads-metadata-refresh'
+      options?.workerId ?? 'meta-ads-metadata-refresh',
+      options?.requestedBy
     );
 
     if (result.skipped) {
