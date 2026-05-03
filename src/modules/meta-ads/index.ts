@@ -7,6 +7,11 @@ import { z } from 'zod';
 
 import { env } from '../../config/env.js';
 import { query, withTransaction } from '../../db/pool.js';
+import {
+  type RawPayloadIntegrityRow,
+  buildRawPayloadStorageMetadata,
+  logRawPayloadIntegrityMismatch
+} from '../../shared/raw-payload-storage.js';
 import { attachAuthContext, requireAdmin } from '../auth/index.js';
 import { buildCanonicalSpendDimensions } from '../marketing-dimensions/index.js';
 import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
@@ -1123,7 +1128,10 @@ async function persistDailySpendSnapshot(
         continue;
       }
 
-      const rawInsert = await client.query<{ id: number }>(
+      const rawPayloadMetadata = buildRawPayloadStorageMetadata(row);
+      const { rawPayloadJson, payloadSizeBytes, payloadHash } = rawPayloadMetadata;
+
+      const rawInsert = await client.query<{ id: number } & RawPayloadIntegrityRow>(
         `
           INSERT INTO meta_ads_raw_spend_records (
             connection_id,
@@ -1131,15 +1139,22 @@ async function persistDailySpendSnapshot(
             report_date,
             level,
             entity_id,
+            payload_external_id,
             currency,
             spend,
             impressions,
             clicks,
             raw_payload,
+            payload_size_bytes,
+            payload_hash,
             updated_at
           )
-          VALUES ($1, $2, $3::date, $4, $5, $6, $7::numeric, $8, $9, $10::jsonb, now())
-          RETURNING id
+          VALUES ($1, $2, $3::date, $4, $5, $6, $7, $8::numeric, $9, $10, $11::jsonb, $12, $13, now())
+          RETURNING
+            id,
+            payload_size_bytes AS "storedPayloadSizeBytes",
+            payload_hash AS "storedPayloadHash",
+            raw_payload AS "persistedRawPayload"
         `,
         [
           params.connectionId,
@@ -1147,13 +1162,27 @@ async function persistDailySpendSnapshot(
           params.syncDate,
           level,
           entityId,
+          entityId,
           params.currency,
           parseMetricDecimal(row.spend),
           parseMetricInteger(row.impressions),
           parseMetricInteger(row.clicks),
-          JSON.stringify(row)
+          rawPayloadJson,
+          payloadSizeBytes,
+          payloadHash
         ]
       );
+
+      logRawPayloadIntegrityMismatch(rawPayloadMetadata, rawInsert.rows[0], {
+        surface: 'meta_ads_raw_spend_records',
+        operation: 'insert',
+        recordId: rawInsert.rows[0].id,
+        fields: {
+          level,
+          entityId,
+          syncJobId: params.syncJobId
+        }
+      });
 
       const rawRecordId = rawInsert.rows[0].id;
       const normalizedRows = normalizeInsightRows(row, params.creativeMap, params.currency);
