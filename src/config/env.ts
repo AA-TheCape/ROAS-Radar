@@ -73,6 +73,8 @@ type Env = {
   META_ADS_SYNC_BATCH_SIZE: number;
   META_ADS_SYNC_INITIAL_LOOKBACK_DAYS: number;
   META_ADS_SYNC_LOOKBACK_DAYS: number;
+  META_ADS_SYNC_MAX_RETRIES: number;
+  META_ADS_TOKEN_REFRESH_LEEWAY_HOURS: number;
   META_ADS_WORKER_LOOP: boolean;
   META_ADS_WORKER_POLL_INTERVAL_MS: number;
   ORDER_ATTRIBUTION_MATERIALIZATION_REQUESTED_BY: string;
@@ -240,6 +242,8 @@ const parsers: { [TKey in keyof Env]: EnvParser<Env[TKey]> } = {
   META_ADS_SYNC_BATCH_SIZE: (name) => parseInteger(name, 5),
   META_ADS_SYNC_INITIAL_LOOKBACK_DAYS: (name) => parseInteger(name, 30),
   META_ADS_SYNC_LOOKBACK_DAYS: (name) => parseInteger(name, 7),
+  META_ADS_SYNC_MAX_RETRIES: (name) => parseInteger(name, 3),
+  META_ADS_TOKEN_REFRESH_LEEWAY_HOURS: (name) => parseInteger(name, 24),
   META_ADS_WORKER_LOOP: (name) => parseBoolean(name, true),
   META_ADS_WORKER_POLL_INTERVAL_MS: (name) => parseInteger(name, 60 * 1000),
   ORDER_ATTRIBUTION_MATERIALIZATION_REQUESTED_BY: (name) => parseString(name, ''),
