@@ -197,6 +197,88 @@ test('buildGoogleAdsMetadataRecords normalizes ids and collapses whitespace for 
   ]);
 });
 
+test('buildGoogleAdsMetadataRecords keeps the latest non-blank name when later duplicates are blank', () => {
+  const observedAt = new Date('2026-04-11T12:00:00.000Z');
+
+  const rows = __googleAdsTestUtils.buildGoogleAdsMetadataRecords({
+    accountId: ' 1234567890 ',
+    observedAt,
+    campaignRows: [
+      {
+        campaign: {
+          id: ' cmp_1 ',
+          name: '  Spring    Search  '
+        }
+      },
+      {
+        campaign: {
+          id: 'cmp_1',
+          name: '   '
+        }
+      }
+    ],
+    adsetRows: [
+      {
+        adGroup: {
+          id: ' adgroup_1 ',
+          name: ' US   Search '
+        }
+      },
+      {
+        adGroup: {
+          id: 'adgroup_1',
+          name: ''
+        }
+      }
+    ],
+    adRows: [
+      {
+        adGroupAd: {
+          ad: {
+            id: ' ad_1 ',
+            name: ' Headline   A '
+          }
+        }
+      },
+      {
+        adGroupAd: {
+          ad: {
+            id: 'ad_1',
+            name: ' '
+          }
+        }
+      }
+    ]
+  });
+
+  assert.deepEqual(rows, [
+    {
+      platform: 'google_ads',
+      accountId: '1234567890',
+      entityType: 'campaign',
+      entityId: 'cmp_1',
+      latestName: 'Spring Search',
+      lastSeenAt: observedAt
+    },
+    {
+      platform: 'google_ads',
+      accountId: '1234567890',
+      entityType: 'adset',
+      entityId: 'adgroup_1',
+      latestName: 'US Search',
+      lastSeenAt: observedAt
+    },
+    {
+      platform: 'google_ads',
+      accountId: '1234567890',
+      entityType: 'ad',
+      entityId: 'ad_1',
+      latestName: 'Headline A',
+      lastSeenAt: observedAt
+    }
+  ]);
+});
+
 test('formatGoogleAdsError includes API status and details payload', () => {
   const error = __googleAdsTestUtils.createGoogleAdsApiErrorForTest(403, 'Google Ads API request failed', {
     error: {

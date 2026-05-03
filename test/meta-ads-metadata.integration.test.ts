@@ -13,7 +13,7 @@ process.env.META_ADS_SYNC_LOOKBACK_DAYS ??= '3';
 process.env.META_ADS_SYNC_INITIAL_LOOKBACK_DAYS ??= '5';
 
 const { pool } = await import('../src/db/pool.js');
-const { processMetaAdsSyncQueue } = await import('../src/modules/meta-ads/index.js');
+const { __metaAdsTestUtils, processMetaAdsSyncQueue } = await import('../src/modules/meta-ads/index.js');
 const { resetE2EDatabase } = await import('./e2e-harness.js');
 
 type MetadataPhase = 'initial' | 'renamed';
@@ -338,6 +338,74 @@ test('Meta Ads metadata sync upserts entity names without duplicate rows across 
         latest_name: 'Prospecting'
       }
     ]);
+  } finally {
+    globalThis.fetch = previousFetch;
+    await resetE2EDatabase();
+  }
+});
+
+test('Meta Ads metadata refresh surfaces retryable API errors without mutating persisted lookup rows', { concurrency: false }, async () => {
+  const previousFetch = globalThis.fetch;
+
+  try {
+    await resetE2EDatabase();
+    await seedMetaSyncJob();
+
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url);
+
+      if (url.pathname.endsWith('/insights')) {
+        const level = url.searchParams.get('level') as 'account' | 'campaign' | 'adset' | 'ad';
+        const timeRange = JSON.parse(url.searchParams.get('time_range') ?? '{}') as { since?: string };
+        const syncDate = timeRange.since ?? '2026-04-11';
+
+        return new Response(JSON.stringify({ data: buildInsightsFixture(syncDate, level) }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        });
+      }
+
+      if (url.pathname.endsWith('/campaigns')) {
+        return new Response(
+          JSON.stringify({
+            error: {
+              code: 4,
+              error_subcode: 99,
+              message: 'Application request limit reached'
+            }
+          }),
+          {
+            status: 400,
+            headers: { 'content-type': 'application/json' }
+          }
+        );
+      }
+
+      if (url.pathname.endsWith('/adsets') || url.pathname.endsWith('/ads') || url.pathname.endsWith('/v23.0/')) {
+        return new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        });
+      }
+
+      throw new Error(`Unexpected Meta Ads fetch ${url.toString()}`);
+    }) as typeof globalThis.fetch;
+
+    let thrown: unknown;
+
+    try {
+      await processMetaAdsSyncQueue({
+        limit: 1,
+        now: new Date('2026-04-11T12:00:00.000Z')
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    assert.ok(thrown instanceof Error);
+    assert.equal(__metaAdsTestUtils.isRetryableMetaAdsApiError(thrown), true);
+    assert.equal(__metaAdsTestUtils.formatMetaAdsError(thrown), 'Meta Ads API request failed (status=400, code=4, subcode=99)');
+    assert.deepEqual(await loadMetadataRows(), []);
   } finally {
     globalThis.fetch = previousFetch;
     await resetE2EDatabase();

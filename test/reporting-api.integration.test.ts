@@ -273,6 +273,10 @@ test('reporting campaign-oriented responses enrich display names from metadata l
       server,
       '/api/reporting/campaigns?startDate=2026-04-10&endDate=2026-04-10&limit=10'
     );
+    const summary = await requestJson(
+      server,
+      '/api/reporting/summary?startDate=2026-04-10&endDate=2026-04-10'
+    );
     const spendDetails = await requestJson(
       server,
       '/api/reporting/spend-details?startDate=2026-04-10&endDate=2026-04-10'
@@ -340,6 +344,23 @@ test('reporting campaign-oriented responses enrich display names from metadata l
         }
       ],
       nextCursor: null
+    });
+
+    assert.equal(summary.response.status, 200);
+    assert.equal(summary.response.headers.get('x-roas-radar-reporting-schema'), REPORTING_SCHEMA_VERSION);
+    assert.deepEqual(summary.body, {
+      range: {
+        startDate: '2026-04-10',
+        endDate: '2026-04-10'
+      },
+      totals: {
+        visits: 230,
+        orders: 10,
+        revenue: 1420,
+        spend: 750,
+        conversionRate: 10 / 230,
+        roas: 1420 / 750
+      }
     });
 
     assert.equal(spendDetails.response.status, 200);

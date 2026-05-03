@@ -13,7 +13,7 @@ const { pool } = await import('../src/db/pool.js');
 const { processGoogleAdsSyncQueue } = await import('../src/modules/google-ads/index.js');
 const { resetE2EDatabase } = await import('./e2e-harness.js');
 
-type MetadataPhase = 'initial' | 'renamed';
+type MetadataPhase = 'initial' | 'renamed' | 'blank';
 
 function buildGoogleCustomerFixture() {
   return {
@@ -89,7 +89,12 @@ function buildMetadataResponse(query: string, phase: MetadataPhase) {
             customer: { id: '1234567890' },
             campaign: {
               id: 'cmp_1',
-              name: phase === 'initial' ? '  Brand   Search  ' : '  Brand Search - Updated  '
+              name:
+                phase === 'initial'
+                  ? '  Brand   Search  '
+                  : phase === 'renamed'
+                    ? '  Brand Search - Updated  '
+                    : '   '
             }
           }
         ]
@@ -100,7 +105,7 @@ function buildMetadataResponse(query: string, phase: MetadataPhase) {
             customer: { id: '1234567890' },
             campaign: {
               id: 'cmp_2',
-              name: ' Prospecting '
+              name: phase === 'blank' ? ' ' : ' Prospecting '
             }
           }
         ]
@@ -117,7 +122,12 @@ function buildMetadataResponse(query: string, phase: MetadataPhase) {
             adGroupAd: {
               ad: {
                 id: 'ad_1',
-                name: phase === 'initial' ? ' Headline   A ' : ' Headline A - Updated ',
+                name:
+                  phase === 'initial'
+                    ? ' Headline   A '
+                    : phase === 'renamed'
+                      ? ' Headline A - Updated '
+                      : ' ',
                 resourceName: 'customers/1234567890/adGroupAds/1'
               }
             }
@@ -135,7 +145,7 @@ function buildMetadataResponse(query: string, phase: MetadataPhase) {
             customer: { id: '1234567890' },
             adGroup: {
               id: 'adgroup_1',
-              name: phase === 'initial' ? ' Search   US ' : ' Search US - Updated '
+              name: phase === 'initial' ? ' Search   US ' : phase === 'renamed' ? ' Search US - Updated ' : ''
             }
           }
         ]
@@ -370,6 +380,16 @@ test('Google Ads metadata sync upserts entity names without duplicate rows acros
         latest_name: 'Prospecting'
       }
     ]);
+
+    phase = 'blank';
+
+    const thirdRun = await processGoogleAdsSyncQueue({
+      limit: 1,
+      now: new Date('2026-04-13T12:00:00.000Z')
+    });
+
+    assert.equal(thirdRun.succeededJobs, 1);
+    assert.deepEqual(await loadMetadataRows(), metadataRows);
   } finally {
     globalThis.fetch = previousFetch;
     await resetE2EDatabase();
