@@ -69,7 +69,19 @@ test('meta order value aggregate migration adds the expected indexes and uniquen
 
   assert.ok(connectionId);
 
-  const syncJobInsert = await pool.query<{ id: number }>(
+  const orderValueSyncJobInsert = await pool.query<{ id: number }>(
+    `
+      INSERT INTO meta_ads_order_value_sync_jobs (connection_id, sync_date)
+      VALUES ($1, '2026-04-29')
+      RETURNING id
+    `,
+    [connectionId]
+  );
+  const orderValueSyncJobId = orderValueSyncJobInsert.rows[0]?.id;
+
+  assert.ok(orderValueSyncJobId);
+
+  const spendSyncJobInsert = await pool.query<{ id: number }>(
     `
       INSERT INTO meta_ads_sync_jobs (connection_id, sync_date)
       VALUES ($1, '2026-04-29')
@@ -77,9 +89,9 @@ test('meta order value aggregate migration adds the expected indexes and uniquen
     `,
     [connectionId]
   );
-  const syncJobId = syncJobInsert.rows[0]?.id;
+  const spendSyncJobId = spendSyncJobInsert.rows[0]?.id;
 
-  assert.ok(syncJobId);
+  assert.ok(spendSyncJobId);
 
   const rawSpendFixture = buildRawPayloadFixture({
     campaign_id: 'cmp_123',
@@ -122,7 +134,7 @@ test('meta order value aggregate migration adds the expected indexes and uniquen
     `,
     [
       connectionId,
-      syncJobId,
+      spendSyncJobId,
       rawSpendFixture.rawPayloadJson,
       rawSpendFixture.payloadSizeBytes,
       rawSpendFixture.payloadHash,
@@ -200,7 +212,7 @@ test('meta order value aggregate migration adds the expected indexes and uniquen
         true
       )
     `,
-    [connectionId, syncJobId, rawRecordId]
+    [connectionId, orderValueSyncJobId, rawRecordId]
   );
 
   await assert.rejects(
@@ -255,7 +267,7 @@ test('meta order value aggregate migration adds the expected indexes and uniquen
           true
         )
       `,
-      [connectionId, syncJobId, rawRecordId]
+      [connectionId, orderValueSyncJobId, rawRecordId]
     ),
     (error: unknown) => {
       assert.equal(typeof error, 'object');

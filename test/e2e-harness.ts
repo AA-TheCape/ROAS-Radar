@@ -23,6 +23,7 @@ export async function resetE2EDatabase(): Promise<void> {
     'ad_sync_api_transactions',
     'google_ads_oauth_states',
     'google_ads_settings',
+    'meta_ads_order_value_sync_jobs',
     'meta_ads_order_value_raw_records',
     'meta_ads_order_value_sync_runs',
     'meta_ads_order_value_aggregates',

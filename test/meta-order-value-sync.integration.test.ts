@@ -11,7 +11,7 @@ process.env.META_ADS_ENCRYPTION_KEY ??= 'meta-encryption-key';
 process.env.META_ADS_ORDER_VALUE_WINDOW_DAYS = '1';
 
 const { pool } = await import('../src/db/pool.js');
-const { runMetaAdsOrderValueSync } = await import('../src/modules/meta-ads/index.js');
+const { __metaAdsTestUtils, runMetaAdsOrderValueSync } = await import('../src/modules/meta-ads/index.js');
 const { resetE2EDatabase } = await import('./e2e-harness.js');
 
 async function captureStructuredLogs<T>(callback: () => Promise<T>): Promise<{
@@ -117,7 +117,7 @@ async function seedMetaConnection(): Promise<number> {
 }
 
 async function loadOrderValuePersistence() {
-  const [rawRecords, aggregateRows, syncRuns, syncJobs] = await Promise.all([
+  const [rawRecords, aggregateRows, syncRuns, syncJobs, spendTableCounts] = await Promise.all([
     pool.query<{
       campaign_id: string;
       action_type: string | null;
@@ -165,20 +165,38 @@ async function loadOrderValuePersistence() {
         ORDER BY id ASC
       `
     ),
-    pool.query<{ status: string }>(
+    pool.query<{
+      status: string;
+      attempts: number;
+      last_error: string | null;
+      locked_by: string | null;
+      completed_at: Date | null;
+    }>(
       `
-        SELECT status
-        FROM meta_ads_sync_jobs
+        SELECT status, attempts, last_error, locked_by, completed_at
+        FROM meta_ads_order_value_sync_jobs
         ORDER BY id ASC
       `
-    )
+    ),
+    Promise.all([
+      pool.query<{ count: string }>('SELECT count(*)::text AS count FROM meta_ads_sync_jobs'),
+      pool.query<{ count: string }>('SELECT count(*)::text AS count FROM meta_ads_raw_spend_records'),
+      pool.query<{ count: string }>('SELECT count(*)::text AS count FROM meta_ads_daily_spend')
+    ])
   ]);
+
+  const [spendQueueCount, spendRawRecordCount, spendDailyCount] = spendTableCounts;
 
   return {
     rawRecords: rawRecords.rows,
     aggregateRows: aggregateRows.rows,
     syncRuns: syncRuns.rows,
-    syncJobs: syncJobs.rows
+    syncJobs: syncJobs.rows,
+    spendTableCounts: {
+      syncJobs: Number(spendQueueCount.rows[0]?.count ?? '0'),
+      rawSpendRecords: Number(spendRawRecordCount.rows[0]?.count ?? '0'),
+      dailySpend: Number(spendDailyCount.rows[0]?.count ?? '0')
+    }
   };
 }
 
@@ -309,6 +327,15 @@ test(
     assert.equal(persisted.syncRuns[0]?.records_received, 3);
     assert.equal(persisted.syncJobs.length, 1);
     assert.equal(persisted.syncJobs[0]?.status, 'completed');
+    assert.equal(persisted.syncJobs[0]?.attempts, 1);
+    assert.equal(persisted.syncJobs[0]?.last_error, null);
+    assert.equal(persisted.syncJobs[0]?.locked_by, null);
+    assert.ok(persisted.syncJobs[0]?.completed_at instanceof Date);
+    assert.deepEqual(persisted.spendTableCounts, {
+      syncJobs: 0,
+      rawSpendRecords: 0,
+      dailySpend: 0
+    });
     assert.deepEqual(
       persisted.rawRecords.map((row) => row.action_type),
       ['omni_purchase', 'purchase', 'offsite_conversion.fb_pixel_purchase', 'link_click']
@@ -382,6 +409,13 @@ test('runMetaAdsOrderValueSync emits a zero-row anomaly when Meta returns no cam
     assert.equal(persisted.aggregateRows.length, 0);
     assert.equal(persisted.syncRuns.length, 1);
     assert.equal(persisted.syncRuns[0]?.status, 'completed');
+    assert.equal(persisted.syncJobs.length, 1);
+    assert.equal(persisted.syncJobs[0]?.status, 'completed');
+    assert.deepEqual(persisted.spendTableCounts, {
+      syncJobs: 0,
+      rawSpendRecords: 0,
+      dailySpend: 0
+    });
 
     const anomalyLog = entries.find((entry) => entry.event === 'meta_ads_order_value_sync_anomaly');
     assert.ok(anomalyLog);
@@ -391,4 +425,151 @@ test('runMetaAdsOrderValueSync emits a zero-row anomaly when Meta returns no cam
   } finally {
     globalThis.fetch = previousFetch;
   }
+});
+
+test('runMetaAdsOrderValueSync retries on transient failures and keeps queue state isolated from spend jobs', { concurrency: false }, async () => {
+  const previousFetch = globalThis.fetch;
+
+  try {
+    const connectionId = await seedMetaConnection();
+    assert.equal(typeof connectionId, 'number');
+    assert.ok(connectionId > 0);
+
+    let requestCount = 0;
+    globalThis.fetch = (async () => {
+      requestCount += 1;
+
+      if (requestCount === 1) {
+        return new Response(JSON.stringify({ error: { message: 'rate limited' } }), {
+          status: 429,
+          headers: { 'content-type': 'application/json' }
+        });
+      }
+
+      return new Response(
+        JSON.stringify({
+          data: [
+            {
+              campaign_id: 'cmp_retry_1',
+              campaign_name: 'Retry Campaign',
+              date_start: '2026-04-29',
+              date_stop: '2026-04-29',
+              spend: '9.99',
+              action_type: 'purchase',
+              actions: [{ action_type: 'purchase', value: '1' }],
+              action_values: [{ action_type: 'purchase', value: '21.00' }],
+              purchase_roas: [{ action_type: 'purchase', value: '2.102102' }]
+            }
+          ],
+          paging: {}
+        }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        }
+      );
+    }) as typeof globalThis.fetch;
+
+    const { result } = await captureStructuredLogs(() =>
+      runMetaAdsOrderValueSync({
+        now: new Date('2026-04-29T15:00:00.000Z'),
+        triggerSource: 'test_retry'
+      })
+    );
+
+    assert.equal(result.succeededConnections, 1);
+    assert.equal(result.failedConnections, 0);
+    assert.equal(result.recordsReceived, 1);
+
+    const persisted = await loadOrderValuePersistence();
+    assert.equal(persisted.syncJobs.length, 1);
+    assert.equal(persisted.syncJobs[0]?.status, 'completed');
+    assert.equal(persisted.syncJobs[0]?.attempts, 1);
+    assert.equal(persisted.syncJobs[0]?.last_error, null);
+    assert.equal(persisted.syncJobs[0]?.locked_by, null);
+    assert.deepEqual(persisted.spendTableCounts, {
+      syncJobs: 0,
+      rawSpendRecords: 0,
+      dailySpend: 0
+    });
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test('runMetaAdsOrderValueSync marks order-value jobs failed without creating spend queue jobs on terminal failures', { concurrency: false }, async () => {
+  const previousFetch = globalThis.fetch;
+
+  try {
+    const connectionId = await seedMetaConnection();
+    assert.equal(typeof connectionId, 'number');
+    assert.ok(connectionId > 0);
+
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ error: { message: 'bad request' } }), {
+        status: 400,
+        headers: { 'content-type': 'application/json' }
+      })) as typeof globalThis.fetch;
+
+    const { result } = await captureStructuredLogs(() =>
+      runMetaAdsOrderValueSync({
+        now: new Date('2026-04-29T15:00:00.000Z'),
+        triggerSource: 'test_terminal_failure'
+      })
+    );
+
+    assert.equal(result.succeededConnections, 0);
+    assert.equal(result.failedConnections, 1);
+
+    const persisted = await loadOrderValuePersistence();
+    assert.equal(persisted.rawRecords.length, 0);
+    assert.equal(persisted.aggregateRows.length, 0);
+    assert.equal(persisted.syncRuns.length, 1);
+    assert.equal(persisted.syncRuns[0]?.status, 'failed');
+    assert.equal(persisted.syncJobs.length, 1);
+    assert.equal(persisted.syncJobs[0]?.status, 'failed');
+    assert.equal(persisted.syncJobs[0]?.attempts, 1);
+    assert.match(persisted.syncJobs[0]?.last_error ?? '', /400/);
+    assert.equal(persisted.syncJobs[0]?.locked_by, null);
+    assert.ok(persisted.syncJobs[0]?.completed_at instanceof Date);
+    assert.deepEqual(persisted.spendTableCounts, {
+      syncJobs: 0,
+      rawSpendRecords: 0,
+      dailySpend: 0
+    });
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test('order-value persistence guard rejects writes into spend-owned tables', () => {
+  assert.doesNotThrow(() =>
+    __metaAdsTestUtils.assertOrderValueQueryDoesNotWriteSpendTables(
+      'INSERT INTO meta_ads_order_value_aggregates (organization_id) VALUES (1)'
+    )
+  );
+
+  assert.throws(
+    () =>
+      __metaAdsTestUtils.assertOrderValueQueryDoesNotWriteSpendTables(
+        'INSERT INTO meta_ads_daily_spend (connection_id) VALUES (1)'
+      ),
+    /meta_ads_daily_spend/
+  );
+
+  assert.throws(
+    () =>
+      __metaAdsTestUtils.assertOrderValueQueryDoesNotWriteSpendTables(
+        'DELETE FROM meta_ads_raw_spend_records WHERE connection_id = 1'
+      ),
+    /meta_ads_raw_spend_records/
+  );
+
+  assert.throws(
+    () =>
+      __metaAdsTestUtils.assertOrderValueQueryDoesNotWriteSpendTables(
+        'UPDATE meta_ads_sync_jobs SET status = \'failed\' WHERE id = 1'
+      ),
+    /meta_ads_sync_jobs/
+  );
 });
