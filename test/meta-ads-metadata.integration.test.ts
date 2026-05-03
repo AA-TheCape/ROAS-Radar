@@ -13,7 +13,9 @@ process.env.META_ADS_SYNC_LOOKBACK_DAYS ??= '3';
 process.env.META_ADS_SYNC_INITIAL_LOOKBACK_DAYS ??= '5';
 
 const { pool } = await import('../src/db/pool.js');
-const { __metaAdsTestUtils, processMetaAdsSyncQueue } = await import('../src/modules/meta-ads/index.js');
+const { __metaAdsTestUtils, processMetaAdsSyncQueue, refreshActiveMetaAdsMetadataConnections } = await import(
+  '../src/modules/meta-ads/index.js'
+);
 const { resetE2EDatabase } = await import('./e2e-harness.js');
 
 type MetadataPhase = 'initial' | 'renamed';
@@ -245,6 +247,19 @@ test('Meta Ads metadata sync upserts entity names without duplicate rows across 
     });
 
     assert.equal(firstRun.succeededJobs, 1);
+    assert.deepEqual(await loadMetadataRows(), []);
+
+    const firstRefresh = await refreshActiveMetaAdsMetadataConnections({
+      now: new Date('2026-04-11T12:00:00.000Z'),
+      workerId: 'meta-ads-metadata-refresh-worker',
+      requestedBy: 'test-suite'
+    });
+
+    assert.deepEqual(firstRefresh, {
+      attempted: 1,
+      refreshed: 1,
+      skipped: 0
+    });
     assert.deepEqual(await loadMetadataRows(), [
       {
         platform: 'meta_ads',
@@ -308,6 +323,17 @@ test('Meta Ads metadata sync upserts entity names without duplicate rows across 
     });
 
     assert.equal(secondRun.succeededJobs, 1);
+    const secondRefresh = await refreshActiveMetaAdsMetadataConnections({
+      now: new Date('2026-04-12T12:00:00.000Z'),
+      workerId: 'meta-ads-metadata-refresh-worker',
+      requestedBy: 'test-suite'
+    });
+
+    assert.deepEqual(secondRefresh, {
+      attempted: 1,
+      refreshed: 1,
+      skipped: 0
+    });
     assert.deepEqual(await loadMetadataRows(), [
       {
         platform: 'meta_ads',
@@ -397,6 +423,11 @@ test('Meta Ads metadata refresh surfaces retryable API errors without mutating p
       await processMetaAdsSyncQueue({
         limit: 1,
         now: new Date('2026-04-11T12:00:00.000Z')
+      });
+      await refreshActiveMetaAdsMetadataConnections({
+        now: new Date('2026-04-11T12:00:00.000Z'),
+        workerId: 'meta-ads-metadata-refresh-worker',
+        requestedBy: 'test-suite'
       });
     } catch (error) {
       thrown = error;

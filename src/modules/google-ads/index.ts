@@ -429,17 +429,8 @@ export async function refreshActiveGoogleAdsMetadataConnections(options?: {
 
 export async function processGoogleAdsSyncQueue(
   options?: Record<string, unknown>
-): Promise<Record<string, unknown> & { metadataRefresh?: { attempted: number; refreshed: number; skipped: number } }> {
-  const result = (await legacyGoogleAdsModule.processGoogleAdsSyncQueue(options)) as Record<string, unknown>;
-  const metadataRefresh = await refreshActiveGoogleAdsMetadataConnections({
-    now: options?.now instanceof Date ? options.now : new Date(),
-    workerId: typeof options?.workerId === 'string' ? options.workerId : 'google-ads-worker'
-  });
-
-  return {
-    ...result,
-    metadataRefresh
-  };
+) : Promise<Record<string, unknown>> {
+  return (await legacyGoogleAdsModule.processGoogleAdsSyncQueue(options)) as Record<string, unknown>;
 }
 
 export function createGoogleAdsApiErrorForTest(

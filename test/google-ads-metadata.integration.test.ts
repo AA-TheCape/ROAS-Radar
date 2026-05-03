@@ -10,7 +10,9 @@ process.env.GOOGLE_ADS_APP_SCOPES ??= 'https://www.googleapis.com/auth/adwords';
 process.env.GOOGLE_ADS_ENCRYPTION_KEY ??= 'google-ads-encryption-key';
 
 const { pool } = await import('../src/db/pool.js');
-const { processGoogleAdsSyncQueue } = await import('../src/modules/google-ads/index.js');
+const { processGoogleAdsSyncQueue, refreshActiveGoogleAdsMetadataConnections } = await import(
+  '../src/modules/google-ads/index.js'
+);
 const { resetE2EDatabase } = await import('./e2e-harness.js');
 
 type MetadataPhase = 'initial' | 'renamed' | 'blank';
@@ -309,6 +311,19 @@ test('Google Ads metadata sync upserts entity names without duplicate rows acros
     });
 
     assert.equal(firstRun.succeededJobs, 1);
+    assert.deepEqual(await loadMetadataRows(), []);
+
+    const firstRefresh = await refreshActiveGoogleAdsMetadataConnections({
+      now: new Date('2026-04-11T12:00:00.000Z'),
+      workerId: 'google-ads-metadata-refresh-worker',
+      requestedBy: 'test-suite'
+    });
+
+    assert.deepEqual(firstRefresh, {
+      attempted: 1,
+      refreshed: 1,
+      skipped: 0
+    });
     assert.deepEqual(await loadMetadataRows(), [
       {
         platform: 'google_ads',
@@ -348,6 +363,17 @@ test('Google Ads metadata sync upserts entity names without duplicate rows acros
     });
 
     assert.equal(secondRun.succeededJobs, 1);
+    const secondRefresh = await refreshActiveGoogleAdsMetadataConnections({
+      now: new Date('2026-04-12T12:00:00.000Z'),
+      workerId: 'google-ads-metadata-refresh-worker',
+      requestedBy: 'test-suite'
+    });
+
+    assert.deepEqual(secondRefresh, {
+      attempted: 1,
+      refreshed: 1,
+      skipped: 0
+    });
     const metadataRows = await loadMetadataRows();
     assert.equal(metadataRows.length, 4);
     assert.deepEqual(metadataRows, [
@@ -389,6 +415,17 @@ test('Google Ads metadata sync upserts entity names without duplicate rows acros
     });
 
     assert.equal(thirdRun.succeededJobs, 1);
+    const thirdRefresh = await refreshActiveGoogleAdsMetadataConnections({
+      now: new Date('2026-04-13T12:00:00.000Z'),
+      workerId: 'google-ads-metadata-refresh-worker',
+      requestedBy: 'test-suite'
+    });
+
+    assert.deepEqual(thirdRefresh, {
+      attempted: 1,
+      refreshed: 1,
+      skipped: 0
+    });
     assert.deepEqual(await loadMetadataRows(), metadataRows);
   } finally {
     globalThis.fetch = previousFetch;

@@ -408,17 +408,8 @@ export async function refreshActiveMetaAdsMetadataConnections(options?: {
 
 export async function processMetaAdsSyncQueue(
   options?: Record<string, unknown>
-): Promise<Record<string, unknown> & { metadataRefresh?: { attempted: number; refreshed: number; skipped: number } }> {
-  const result = (await legacyMetaAdsModule.processMetaAdsSyncQueue(options)) as Record<string, unknown>;
-  const metadataRefresh = await refreshActiveMetaAdsMetadataConnections({
-    now: options?.now instanceof Date ? options.now : new Date(),
-    workerId: typeof options?.workerId === 'string' ? options.workerId : 'meta-ads-worker'
-  });
-
-  return {
-    ...result,
-    metadataRefresh
-  };
+) : Promise<Record<string, unknown>> {
+  return (await legacyMetaAdsModule.processMetaAdsSyncQueue(options)) as Record<string, unknown>;
 }
 
 export function createMetaAdsApiErrorForTest(
