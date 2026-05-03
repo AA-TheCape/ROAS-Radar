@@ -1,10 +1,9 @@
 import express from 'express';
+import { Router } from 'express';
 import { env, getApiAllowedOrigins } from './config/env.js';
 import { checkDatabaseHealth } from './db/pool.js';
 import { createAuthRouter, createUserAdminRouter } from './modules/auth/index.js';
 import { createAttributionAdminRouter } from './modules/attribution/admin.js';
-import { createGoogleAdsAdminRouter, createGoogleAdsPublicRouter } from './modules/google-ads/index.js';
-import { createMetaAdsAdminRouter, createMetaAdsPublicRouter } from './modules/meta-ads/index.js';
 import { createReportingRouter } from './modules/reporting/index.js';
 import { createSettingsRouter } from './modules/settings/index.js';
 import { createShopifyAdminRouter, createShopifyPublicRouter, createShopifyWebhookRouter } from './modules/shopify/index.js';
@@ -12,6 +11,9 @@ import { createTrackingRouter } from './modules/tracking/index.js';
 import { createIdentityAdminRouter } from './modules/identity/admin.js';
 import { createInternalIdentityRouter } from './modules/identity/read-api.js';
 import { createRequestLoggingMiddleware, logHttpError } from './observability/index.js';
+function createNoopRouter() {
+    return Router();
+}
 export function createApp() {
     const app = express();
     const serviceName = process.env.K_SERVICE ?? 'roas-radar-api';
@@ -73,10 +75,10 @@ export function createApp() {
     app.use('/api/admin/attribution', createAttributionAdminRouter());
     app.use('/shopify', createShopifyPublicRouter());
     app.use('/api/admin/shopify', createShopifyAdminRouter());
-    app.use('/meta-ads', createMetaAdsPublicRouter());
-    app.use('/api/admin/meta-ads', createMetaAdsAdminRouter());
-    app.use('/google-ads', createGoogleAdsPublicRouter());
-    app.use('/api/admin/google-ads', createGoogleAdsAdminRouter());
+    app.use('/meta-ads', createNoopRouter());
+    app.use('/api/admin/meta-ads', createNoopRouter());
+    app.use('/google-ads', createNoopRouter());
+    app.use('/api/admin/google-ads', createNoopRouter());
     app.use((error, _req, res, _next) => {
         const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error && typeof error.statusCode === 'number'
             ? error.statusCode

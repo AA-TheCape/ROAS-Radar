@@ -5,6 +5,7 @@ import { calculatePerformanceMetrics } from '../../shared/metrics.js';
 import { ATTRIBUTION_MODELS } from '../attribution/engine.js';
 import { attachAuthContext, requireAuthenticated } from '../auth/index.js';
 import { fetchDataQualityReport, resolveRunDate } from '../data-quality/index.js';
+import { buildCampaignResolutionGroupKey, resolveCampaignDisplayMetadata } from './metadata-resolution.js';
 import { getReportingTimezone } from '../settings/index.js';
 class ReportingHttpError extends Error {
     statusCode;
@@ -164,10 +165,34 @@ function countDaysInRange(startDate, endDate) {
     }
     return Math.floor((end - start) / 86_400_000) + 1;
 }
+function buildCampaignLabelFields(resolution) {
+    if (!resolution || !resolution.campaignDisplayName) {
+        return {};
+    }
+    return {
+        campaignDisplayName: resolution.campaignDisplayName,
+        campaignEntityId: resolution.campaignEntityId,
+        campaignPlatform: resolution.campaignPlatform,
+        campaignNameResolutionStatus: resolution.campaignNameResolutionStatus,
+        campaignLabel: {
+            displayName: resolution.campaignDisplayName,
+            entityId: resolution.campaignEntityId,
+            platform: resolution.campaignPlatform,
+            resolutionStatus: resolution.campaignNameResolutionStatus,
+            lastSeenAt: resolution.lastSeenAt,
+            updatedAt: resolution.updatedAt
+        }
+    };
+}
+const REPORTING_SCHEMA_VERSION = '2026-05-02';
 export function createReportingRouter() {
     const router = Router();
     router.use(attachAuthContext);
     router.use(requireAuthenticated);
+    router.use((_req, res, next) => {
+        res.setHeader('X-ROAS-Radar-Reporting-Schema', REPORTING_SCHEMA_VERSION);
+        next();
+    });
     router.get('/summary', async (req, res, next) => {
         try {
             const input = parseInput(baseFiltersSchema, req.query);
@@ -228,11 +253,13 @@ export function createReportingRouter() {
           ORDER BY revenue DESC, orders DESC, visits DESC, source ASC, campaign ASC
           LIMIT $${filters.params.length + 3}
         `, [input.startDate, input.endDate, ...filters.params, input.limit]);
+            const campaignMetadata = await resolveCampaignDisplayMetadata(input.startDate, input.endDate, result.rows.map((row) => row.campaign), input.source);
             res.json({
                 rows: result.rows.map((row) => {
                     const visits = Number(row.visits);
                     const orders = Number(row.orders);
                     const revenue = Number(row.revenue);
+                    const resolution = campaignMetadata.byGroup.get(buildCampaignResolutionGroupKey(row.source, row.medium, row.campaign));
                     return {
                         source: row.source,
                         medium: row.medium,
@@ -241,7 +268,8 @@ export function createReportingRouter() {
                         visits,
                         orders,
                         revenue,
-                        conversionRate: visits > 0 ? orders / visits : 0
+                        conversionRate: visits > 0 ? orders / visits : 0,
+                        ...buildCampaignLabelFields(resolution)
                     };
                 }),
                 nextCursor: null
@@ -268,6 +296,7 @@ export function createReportingRouter() {
           GROUP BY source, medium, campaign
           ORDER BY spend DESC, source ASC, medium ASC, campaign ASC
         `, [input.startDate, input.endDate, ...filters.params]);
+            const campaignMetadata = await resolveCampaignDisplayMetadata(input.startDate, input.endDate, result.rows.map((row) => row.campaign), input.source);
             const groupMap = new Map();
             for (const row of result.rows) {
                 const spend = Number(row.spend);
@@ -280,7 +309,8 @@ export function createReportingRouter() {
                     existingGroup.subtotal += spend;
                     existingGroup.campaigns.push({
                         campaign: row.campaign,
-                        spend
+                        spend,
+                        ...buildCampaignLabelFields(campaignMetadata.byGroup.get(buildCampaignResolutionGroupKey(row.source, row.medium, row.campaign)))
                     });
                     continue;
                 }
@@ -292,7 +322,8 @@ export function createReportingRouter() {
                     campaigns: [
                         {
                             campaign: row.campaign,
-                            spend
+                            spend,
+                            ...buildCampaignLabelFields(campaignMetadata.byGroup.get(buildCampaignResolutionGroupKey(row.source, row.medium, row.campaign)))
                         }
                     ]
                 });
@@ -342,6 +373,9 @@ export function createReportingRouter() {
           GROUP BY bucket
           ORDER BY bucket ASC
         `, [input.startDate, input.endDate, ...filters.params]);
+            const campaignMetadata = input.groupBy === 'campaign'
+                ? await resolveCampaignDisplayMetadata(input.startDate, input.endDate, result.rows.map((row) => row.bucket), input.source)
+                : null;
             const bucketMetrics = result.rows.map((row) => {
                 const metrics = calculatePerformanceMetrics({
                     visits: row.visits,
@@ -356,7 +390,10 @@ export function createReportingRouter() {
                     revenue: metrics.attributedRevenue,
                     spend: metrics.spend,
                     conversionRate: metrics.conversionRate,
-                    roas: metrics.roas
+                    roas: metrics.roas,
+                    ...(input.groupBy === 'campaign'
+                        ? buildCampaignLabelFields(campaignMetadata?.byCampaign.get(row.bucket))
+                        : {})
                 };
             });
             res.json({
@@ -364,7 +401,10 @@ export function createReportingRouter() {
                     date: row.bucket,
                     visits: row.visits,
                     orders: row.orders,
-                    revenue: row.revenue
+                    revenue: row.revenue,
+                    ...(input.groupBy === 'campaign'
+                        ? buildCampaignLabelFields(campaignMetadata?.byCampaign.get(row.bucket))
+                        : {})
                 })),
                 lowestBuckets: [...bucketMetrics]
                     .sort((left, right) => left.revenue - right.revenue ||

@@ -224,8 +224,11 @@ function verifyShopifyOAuthHmac(originalUrl, providedHmac) {
 function buildShopifyInstallUrl(shopDomain, state, returnTo) {
     assertShopifyAppConfig();
     const url = new URL(`https://${shopDomain}/admin/oauth/authorize`);
+    const scopes = env.SHOPIFY_APP_SCOPES.split(',')
+        .map((scope) => scope.trim())
+        .filter(Boolean);
     url.searchParams.set('client_id', env.SHOPIFY_APP_API_KEY);
-    url.searchParams.set('scope', env.SHOPIFY_APP_SCOPES.join(','));
+    url.searchParams.set('scope', scopes.join(','));
     url.searchParams.set('redirect_uri', buildOAuthCallbackUrl());
     url.searchParams.set('state', state);
     if (returnTo) {
