@@ -1,31 +1,31 @@
 {
-  "displayName": "ROAS Radar __ENVIRONMENT__ Data Quality Alerts",
-  "documentation": {
-    "content": "Identity graph data quality thresholds were breached. Review `/api/reporting/reconciliation` and follow the runbook: __RUNBOOK_URL_DATA_QUALITY__",
-    "mimeType": "text/markdown"
-  },
-  "combiner": "OR",
-  "enabled": true,
-  "severity": "WARNING",
-  "notificationChannels": __ALERT_NOTIFICATION_CHANNELS__,
-  "conditions": [
-    {
-      "displayName": "Any data quality alert is emitted in 10 minutes",
-      "conditionThreshold": {
-        "filter": "metric.type=\"logging.googleapis.com/user/roas_data_quality_alerts\" resource.type=\"cloud_run_revision\"",
-        "comparison": "COMPARISON_GT",
-        "thresholdValue": 0,
-        "duration": "600s",
-        "aggregations": [
-          {
-            "alignmentPeriod": "600s",
-            "perSeriesAligner": "ALIGN_SUM"
-          }
-        ],
-        "trigger": {
-          "count": 1
-        }
-      }
-    }
-  ]
+	"displayName": "ROAS Radar __ENVIRONMENT__ Data Quality Alerts",
+	"documentation": {
+		"content": "Identity graph data quality thresholds were breached. Review `/api/reporting/reconciliation` and follow the runbook: __RUNBOOK_URL_DATA_QUALITY__",
+		"mimeType": "text/markdown"
+	},
+	"combiner": "OR",
+	"enabled": true,
+	"severity": "WARNING",
+	"notificationChannels": "__ALERT_NOTIFICATION_CHANNELS__",
+	"conditions": [
+		{
+			"displayName": "Any data quality alert is emitted in 10 minutes",
+			"conditionThreshold": {
+				"filter": "metric.type=\"logging.googleapis.com/user/roas_data_quality_alerts\" resource.type=\"cloud_run_revision\"",
+				"comparison": "COMPARISON_GT",
+				"thresholdValue": 0,
+				"duration": "600s",
+				"aggregations": [
+					{
+						"alignmentPeriod": "600s",
+						"perSeriesAligner": "ALIGN_SUM"
+					}
+				],
+				"trigger": {
+					"count": 1
+				}
+			}
+		}
+	]
 }

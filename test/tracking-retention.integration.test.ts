@@ -304,12 +304,14 @@ test('runSessionAttributionRetention deletes expired unprotected session capture
     emitLogs: false
   });
 
-  assert.deepEqual(result, {
-    cutoffAt: RETENTION_CUTOFF,
-    batchSize: 1,
-    maxBatches: 2,
-    batchesRun: 2,
-    deletedTouchEvents: 2,
+	  assert.deepEqual(result, {
+	    cutoffAt: RETENTION_CUTOFF,
+	    ga4FallbackCutoffAt: RETENTION_CUTOFF,
+	    batchSize: 1,
+	    maxBatches: 2,
+	    batchesRun: 2,
+	    deletedGa4FallbackCandidates: 0,
+	    deletedTouchEvents: 2,
     deletedSessions: 2,
     protectedSessionsSkipped: 1,
     protectedTouchEventsSkipped: 1

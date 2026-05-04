@@ -1,61 +1,63 @@
-import pg from 'pg';
+import pg from "pg";
 
 const { Client } = pg;
 
 const REQUIRED_INDEXES = {
-  shopify_receipts: 'shopify_webhook_receipts_payload_lookup_idx',
-  shopify_orders: 'shopify_orders_payload_lookup_idx',
-  meta_connections: 'meta_ads_connections_raw_account_lookup_idx',
-  meta_spend: 'meta_ads_raw_spend_records_payload_lookup_idx',
-  google_connections: 'google_ads_connections_raw_customer_lookup_idx',
-  google_spend: 'google_ads_raw_spend_records_payload_lookup_idx'
+	shopify_receipts: "shopify_webhook_receipts_payload_lookup_idx",
+	shopify_orders: "shopify_orders_payload_lookup_idx",
+	meta_connections: "meta_ads_connections_raw_account_lookup_idx",
+	meta_spend: "meta_ads_raw_spend_records_payload_lookup_idx",
+	google_connections: "google_ads_connections_raw_customer_lookup_idx",
+	google_spend: "google_ads_raw_spend_records_payload_lookup_idx",
 };
 
 function requireDatabaseUrl() {
-  if (!process.env.DATABASE_URL) {
-    throw new Error('DATABASE_URL is required for raw payload query plan verification');
-  }
+	if (!process.env.DATABASE_URL) {
+		throw new Error(
+			"DATABASE_URL is required for raw payload query plan verification",
+		);
+	}
 
-  return process.env.DATABASE_URL;
+	return process.env.DATABASE_URL;
 }
 
 function collectPlanNodes(node, names = []) {
-  if (!node || typeof node !== 'object') {
-    return names;
-  }
+	if (!node || typeof node !== "object") {
+		return names;
+	}
 
-  if (typeof node['Index Name'] === 'string') {
-    names.push(node['Index Name']);
-  }
+	if (typeof node["Index Name"] === "string") {
+		names.push(node["Index Name"]);
+	}
 
-  const plans = node.Plans;
+	const plans = node.Plans;
 
-  if (Array.isArray(plans)) {
-    for (const plan of plans) {
-      collectPlanNodes(plan, names);
-    }
-  }
+	if (Array.isArray(plans)) {
+		for (const plan of plans) {
+			collectPlanNodes(plan, names);
+		}
+	}
 
-  return names;
+	return names;
 }
 
 async function explainUsesIndex(client, label, sql, params, expectedIndex) {
-  const result = await client.query(`EXPLAIN (FORMAT JSON) ${sql}`, params);
-  const planRoot = result.rows[0]['QUERY PLAN'][0]?.Plan;
-  const indexNames = collectPlanNodes(planRoot);
+	const result = await client.query(`EXPLAIN (FORMAT JSON) ${sql}`, params);
+	const planRoot = result.rows[0]["QUERY PLAN"][0]?.Plan;
+	const indexNames = collectPlanNodes(planRoot);
 
-  if (!indexNames.includes(expectedIndex)) {
-    throw new Error(
-      `${label} did not use ${expectedIndex}. Planner used: ${indexNames.length > 0 ? indexNames.join(', ') : 'no index'}`
-    );
-  }
+	if (!indexNames.includes(expectedIndex)) {
+		throw new Error(
+			`${label} did not use ${expectedIndex}. Planner used: ${indexNames.length > 0 ? indexNames.join(", ") : "no index"}`,
+		);
+	}
 
-  process.stdout.write(`${label}: ${expectedIndex}\n`);
+	process.stdout.write(`${label}: ${expectedIndex}\n`);
 }
 
 async function seedShopifyRawTables(client, tag) {
-  await client.query(
-    `
+	await client.query(
+		`
       INSERT INTO shopify_orders (
         shopify_order_id,
         shopify_order_number,
@@ -83,11 +85,11 @@ async function seedShopifyRawTables(client, tag) {
         jsonb_build_object('id', $1 || '-order-' || gs::text, 'ordinal', gs)
       FROM generate_series(1, 5000) AS gs
     `,
-    [tag]
-  );
+		[tag],
+	);
 
-  await client.query(
-    `
+	await client.query(
+		`
       INSERT INTO shopify_webhook_receipts (
         topic,
         shop_domain,
@@ -113,13 +115,13 @@ async function seedShopifyRawTables(client, tag) {
         $1 || '-order-' || (gs % 250)::text
       FROM generate_series(1, 5000) AS gs
     `,
-    [tag]
-  );
+		[tag],
+	);
 }
 
 async function seedMetaRawTables(client, tag) {
-  await client.query(
-    `
+	await client.query(
+		`
       INSERT INTO meta_ads_connections (
         id,
         ad_account_id,
@@ -154,11 +156,11 @@ async function seedMetaRawTables(client, tag) {
       )
       ON CONFLICT (id) DO NOTHING
     `,
-    [tag]
-  );
+		[tag],
+	);
 
-  await client.query(
-    `
+	await client.query(
+		`
       INSERT INTO meta_ads_connections (
         id,
         ad_account_id,
@@ -193,11 +195,11 @@ async function seedMetaRawTables(client, tag) {
       FROM generate_series(1, 3000) AS gs
       ON CONFLICT (id) DO NOTHING
     `,
-    [tag]
-  );
+		[tag],
+	);
 
-  await client.query(
-    `
+	await client.query(
+		`
       INSERT INTO meta_ads_sync_jobs (
         id,
         connection_id,
@@ -207,11 +209,11 @@ async function seedMetaRawTables(client, tag) {
       )
       VALUES (91001, 91001, current_date, 'completed', now())
       ON CONFLICT (id) DO NOTHING
-    `
-  );
+    `,
+	);
 
-  await client.query(
-    `
+	await client.query(
+		`
       INSERT INTO meta_ads_raw_spend_records (
         connection_id,
         sync_job_id,
@@ -247,13 +249,13 @@ async function seedMetaRawTables(client, tag) {
         md5(($1 || '-meta-row-' || gs::text))
       FROM generate_series(1, 8000) AS gs
     `,
-    [tag]
-  );
+		[tag],
+	);
 }
 
 async function seedGoogleRawTables(client, tag) {
-  await client.query(
-    `
+	await client.query(
+		`
       INSERT INTO google_ads_connections (
         id,
         customer_id,
@@ -290,11 +292,11 @@ async function seedGoogleRawTables(client, tag) {
       )
       ON CONFLICT (id) DO NOTHING
     `,
-    [tag]
-  );
+		[tag],
+	);
 
-  await client.query(
-    `
+	await client.query(
+		`
       INSERT INTO google_ads_connections (
         id,
         customer_id,
@@ -331,11 +333,11 @@ async function seedGoogleRawTables(client, tag) {
       FROM generate_series(1, 3000) AS gs
       ON CONFLICT (id) DO NOTHING
     `,
-    [tag]
-  );
+		[tag],
+	);
 
-  await client.query(
-    `
+	await client.query(
+		`
       INSERT INTO google_ads_sync_jobs (
         id,
         connection_id,
@@ -345,11 +347,11 @@ async function seedGoogleRawTables(client, tag) {
       )
       VALUES (92001, 92001, current_date, 'completed', now())
       ON CONFLICT (id) DO NOTHING
-    `
-  );
+    `,
+	);
 
-  await client.query(
-    `
+	await client.query(
+		`
       INSERT INTO google_ads_raw_spend_records (
         connection_id,
         sync_job_id,
@@ -385,34 +387,34 @@ async function seedGoogleRawTables(client, tag) {
         md5(($1 || '-google-row-' || gs::text))
       FROM generate_series(1, 8000) AS gs
     `,
-    [tag]
-  );
+		[tag],
+	);
 }
 
 async function main() {
-  const client = new Client({ connectionString: requireDatabaseUrl() });
-  const verificationTag = `raw-plan-${Date.now()}`;
+	const client = new Client({ connectionString: requireDatabaseUrl() });
+	const verificationTag = `raw-plan-${Date.now()}`;
 
-  await client.connect();
+	await client.connect();
 
-  try {
-    await client.query('BEGIN');
+	try {
+		await client.query("BEGIN");
 
-    await seedShopifyRawTables(client, verificationTag);
-    await seedMetaRawTables(client, verificationTag);
-    await seedGoogleRawTables(client, verificationTag);
+		await seedShopifyRawTables(client, verificationTag);
+		await seedMetaRawTables(client, verificationTag);
+		await seedGoogleRawTables(client, verificationTag);
 
-    await client.query('ANALYZE shopify_webhook_receipts');
-    await client.query('ANALYZE shopify_orders');
-    await client.query('ANALYZE meta_ads_connections');
-    await client.query('ANALYZE meta_ads_raw_spend_records');
-    await client.query('ANALYZE google_ads_connections');
-    await client.query('ANALYZE google_ads_raw_spend_records');
+		await client.query("ANALYZE shopify_webhook_receipts");
+		await client.query("ANALYZE shopify_orders");
+		await client.query("ANALYZE meta_ads_connections");
+		await client.query("ANALYZE meta_ads_raw_spend_records");
+		await client.query("ANALYZE google_ads_connections");
+		await client.query("ANALYZE google_ads_raw_spend_records");
 
-    await explainUsesIndex(
-      client,
-      'shopify_receipts_lookup',
-      `
+		await explainUsesIndex(
+			client,
+			"shopify_receipts_lookup",
+			`
         SELECT id
         FROM shopify_webhook_receipts
         WHERE payload_source = $1
@@ -420,14 +422,14 @@ async function main() {
         ORDER BY received_at DESC
         LIMIT 20
       `,
-      ['shopify_webhook', `${verificationTag}-order-7`],
-      REQUIRED_INDEXES.shopify_receipts
-    );
+			["shopify_webhook", `${verificationTag}-order-7`],
+			REQUIRED_INDEXES.shopify_receipts,
+		);
 
-    await explainUsesIndex(
-      client,
-      'shopify_orders_lookup',
-      `
+		await explainUsesIndex(
+			client,
+			"shopify_orders_lookup",
+			`
         SELECT id
         FROM shopify_orders
         WHERE payload_source = $1
@@ -435,14 +437,14 @@ async function main() {
         ORDER BY payload_received_at DESC
         LIMIT 1
       `,
-      ['shopify_order', `${verificationTag}-order-7`],
-      REQUIRED_INDEXES.shopify_orders
-    );
+			["shopify_order", `${verificationTag}-order-7`],
+			REQUIRED_INDEXES.shopify_orders,
+		);
 
-    await explainUsesIndex(
-      client,
-      'meta_connection_lookup',
-      `
+		await explainUsesIndex(
+			client,
+			"meta_connection_lookup",
+			`
         SELECT id
         FROM meta_ads_connections
         WHERE raw_account_source = $1
@@ -450,14 +452,14 @@ async function main() {
         ORDER BY raw_account_received_at DESC
         LIMIT 1
       `,
-      ['meta_ads_account', `${verificationTag}-meta-account`],
-      REQUIRED_INDEXES.meta_connections
-    );
+			["meta_ads_account", `${verificationTag}-meta-account`],
+			REQUIRED_INDEXES.meta_connections,
+		);
 
-    await explainUsesIndex(
-      client,
-      'meta_spend_lookup',
-      `
+		await explainUsesIndex(
+			client,
+			"meta_spend_lookup",
+			`
         SELECT id
         FROM meta_ads_raw_spend_records
         WHERE payload_source = $1
@@ -465,14 +467,14 @@ async function main() {
         ORDER BY payload_received_at DESC
         LIMIT 20
       `,
-      ['meta_ads_insights', `${verificationTag}-meta-campaign-17`],
-      REQUIRED_INDEXES.meta_spend
-    );
+			["meta_ads_insights", `${verificationTag}-meta-campaign-17`],
+			REQUIRED_INDEXES.meta_spend,
+		);
 
-    await explainUsesIndex(
-      client,
-      'google_connection_lookup',
-      `
+		await explainUsesIndex(
+			client,
+			"google_connection_lookup",
+			`
         SELECT id
         FROM google_ads_connections
         WHERE raw_customer_source = $1
@@ -480,14 +482,14 @@ async function main() {
         ORDER BY raw_customer_received_at DESC
         LIMIT 1
       `,
-      ['google_ads_customer', `${verificationTag}-google-customer`],
-      REQUIRED_INDEXES.google_connections
-    );
+			["google_ads_customer", `${verificationTag}-google-customer`],
+			REQUIRED_INDEXES.google_connections,
+		);
 
-    await explainUsesIndex(
-      client,
-      'google_spend_lookup',
-      `
+		await explainUsesIndex(
+			client,
+			"google_spend_lookup",
+			`
         SELECT id
         FROM google_ads_raw_spend_records
         WHERE payload_source = $1
@@ -495,16 +497,18 @@ async function main() {
         ORDER BY payload_received_at DESC
         LIMIT 20
       `,
-      ['google_ads_api', `${verificationTag}-google-campaign-17`],
-      REQUIRED_INDEXES.google_spend
-    );
-  } finally {
-    await client.query('ROLLBACK');
-    await client.end();
-  }
+			["google_ads_api", `${verificationTag}-google-campaign-17`],
+			REQUIRED_INDEXES.google_spend,
+		);
+	} finally {
+		await client.query("ROLLBACK");
+		await client.end();
+	}
 }
 
 main().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
-  process.exit(1);
+	process.stderr.write(
+		`${error instanceof Error ? error.stack : String(error)}\n`,
+	);
+	process.exit(1);
 });

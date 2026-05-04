@@ -1,180 +1,186 @@
 import React, {
-  Suspense,
-  lazy,
-  startTransition,
-  useCallback,
-  useDeferredValue,
-  useEffect,
-  useMemo,
-  useState,
-  type FormEvent
-} from 'react';
+	Suspense,
+	lazy,
+	startTransition,
+	useCallback,
+	useDeferredValue,
+	useEffect,
+	useMemo,
+	useState,
+	type FormEvent,
+} from "react";
 import {
-  ORDER_ATTRIBUTION_BACKFILL_DEFAULT_LIMIT,
-  type OrderAttributionBackfillSubmittedOptions,
-  orderAttributionBackfillRequestSchema
-} from '../../packages/attribution-schema/index.js';
+	ORDER_ATTRIBUTION_BACKFILL_DEFAULT_LIMIT,
+	type OrderAttributionBackfillSubmittedOptions,
+	orderAttributionBackfillRequestSchema,
+} from "../../packages/attribution-schema/index.js";
 
-import {
-  backfillShopifyOrders,
-  clearStoredAuthToken,
-  createUser,
-  enqueueOrderAttributionBackfill,
-  fetchAppSettings,
-  fetchCampaigns,
-  fetchCurrentUser,
-  fetchIdentityHealthConflicts,
-  fetchIdentityHealthOverview,
-  fetchGoogleAdsStatus,
-  fetchMetaAdsStatus,
-  fetchOrderDetails,
-  fetchOrderAttributionBackfillJob,
-  fetchOrders,
-  fetchSpendDetails,
-  fetchShopifyConnection,
-  fetchSummary,
-  fetchTimeseries,
-  fetchUsers,
-  getStoredAuthToken,
-  login,
-  logout,
-  reconcileGoogleAds,
-  recoverShopifyAttributionHints,
-  storeAuthToken,
-  syncShopifyWebhooks,
-  startGoogleAdsOauth,
-  startMetaAdsOauth,
-  syncGoogleAds,
-  syncMetaAds,
-  updateAppSettings,
-  updateGoogleAdsConfig,
-  updateMetaAdsConfig,
-  type AppSettings,
-  type AuthUser,
-  type CampaignRow,
-  type CreateUserPayload,
-  type GoogleAdsConfigSummary,
-  type GoogleAdsStatusResponse,
-  type IdentityConflictsResponse,
-  type IdentityHealthFilters,
-  type IdentityHealthOverviewResponse,
-  type MetaAdsConnection,
-  type MetaAdsConfigSummary,
-  type OrderAttributionBackfillEnqueueResponse,
-  type OrderAttributionBackfillJobResponse,
-  type OrderDetailsResponse,
-  type OrderRow,
-  type ReportingFilters,
-  type ShopifyConnectionResponse,
-  type ShopifyBackfillResponse,
-  type ShopifyAttributionRecoveryResponse,
-  type SpendDetailChannelGroup,
-  type SummaryTotals,
-  type TimeseriesGroupBy,
-  type TimeseriesPoint
-} from './lib/api';
-import { isAttributionTier } from './lib/attributionTier';
-import {
-  formatCurrency,
-  formatDateLabel,
-  formatDateTimeLabel,
-  formatNumber,
-  formatPercent
-} from './lib/format';
 import AuthenticatedAppShell, {
-  type AppShellBreadcrumb,
-  type AppShellNavItem
-} from './components/AuthenticatedAppShell';
-import TitleBarTimestamp from './components/TitleBarTimestamp';
+	type AppShellBreadcrumb,
+	type AppShellNavItem,
+} from "./components/AuthenticatedAppShell";
 import {
-  AuthGate,
-  Banner,
-  Button,
-  ButtonRow,
-  Field,
-  FieldGrid,
-  Form,
-  Input,
-  Panel,
-  SectionState,
-  Select
-} from './components/AuthenticatedUi';
+	AuthGate,
+	Banner,
+	Button,
+	ButtonRow,
+	Field,
+	FieldGrid,
+	Form,
+	Input,
+	Panel,
+	SectionState,
+	Select,
+} from "./components/AuthenticatedUi";
+import TitleBarTimestamp from "./components/TitleBarTimestamp";
+import {
+	type AppSettings,
+	type AuthUser,
+	type CampaignRow,
+	type CreateUserPayload,
+	type GoogleAdsConfigSummary,
+	type GoogleAdsStatusResponse,
+	type IdentityConflictsResponse,
+	type IdentityHealthFilters,
+	type IdentityHealthOverviewResponse,
+	type MetaAdsConfigSummary,
+	type MetaAdsConnection,
+	type OrderAttributionBackfillEnqueueResponse,
+	type OrderAttributionBackfillJobResponse,
+	type OrderDetailsResponse,
+	type OrderRow,
+	type ReportingFilters,
+	type ShopifyAttributionRecoveryResponse,
+	type ShopifyBackfillResponse,
+	type ShopifyConnectionResponse,
+	type SpendDetailChannelGroup,
+	type SummaryTotals,
+	type TimeseriesGroupBy,
+	type TimeseriesPoint,
+	backfillShopifyOrders,
+	clearStoredAuthToken,
+	createUser,
+	enqueueOrderAttributionBackfill,
+	fetchAppSettings,
+	fetchCampaigns,
+	fetchCurrentUser,
+	fetchGoogleAdsStatus,
+	fetchIdentityHealthConflicts,
+	fetchIdentityHealthOverview,
+	fetchMetaAdsStatus,
+	fetchOrderAttributionBackfillJob,
+	fetchOrderDetails,
+	fetchOrders,
+	fetchShopifyConnection,
+	fetchSpendDetails,
+	fetchSummary,
+	fetchTimeseries,
+	fetchUsers,
+	getStoredAuthToken,
+	login,
+	logout,
+	reconcileGoogleAds,
+	recoverShopifyAttributionHints,
+	startGoogleAdsOauth,
+	startMetaAdsOauth,
+	storeAuthToken,
+	syncGoogleAds,
+	syncMetaAds,
+	syncShopifyWebhooks,
+	updateAppSettings,
+	updateGoogleAdsConfig,
+	updateMetaAdsConfig,
+} from "./lib/api";
+import {
+	formatCurrency,
+	formatDateLabel,
+	formatDateTimeLabel,
+	formatNumber,
+	formatPercent,
+} from "./lib/format";
+import { isAttributionTier } from "./lib/attributionTier";
 
 const ReportingDashboard = lazy(() => import('./components/ReportingDashboard'));
+const MetaOrderValueView = lazy(() => import('./components/MetaOrderValueView'));
 const OrderDetailsView = lazy(() => import('./components/OrderDetailsView'));
 const SettingsAdminView = lazy(() => import('./components/SettingsAdminView'));
 const IdentityGraphHealthView = lazy(() => import('./components/IdentityGraphHealthView'));
 
 type AsyncSection<T> = {
-  data: T | null;
-  loading: boolean;
-  error: string | null;
+	data: T | null;
+	loading: boolean;
+	error: string | null;
 };
 
 type DashboardState = {
-  summary: AsyncSection<SummaryTotals>;
-  campaigns: AsyncSection<CampaignRow[]>;
-  timeseries: AsyncSection<TimeseriesPoint[]>;
-  orders: AsyncSection<OrderRow[]>;
-  spendDetails: AsyncSection<SpendDetailChannelGroup[]>;
+	summary: AsyncSection<SummaryTotals>;
+	campaigns: AsyncSection<CampaignRow[]>;
+	timeseries: AsyncSection<TimeseriesPoint[]>;
+	orders: AsyncSection<OrderRow[]>;
+	spendDetails: AsyncSection<SpendDetailChannelGroup[]>;
 };
 
 type ActionFeedback = {
-  context: string | null;
-  loading: string | null;
-  error: string | null;
-  message: string | null;
+	context: string | null;
+	loading: string | null;
+	error: string | null;
+	message: string | null;
 };
 
 type AuthState = {
-  checking: boolean;
-  user: AuthUser | null;
-  error: string | null;
+	checking: boolean;
+	user: AuthUser | null;
+	error: string | null;
 };
 
 type MetaConnectionState = {
-  config: MetaAdsConfigSummary;
-  connection: MetaAdsConnection | null;
+	config: MetaAdsConfigSummary;
+	connection: MetaAdsConnection | null;
 };
 
 type MetaConfigForm = {
-  appId: string;
-  appSecret: string;
-  appBaseUrl: string;
-  appScopes: string;
-  adAccountId: string;
+	appId: string;
+	appSecret: string;
+	appBaseUrl: string;
+	appScopes: string;
+	adAccountId: string;
 };
 
 type GoogleConfigForm = {
-  clientId: string;
-  clientSecret: string;
-  developerToken: string;
-  appBaseUrl: string;
-  appScopes: string;
+	clientId: string;
+	clientSecret: string;
+	developerToken: string;
+	appBaseUrl: string;
+	appScopes: string;
 };
 
 type GoogleConnectForm = {
-  customerId: string;
-  loginCustomerId: string;
+	customerId: string;
+	loginCustomerId: string;
 };
 
 type GoogleConnectionState = {
-  config: GoogleAdsConfigSummary;
-  connection: GoogleAdsStatusResponse['connection'];
-  reconciliation: GoogleAdsStatusResponse['reconciliation'];
+	config: GoogleAdsConfigSummary;
+	connection: GoogleAdsStatusResponse["connection"];
+	reconciliation: GoogleAdsStatusResponse["reconciliation"];
 };
 
 type SettingsForm = {
-  reportingTimezone: string;
+	reportingTimezone: string;
 };
 
-type AppPage = 'dashboard' | 'identity-health' | 'settings' | 'order-details';
+type AppPage = 'dashboard' | 'meta-order-value' | 'identity-health' | 'settings' | 'order-details';
 
 const AUTHENTICATED_NAV_ITEMS: AppShellNavItem[] = [
   {
     key: 'dashboard',
     label: 'Dashboard',
     description: 'Summary metrics, campaign performance, time-based revenue trends, and attributed order rows.'
+  },
+  {
+    key: 'meta-order-value',
+    label: 'Meta order value',
+    description: 'Campaign-day Meta attributed revenue, spend, ROAS, and canonical action-type breakdowns.'
   },
   {
     key: 'identity-health',
@@ -188,106 +194,141 @@ const AUTHENTICATED_NAV_ITEMS: AppShellNavItem[] = [
   }
 ];
 
-const DEFAULT_REPORTING_TIMEZONE = 'America/Los_Angeles';
-const DEFAULT_GROUP_BY: TimeseriesGroupBy = 'day';
-const ORDER_ATTRIBUTION_BACKFILL_JOB_STORAGE_KEY = 'roas-radar.order-attribution-backfill.latest-job-id';
+const DEFAULT_REPORTING_TIMEZONE = "America/Los_Angeles";
+const DEFAULT_GROUP_BY: TimeseriesGroupBy = "day";
+const ORDER_ATTRIBUTION_BACKFILL_JOB_STORAGE_KEY =
+	"roas-radar.order-attribution-backfill.latest-job-id";
 const ORDER_ATTRIBUTION_BACKFILL_POLL_INTERVAL_MS = 5000;
 const REPORTING_TIMEZONE_OPTIONS = [
-  'America/Los_Angeles',
-  'America/Denver',
-  'America/Chicago',
-  'America/New_York',
-  'America/Phoenix',
-  'America/Anchorage',
-  'Pacific/Honolulu',
-  'UTC',
-  'PST',
-  'PT'
+	"America/Los_Angeles",
+	"America/Denver",
+	"America/Chicago",
+	"America/New_York",
+	"America/Phoenix",
+	"America/Anchorage",
+	"Pacific/Honolulu",
+	"UTC",
+	"PST",
+	"PT",
 ] as const;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 const PRESETS = [
-  { label: 'Today', value: (reportingTimezone: string) => buildRange(1, reportingTimezone) },
-  { label: 'Yesterday', value: (reportingTimezone: string) => buildSingleDayRange(-1, reportingTimezone) },
-  { label: 'Last 7D', value: (reportingTimezone: string) => buildRange(7, reportingTimezone) },
-  { label: 'Last 30D', value: (reportingTimezone: string) => buildRange(30, reportingTimezone) },
-  { label: 'Last 90D', value: (reportingTimezone: string) => buildRange(90, reportingTimezone) }
+	{
+		label: "Today",
+		value: (reportingTimezone: string) => buildRange(1, reportingTimezone),
+	},
+	{
+		label: "Yesterday",
+		value: (reportingTimezone: string) =>
+			buildSingleDayRange(-1, reportingTimezone),
+	},
+	{
+		label: "Last 7D",
+		value: (reportingTimezone: string) => buildRange(7, reportingTimezone),
+	},
+	{
+		label: "Last 30D",
+		value: (reportingTimezone: string) => buildRange(30, reportingTimezone),
+	},
+	{
+		label: "Last 90D",
+		value: (reportingTimezone: string) => buildRange(90, reportingTimezone),
+	},
 ] as const;
 
-function formatDateInput(date: Date, reportingTimezone = DEFAULT_REPORTING_TIMEZONE): string {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: reportingTimezone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit'
-  }).formatToParts(date);
+function formatDateInput(
+	date: Date,
+	reportingTimezone = DEFAULT_REPORTING_TIMEZONE,
+): string {
+	const parts = new Intl.DateTimeFormat("en-CA", {
+		timeZone: reportingTimezone,
+		year: "numeric",
+		month: "2-digit",
+		day: "2-digit",
+	}).formatToParts(date);
 
-  const year = parts.find((part) => part.type === 'year')?.value;
-  const month = parts.find((part) => part.type === 'month')?.value;
-  const day = parts.find((part) => part.type === 'day')?.value;
+	const year = parts.find((part) => part.type === "year")?.value;
+	const month = parts.find((part) => part.type === "month")?.value;
+	const day = parts.find((part) => part.type === "day")?.value;
 
-  if (!year || !month || !day) {
-    return date.toISOString().slice(0, 10);
-  }
+	if (!year || !month || !day) {
+		return date.toISOString().slice(0, 10);
+	}
 
-  return `${year}-${month}-${day}`;
+	return `${year}-${month}-${day}`;
 }
 
 function buildRange(
-  days: number,
-  reportingTimezone = DEFAULT_REPORTING_TIMEZONE
-): Pick<ReportingFilters, 'startDate' | 'endDate'> {
-  const end = new Date();
-  const start = new Date(end.getTime() - (days - 1) * MS_PER_DAY);
+	days: number,
+	reportingTimezone = DEFAULT_REPORTING_TIMEZONE,
+): Pick<ReportingFilters, "startDate" | "endDate"> {
+	const end = new Date();
+	const start = new Date(end.getTime() - (days - 1) * MS_PER_DAY);
 
-  return {
-    startDate: formatDateInput(start, reportingTimezone),
-    endDate: formatDateInput(end, reportingTimezone)
-  };
+	return {
+		startDate: formatDateInput(start, reportingTimezone),
+		endDate: formatDateInput(end, reportingTimezone),
+	};
 }
 
 function buildSingleDayRange(
-  offsetDays: number,
-  reportingTimezone = DEFAULT_REPORTING_TIMEZONE
-): Pick<ReportingFilters, 'startDate' | 'endDate'> {
-  const date = new Date(Date.now() + offsetDays * MS_PER_DAY);
-  const value = formatDateInput(date, reportingTimezone);
+	offsetDays: number,
+	reportingTimezone = DEFAULT_REPORTING_TIMEZONE,
+): Pick<ReportingFilters, "startDate" | "endDate"> {
+	const date = new Date(Date.now() + offsetDays * MS_PER_DAY);
+	const value = formatDateInput(date, reportingTimezone);
 
-  return {
-    startDate: value,
-    endDate: value
-  };
+	return {
+		startDate: value,
+		endDate: value,
+	};
 }
 
-function buildYesterdayDateInput(reportingTimezone = DEFAULT_REPORTING_TIMEZONE): string {
-  return buildSingleDayRange(-1, reportingTimezone).startDate;
+function buildYesterdayDateInput(
+	reportingTimezone = DEFAULT_REPORTING_TIMEZONE,
+): string {
+	return buildSingleDayRange(-1, reportingTimezone).startDate;
 }
 
-function buildAprilFirstDateInput(reportingTimezone = DEFAULT_REPORTING_TIMEZONE): string {
-  const currentYear = formatDateInput(new Date(), reportingTimezone).slice(0, 4);
-  return `${currentYear}-04-01`;
+function buildAprilFirstDateInput(
+	reportingTimezone = DEFAULT_REPORTING_TIMEZONE,
+): string {
+	const currentYear = formatDateInput(new Date(), reportingTimezone).slice(
+		0,
+		4,
+	);
+	return `${currentYear}-04-01`;
 }
 
-function normalizeReportingFilters(filters: ReportingFilters): ReportingFilters {
-  if (filters.startDate && filters.endDate && filters.startDate > filters.endDate) {
-    return {
-      ...filters,
-      endDate: filters.startDate
-    };
-  }
+function normalizeReportingFilters(
+	filters: ReportingFilters,
+): ReportingFilters {
+	if (
+		filters.startDate &&
+		filters.endDate &&
+		filters.startDate > filters.endDate
+	) {
+		return {
+			...filters,
+			endDate: filters.startDate,
+		};
+	}
 
-  return filters;
+	return filters;
 }
 
 const DASHBOARD_QUERY_PARAM_KEYS = ['startDate', 'endDate', 'source', 'campaign', 'attributionModel', 'attributionTier', 'groupBy'] as const;
 const REPORTING_FILTER_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
-const ATTRIBUTION_MODELS = new Set<NonNullable<ReportingFilters['attributionModel']>>([
-  'first_touch',
-  'last_touch',
-  'linear',
-  'time_decay',
-  'position_based',
-  'rule_based_weighted'
+const ATTRIBUTION_MODELS = new Set<
+	NonNullable<ReportingFilters["attributionModel"]>
+>([
+	"first_touch",
+	"last_touch",
+	"linear",
+	"time_decay",
+	"position_based",
+	"rule_based_weighted",
 ]);
 
 export function createDefaultReportingFilters(reportingTimezone = DEFAULT_REPORTING_TIMEZONE): ReportingFilters {
@@ -300,23 +341,30 @@ export function createDefaultReportingFilters(reportingTimezone = DEFAULT_REPORT
 }
 
 function isValidDateInput(value: string | null): value is string {
-  return Boolean(value && REPORTING_FILTER_DATE_PATTERN.test(value));
+	return Boolean(value && REPORTING_FILTER_DATE_PATTERN.test(value));
 }
 
 function isTimeseriesGroupBy(value: string | null): value is TimeseriesGroupBy {
-  return value === 'day' || value === 'source' || value === 'campaign';
+	return value === "day" || value === "source" || value === "campaign";
 }
 
-function isAttributionModel(value: string | null): value is NonNullable<ReportingFilters['attributionModel']> {
-  return Boolean(value && ATTRIBUTION_MODELS.has(value as NonNullable<ReportingFilters['attributionModel']>));
+function isAttributionModel(
+	value: string | null,
+): value is NonNullable<ReportingFilters["attributionModel"]> {
+	return Boolean(
+		value &&
+			ATTRIBUTION_MODELS.has(
+				value as NonNullable<ReportingFilters["attributionModel"]>,
+			),
+	);
 }
 
 export function readDashboardStateFromSearch(
-  search: string,
-  reportingTimezone = DEFAULT_REPORTING_TIMEZONE
+	search: string,
+	reportingTimezone = DEFAULT_REPORTING_TIMEZONE,
 ): {
-  filters: ReportingFilters;
-  groupBy: TimeseriesGroupBy;
+	filters: ReportingFilters;
+	groupBy: TimeseriesGroupBy;
 } {
   const params = new URLSearchParams(search);
   const defaults = createDefaultReportingFilters(reportingTimezone);
@@ -342,30 +390,30 @@ export function readDashboardStateFromSearch(
 }
 
 export function applyDashboardStateToSearch(
-  currentSearch: string,
-  filters: ReportingFilters,
-  groupBy: TimeseriesGroupBy
+	currentSearch: string,
+	filters: ReportingFilters,
+	groupBy: TimeseriesGroupBy,
 ): string {
-  const params = new URLSearchParams(currentSearch);
+	const params = new URLSearchParams(currentSearch);
 
-  for (const key of DASHBOARD_QUERY_PARAM_KEYS) {
-    params.delete(key);
-  }
+	for (const key of DASHBOARD_QUERY_PARAM_KEYS) {
+		params.delete(key);
+	}
 
-  params.set('startDate', filters.startDate);
-  params.set('endDate', filters.endDate);
+	params.set("startDate", filters.startDate);
+	params.set("endDate", filters.endDate);
 
-  if (filters.source?.trim()) {
-    params.set('source', filters.source.trim());
-  }
+	if (filters.source?.trim()) {
+		params.set("source", filters.source.trim());
+	}
 
-  if (filters.campaign?.trim()) {
-    params.set('campaign', filters.campaign.trim());
-  }
+	if (filters.campaign?.trim()) {
+		params.set("campaign", filters.campaign.trim());
+	}
 
-  if (filters.attributionModel?.trim()) {
-    params.set('attributionModel', filters.attributionModel.trim());
-  }
+	if (filters.attributionModel?.trim()) {
+		params.set("attributionModel", filters.attributionModel.trim());
+	}
 
   if (filters.attributionTier?.trim()) {
     params.set('attributionTier', filters.attributionTier.trim());
@@ -373,222 +421,241 @@ export function applyDashboardStateToSearch(
 
   params.set('groupBy', groupBy);
 
-  return params.toString();
+	return params.toString();
 }
 
 function readInitialDashboardState() {
-  if (typeof window === 'undefined') {
-    return {
-      filters: createDefaultReportingFilters(DEFAULT_REPORTING_TIMEZONE),
-      groupBy: DEFAULT_GROUP_BY
-    };
-  }
+	if (typeof window === "undefined") {
+		return {
+			filters: createDefaultReportingFilters(DEFAULT_REPORTING_TIMEZONE),
+			groupBy: DEFAULT_GROUP_BY,
+		};
+	}
 
-  return readDashboardStateFromSearch(window.location.search, DEFAULT_REPORTING_TIMEZONE);
+	return readDashboardStateFromSearch(
+		window.location.search,
+		DEFAULT_REPORTING_TIMEZONE,
+	);
 }
 
 function createLoadingSection<T>(): AsyncSection<T> {
-  return {
-    data: null,
-    loading: true,
-    error: null
-  };
+	return {
+		data: null,
+		loading: true,
+		error: null,
+	};
 }
 
 function createResolvedSection<T>(data: T): AsyncSection<T> {
-  return {
-    data,
-    loading: false,
-    error: null
-  };
+	return {
+		data,
+		loading: false,
+		error: null,
+	};
 }
 
 function createErroredSection<T>(message: string): AsyncSection<T> {
-  return {
-    data: null,
-    loading: false,
-    error: message
-  };
+	return {
+		data: null,
+		loading: false,
+		error: message,
+	};
 }
 
 function readStoredOrderAttributionBackfillJobId(): string | null {
-  if (typeof window === 'undefined') {
-    return null;
-  }
+	if (typeof window === "undefined") {
+		return null;
+	}
 
-  const value = window.localStorage.getItem(ORDER_ATTRIBUTION_BACKFILL_JOB_STORAGE_KEY)?.trim() ?? '';
-  return value || null;
+	const value =
+		window.localStorage
+			.getItem(ORDER_ATTRIBUTION_BACKFILL_JOB_STORAGE_KEY)
+			?.trim() ?? "";
+	return value || null;
 }
 
 function storeOrderAttributionBackfillJobId(jobId: string) {
-  if (typeof window === 'undefined') {
-    return;
-  }
+	if (typeof window === "undefined") {
+		return;
+	}
 
-  window.localStorage.setItem(ORDER_ATTRIBUTION_BACKFILL_JOB_STORAGE_KEY, jobId);
+	window.localStorage.setItem(
+		ORDER_ATTRIBUTION_BACKFILL_JOB_STORAGE_KEY,
+		jobId,
+	);
 }
 
 function useDashboardData(
-  filters: ReportingFilters,
-  groupBy: TimeseriesGroupBy,
-  enabled: boolean,
-  refreshKey: number
+	filters: ReportingFilters,
+	groupBy: TimeseriesGroupBy,
+	enabled: boolean,
+	refreshKey: number,
 ) {
-  const [state, setState] = useState<DashboardState>({
-    summary: createLoadingSection(),
-    campaigns: createLoadingSection(),
-    timeseries: createLoadingSection(),
-    orders: createLoadingSection(),
-    spendDetails: createLoadingSection()
-  });
+	const [state, setState] = useState<DashboardState>({
+		summary: createLoadingSection(),
+		campaigns: createLoadingSection(),
+		timeseries: createLoadingSection(),
+		orders: createLoadingSection(),
+		spendDetails: createLoadingSection(),
+	});
 
-  useEffect(() => {
-    void refreshKey;
+	useEffect(() => {
+		void refreshKey;
 
-    if (!enabled) {
-      setState({
-        summary: {
-          data: null,
-          loading: false,
-          error: null
-        },
-        campaigns: createResolvedSection<CampaignRow[]>([]),
-        timeseries: createResolvedSection<TimeseriesPoint[]>([]),
-        orders: createResolvedSection<OrderRow[]>([]),
-        spendDetails: createResolvedSection<SpendDetailChannelGroup[]>([])
-      });
-      return;
-    }
+		if (!enabled) {
+			setState({
+				summary: {
+					data: null,
+					loading: false,
+					error: null,
+				},
+				campaigns: createResolvedSection<CampaignRow[]>([]),
+				timeseries: createResolvedSection<TimeseriesPoint[]>([]),
+				orders: createResolvedSection<OrderRow[]>([]),
+				spendDetails: createResolvedSection<SpendDetailChannelGroup[]>([]),
+			});
+			return;
+		}
 
-    let cancelled = false;
+		let cancelled = false;
 
-    setState({
-      summary: createLoadingSection(),
-      campaigns: createLoadingSection(),
-      timeseries: createLoadingSection(),
-      orders: createLoadingSection(),
-      spendDetails: createLoadingSection()
-    });
+		setState({
+			summary: createLoadingSection(),
+			campaigns: createLoadingSection(),
+			timeseries: createLoadingSection(),
+			orders: createLoadingSection(),
+			spendDetails: createLoadingSection(),
+		});
 
-    fetchSummary(filters)
-      .then((response) => {
-        if (!cancelled) {
-          setState((current) => ({
-            ...current,
-            summary: createResolvedSection(response.totals)
-          }));
-        }
-      })
-      .catch((error: Error) => {
-        if (!cancelled) {
-          setState((current) => ({
-            ...current,
-            summary: createErroredSection(error.message)
-          }));
-        }
-      });
+		fetchSummary(filters)
+			.then((response) => {
+				if (!cancelled) {
+					setState((current) => ({
+						...current,
+						summary: createResolvedSection(response.totals),
+					}));
+				}
+			})
+			.catch((error: Error) => {
+				if (!cancelled) {
+					setState((current) => ({
+						...current,
+						summary: createErroredSection(error.message),
+					}));
+				}
+			});
 
-    fetchCampaigns(filters, 12)
-      .then((response) => {
-        if (!cancelled) {
-          setState((current) => ({
-            ...current,
-            campaigns: createResolvedSection(response.rows)
-          }));
-        }
-      })
-      .catch((error: Error) => {
-        if (!cancelled) {
-          setState((current) => ({
-            ...current,
-            campaigns: createErroredSection(error.message)
-          }));
-        }
-      });
+		fetchCampaigns(filters, 12)
+			.then((response) => {
+				if (!cancelled) {
+					setState((current) => ({
+						...current,
+						campaigns: createResolvedSection(response.rows),
+					}));
+				}
+			})
+			.catch((error: Error) => {
+				if (!cancelled) {
+					setState((current) => ({
+						...current,
+						campaigns: createErroredSection(error.message),
+					}));
+				}
+			});
 
-    fetchTimeseries(filters, groupBy)
-      .then((response) => {
-        if (!cancelled) {
-          setState((current) => ({
-            ...current,
-            timeseries: createResolvedSection(response.points)
-          }));
-        }
-      })
-      .catch((error: Error) => {
-        if (!cancelled) {
-          setState((current) => ({
-            ...current,
-            timeseries: createErroredSection(error.message)
-          }));
-        }
-      });
+		fetchTimeseries(filters, groupBy)
+			.then((response) => {
+				if (!cancelled) {
+					setState((current) => ({
+						...current,
+						timeseries: createResolvedSection(response.points),
+					}));
+				}
+			})
+			.catch((error: Error) => {
+				if (!cancelled) {
+					setState((current) => ({
+						...current,
+						timeseries: createErroredSection(error.message),
+					}));
+				}
+			});
 
-    fetchOrders(filters, 10)
-      .then((response) => {
-        if (!cancelled) {
-          setState((current) => ({
-            ...current,
-            orders: createResolvedSection(response.rows)
-          }));
-        }
-      })
-      .catch((error: Error) => {
-        if (!cancelled) {
-          setState((current) => ({
-            ...current,
-            orders: createErroredSection(error.message)
-          }));
-        }
-      });
+		fetchOrders(filters, 10)
+			.then((response) => {
+				if (!cancelled) {
+					setState((current) => ({
+						...current,
+						orders: createResolvedSection(response.rows),
+					}));
+				}
+			})
+			.catch((error: Error) => {
+				if (!cancelled) {
+					setState((current) => ({
+						...current,
+						orders: createErroredSection(error.message),
+					}));
+				}
+			});
 
-    fetchSpendDetails(filters)
-      .then((response) => {
-        if (!cancelled) {
-          setState((current) => ({
-            ...current,
-            spendDetails: createResolvedSection(response.groups)
-          }));
-        }
-      })
-      .catch((error: Error) => {
-        if (!cancelled) {
-          setState((current) => ({
-            ...current,
-            spendDetails: createErroredSection(error.message)
-          }));
-        }
-      });
+		fetchSpendDetails(filters)
+			.then((response) => {
+				if (!cancelled) {
+					setState((current) => ({
+						...current,
+						spendDetails: createResolvedSection(response.groups),
+					}));
+				}
+			})
+			.catch((error: Error) => {
+				if (!cancelled) {
+					setState((current) => ({
+						...current,
+						spendDetails: createErroredSection(error.message),
+					}));
+				}
+			});
 
-    return () => {
-      cancelled = true;
-    };
-  }, [enabled, filters, groupBy, refreshKey]);
+		return () => {
+			cancelled = true;
+		};
+	}, [enabled, filters, groupBy, refreshKey]);
 
-  return state;
+	return state;
 }
 
-function formatOptionalDateTime(value: string | null | undefined, reportingTimezone: string): string {
-  return value ? formatDateTimeLabel(value, reportingTimezone) : 'Not available';
+function formatOptionalDateTime(
+	value: string | null | undefined,
+	reportingTimezone: string,
+): string {
+	return value
+		? formatDateTimeLabel(value, reportingTimezone)
+		: "Not available";
 }
 
-function toBackfillOptionState(options: OrderAttributionBackfillSubmittedOptions) {
-  return {
-    dryRun: options.dryRun,
-    limit: String(options.limit),
-    webOrdersOnly: options.webOrdersOnly,
-    skipShopifyWriteback: options.skipShopifyWriteback
-  };
+function toBackfillOptionState(
+	options: OrderAttributionBackfillSubmittedOptions,
+) {
+	return {
+		dryRun: options.dryRun,
+		limit: String(options.limit),
+		webOrdersOnly: options.webOrdersOnly,
+		skipShopifyWriteback: options.skipShopifyWriteback,
+	};
 }
 
-function AuthenticatedViewFallback({ title, description }: { title: string; description: string }) {
-  return (
-    <Panel title={title} description={description} wide>
-      <SectionState loading empty={false} error={null} emptyLabel="">
-        <div />
-      </SectionState>
-    </Panel>
-  );
+function AuthenticatedViewFallback({
+	title,
+	description,
+}: { title: string; description: string }) {
+	return (
+		<Panel title={title} description={description} wide>
+			<SectionState loading empty={false} error={null} emptyLabel="">
+				<div />
+			</SectionState>
+		</Panel>
+	);
 }
 
 function App() {
@@ -1764,6 +1831,11 @@ function App() {
           { label: 'Authenticated app' },
           { label: 'Dashboard', current: true }
         ]
+      : currentPage === 'meta-order-value'
+        ? [
+            { label: 'Authenticated app' },
+            { label: 'Meta order value', current: true }
+          ]
       : currentPage === 'identity-health'
         ? [
             { label: 'Authenticated app' },
@@ -1835,6 +1907,19 @@ function App() {
             spendDetailsSection={dashboard.spendDetails}
             onOpenOrderDetails={(shopifyOrderId) => void openOrderDetails(shopifyOrderId)}
           />
+        </Suspense>
+      ) : null}
+
+      {currentPage === 'meta-order-value' ? (
+        <Suspense
+          fallback={
+            <AuthenticatedViewFallback
+              title="Meta order value"
+              description="Loading Meta-attributed revenue totals, date controls, and campaign-day rows."
+            />
+          }
+        >
+          <MetaOrderValueView reportingTimezone={reportingTimezone} />
         </Suspense>
       ) : null}
 

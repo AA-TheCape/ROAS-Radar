@@ -7,6 +7,7 @@ Use this document alongside:
 - `docs/marketing-dimensions.md` for channel taxonomy and canonicalization rules
 - `docs/visitor-identity-stitching.md` for deterministic identity-linking behavior
 - `docs/last-non-direct-touch-approval-matrix.md` for the approved primary-winner rule matrix and Shopify fallback caveats
+- `docs/ga4-fallback-attribution-contract-v1.md` for GA4 fallback eligibility, precedence, and confidence semantics
 - `docs/reporting-metrics.md` for KPI formulas used by the reporting APIs and dashboard
 
 ## Dashboard Interpretation Quick Start
@@ -188,16 +189,19 @@ Key fields:
 
 - `shopify_order_id`
 - `session_id`
+- `match_source`
 - `attribution_model`
 - `attributed_source`, `attributed_medium`, `attributed_campaign`, `attributed_content`, `attributed_term`
 - `attributed_click_id_type`, `attributed_click_id_value`
 - `confidence_score`
+- `confidence_label`
 - `attribution_reason`
 - `attributed_at`
 
 Interpretation notes:
 
 - this table stores the primary `last_touch` result used for single-row order summaries
+- `match_source` is the durable provenance field for how the primary result was sourced
 - analysts comparing models should use `attribution_order_credits` and `daily_reporting_metrics`, not just `attribution_results`
 
 ### `attribution_order_credits`
@@ -209,10 +213,12 @@ Key fields:
 - `shopify_order_id`
 - `attribution_model`
 - `touchpoint_position`
+- `match_source`
 - attributed channel fields and click IDs
 - `credit_weight`
 - `revenue_credit`
 - `is_primary`
+- `confidence_label`
 - `attribution_reason`
 
 Interpretation notes:
@@ -220,6 +226,7 @@ Interpretation notes:
 - this is the canonical multi-touch table for model comparison
 - `credit_weight` and `revenue_credit` can be fractional
 - an order contributes one full order across all rows within a model, but that order may be split across multiple touchpoints
+- `match_source` distinguishes deterministic, Shopify fallback, GA4 fallback, and unattributed provenance
 
 ### `daily_reporting_metrics`
 
@@ -311,12 +318,34 @@ Inside `deterministic_first_party`, the attribution worker resolves journeys in 
 - confidence score: `0.60`
 - attribution reason: `matched_by_customer_identity`
 
+`shopify_hint_fallback`
+
+- recovery-only synthetic fallback from Shopify order hints
+- only eligible when deterministic resolution produces no winner
+- confidence score: `0.55` with a supported click ID, `0.40` with canonical UTMs and no click ID
+- confidence label: `low`
+- attribution reason: `shopify_hint_derived`
+- `match_source = 'shopify_hint_fallback'`
+
+`ga4_fallback`
+
+- recovery-only GA4 fallback for Shopify web orders
+- only eligible when deterministic resolution produces no winner and Shopify hint fallback has no match
+- candidate timestamps after the order timestamp are ineligible
+- direct or empty GA4 candidates with no canonical UTMs and no click ID are ineligible
+- confidence score: `0.35` with a supported click ID, `0.25` with canonical UTMs and no click ID
+- confidence label: `low`
+- attribution reason: `ga4_fallback_derived`
+- `match_source = 'ga4_fallback'`
+
 `unattributed`
 
-- no eligible deterministic match was found
+- no eligible deterministic, Shopify fallback, or GA4 fallback match was found
 - the engine still creates one unattributed credit row so revenue is conserved across models
 - confidence score: `0.00`
+- confidence label: `none`
 - attribution reason: `unattributed`
+- `match_source = 'unattributed'`
 
 ### Attribution window and session selection
 
@@ -447,7 +476,6 @@ Do not infer these semantics from `attribution_reason`. Different reasons can ex
 - stitched identity fallback
 - GA4 fallback evidence
 - unattributed fallback
-- synthetic Shopify-hint fallback in recovery-only flows
 
 It does not tell you that a campaign is “better” or that one model is more correct than another.
 
@@ -464,6 +492,20 @@ Analyst expectations:
 
 Treat this as recovered attribution signal, not as evidence that a real tracked session was stitched successfully.
 
+### GA4 fallback is weaker than Shopify hint fallback
+
+When both deterministic resolution and Shopify synthetic fallback fail for an eligible Shopify web order, ROAS Radar may apply GA4 fallback attribution as a later recovery step.
+
+Analyst expectations:
+
+- this fallback uses `attribution_reason = ga4_fallback_derived`
+- it persists `match_source = 'ga4_fallback'`
+- it does not resolve to a real ROAS Radar session, so `session_id` remains `null`
+- it must not overwrite deterministic or Shopify synthetic fallback outcomes
+- current confidence is lower than Shopify synthetic fallback: `0.35` with a click ID, `0.25` without one
+
+Treat this as the weakest approved attributed recovery path before `unattributed`, not as first-party session proof.
+
 ### `confidence_score` is about match strength
 
 `confidence_score` reflects how strongly the order was linked to a journey:
@@ -471,9 +513,20 @@ Treat this as recovered attribution signal, not as evidence that a real tracked 
 - `1.00`: exact session or checkout-token evidence
 - `0.90`: cart-token evidence
 - `0.60`: stitched identity fallback
+- `0.55`: Shopify synthetic fallback with a supported click ID
+- `0.40`: Shopify synthetic fallback with canonical UTMs and no click ID
+- `0.35`: GA4 fallback with a supported click ID
+- `0.25`: GA4 fallback with canonical UTMs and no click ID
 - `0.00`: unattributed
 
 It is not a measure of channel performance, campaign quality, or model superiority.
+
+`confidence_label` is the grouped interpretation layer:
+
+- `high`: `1.00`, `0.90`
+- `medium`: `0.60`
+- `low`: `0.55`, `0.40`, `0.35`, `0.25`
+- `none`: `0.00`
 
 ### Summary, campaigns, timeseries, and orders endpoints read different shapes
 

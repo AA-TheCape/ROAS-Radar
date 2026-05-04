@@ -1,93 +1,66 @@
 # Cloud Run Pipelines
 
-## Managed Workloads
+Use this runbook when deploying or operating the scheduled Cloud Run workers in dev, staging, or production.
 
-The Cloud Run deploy pipeline manages:
+## Managed workloads
 
-- API service: `API_SERVICE_NAME`
-- Dashboard service: `DASHBOARD_SERVICE_NAME`
-- Attribution worker service: `WORKER_SERVICE_NAME`
-- Migrator job: `MIGRATOR_JOB_NAME`
-- Meta Ads metadata refresh job: `META_ADS_METADATA_JOB_NAME`
-- Google Ads metadata refresh job: `GOOGLE_ADS_METADATA_JOB_NAME`
+- Cloud Run services:
+  - `roas-radar-api`
+  - `roas-radar-dashboard`
+  - `roas-radar-attribution-worker`
+- Cloud Run Jobs:
+  - `roas-radar-migrate`
+  - `roas-radar-meta-ads-sync`
+  - `roas-radar-meta-order-value-sync`
+  - `roas-radar-meta-ads-metadata-refresh`
+  - `roas-radar-google-ads-metadata-refresh`
+  - `roas-radar-google-ads-sync`
+  - `roas-radar-session-retention`
+  - `roas-radar-data-quality`
+  - `roas-radar-identity-graph-backfill`
+  - `roas-radar-order-attribution-materialization`
+- Cloud Scheduler:
+  - one scheduler per recurring Cloud Run Job
 
-Metadata refresh runs are scheduled workloads. They are not part of the normal ad sync queue path.
+## Pre-deploy checks
 
-## Standard Deploy
+Run the backend verification contract from a clean Node 22 checkout in this order:
 
-Deploy the baseline Cloud Run workloads with:
+For staged releases, prefer:
 
-```bash
-./infra/cloud-run/deploy.sh
-```
+1. `sh infra/cloud-run/promote.sh staging`
+2. Validate `sh infra/cloud-run/smoke-test.sh staging`
+3. Confirm the smoke log shows `/api/reporting/meta-order-value` returning `401` without auth and succeeding with the reporting bearer token for the bounded `startDate` and `endDate` query
+4. Confirm the Meta order-value scheduler is active in non-prod with `sh infra/cloud-run/scheduler.sh staging meta-order-value status`
+5. After non-prod validation, `sh infra/cloud-run/promote.sh production`
+6. Validate `sh infra/cloud-run/smoke-test.sh production` and retain the same Meta order value smoke evidence for production promotion records
+7. Confirm the production scheduler with `sh infra/cloud-run/scheduler.sh production meta-order-value status`
 
-The deploy script reads the active `infra/cloud-run/environments/*.env` file and manages both services and jobs, including:
+Do not sign off staging or continue to production unless the smoke evidence includes the authenticated Meta order value response contract check.
 
-- `API_SERVICE_NAME`
-- `DASHBOARD_SERVICE_NAME`
-- `WORKER_SERVICE_NAME`
-- `MIGRATOR_JOB_NAME`
-- `META_ADS_METADATA_JOB_NAME`
-- `GOOGLE_ADS_METADATA_JOB_NAME`
+## Meta Scheduler Controls
 
-## Metadata Refresh Scheduler Controls
+- `META_ADS_ORDER_VALUE_SCHEDULER_PAUSED` controls whether deploys leave the hourly Meta order-value scheduler active or paused.
+- `META_ADS_ORDER_VALUE_SYNC_SCHEDULE` controls the Meta order-value Cloud Scheduler cron.
+- `META_ADS_SCHEDULER_ATTEMPT_DEADLINE`, `META_ADS_SCHEDULER_MAX_RETRY_ATTEMPTS`, `META_ADS_SCHEDULER_MIN_BACKOFF`, `META_ADS_SCHEDULER_MAX_BACKOFF`, and `META_ADS_SCHEDULER_MAX_DOUBLINGS` control Cloud Scheduler retry behavior.
+- `META_ADS_JOB_TIMEOUT_SECONDS` and `META_ADS_JOB_MAX_RETRIES` control the Cloud Run Job execution budget.
+- `META_ADS_ORDER_VALUE_SYNC_ENABLED` is the emergency kill switch for Meta order-value extraction without disabling the broader deploy surface.
+- `META_ADS_METADATA_SCHEDULER_NAME` and `GOOGLE_ADS_METADATA_SCHEDULER_NAME` identify the campaign metadata refresh schedulers created by deploys.
+- `META_ADS_METADATA_REFRESH_REQUESTED_BY` and `GOOGLE_ADS_METADATA_REFRESH_REQUESTED_BY` should appear in `campaign_metadata_sync_job_lifecycle` logs for scheduler-triggered refreshes.
 
-Cloud Scheduler owns the recurring metadata refresh triggers for the dedicated Cloud Run jobs:
+Recommended operating posture:
 
-- Meta Ads scheduler: `META_ADS_METADATA_SCHEDULER_NAME`
-- Google Ads scheduler: `GOOGLE_ADS_METADATA_SCHEDULER_NAME`
+- `dev`: scheduler paused
+- `staging`: scheduler active for hourly validation
+- `production`: scheduler active only after staging validation passes
 
-Per environment, define:
+## Rollback And Toggle
 
-- `META_ADS_METADATA_SCHEDULER_NAME`
-- `META_ADS_METADATA_SCHEDULE`
-- `META_ADS_METADATA_SCHEDULER_ENABLED`
-- `META_ADS_METADATA_REFRESH_REQUESTED_BY`
-- `GOOGLE_ADS_METADATA_SCHEDULER_NAME`
-- `GOOGLE_ADS_METADATA_SCHEDULE`
-- `GOOGLE_ADS_METADATA_SCHEDULER_ENABLED`
-- `GOOGLE_ADS_METADATA_REFRESH_REQUESTED_BY`
+1. If the issue is limited to Meta hourly ingestion, pause only the Meta scheduler:
+   `sh infra/cloud-run/scheduler.sh <environment> meta-order-value pause`
+2. If the scheduler should stay deployed but order-value extraction must stop, set `META_ADS_ORDER_VALUE_SYNC_ENABLED="false"` in the target environment file and rerun `sh infra/cloud-run/deploy.sh <environment>`.
+3. If the service rollout itself must be reverted, use `sh infra/cloud-run/rollback.sh <environment> <deploy-metadata-file> previous`.
+4. After remediation, resume the scheduler:
+   `sh infra/cloud-run/scheduler.sh <environment> meta-order-value resume`
 
-`infra/cloud-run/deploy.sh` creates the Cloud Scheduler jobs with `gcloud scheduler jobs create http`, points them at the metadata refresh job entrypoints, and applies the scheduler identity used in `requestedBy` logging.
-
-## Create Or Update Schedulers
-
-After the Cloud Run jobs exist, create or refresh the metadata schedulers by rerunning:
-
-```bash
-./infra/cloud-run/deploy.sh
-```
-
-The script will configure:
-
-- `META_ADS_METADATA_JOB_NAME` behind `META_ADS_METADATA_SCHEDULER_NAME`
-- `GOOGLE_ADS_METADATA_JOB_NAME` behind `GOOGLE_ADS_METADATA_SCHEDULER_NAME`
-
-This keeps scheduled metadata refresh outside the normal `meta-ads` and `google-ads` sync queues.
-
-## Pause And Resume
-
-To pause scheduled metadata refresh without disabling the Cloud Run jobs themselves:
-
-```bash
-gcloud scheduler jobs pause "$META_ADS_METADATA_SCHEDULER_NAME" --location "$GCP_REGION"
-gcloud scheduler jobs pause "$GOOGLE_ADS_METADATA_SCHEDULER_NAME" --location "$GCP_REGION"
-```
-
-To resume them:
-
-```bash
-gcloud scheduler jobs resume "$META_ADS_METADATA_SCHEDULER_NAME" --location "$GCP_REGION"
-gcloud scheduler jobs resume "$GOOGLE_ADS_METADATA_SCHEDULER_NAME" --location "$GCP_REGION"
-```
-
-Use pause when investigating noisy upstream failures or when a platform-specific incident requires holding only one metadata path. Resume after the incident is cleared and verify fresh `campaign_metadata_sync_job_lifecycle` completion logs.
-
-## Operator Checks
-
-After deploy or scheduler changes, verify:
-
-- the Cloud Run jobs for `META_ADS_METADATA_JOB_NAME` and `GOOGLE_ADS_METADATA_JOB_NAME` exist
-- the Cloud Scheduler jobs are present and target the expected region
-- `META_ADS_METADATA_REFRESH_REQUESTED_BY` and `GOOGLE_ADS_METADATA_REFRESH_REQUESTED_BY` appear in structured logs as `requestedBy`
-- the normal ad sync workers remain unchanged and do not trigger metadata refresh API calls on their own
+For upstream metadata quota incidents, pause the affected campaign metadata scheduler with `gcloud scheduler jobs pause`, then use `gcloud scheduler jobs resume` after `campaign_metadata_sync_job_lifecycle` logs show successful manual or scheduler refreshes.

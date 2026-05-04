@@ -5,18 +5,20 @@ This document publishes the team-approved primary-winner semantics for ROAS Rada
 Use this document alongside:
 
 - `docs/analytics-playbook.md` for reporting and attribution interpretation
+- `docs/ga4-fallback-attribution-contract-v1.md` for the approved GA4 fallback contract
 - `docs/visitor-identity-stitching.md` for deterministic candidate collection and identity fallback behavior
 - `docs/marketing-dimensions.md` for canonical source, medium, and click-ID interpretation rules
 
 ## Scope
 
-This matrix governs the primary deterministic winner written to `attribution_results` and the primary `last_touch` row in `attribution_order_credits`.
+This matrix governs the primary winner written to `attribution_results` and the primary `last_touch` row in `attribution_order_credits` across deterministic, Shopify synthetic fallback, GA4 fallback, and unattributed outcomes.
 
 It does not redefine:
 
 - fractional multi-touch credit rules for `linear`, `time_decay`, `position_based`, or `rule_based_weighted`
 - attribution-window configuration
 - Shopify synthetic-hint extraction rules beyond the recovery-only fallback semantics documented here
+- GA4 candidate ingestion or extraction rules beyond the fallback semantics documented here and in `docs/ga4-fallback-attribution-contract-v1.md`
 
 ## Approved Semantics
 
@@ -94,6 +96,29 @@ Caveats:
 - it is intended to recover signal when durable deterministic capture is missing, not to compete with deterministic evidence
 - reporting and downstream consumers must treat it as synthetic attribution, not as proof of a stitched or resolved session
 
+### 5. GA4 fallback semantics
+
+Approved behavior:
+
+- GA4 fallback is recovery-only fallback behavior after deterministic resolution and Shopify synthetic fallback both fail
+- it is considered only for Shopify web orders
+- it must never override a resolved deterministic winner
+- it must never override a Shopify-hint-derived fallback winner
+- GA4 fallback does not point to a real ROAS Radar session, so `session_id` remains `null`
+- the fallback row uses `attribution_reason = ga4_fallback_derived`
+- downstream surfaces must persist `match_source = 'ga4_fallback'`
+
+Current confidence semantics:
+
+- `0.35` when the GA4 fallback winner includes a supported click ID
+- `0.25` when the GA4 fallback winner has canonical UTMs but no click ID
+
+Caveats:
+
+- GA4 fallback may replace an otherwise unattributed outcome
+- a GA4 candidate with no canonical UTMs and no supported click ID is ineligible
+- reporting and downstream consumers must treat this as weaker recovered attribution than Shopify hint fallback
+
 ## Winner Selection Contract
 
 After deterministic candidate collection and deduplication:
@@ -120,6 +145,8 @@ Implications:
 | Same-timestamp deterministic collision | Stronger source precedence wins | `landing_session_id` and checkout evidence outrank cart and identity fallback |
 | Same-timestamp equal-precedence collision | Click-ID presence, then lexical `sessionId`, breaks the tie | Primary selection stays deterministic and reproducible |
 | No deterministic winner, Shopify hint present | Synthetic fallback may create attribution with `shopify_hint_derived` | Revenue can be recovered, but without a real ROAS Radar session link |
+| No deterministic winner, no Shopify hint winner, eligible GA4 candidate present | GA4 fallback may create attribution with `ga4_fallback_derived` and `match_source = 'ga4_fallback'` | Revenue can be recovered after weaker fallback, still without a real ROAS Radar session link |
+| No deterministic, Shopify, or GA4 winner | Unattributed remains the final outcome with `match_source = 'unattributed'` | Revenue stays conserved without manufacturing attribution |
 
 ## Merge-Gated Product Decisions
 
@@ -129,6 +156,7 @@ The following points are now approved and should be treated as published product
 - click-ID-only non-direct classification
 - deterministic ingestion-source precedence
 - Shopify-hint-derived fallback behavior, including null-session synthetic attribution and current confidence semantics
+- GA4 fallback behavior, including null-session provenance, precedence after Shopify hints, and current confidence semantics
 
 ## Change Discipline
 
@@ -136,5 +164,6 @@ Any future change to these semantics should update all of the following together
 
 - this document
 - `docs/analytics-playbook.md`
+- `docs/ga4-fallback-attribution-contract-v1.md`
 - `docs/visitor-identity-stitching.md`
 - resolver and Shopify hint tests that enforce the behavior

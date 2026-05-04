@@ -1,20 +1,20 @@
 {
-  "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
-  "files": {
-    "ignore": [
-      "dist/**",
-      "coverage/**",
-      "node_modules/**",
-      "dashboard/dist/**",
-      "dashboard/node_modules/**",
-      "shopify/theme/assets/**",
-      "test/shopify-roas-radar-tracker.test.js"
-    ]
-  },
-  "linter": {
-    "enabled": true,
-    "rules": {
-      "recommended": true
-    }
-  }
+	"$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
+	"files": {
+		"ignore": [
+			"dist/**",
+			"coverage/**",
+			"node_modules/**",
+			"dashboard/dist/**",
+			"dashboard/node_modules/**",
+			"shopify/theme/assets/**",
+			"test/shopify-roas-radar-tracker.test.js"
+		]
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"recommended": true
+		}
+	}
 }

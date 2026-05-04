@@ -22,6 +22,7 @@ type CampaignResolutionRow = {
   platform: 'google_ads' | 'meta_ads';
   account_id: string | null;
   campaign_id: string | null;
+  entity_id?: string | null;
   fallback_name: string | null;
   latest_name: string | null;
   last_seen_at: Date | null;
@@ -116,7 +117,7 @@ function collapseScopedResolutions(
 function buildResolution(row: CampaignResolutionRow): CampaignDisplayResolution {
   const resolvedName = collapseWhitespace(row.latest_name);
   const fallbackName = collapseWhitespace(row.fallback_name);
-  const entityId = normalizeString(row.campaign_id);
+  const entityId = normalizeString(row.campaign_id ?? row.entity_id);
 
   if (resolvedName) {
     return {

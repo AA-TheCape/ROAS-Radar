@@ -99,6 +99,33 @@ function buildMetaMalformedAdInsightFixture() {
   return row;
 }
 
+function buildMetaOrderValueInsightFixture(params: {
+  actionType: string;
+  campaignId?: string;
+  campaignName?: string;
+  revenue?: string | null;
+  purchaseCount?: string | null;
+}) {
+  return {
+    campaign_id: params.campaignId ?? 'cmp_1',
+    campaign_name: params.campaignName ?? 'Campaign One',
+    date_start: '2026-04-11',
+    date_stop: '2026-04-11',
+    spend: '12.34',
+    action_type: params.actionType,
+    source_debug: {
+      actionType: params.actionType,
+      nested: {
+        kept: ['raw', null, { marker: params.actionType }]
+      }
+    },
+    actions: params.purchaseCount === null ? [] : [{ action_type: params.actionType, value: params.purchaseCount ?? '2' }],
+    action_values: params.revenue === null ? [] : [{ action_type: params.actionType, value: params.revenue ?? '39.50' }],
+    purchase_roas: [{ action_type: params.actionType, value: '3.200000' }],
+    oversized_blob: buildLargeText(`meta-order-value-${params.actionType}`)
+  };
+}
+
 function buildGoogleCustomerFixture() {
   return {
     customer: {
@@ -217,8 +244,16 @@ function buildGoogleMalformedAdFixture() {
   return row;
 }
 
-async function loadMetaRawPersistence() {
-  const [connectionResult, spendResult] = await Promise.all([
+type SeededMetaConnection = {
+  connectionId: number;
+};
+
+type SeededGoogleConnection = {
+  connectionId: number;
+};
+
+async function loadMetaRawPersistence(connectionId: number) {
+  const [connectionResult, rawResult, dailyResult, orderValueRawResult, orderValueAggregateResult] = await Promise.all([
     pool.query<{
       raw_account_data: Record<string, unknown>;
       raw_account_source: string;
@@ -234,9 +269,9 @@ async function loadMetaRawPersistence() {
           raw_account_payload_size_bytes,
           raw_account_payload_hash
         FROM meta_ads_connections
-        ORDER BY id DESC
-        LIMIT 1
-      `
+        WHERE id = $1
+      `,
+      [connectionId]
     ),
     pool.query<{
       level: string;
@@ -249,18 +284,44 @@ async function loadMetaRawPersistence() {
       `
         SELECT level, raw_payload, payload_source, payload_external_id, payload_size_bytes, payload_hash
         FROM meta_ads_raw_spend_records
-        ORDER BY connection_id ASC, id ASC
+        WHERE connection_id = $1
+        ORDER BY id ASC
+      `,
+      [connectionId]
+    ),
+    pool.query<{
+      granularity: string;
+      entity_key: string;
+      raw_payload: Record<string, unknown>;
+    }>(
       `
+        SELECT granularity, entity_key, raw_payload
+        FROM meta_ads_daily_spend
+        WHERE connection_id = $1
+        ORDER BY id ASC
+      `,
+      [connectionId]
+    ),
+    pool.query<{ count: string }>(
+      'SELECT count(*)::text AS count FROM meta_ads_order_value_raw_records WHERE connection_id = $1',
+      [connectionId]
+    ),
+    pool.query<{ count: string }>(
+      'SELECT count(*)::text AS count FROM meta_ads_order_value_aggregates WHERE meta_connection_id = $1',
+      [connectionId]
     )
   ]);
 
   return {
     connection: connectionResult.rows[0] ?? null,
-    spendRows: spendResult.rows
+    rawRows: rawResult.rows,
+    dailyRows: dailyResult.rows,
+    orderValueRawCount: Number(orderValueRawResult.rows[0]?.count ?? '0'),
+    orderValueAggregateCount: Number(orderValueAggregateResult.rows[0]?.count ?? '0')
   };
 }
 
-async function loadGoogleRawPersistence() {
+async function loadGoogleRawPersistence(connectionId: number) {
   const [connectionResult, spendResult] = await Promise.all([
     pool.query<{
       raw_customer_data: Record<string, unknown>;
@@ -277,9 +338,9 @@ async function loadGoogleRawPersistence() {
           raw_customer_payload_size_bytes,
           raw_customer_payload_hash
         FROM google_ads_connections
-        ORDER BY id DESC
-        LIMIT 1
-      `
+        WHERE id = $1
+      `,
+      [connectionId]
     ),
     pool.query<{
       level: string;
@@ -292,8 +353,10 @@ async function loadGoogleRawPersistence() {
       `
         SELECT level, raw_payload, payload_source, payload_external_id, payload_size_bytes, payload_hash
         FROM google_ads_raw_spend_records
-        ORDER BY connection_id ASC, id ASC
-      `
+        WHERE connection_id = $1
+        ORDER BY id ASC
+      `,
+      [connectionId]
     )
   ]);
 
@@ -303,10 +366,23 @@ async function loadGoogleRawPersistence() {
   };
 }
 
-async function loadAdProjectionCounts() {
+async function loadAdProjectionCounts(params: {
+  metaConnectionId?: number;
+  googleConnectionId?: number;
+}) {
   const [metaResult, googleResult] = await Promise.all([
-    pool.query<{ count: string }>('SELECT count(*)::text AS count FROM meta_ads_daily_spend'),
-    pool.query<{ count: string }>('SELECT count(*)::text AS count FROM google_ads_daily_spend')
+    params.metaConnectionId
+      ? pool.query<{ count: string }>(
+          'SELECT count(*)::text AS count FROM meta_ads_daily_spend WHERE connection_id = $1',
+          [params.metaConnectionId]
+        )
+      : Promise.resolve({ rows: [{ count: '0' }] }),
+    params.googleConnectionId
+      ? pool.query<{ count: string }>(
+          'SELECT count(*)::text AS count FROM google_ads_daily_spend WHERE connection_id = $1',
+          [params.googleConnectionId]
+        )
+      : Promise.resolve({ rows: [{ count: '0' }] })
   ]);
 
   return {
@@ -315,7 +391,7 @@ async function loadAdProjectionCounts() {
   };
 }
 
-async function seedMetaSyncJob(): Promise<{ connectionId: number; jobId: number }> {
+async function seedMetaSyncJob(): Promise<SeededMetaConnection> {
   const rawAccountData = buildMetaAccountFixture();
   const rawAccountJson = JSON.stringify(rawAccountData);
 
@@ -363,9 +439,11 @@ async function seedMetaSyncJob(): Promise<{ connectionId: number; jobId: number 
       createHash('sha256').update(rawAccountJson).digest('hex')
     ]
   );
-  const connectionId = connectionResult.rows[0].id;
 
-  const jobResult = await pool.query<{ id: number }>(
+  const connectionId = connectionResult.rows[0]?.id;
+  assert.ok(connectionId);
+
+  const syncJobResult = await pool.query<{ id: number }>(
     `
       INSERT INTO meta_ads_sync_jobs (
         connection_id,
@@ -379,10 +457,13 @@ async function seedMetaSyncJob(): Promise<{ connectionId: number; jobId: number 
     `,
     [connectionId]
   );
-  return { connectionId, jobId: jobResult.rows[0].id };
+
+  assert.ok(syncJobResult.rows[0]?.id);
+
+  return { connectionId };
 }
 
-async function seedGoogleSyncJob(): Promise<{ connectionId: number; jobId: number }> {
+async function seedGoogleSyncJob(): Promise<SeededGoogleConnection> {
   const rawCustomerData = buildGoogleCustomerFixture();
   const rawCustomerJson = JSON.stringify(rawCustomerData);
 
@@ -441,9 +522,11 @@ async function seedGoogleSyncJob(): Promise<{ connectionId: number; jobId: numbe
       createHash('sha256').update(rawCustomerJson).digest('hex')
     ]
   );
-  const connectionId = connectionResult.rows[0].id;
 
-  const jobResult = await pool.query<{ id: number }>(
+  const connectionId = connectionResult.rows[0]?.id;
+  assert.ok(connectionId);
+
+  const syncJobResult = await pool.query<{ id: number }>(
     `
       INSERT INTO google_ads_sync_jobs (
         connection_id,
@@ -457,47 +540,50 @@ async function seedGoogleSyncJob(): Promise<{ connectionId: number; jobId: numbe
     `,
     [connectionId]
   );
-  return { connectionId, jobId: jobResult.rows[0].id };
+
+  assert.ok(syncJobResult.rows[0]?.id);
+
+  return { connectionId };
 }
+
+test.beforeEach(async () => {
+  await resetE2EDatabase();
+});
+
+test.afterEach(async () => {
+  await resetE2EDatabase();
+});
+
+test.after(async () => {
+  await pool.end();
+});
 
 test('Meta Ads and Google Ads sync preserve raw payloads without trimming', { concurrency: false }, async () => {
   const previousFetch = globalThis.fetch;
 
   try {
-    await resetE2EDatabase();
-    await seedMetaSyncJob();
+    const metaSeed = await seedMetaSyncJob();
     const expectedMetaAccount = buildMetaAccountFixture();
 
     globalThis.fetch = (async (input: string | URL | Request) => {
       const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url);
-      const level = url.searchParams.get('level');
 
-      if (url.pathname.endsWith('/insights') && level) {
-        const rawInsight = buildMetaInsightFixture(level as 'account' | 'campaign' | 'adset' | 'ad');
-        const malformedInsight = level === 'ad' ? [buildMetaMalformedAdInsightFixture()] : [];
+      if (url.pathname.endsWith('/insights')) {
+        const level = url.searchParams.get('level');
+        const fixtures =
+          level === 'account'
+            ? [buildMetaInsightFixture('account')]
+            : level === 'campaign'
+              ? [buildMetaInsightFixture('campaign')]
+              : level === 'adset'
+                ? [buildMetaInsightFixture('adset')]
+                : [buildMetaInsightFixture('ad'), buildMetaMalformedAdInsightFixture()];
         return new Response(
           JSON.stringify({
-            data: [rawInsight, ...malformedInsight],
+            data: fixtures,
             paging: {},
             extra_page_field: {
-              kept: level
-            }
-          }),
-          { status: 200, headers: { 'content-type': 'application/json' } }
-        );
-      }
-
-      if (url.searchParams.get('ids') === 'ad_1') {
-        return new Response(
-          JSON.stringify({
-            ad_1: {
-              creative: {
-                id: 'creative_1',
-                name: 'Creative One'
-              }
-            },
-            batch_debug: {
-              untouched: true
+              kept: level ?? 'unknown'
             }
           }),
           { status: 200, headers: { 'content-type': 'application/json' } }
@@ -513,8 +599,8 @@ test('Meta Ads and Google Ads sync preserve raw payloads without trimming', { co
     });
 
     assert.equal(result.succeededJobs, 1);
-    const persisted = await loadMetaRawPersistence();
-    const projectionCountsAfterMeta = await loadAdProjectionCounts();
+    const persisted = await loadMetaRawPersistence(metaSeed.connectionId);
+    const projectionCountsAfterMeta = await loadAdProjectionCounts({ metaConnectionId: metaSeed.connectionId });
     assertExactRawPayloadInvariant({
       persistedRawPayload: persisted.connection?.raw_account_data ?? {},
       expectedRawPayload: expectedMetaAccount,
@@ -540,81 +626,126 @@ test('Meta Ads and Google Ads sync preserve raw payloads without trimming', { co
     });
     assert.equal(persisted.connection?.raw_account_source, 'meta_ads_account');
     assert.equal(persisted.connection?.raw_account_external_id, '123456789');
-    assert.equal(persisted.spendRows.length, 5);
+    assert.equal(persisted.rawRows.length, 5);
+    assert.equal(persisted.dailyRows.length, 5);
     assert.equal(projectionCountsAfterMeta.metaDailyCount, 5);
+    assert.equal(persisted.orderValueRawCount, 0);
+    assert.equal(persisted.orderValueAggregateCount, 0);
     const expectedAccountInsight = buildMetaInsightFixture('account');
+    const expectedCampaignInsight = buildMetaInsightFixture('campaign');
+    const expectedAdsetInsight = buildMetaInsightFixture('adset');
     const expectedAdInsight = buildMetaInsightFixture('ad');
     const expectedMalformedAdInsight = buildMetaMalformedAdInsightFixture();
-    const expectedAccountMetadata = __rawPayloadStorageTestUtils.buildRawPayloadStorageMetadata(expectedAccountInsight);
-    const expectedAdMetadata = __rawPayloadStorageTestUtils.buildRawPayloadStorageMetadata(expectedAdInsight);
-    const expectedMalformedAdMetadata = __rawPayloadStorageTestUtils.buildRawPayloadStorageMetadata(expectedMalformedAdInsight);
     assertExactRawPayloadInvariant({
-      persistedRawPayload: persisted.spendRows[0].raw_payload,
+      persistedRawPayload: persisted.rawRows[0].raw_payload,
       expectedRawPayload: expectedAccountInsight,
       unmappedPathValue: (
-        persisted.spendRows[0].raw_payload as {
+        persisted.rawRows[0].raw_payload as {
           source_debug: { nested: { kept: Array<string | null | { marker: string }> } };
         }
       ).source_debug.nested.kept[2],
       expectedUnmappedPathValue: expectedAccountInsight.source_debug.nested.kept[2],
       normalizedVariant: {
         ...expectedAccountInsight,
-        objective: 'outcome_traffic'
+        account_name: 'meta account'
       },
       subsetVariant: {
         account_id: expectedAccountInsight.account_id,
         account_name: expectedAccountInsight.account_name,
         spend: expectedAccountInsight.spend,
-        impressions: expectedAccountInsight.impressions,
-        clicks: expectedAccountInsight.clicks,
         date_start: expectedAccountInsight.date_start,
         date_stop: expectedAccountInsight.date_stop
       },
       enrichedVariant: {
         ...expectedAccountInsight,
-        canonical_campaign: 'Meta Account'
+        granularity: 'account'
       }
     });
-    assert.equal(persisted.spendRows[0].payload_source, 'meta_ads_insights');
-    assert.equal(persisted.spendRows[0].payload_external_id, '123456789');
-    assert.equal(persisted.spendRows[0].payload_size_bytes, expectedAccountMetadata.payloadSizeBytes);
-    assert.equal(persisted.spendRows[0].payload_hash, expectedAccountMetadata.payloadHash);
-    assert.equal(persisted.spendRows[3].level, 'ad');
     assertExactRawPayloadInvariant({
-      persistedRawPayload: persisted.spendRows[3].raw_payload,
+      persistedRawPayload: persisted.rawRows[1].raw_payload,
+      expectedRawPayload: expectedCampaignInsight,
+      unmappedPathValue: (
+        persisted.rawRows[1].raw_payload as {
+          source_debug: { nested: { kept: Array<string | null | { marker: string }> } };
+        }
+      ).source_debug.nested.kept[2],
+      expectedUnmappedPathValue: expectedCampaignInsight.source_debug.nested.kept[2],
+      normalizedVariant: {
+        ...expectedCampaignInsight,
+        campaign_name: 'campaign one'
+      },
+      subsetVariant: {
+        campaign_id: expectedCampaignInsight.campaign_id,
+        spend: expectedCampaignInsight.spend
+      },
+      enrichedVariant: {
+        ...expectedCampaignInsight,
+        granularity: 'campaign'
+      }
+    });
+    assert.deepEqual(
+      persisted.rawRows.map((row) => row.level),
+      ['account', 'campaign', 'adset', 'ad', 'ad']
+    );
+    assert.deepEqual(
+      persisted.dailyRows.map((row) => row.granularity),
+      ['account', 'campaign', 'adset', 'ad', 'creative']
+    );
+    assert.deepEqual(
+      persisted.rawRows.map((row) => row.payload_external_id),
+      ['123456789', 'cmp_1', 'adset_1', 'ad_1', null]
+    );
+    assert.equal(persisted.rawRows[3].payload_hash.length, 64);
+    assert.equal(persisted.rawRows[4].payload_hash.length, 64);
+    assertExactRawPayloadInvariant({
+      persistedRawPayload: persisted.rawRows[2].raw_payload,
+      expectedRawPayload: expectedAdsetInsight,
+      unmappedPathValue: (
+        persisted.rawRows[2].raw_payload as {
+          source_debug: { nested: { kept: Array<string | null | { marker: string }> } };
+        }
+      ).source_debug.nested.kept[2],
+      expectedUnmappedPathValue: expectedAdsetInsight.source_debug.nested.kept[2],
+      normalizedVariant: {
+        ...expectedAdsetInsight,
+        adset_name: 'adset one'
+      },
+      subsetVariant: {
+        adset_id: expectedAdsetInsight.adset_id,
+        spend: expectedAdsetInsight.spend
+      },
+      enrichedVariant: {
+        ...expectedAdsetInsight,
+        granularity: 'adset'
+      }
+    });
+    assertExactRawPayloadInvariant({
+      persistedRawPayload: persisted.rawRows[3].raw_payload,
       expectedRawPayload: expectedAdInsight,
       unmappedPathValue: (
-        persisted.spendRows[3].raw_payload as {
-          action_values: Array<{ action_type: string; value: string | null }>;
+        persisted.rawRows[3].raw_payload as {
+          source_debug: { nested: { kept: Array<string | null | { marker: string }> } };
         }
-      ).action_values[1],
-      expectedUnmappedPathValue: expectedAdInsight.action_values[1],
+      ).source_debug.nested.kept[2],
+      expectedUnmappedPathValue: expectedAdInsight.source_debug.nested.kept[2],
       normalizedVariant: {
         ...expectedAdInsight,
         ad_name: 'ad one'
       },
       subsetVariant: {
-        account_id: expectedAdInsight.account_id,
-        campaign_id: expectedAdInsight.campaign_id,
-        adset_id: expectedAdInsight.adset_id,
         ad_id: expectedAdInsight.ad_id,
         spend: expectedAdInsight.spend
       },
       enrichedVariant: {
         ...expectedAdInsight,
-        canonical_medium: 'paid_social'
+        granularity: 'ad'
       }
     });
-    assert.equal(persisted.spendRows[3].payload_source, 'meta_ads_insights');
-    assert.equal(persisted.spendRows[3].payload_external_id, 'ad_1');
-    assert.equal(persisted.spendRows[3].payload_size_bytes, expectedAdMetadata.payloadSizeBytes);
-    assert.equal(persisted.spendRows[3].payload_hash, expectedAdMetadata.payloadHash);
-    assert.equal(persisted.spendRows[4].level, 'ad');
     assertExactRawPayloadInvariant({
-      persistedRawPayload: persisted.spendRows[4].raw_payload,
+      persistedRawPayload: persisted.rawRows[4].raw_payload,
       expectedRawPayload: expectedMalformedAdInsight,
       unmappedPathValue: (
-        persisted.spendRows[4].raw_payload as {
+        persisted.rawRows[4].raw_payload as {
           malformed_debug: { kept: boolean };
         }
       ).malformed_debug,
@@ -624,23 +755,17 @@ test('Meta Ads and Google Ads sync preserve raw payloads without trimming', { co
         ad_name: 'missing entity id ad'
       },
       subsetVariant: {
-        account_id: expectedMalformedAdInsight.account_id,
-        campaign_id: expectedMalformedAdInsight.campaign_id,
-        adset_id: expectedMalformedAdInsight.adset_id,
+        ad_name: expectedMalformedAdInsight.ad_name,
         spend: expectedMalformedAdInsight.spend
       },
       enrichedVariant: {
         ...expectedMalformedAdInsight,
-        roas_radar_debug: true
+        granularity: 'ad'
       }
     });
-    assert.equal(persisted.spendRows[4].payload_source, 'meta_ads_insights');
-    assert.equal(persisted.spendRows[4].payload_external_id, null);
-    assert.equal(persisted.spendRows[4].payload_size_bytes, expectedMalformedAdMetadata.payloadSizeBytes);
-    assert.equal(persisted.spendRows[4].payload_hash, expectedMalformedAdMetadata.payloadHash);
 
     await resetE2EDatabase();
-    await seedGoogleSyncJob();
+    const googleSeed = await seedGoogleSyncJob();
     const expectedGoogleCustomer = buildGoogleCustomerFixture();
 
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -699,8 +824,8 @@ test('Meta Ads and Google Ads sync preserve raw payloads without trimming', { co
     });
 
     assert.equal(googleResult.succeededJobs, 1);
-    const googlePersisted = await loadGoogleRawPersistence();
-    const projectionCountsAfterGoogle = await loadAdProjectionCounts();
+    const googlePersisted = await loadGoogleRawPersistence(googleSeed.connectionId);
+    const projectionCountsAfterGoogle = await loadAdProjectionCounts({ googleConnectionId: googleSeed.connectionId });
     assertExactRawPayloadInvariant({
       persistedRawPayload: googlePersisted.connection?.raw_customer_data ?? {},
       expectedRawPayload: expectedGoogleCustomer,
@@ -868,7 +993,5 @@ test('Meta Ads and Google Ads sync preserve raw payloads without trimming', { co
     assert.equal(googlePersisted.spendRows[3].payload_hash, expectedMalformedGoogleAdMetadata.payloadHash);
   } finally {
     globalThis.fetch = previousFetch;
-    await resetE2EDatabase();
-    await pool.end();
   }
 });

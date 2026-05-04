@@ -1,148 +1,156 @@
-import { env } from '../../config/env.js';
-import { query, withTransaction } from '../../db/pool.js';
-import { logError, logInfo, logWarning } from '../../observability/index.js';
+import { env } from "../../config/env.js";
+import { query, withTransaction } from "../../db/pool.js";
+import { logError, logInfo, logWarning } from "../../observability/index.js";
 
 type DataQualityMetricRow = {
-  metric_date: string;
-  visits: string | number;
-  orders: string | number;
-  revenue: string | number;
-  spend: string | number;
+	metric_date: string;
+	visits: string | number;
+	orders: string | number;
+	revenue: string | number;
+	spend: string | number;
 };
 
 type PersistedCheckRow = {
-  run_date: string;
-  check_key: string;
-  status: 'healthy' | 'warning' | 'failed';
-  severity: 'info' | 'warning' | 'critical';
-  discrepancy_count: number;
-  summary: string;
-  details: Record<string, unknown>;
-  checked_at: Date;
-  alert_emitted_at: Date | null;
+	run_date: string;
+	check_key: string;
+	status: "healthy" | "warning" | "failed";
+	severity: "info" | "warning" | "critical";
+	discrepancy_count: number;
+	summary: string;
+	details: Record<string, unknown>;
+	checked_at: Date;
+	alert_emitted_at: Date | null;
 };
 
 type DataQualityCheckResult = {
-  checkKey: string;
-  status: PersistedCheckRow['status'];
-  severity: PersistedCheckRow['severity'];
-  discrepancyCount: number;
-  summary: string;
-  details: Record<string, unknown>;
-  threshold: number;
-  alertTriggered: boolean;
+	checkKey: string;
+	status: PersistedCheckRow["status"];
+	severity: PersistedCheckRow["severity"];
+	discrepancyCount: number;
+	summary: string;
+	details: Record<string, unknown>;
+	threshold: number;
+	alertTriggered: boolean;
 };
 
 type AnomalyFlag = {
-  metric: 'visits' | 'orders' | 'revenue' | 'spend';
-  currentValue: number;
-  baselineValue: number;
-  absoluteDelta: number;
-  relativeDelta: number | null;
+	metric: "visits" | "orders" | "revenue" | "spend";
+	currentValue: number;
+	baselineValue: number;
+	absoluteDelta: number;
+	relativeDelta: number | null;
 };
 
 type DuplicateAssignmentRow = {
-  entity_key: string;
-  canonical_count: number;
-  journey_ids: string[];
-  source_tables: string[];
+	entity_key: string;
+	canonical_count: number;
+	journey_ids: string[];
+	source_tables: string[];
 };
 
 type ShopifyConflictRow = {
-  shopify_customer_id: string;
-  canonical_count: number;
-  journey_ids: string[];
-  source_tables: string[];
+	shopify_customer_id: string;
+	canonical_count: number;
+	journey_ids: string[];
+	source_tables: string[];
 };
 
 type HashAnomalyRow = {
-  source_name: string;
-  field_name: string;
-  invalid_count: number;
-  sample_values: string[];
+	source_name: string;
+	field_name: string;
+	invalid_count: number;
+	sample_values: string[];
 };
 
-type DataQualityCheckSeverity = Extract<PersistedCheckRow['severity'], 'warning' | 'critical'>;
+type DataQualityCheckSeverity = Extract<
+	PersistedCheckRow["severity"],
+	"warning" | "critical"
+>;
 
-const HASH_FORMAT_REGEX = '^[0-9a-f]{64}$';
+const HASH_FORMAT_REGEX = "^[0-9a-f]{64}$";
 
 function toDateString(value: Date): string {
-  return value.toISOString().slice(0, 10);
+	return value.toISOString().slice(0, 10);
 }
 
 function addUtcDays(date: Date, days: number): Date {
-  const next = new Date(date);
-  next.setUTCDate(next.getUTCDate() + days);
-  return next;
+	const next = new Date(date);
+	next.setUTCDate(next.getUTCDate() + days);
+	return next;
 }
 
 function toRunDateEnd(runDate: string): string {
-  return `${toDateString(addUtcDays(new Date(`${runDate}T00:00:00.000Z`), 1))}T00:00:00.000Z`;
+	return `${toDateString(addUtcDays(new Date(`${runDate}T00:00:00.000Z`), 1))}T00:00:00.000Z`;
 }
 
 function toNumber(value: string | number): number {
-  return typeof value === 'number' ? value : Number(value);
+	return typeof value === "number" ? value : Number(value);
 }
 
 function pluralize(label: string, count: number): string {
-  return count === 1 ? label : `${label}s`;
+	return count === 1 ? label : `${label}s`;
 }
 
 function evaluateDiscrepancyCount(input: {
-  discrepancyCount: number;
-  threshold: number;
-  severityOnAlert: DataQualityCheckSeverity;
-  healthySummary: string;
-  warningSummary: string;
-  alertSummary: string;
-  details: Record<string, unknown>;
+	discrepancyCount: number;
+	threshold: number;
+	severityOnAlert: DataQualityCheckSeverity;
+	healthySummary: string;
+	warningSummary: string;
+	alertSummary: string;
+	details: Record<string, unknown>;
 }): DataQualityCheckResult {
-  const discrepancyCount = Math.max(0, input.discrepancyCount);
-  const threshold = Math.max(0, input.threshold);
-  const alertTriggered = discrepancyCount > threshold;
+	const discrepancyCount = Math.max(0, input.discrepancyCount);
+	const threshold = Math.max(0, input.threshold);
+	const alertTriggered = discrepancyCount > threshold;
 
-  if (discrepancyCount === 0) {
-    return {
-      checkKey: '',
-      status: 'healthy',
-      severity: 'info',
-      discrepancyCount,
-      summary: input.healthySummary,
-      details: input.details,
-      threshold,
-      alertTriggered: false
-    };
-  }
+	if (discrepancyCount === 0) {
+		return {
+			checkKey: "",
+			status: "healthy",
+			severity: "info",
+			discrepancyCount,
+			summary: input.healthySummary,
+			details: input.details,
+			threshold,
+			alertTriggered: false,
+		};
+	}
 
-  if (alertTriggered) {
-    return {
-      checkKey: '',
-      status: input.severityOnAlert === 'critical' ? 'failed' : 'warning',
-      severity: input.severityOnAlert,
-      discrepancyCount,
-      summary: input.alertSummary,
-      details: input.details,
-      threshold,
-      alertTriggered: true
-    };
-  }
+	if (alertTriggered) {
+		return {
+			checkKey: "",
+			status: input.severityOnAlert === "critical" ? "failed" : "warning",
+			severity: input.severityOnAlert,
+			discrepancyCount,
+			summary: input.alertSummary,
+			details: input.details,
+			threshold,
+			alertTriggered: true,
+		};
+	}
 
-  return {
-    checkKey: '',
-    status: 'warning',
-    severity: 'warning',
-    discrepancyCount,
-    summary: input.warningSummary,
-    details: input.details,
-    threshold,
-    alertTriggered: false
-  };
+	return {
+		checkKey: "",
+		status: "warning",
+		severity: "warning",
+		discrepancyCount,
+		summary: input.warningSummary,
+		details: input.details,
+		threshold,
+		alertTriggered: false,
+	};
 }
 
-async function buildReportingAnomalyCheck(runDate: string): Promise<DataQualityCheckResult> {
-  const lookbackDates = buildLookbackDates(runDate, env.DATA_QUALITY_ANOMALY_LOOKBACK_DAYS + 1);
-  const metricsResult = await query<DataQualityMetricRow>(
-    `
+async function buildReportingAnomalyCheck(
+	runDate: string,
+): Promise<DataQualityCheckResult> {
+	const lookbackDates = buildLookbackDates(
+		runDate,
+		env.DATA_QUALITY_ANOMALY_LOOKBACK_DAYS + 1,
+	);
+	const metricsResult = await query<DataQualityMetricRow>(
+		`
       SELECT
         metric_date::text,
         COALESCE(SUM(visits), 0)::text AS visits,
@@ -154,34 +162,36 @@ async function buildReportingAnomalyCheck(runDate: string): Promise<DataQualityC
       GROUP BY metric_date
       ORDER BY metric_date ASC
     `,
-    [lookbackDates]
-  );
-  const anomalyFlags = detectAnomalyFlags(metricsResult.rows, runDate);
-  const evaluated = evaluateDiscrepancyCount({
-    discrepancyCount: anomalyFlags.length,
-    threshold: env.DATA_QUALITY_REPORTING_ANOMALY_ALERT_THRESHOLD,
-    severityOnAlert: 'warning',
-    healthySummary: 'No reporting anomalies detected for the run date.',
-    warningSummary: `${anomalyFlags.length} reporting ${pluralize('metric', anomalyFlags.length)} deviated from the trailing baseline but remained within the configured alert threshold.`,
-    alertSummary: `${anomalyFlags.length} reporting ${pluralize('metric', anomalyFlags.length)} exceeded the trailing-baseline alert threshold.`,
-    details: {
-      anomalyFlags,
-      lookbackDates
-    }
-  });
+		[lookbackDates],
+	);
+	const anomalyFlags = detectAnomalyFlags(metricsResult.rows, runDate);
+	const evaluated = evaluateDiscrepancyCount({
+		discrepancyCount: anomalyFlags.length,
+		threshold: env.DATA_QUALITY_REPORTING_ANOMALY_ALERT_THRESHOLD,
+		severityOnAlert: "warning",
+		healthySummary: "No reporting anomalies detected for the run date.",
+		warningSummary: `${anomalyFlags.length} reporting ${pluralize("metric", anomalyFlags.length)} deviated from the trailing baseline but remained within the configured alert threshold.`,
+		alertSummary: `${anomalyFlags.length} reporting ${pluralize("metric", anomalyFlags.length)} exceeded the trailing-baseline alert threshold.`,
+		details: {
+			anomalyFlags,
+			lookbackDates,
+		},
+	});
 
-  return {
-    ...evaluated,
-    checkKey: 'reporting_anomaly_check'
-  };
+	return {
+		...evaluated,
+		checkKey: "reporting_anomaly_check",
+	};
 }
 
-async function buildOrphanSessionCheck(runDate: string): Promise<DataQualityCheckResult> {
-  const result = await query<{
-    discrepancy_count: string;
-    sample_session_ids: string[];
-  }>(
-    `
+async function buildOrphanSessionCheck(
+	runDate: string,
+): Promise<DataQualityCheckResult> {
+	const result = await query<{
+		discrepancy_count: string;
+		sample_session_ids: string[];
+	}>(
+		`
       WITH orphan_sessions AS (
         SELECT
           s.id::text AS session_id,
@@ -234,35 +244,38 @@ async function buildOrphanSessionCheck(runDate: string): Promise<DataQualityChec
         (SELECT COUNT(*)::text FROM orphan_sessions) AS discrepancy_count,
         COALESCE((SELECT array_agg(session_id ORDER BY session_id ASC) FROM sampled), ARRAY[]::text[]) AS sample_session_ids
     `,
-    [toRunDateEnd(runDate), env.DATA_QUALITY_SAMPLE_LIMIT]
-  );
+		[toRunDateEnd(runDate), env.DATA_QUALITY_SAMPLE_LIMIT],
+	);
 
-  const row = result.rows[0];
-  const discrepancyCount = Number(row?.discrepancy_count ?? 0);
-  const evaluated = evaluateDiscrepancyCount({
-    discrepancyCount,
-    threshold: env.DATA_QUALITY_ORPHAN_SESSION_ALERT_THRESHOLD,
-    severityOnAlert: 'critical',
-    healthySummary: 'No orphan sessions were detected in the identity graph snapshot.',
-    warningSummary: `${discrepancyCount} orphan ${pluralize('session', discrepancyCount)} remain unresolved but did not breach the configured alert threshold.`,
-    alertSummary: `${discrepancyCount} orphan ${pluralize('session', discrepancyCount)} breached the configured alert threshold.`,
-    details: {
-      sampleSessionIds: row?.sample_session_ids ?? []
-    }
-  });
+	const row = result.rows[0];
+	const discrepancyCount = Number(row?.discrepancy_count ?? 0);
+	const evaluated = evaluateDiscrepancyCount({
+		discrepancyCount,
+		threshold: env.DATA_QUALITY_ORPHAN_SESSION_ALERT_THRESHOLD,
+		severityOnAlert: "critical",
+		healthySummary:
+			"No orphan sessions were detected in the identity graph snapshot.",
+		warningSummary: `${discrepancyCount} orphan ${pluralize("session", discrepancyCount)} remain unresolved but did not breach the configured alert threshold.`,
+		alertSummary: `${discrepancyCount} orphan ${pluralize("session", discrepancyCount)} breached the configured alert threshold.`,
+		details: {
+			sampleSessionIds: row?.sample_session_ids ?? [],
+		},
+	});
 
-  return {
-    ...evaluated,
-    checkKey: 'identity_graph_orphan_sessions'
-  };
+	return {
+		...evaluated,
+		checkKey: "identity_graph_orphan_sessions",
+	};
 }
 
-async function buildDuplicateCanonicalAssignmentCheck(runDate: string): Promise<DataQualityCheckResult> {
-  const result = await query<{
-    discrepancy_count: string;
-    samples: DuplicateAssignmentRow[];
-  }>(
-    `
+async function buildDuplicateCanonicalAssignmentCheck(
+	runDate: string,
+): Promise<DataQualityCheckResult> {
+	const result = await query<{
+		discrepancy_count: string;
+		samples: DuplicateAssignmentRow[];
+	}>(
+		`
       WITH session_assignments AS (
         SELECT
           s.id::text AS entity_key,
@@ -335,35 +348,37 @@ async function buildDuplicateCanonicalAssignmentCheck(runDate: string): Promise<
           '[]'::jsonb
         ) AS samples
     `,
-    [toRunDateEnd(runDate), env.DATA_QUALITY_SAMPLE_LIMIT]
-  );
+		[toRunDateEnd(runDate), env.DATA_QUALITY_SAMPLE_LIMIT],
+	);
 
-  const row = result.rows[0];
-  const discrepancyCount = Number(row?.discrepancy_count ?? 0);
-  const evaluated = evaluateDiscrepancyCount({
-    discrepancyCount,
-    threshold: env.DATA_QUALITY_DUPLICATE_CANONICAL_ALERT_THRESHOLD,
-    severityOnAlert: 'critical',
-    healthySummary: 'No duplicate canonical session assignments were detected.',
-    warningSummary: `${discrepancyCount} session ${pluralize('assignment', discrepancyCount)} disagreed across canonical surfaces but remained within the configured alert threshold.`,
-    alertSummary: `${discrepancyCount} session ${pluralize('assignment', discrepancyCount)} disagreed across canonical surfaces and breached the alert threshold.`,
-    details: {
-      sampleConflicts: row?.samples ?? []
-    }
-  });
+	const row = result.rows[0];
+	const discrepancyCount = Number(row?.discrepancy_count ?? 0);
+	const evaluated = evaluateDiscrepancyCount({
+		discrepancyCount,
+		threshold: env.DATA_QUALITY_DUPLICATE_CANONICAL_ALERT_THRESHOLD,
+		severityOnAlert: "critical",
+		healthySummary: "No duplicate canonical session assignments were detected.",
+		warningSummary: `${discrepancyCount} session ${pluralize("assignment", discrepancyCount)} disagreed across canonical surfaces but remained within the configured alert threshold.`,
+		alertSummary: `${discrepancyCount} session ${pluralize("assignment", discrepancyCount)} disagreed across canonical surfaces and breached the alert threshold.`,
+		details: {
+			sampleConflicts: row?.samples ?? [],
+		},
+	});
 
-  return {
-    ...evaluated,
-    checkKey: 'identity_graph_duplicate_canonical_assignments'
-  };
+	return {
+		...evaluated,
+		checkKey: "identity_graph_duplicate_canonical_assignments",
+	};
 }
 
-async function buildConflictingShopifyMappingCheck(runDate: string): Promise<DataQualityCheckResult> {
-  const result = await query<{
-    discrepancy_count: string;
-    samples: ShopifyConflictRow[];
-  }>(
-    `
+async function buildConflictingShopifyMappingCheck(
+	runDate: string,
+): Promise<DataQualityCheckResult> {
+	const result = await query<{
+		discrepancy_count: string;
+		samples: ShopifyConflictRow[];
+	}>(
+		`
       WITH shopify_assignments AS (
         SELECT
           j.authoritative_shopify_customer_id AS shopify_customer_id,
@@ -429,35 +444,37 @@ async function buildConflictingShopifyMappingCheck(runDate: string): Promise<Dat
           '[]'::jsonb
         ) AS samples
     `,
-    [toRunDateEnd(runDate), env.DATA_QUALITY_SAMPLE_LIMIT]
-  );
+		[toRunDateEnd(runDate), env.DATA_QUALITY_SAMPLE_LIMIT],
+	);
 
-  const row = result.rows[0];
-  const discrepancyCount = Number(row?.discrepancy_count ?? 0);
-  const evaluated = evaluateDiscrepancyCount({
-    discrepancyCount,
-    threshold: env.DATA_QUALITY_CONFLICTING_SHOPIFY_ALERT_THRESHOLD,
-    severityOnAlert: 'critical',
-    healthySummary: 'No conflicting Shopify customer mappings were detected.',
-    warningSummary: `${discrepancyCount} Shopify customer ${pluralize('mapping', discrepancyCount)} disagreed across canonical surfaces but remained within the configured alert threshold.`,
-    alertSummary: `${discrepancyCount} Shopify customer ${pluralize('mapping', discrepancyCount)} disagreed across canonical surfaces and breached the alert threshold.`,
-    details: {
-      sampleConflicts: row?.samples ?? []
-    }
-  });
+	const row = result.rows[0];
+	const discrepancyCount = Number(row?.discrepancy_count ?? 0);
+	const evaluated = evaluateDiscrepancyCount({
+		discrepancyCount,
+		threshold: env.DATA_QUALITY_CONFLICTING_SHOPIFY_ALERT_THRESHOLD,
+		severityOnAlert: "critical",
+		healthySummary: "No conflicting Shopify customer mappings were detected.",
+		warningSummary: `${discrepancyCount} Shopify customer ${pluralize("mapping", discrepancyCount)} disagreed across canonical surfaces but remained within the configured alert threshold.`,
+		alertSummary: `${discrepancyCount} Shopify customer ${pluralize("mapping", discrepancyCount)} disagreed across canonical surfaces and breached the alert threshold.`,
+		details: {
+			sampleConflicts: row?.samples ?? [],
+		},
+	});
 
-  return {
-    ...evaluated,
-    checkKey: 'identity_graph_conflicting_shopify_mappings'
-  };
+	return {
+		...evaluated,
+		checkKey: "identity_graph_conflicting_shopify_mappings",
+	};
 }
 
-async function buildHashFormatAnomalyCheck(runDate: string): Promise<DataQualityCheckResult> {
-  const result = await query<{
-    discrepancy_count: string;
-    samples: HashAnomalyRow[];
-  }>(
-    `
+async function buildHashFormatAnomalyCheck(
+	runDate: string,
+): Promise<DataQualityCheckResult> {
+	const result = await query<{
+		discrepancy_count: string;
+		samples: HashAnomalyRow[];
+	}>(
+		`
       WITH anomalies AS (
         SELECT
           'identity_nodes'::text AS source_name,
@@ -627,132 +644,156 @@ async function buildHashFormatAnomalyCheck(runDate: string): Promise<DataQuality
           '[]'::jsonb
         ) AS samples
     `,
-    [toRunDateEnd(runDate), HASH_FORMAT_REGEX, env.DATA_QUALITY_SAMPLE_LIMIT]
-  );
+		[toRunDateEnd(runDate), HASH_FORMAT_REGEX, env.DATA_QUALITY_SAMPLE_LIMIT],
+	);
 
-  const row = result.rows[0];
-  const discrepancyCount = Number(row?.discrepancy_count ?? 0);
-  const evaluated = evaluateDiscrepancyCount({
-    discrepancyCount,
-    threshold: env.DATA_QUALITY_HASH_ANOMALY_ALERT_THRESHOLD,
-    severityOnAlert: 'warning',
-    healthySummary: 'No hash-format anomalies were detected across identity and Shopify surfaces.',
-    warningSummary: `${discrepancyCount} hash-format ${pluralize('anomaly', discrepancyCount)} were detected but remained within the configured alert threshold.`,
-    alertSummary: `${discrepancyCount} hash-format ${pluralize('anomaly', discrepancyCount)} breached the configured alert threshold.`,
-    details: {
-      samples: row?.samples ?? [],
-      expectedPattern: HASH_FORMAT_REGEX
-    }
-  });
+	const row = result.rows[0];
+	const discrepancyCount = Number(row?.discrepancy_count ?? 0);
+	const evaluated = evaluateDiscrepancyCount({
+		discrepancyCount,
+		threshold: env.DATA_QUALITY_HASH_ANOMALY_ALERT_THRESHOLD,
+		severityOnAlert: "warning",
+		healthySummary:
+			"No hash-format anomalies were detected across identity and Shopify surfaces.",
+		warningSummary: `${discrepancyCount} hash-format ${pluralize("anomaly", discrepancyCount)} were detected but remained within the configured alert threshold.`,
+		alertSummary: `${discrepancyCount} hash-format ${pluralize("anomaly", discrepancyCount)} breached the configured alert threshold.`,
+		details: {
+			samples: row?.samples ?? [],
+			expectedPattern: HASH_FORMAT_REGEX,
+		},
+	});
 
-  return {
-    ...evaluated,
-    checkKey: 'identity_graph_hash_format_anomalies'
-  };
+	return {
+		...evaluated,
+		checkKey: "identity_graph_hash_format_anomalies",
+	};
 }
 
 function emitCheckLog(runDate: string, check: DataQualityCheckResult): void {
-  const fields = {
-    service: process.env.K_SERVICE ?? 'roas-radar-data-quality',
-    runDate,
-    checkKey: check.checkKey,
-    status: check.status,
-    severity: check.severity,
-    discrepancyCount: check.discrepancyCount,
-    threshold: check.threshold,
-    alertTriggered: check.alertTriggered,
-    details: check.details
-  };
+	const fields = {
+		service: process.env.K_SERVICE ?? "roas-radar-data-quality",
+		runDate,
+		checkKey: check.checkKey,
+		status: check.status,
+		severity: check.severity,
+		discrepancyCount: check.discrepancyCount,
+		threshold: check.threshold,
+		alertTriggered: check.alertTriggered,
+		details: check.details,
+	};
 
-  if (check.alertTriggered && check.severity === 'critical') {
-    logError('data_quality_alert_triggered', new Error(check.summary), fields);
-    return;
-  }
+	if (check.alertTriggered && check.severity === "critical") {
+		logError("data_quality_alert_triggered", new Error(check.summary), fields);
+		return;
+	}
 
-  if (check.alertTriggered || check.status === 'warning') {
-    logWarning(check.alertTriggered ? 'data_quality_alert_triggered' : 'data_quality_check_evaluated', fields);
-    return;
-  }
+	if (check.alertTriggered || check.status === "warning") {
+		logWarning(
+			check.alertTriggered
+				? "data_quality_alert_triggered"
+				: "data_quality_check_evaluated",
+			fields,
+		);
+		return;
+	}
 
-  logInfo('data_quality_check_evaluated', fields);
+	logInfo("data_quality_check_evaluated", fields);
 }
 
 export function resolveRunDate(now = new Date()): string {
-  const target = addUtcDays(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())), -env.DATA_QUALITY_TARGET_LAG_DAYS);
-  return toDateString(target);
+	const target = addUtcDays(
+		new Date(
+			Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+		),
+		-env.DATA_QUALITY_TARGET_LAG_DAYS,
+	);
+	return toDateString(target);
 }
 
-export function buildLookbackDates(runDate: string, lookbackDays: number): string[] {
-  const end = new Date(`${runDate}T00:00:00.000Z`);
-  const days = Math.max(lookbackDays, 1);
-  const dates: string[] = [];
+export function buildLookbackDates(
+	runDate: string,
+	lookbackDays: number,
+): string[] {
+	const end = new Date(`${runDate}T00:00:00.000Z`);
+	const days = Math.max(lookbackDays, 1);
+	const dates: string[] = [];
 
-  for (let index = days - 1; index >= 0; index -= 1) {
-    dates.push(toDateString(addUtcDays(end, -index)));
-  }
+	for (let index = days - 1; index >= 0; index -= 1) {
+		dates.push(toDateString(addUtcDays(end, -index)));
+	}
 
-  return dates;
+	return dates;
 }
 
-export function detectAnomalyFlags(rows: DataQualityMetricRow[], runDate: string): AnomalyFlag[] {
-  const current = rows.find((row) => row.metric_date === runDate);
+export function detectAnomalyFlags(
+	rows: DataQualityMetricRow[],
+	runDate: string,
+): AnomalyFlag[] {
+	const current = rows.find((row) => row.metric_date === runDate);
 
-  if (!current) {
-    return [];
-  }
+	if (!current) {
+		return [];
+	}
 
-  const baselineRows = rows.filter((row) => row.metric_date !== runDate);
-  if (baselineRows.length === 0) {
-    return [];
-  }
+	const baselineRows = rows.filter((row) => row.metric_date !== runDate);
+	if (baselineRows.length === 0) {
+		return [];
+	}
 
-  const metrics: Array<AnomalyFlag['metric']> = ['visits', 'orders', 'revenue', 'spend'];
+	const metrics: Array<AnomalyFlag["metric"]> = [
+		"visits",
+		"orders",
+		"revenue",
+		"spend",
+	];
 
-  return metrics
-    .map((metric) => {
-      const baselineValue =
-        baselineRows.reduce((sum, row) => sum + toNumber(row[metric]), 0) / baselineRows.length;
-      const currentValue = toNumber(current[metric]);
-      const absoluteDelta = baselineValue - currentValue;
-      const relativeDelta = baselineValue <= 0 ? null : absoluteDelta / baselineValue;
+	return metrics
+		.map((metric) => {
+			const baselineValue =
+				baselineRows.reduce((sum, row) => sum + toNumber(row[metric]), 0) /
+				baselineRows.length;
+			const currentValue = toNumber(current[metric]);
+			const absoluteDelta = baselineValue - currentValue;
+			const relativeDelta =
+				baselineValue <= 0 ? null : absoluteDelta / baselineValue;
 
-      return {
-        metric,
-        currentValue,
-        baselineValue,
-        absoluteDelta,
-        relativeDelta
-      };
-    })
-    .filter(
-      (flag) =>
-        flag.baselineValue >= env.DATA_QUALITY_ANOMALY_MIN_BASELINE &&
-        flag.absoluteDelta > 0 &&
-        (flag.relativeDelta ?? 0) >= env.DATA_QUALITY_ANOMALY_THRESHOLD_RATIO
-    );
+			return {
+				metric,
+				currentValue,
+				baselineValue,
+				absoluteDelta,
+				relativeDelta,
+			};
+		})
+		.filter(
+			(flag) =>
+				flag.baselineValue >= env.DATA_QUALITY_ANOMALY_MIN_BASELINE &&
+				flag.absoluteDelta > 0 &&
+				(flag.relativeDelta ?? 0) >= env.DATA_QUALITY_ANOMALY_THRESHOLD_RATIO,
+		);
 }
 
 export async function fetchDataQualityReport(runDate: string): Promise<{
-  runDate: string;
-  totals: {
-    totalChecks: number;
-    failedChecks: number;
-    warningChecks: number;
-    totalDiscrepancies: number;
-  };
-  checks: Array<{
-    checkKey: string;
-    status: PersistedCheckRow['status'];
-    severity: PersistedCheckRow['severity'];
-    discrepancyCount: number;
-    summary: string;
-    details: Record<string, unknown>;
-    checkedAt: string;
-    alertEmittedAt: string | null;
-  }>;
+	runDate: string;
+	totals: {
+		totalChecks: number;
+		failedChecks: number;
+		warningChecks: number;
+		totalDiscrepancies: number;
+	};
+	checks: Array<{
+		checkKey: string;
+		status: PersistedCheckRow["status"];
+		severity: PersistedCheckRow["severity"];
+		discrepancyCount: number;
+		summary: string;
+		details: Record<string, unknown>;
+		checkedAt: string;
+		alertEmittedAt: string | null;
+	}>;
 }> {
-  const result = await query<PersistedCheckRow>(
-    `
+	const result = await query<PersistedCheckRow>(
+		`
       SELECT
         run_date::text,
         check_key,
@@ -773,53 +814,59 @@ export async function fetchDataQualityReport(runDate: string): Promise<{
         END,
         check_key ASC
     `,
-    [runDate]
-  );
+		[runDate],
+	);
 
-  const checks = result.rows.map((row) => ({
-    checkKey: row.check_key,
-    status: row.status,
-    severity: row.severity,
-    discrepancyCount: row.discrepancy_count,
-    summary: row.summary,
-    details: row.details,
-    checkedAt: row.checked_at.toISOString(),
-    alertEmittedAt: row.alert_emitted_at?.toISOString() ?? null
-  }));
+	const checks = result.rows.map((row) => ({
+		checkKey: row.check_key,
+		status: row.status,
+		severity: row.severity,
+		discrepancyCount: row.discrepancy_count,
+		summary: row.summary,
+		details: row.details,
+		checkedAt: row.checked_at.toISOString(),
+		alertEmittedAt: row.alert_emitted_at?.toISOString() ?? null,
+	}));
 
-  return {
-    runDate,
-    totals: {
-      totalChecks: checks.length,
-      failedChecks: checks.filter((check) => check.status === 'failed').length,
-      warningChecks: checks.filter((check) => check.status === 'warning').length,
-      totalDiscrepancies: checks.reduce((sum, check) => sum + check.discrepancyCount, 0)
-    },
-    checks
-  };
+	return {
+		runDate,
+		totals: {
+			totalChecks: checks.length,
+			failedChecks: checks.filter((check) => check.status === "failed").length,
+			warningChecks: checks.filter((check) => check.status === "warning")
+				.length,
+			totalDiscrepancies: checks.reduce(
+				(sum, check) => sum + check.discrepancyCount,
+				0,
+			),
+		},
+		checks,
+	};
 }
 
-export async function runDailyDataQualityChecks(runDate = resolveRunDate()): Promise<{
-  runDate: string;
-  totals: {
-    totalChecks: number;
-    failedChecks: number;
-    warningChecks: number;
-    totalDiscrepancies: number;
-  };
+export async function runDailyDataQualityChecks(
+	runDate = resolveRunDate(),
+): Promise<{
+	runDate: string;
+	totals: {
+		totalChecks: number;
+		failedChecks: number;
+		warningChecks: number;
+		totalDiscrepancies: number;
+	};
 }> {
-  const checks = await Promise.all([
-    buildReportingAnomalyCheck(runDate),
-    buildOrphanSessionCheck(runDate),
-    buildDuplicateCanonicalAssignmentCheck(runDate),
-    buildConflictingShopifyMappingCheck(runDate),
-    buildHashFormatAnomalyCheck(runDate)
-  ]);
+	const checks = await Promise.all([
+		buildReportingAnomalyCheck(runDate),
+		buildOrphanSessionCheck(runDate),
+		buildDuplicateCanonicalAssignmentCheck(runDate),
+		buildConflictingShopifyMappingCheck(runDate),
+		buildHashFormatAnomalyCheck(runDate),
+	]);
 
-  await withTransaction(async (client) => {
-    for (const check of checks) {
-      await client.query(
-        `
+	await withTransaction(async (client) => {
+		for (const check of checks) {
+			await client.query(
+				`
           INSERT INTO data_quality_check_runs (
             run_date,
             check_key,
@@ -858,40 +905,40 @@ export async function runDailyDataQualityChecks(runDate = resolveRunDate()): Pro
             END,
             updated_at = now()
         `,
-        [
-          runDate,
-          check.checkKey,
-          check.status,
-          check.severity,
-          check.discrepancyCount,
-          check.summary,
-          JSON.stringify(check.details),
-          check.alertTriggered
-        ]
-      );
-    }
-  });
+				[
+					runDate,
+					check.checkKey,
+					check.status,
+					check.severity,
+					check.discrepancyCount,
+					check.summary,
+					JSON.stringify(check.details),
+					check.alertTriggered,
+				],
+			);
+		}
+	});
 
-  for (const check of checks) {
-    emitCheckLog(runDate, check);
-  }
+	for (const check of checks) {
+		emitCheckLog(runDate, check);
+	}
 
-  const report = await fetchDataQualityReport(runDate);
-  logInfo('data_quality_run_completed', {
-    service: process.env.K_SERVICE ?? 'roas-radar-data-quality',
-    runDate,
-    totals: report.totals
-  });
+	const report = await fetchDataQualityReport(runDate);
+	logInfo("data_quality_run_completed", {
+		service: process.env.K_SERVICE ?? "roas-radar-data-quality",
+		runDate,
+		totals: report.totals,
+	});
 
-  return {
-    runDate: report.runDate,
-    totals: report.totals
-  };
+	return {
+		runDate: report.runDate,
+		totals: report.totals,
+	};
 }
 
 export const __dataQualityTestUtils = {
-  resolveRunDate,
-  buildLookbackDates,
-  detectAnomalyFlags,
-  evaluateDiscrepancyCount
+	resolveRunDate,
+	buildLookbackDates,
+	detectAnomalyFlags,
+	evaluateDiscrepancyCount,
 };

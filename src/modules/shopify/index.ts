@@ -24,175 +24,178 @@ import { enqueueShopifyOrderWriteback } from './writeback.js';
 const OAUTH_STATE_TTL_MINUTES = 10;
 
 const SHOPIFY_WEBHOOK_TOPICS = [
-  {
-    topic: 'ORDERS_CREATE',
-    deliveryPath: '/orders-create'
-  },
-  {
-    topic: 'ORDERS_PAID',
-    deliveryPath: '/orders-paid'
-  },
-  {
-    topic: 'APP_UNINSTALLED',
-    deliveryPath: '/app-uninstalled'
-  }
+	{
+		topic: "ORDERS_CREATE",
+		deliveryPath: "/orders-create",
+	},
+	{
+		topic: "ORDERS_PAID",
+		deliveryPath: "/orders-paid",
+	},
+	{
+		topic: "APP_UNINSTALLED",
+		deliveryPath: "/app-uninstalled",
+	},
 ] as const;
 
 const strictEmailSchema = z.string().email();
 
 function sanitizeNullableEmail(value: unknown): string | null | undefined {
-  if (value == null) {
-    return value as null | undefined;
-  }
+	if (value == null) {
+		return value as null | undefined;
+	}
 
-  if (typeof value !== 'string') {
-    return null;
-  }
+	if (typeof value !== "string") {
+		return null;
+	}
 
-  const normalized = normalizeEmailAddress(value);
-  if (!normalized) {
-    return null;
-  }
+	const normalized = normalizeEmailAddress(value);
+	if (!normalized) {
+		return null;
+	}
 
-  return strictEmailSchema.safeParse(normalized).success ? normalized : null;
+	return strictEmailSchema.safeParse(normalized).success ? normalized : null;
 }
 
-const shopifyEmailSchema = z.preprocess(sanitizeNullableEmail, z.string().nullable().optional());
+const shopifyEmailSchema = z.preprocess(
+	sanitizeNullableEmail,
+	z.string().nullable().optional(),
+);
 
 const shopifyAttributeSchema = z.object({
-  name: z.string().optional(),
-  value: z.union([z.string(), z.number(), z.boolean()]).nullable().optional()
+	name: z.string().optional(),
+	value: z.union([z.string(), z.number(), z.boolean()]).nullable().optional(),
 });
 
 const shopifyCustomerSchema = z
-  .object({
-    id: z.union([z.string(), z.number()]).optional(),
-    email: shopifyEmailSchema,
-    phone: z.string().nullable().optional()
-  })
-  .nullable()
-  .optional();
+	.object({
+		id: z.union([z.string(), z.number()]).optional(),
+		email: shopifyEmailSchema,
+		phone: z.string().nullable().optional(),
+	})
+	.nullable()
+	.optional();
 
 const shopifyLineItemSchema = z.object({
-  id: z.union([z.string(), z.number()]).optional(),
-  product_id: z.union([z.string(), z.number()]).nullable().optional(),
-  variant_id: z.union([z.string(), z.number()]).nullable().optional(),
-  sku: z.string().nullable().optional(),
-  title: z.string().nullable().optional(),
-  name: z.string().nullable().optional(),
-  vendor: z.string().nullable().optional(),
-  quantity: z.coerce.number().int().optional(),
-  price: z.union([z.string(), z.number()]).optional(),
-  total_discount: z.union([z.string(), z.number()]).optional(),
-  fulfillment_status: z.string().nullable().optional(),
-  requires_shipping: z.boolean().nullable().optional(),
-  taxable: z.boolean().nullable().optional()
+	id: z.union([z.string(), z.number()]).optional(),
+	product_id: z.union([z.string(), z.number()]).nullable().optional(),
+	variant_id: z.union([z.string(), z.number()]).nullable().optional(),
+	sku: z.string().nullable().optional(),
+	title: z.string().nullable().optional(),
+	name: z.string().nullable().optional(),
+	vendor: z.string().nullable().optional(),
+	quantity: z.coerce.number().int().optional(),
+	price: z.union([z.string(), z.number()]).optional(),
+	total_discount: z.union([z.string(), z.number()]).optional(),
+	fulfillment_status: z.string().nullable().optional(),
+	requires_shipping: z.boolean().nullable().optional(),
+	taxable: z.boolean().nullable().optional(),
 });
 
 const shopifyOrderPayloadSchema = z.object({
-  id: z.union([z.string(), z.number()]),
-  order_number: z.union([z.string(), z.number()]).optional(),
-  customer: shopifyCustomerSchema,
-  email: shopifyEmailSchema,
-  currency: z.string().min(1).optional(),
-  subtotal_price: z.union([z.string(), z.number()]).optional(),
-  total_price: z.union([z.string(), z.number()]).optional(),
-  financial_status: z.string().nullable().optional(),
-  fulfillment_status: z.string().nullable().optional(),
-  processed_at: z.string().datetime({ offset: true }).nullable().optional(),
-  created_at: z.string().datetime({ offset: true }).nullable().optional(),
-  updated_at: z.string().datetime({ offset: true }).nullable().optional(),
-  checkout_token: z.string().nullable().optional(),
-  cart_token: z.string().nullable().optional(),
-  landing_site: z.string().nullable().optional(),
-  referring_site: z.string().nullable().optional(),
-  source_name: z.string().nullable().optional(),
-  line_items: z.array(shopifyLineItemSchema).default([]),
-  note_attributes: z.array(shopifyAttributeSchema).optional(),
-  attributes: z.array(shopifyAttributeSchema).optional()
+	id: z.union([z.string(), z.number()]),
+	order_number: z.union([z.string(), z.number()]).optional(),
+	customer: shopifyCustomerSchema,
+	email: shopifyEmailSchema,
+	currency: z.string().min(1).optional(),
+	subtotal_price: z.union([z.string(), z.number()]).optional(),
+	total_price: z.union([z.string(), z.number()]).optional(),
+	financial_status: z.string().nullable().optional(),
+	fulfillment_status: z.string().nullable().optional(),
+	processed_at: z.string().datetime({ offset: true }).nullable().optional(),
+	created_at: z.string().datetime({ offset: true }).nullable().optional(),
+	updated_at: z.string().datetime({ offset: true }).nullable().optional(),
+	checkout_token: z.string().nullable().optional(),
+	cart_token: z.string().nullable().optional(),
+	landing_site: z.string().nullable().optional(),
+	referring_site: z.string().nullable().optional(),
+	source_name: z.string().nullable().optional(),
+	line_items: z.array(shopifyLineItemSchema).default([]),
+	note_attributes: z.array(shopifyAttributeSchema).optional(),
+	attributes: z.array(shopifyAttributeSchema).optional(),
 });
 
 const installRequestSchema = z.object({
-  shop: z.string().min(1),
-  returnTo: z.string().optional()
+	shop: z.string().min(1),
+	returnTo: z.string().optional(),
 });
 
 const callbackQuerySchema = z.object({
-  shop: z.string().min(1),
-  code: z.string().min(1),
-  hmac: z.string().min(1),
-  state: z.string().min(1)
+	shop: z.string().min(1),
+	code: z.string().min(1),
+	hmac: z.string().min(1),
+	state: z.string().min(1),
 });
 
 const shopifyBackfillRequestSchema = z
-  .object({
-    startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
-  })
-  .superRefine((value, ctx) => {
-    if (value.startDate > value.endDate) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'startDate must be on or before endDate',
-        path: ['startDate']
-      });
-    }
-  });
+	.object({
+		startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+		endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+	})
+	.superRefine((value, ctx) => {
+		if (value.startDate > value.endDate) {
+			ctx.addIssue({
+				code: z.ZodIssueCode.custom,
+				message: "startDate must be on or before endDate",
+				path: ["startDate"],
+			});
+		}
+	});
 
 type ShopifyOrderPayload = z.infer<typeof shopifyOrderPayloadSchema>;
 type ShopifyLineItemPayload = z.infer<typeof shopifyLineItemSchema>;
 
 type WebhookReceiptRow = {
-  id: number;
-  status: string;
-  processed_at: Date | null;
+	id: number;
+	status: string;
+	processed_at: Date | null;
 };
 
 type PersistWebhookInput = {
-  payload: ShopifyOrderPayload;
-  rawPayload: unknown;
-  rawBody: Buffer;
-  shopDomain: string;
-  topic: string;
-  webhookId: string | null;
+	payload: ShopifyOrderPayload;
+	rawPayload: unknown;
+	rawBody: Buffer;
+	shopDomain: string;
+	topic: string;
+	webhookId: string | null;
 };
 
 type ShopifyInstallStateRow = {
-  id: string;
-  return_to: string | null;
+	id: string;
+	return_to: string | null;
 };
 
 type ShopifyInstallationSummaryRow = {
-  shop_domain: string;
-  status: string;
-  installed_at: Date;
-  reconnected_at: Date | null;
-  uninstalled_at: Date | null;
-  scopes: string[];
-  webhook_base_url: string;
-  webhook_subscriptions: unknown;
-  shop_name: string | null;
-  shop_email: string | null;
-  shop_currency: string | null;
-  updated_at: Date;
+	shop_domain: string;
+	status: string;
+	installed_at: Date;
+	reconnected_at: Date | null;
+	uninstalled_at: Date | null;
+	scopes: string[];
+	webhook_base_url: string;
+	webhook_subscriptions: unknown;
+	shop_name: string | null;
+	shop_email: string | null;
+	shop_currency: string | null;
+	updated_at: Date;
 };
 
 type ShopifyShopIdentity = {
-  myshopifyDomain: string;
-  name: string | null;
-  email: string | null;
-  currencyCode: string | null;
-  raw: unknown;
+	myshopifyDomain: string;
+	name: string | null;
+	email: string | null;
+	currencyCode: string | null;
+	raw: unknown;
 };
 
 type ShopifyWebhookSubscription = {
-  topic: string;
-  id: string;
-  callbackUrl: string | null;
+	topic: string;
+	id: string;
+	callbackUrl: string | null;
 };
 
 type ShopifyOrdersRestResponse = {
-  orders?: unknown[];
+	orders?: unknown[];
 };
 
 type ShopifyAttributionRecoveryResponse = {
@@ -203,169 +206,193 @@ type ShopifyAttributionRecoveryResponse = {
 };
 
 class ShopifyHttpError extends Error {
-  statusCode: number;
-  code: string;
-  details?: unknown;
+	statusCode: number;
+	code: string;
+	details?: unknown;
 
-  constructor(statusCode: number, code: string, message: string, details?: unknown) {
-    super(message);
-    this.name = 'ShopifyHttpError';
-    this.statusCode = statusCode;
-    this.code = code;
-    this.details = details;
-  }
+	constructor(
+		statusCode: number,
+		code: string,
+		message: string,
+		details?: unknown,
+	) {
+		super(message);
+		this.name = "ShopifyHttpError";
+		this.statusCode = statusCode;
+		this.code = code;
+		this.details = details;
+	}
 }
 
 function getShopifySharedSecret(): string {
-  return env.SHOPIFY_WEBHOOK_SECRET || env.SHOPIFY_APP_API_SECRET;
+	return env.SHOPIFY_WEBHOOK_SECRET || env.SHOPIFY_APP_API_SECRET;
 }
 
 function normalizeShopDomain(rawShop: string): string {
-  const normalized = rawShop.trim().toLowerCase();
+	const normalized = rawShop.trim().toLowerCase();
 
-  if (!/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/.test(normalized)) {
-    throw new ShopifyHttpError(400, 'invalid_shop_domain', 'shop must be a valid *.myshopify.com domain');
-  }
+	if (!/^[a-z0-9][a-z0-9-]*\.myshopify\.com$/.test(normalized)) {
+		throw new ShopifyHttpError(
+			400,
+			"invalid_shop_domain",
+			"shop must be a valid *.myshopify.com domain",
+		);
+	}
 
-  return normalized;
+	return normalized;
 }
 
 function normalizeReturnTo(rawReturnTo: string | undefined): string | null {
-  if (!rawReturnTo) {
-    return null;
-  }
+	if (!rawReturnTo) {
+		return null;
+	}
 
-  const trimmed = rawReturnTo.trim();
+	const trimmed = rawReturnTo.trim();
 
-  if (!trimmed) {
-    return null;
-  }
+	if (!trimmed) {
+		return null;
+	}
 
-  if (trimmed.startsWith('/')) {
-    return trimmed;
-  }
+	if (trimmed.startsWith("/")) {
+		return trimmed;
+	}
 
-  try {
-    const url = new URL(trimmed);
+	try {
+		const url = new URL(trimmed);
 
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-      throw new Error('Unsupported redirect protocol');
-    }
+		if (url.protocol !== "http:" && url.protocol !== "https:") {
+			throw new Error("Unsupported redirect protocol");
+		}
 
-    return url.toString();
-  } catch {
-    throw new ShopifyHttpError(400, 'invalid_return_to', 'returnTo must be an absolute http(s) URL or a root-relative path');
-  }
+		return url.toString();
+	} catch {
+		throw new ShopifyHttpError(
+			400,
+			"invalid_return_to",
+			"returnTo must be an absolute http(s) URL or a root-relative path",
+		);
+	}
 }
 
 function assertShopifyAppConfig(): void {
-  const missing = [
-    ['SHOPIFY_APP_API_KEY', env.SHOPIFY_APP_API_KEY],
-    ['SHOPIFY_APP_API_SECRET', env.SHOPIFY_APP_API_SECRET],
-    ['SHOPIFY_APP_API_VERSION', env.SHOPIFY_APP_API_VERSION],
-    ['SHOPIFY_APP_BASE_URL', env.SHOPIFY_APP_BASE_URL],
-    ['SHOPIFY_APP_ENCRYPTION_KEY', env.SHOPIFY_APP_ENCRYPTION_KEY]
-  ]
-    .filter(([, value]) => !value)
-    .map(([key]) => key);
+	const missing = [
+		["SHOPIFY_APP_API_KEY", env.SHOPIFY_APP_API_KEY],
+		["SHOPIFY_APP_API_SECRET", env.SHOPIFY_APP_API_SECRET],
+		["SHOPIFY_APP_API_VERSION", env.SHOPIFY_APP_API_VERSION],
+		["SHOPIFY_APP_BASE_URL", env.SHOPIFY_APP_BASE_URL],
+		["SHOPIFY_APP_ENCRYPTION_KEY", env.SHOPIFY_APP_ENCRYPTION_KEY],
+	]
+		.filter(([, value]) => !value)
+		.map(([key]) => key);
 
-  if (missing.length > 0) {
-    throw new ShopifyHttpError(
-      500,
-      'shopify_app_config_missing',
-      `Missing Shopify app configuration: ${missing.join(', ')}`
-    );
-  }
+	if (missing.length > 0) {
+		throw new ShopifyHttpError(
+			500,
+			"shopify_app_config_missing",
+			`Missing Shopify app configuration: ${missing.join(", ")}`,
+		);
+	}
 }
 
 function getAppBaseUrl(): string {
-  const url = new URL(env.SHOPIFY_APP_BASE_URL);
-  return url.toString().replace(/\/$/, '');
+	const url = new URL(env.SHOPIFY_APP_BASE_URL);
+	return url.toString().replace(/\/$/, "");
 }
 
 function buildOAuthCallbackUrl(): string {
-  return `${getAppBaseUrl()}/shopify/oauth/callback`;
+	return `${getAppBaseUrl()}/shopify/oauth/callback`;
 }
 
 function createOAuthStateDigest(state: string): string {
-  return createHash('sha256').update(state).digest('hex');
+	return createHash("sha256").update(state).digest("hex");
 }
 
-function verifyWebhookSignature(rawBody: Buffer, signature: string | undefined): boolean {
-  const secret = getShopifySharedSecret();
+function verifyWebhookSignature(
+	rawBody: Buffer,
+	signature: string | undefined,
+): boolean {
+	const secret = getShopifySharedSecret();
 
-  if (!secret || !signature) {
-    return false;
-  }
+	if (!secret || !signature) {
+		return false;
+	}
 
-  const digest = createHmac('sha256', secret).update(rawBody).digest('base64');
+	const digest = createHmac("sha256", secret).update(rawBody).digest("base64");
 
-  if (digest.length !== signature.length) {
-    return false;
-  }
+	if (digest.length !== signature.length) {
+		return false;
+	}
 
-  return timingSafeEqual(Buffer.from(digest), Buffer.from(signature));
+	return timingSafeEqual(Buffer.from(digest), Buffer.from(signature));
 }
 
 function createOAuthHmacMessage(originalUrl: string): string {
-  const queryIndex = originalUrl.indexOf('?');
+	const queryIndex = originalUrl.indexOf("?");
 
-  if (queryIndex === -1) {
-    return '';
-  }
+	if (queryIndex === -1) {
+		return "";
+	}
 
-  const params = new URLSearchParams(originalUrl.slice(queryIndex + 1));
-  const pairs: string[] = [];
+	const params = new URLSearchParams(originalUrl.slice(queryIndex + 1));
+	const pairs: string[] = [];
 
-  for (const [key, value] of params.entries()) {
-    if (key === 'hmac' || key === 'signature') {
-      continue;
-    }
+	for (const [key, value] of params.entries()) {
+		if (key === "hmac" || key === "signature") {
+			continue;
+		}
 
-    pairs.push(`${key}=${value}`);
-  }
+		pairs.push(`${key}=${value}`);
+	}
 
-  return pairs.sort().join('&');
+	return pairs.sort().join("&");
 }
 
-function verifyShopifyOAuthHmac(originalUrl: string, providedHmac: string): boolean {
-  const secret = env.SHOPIFY_APP_API_SECRET;
+function verifyShopifyOAuthHmac(
+	originalUrl: string,
+	providedHmac: string,
+): boolean {
+	const secret = env.SHOPIFY_APP_API_SECRET;
 
-  if (!secret || !providedHmac) {
-    return false;
-  }
+	if (!secret || !providedHmac) {
+		return false;
+	}
 
-  const digest = createHmac('sha256', secret).update(createOAuthHmacMessage(originalUrl)).digest('hex');
+	const digest = createHmac("sha256", secret)
+		.update(createOAuthHmacMessage(originalUrl))
+		.digest("hex");
 
-  if (digest.length !== providedHmac.length) {
-    return false;
-  }
+	if (digest.length !== providedHmac.length) {
+		return false;
+	}
 
-  return timingSafeEqual(Buffer.from(digest), Buffer.from(providedHmac));
+	return timingSafeEqual(Buffer.from(digest), Buffer.from(providedHmac));
 }
 
-function buildShopifyInstallUrl(shopDomain: string, state: string, returnTo: string | null): string {
-  assertShopifyAppConfig();
+function buildShopifyInstallUrl(
+	shopDomain: string,
+	state: string,
+	returnTo: string | null,
+): string {
+	assertShopifyAppConfig();
 
-  const url = new URL(`https://${shopDomain}/admin/oauth/authorize`);
-  const scopes = env.SHOPIFY_APP_SCOPES.split(',')
-    .map((scope) => scope.trim())
-    .filter(Boolean);
-  url.searchParams.set('client_id', env.SHOPIFY_APP_API_KEY);
-  url.searchParams.set('scope', scopes.join(','));
-  url.searchParams.set('redirect_uri', buildOAuthCallbackUrl());
-  url.searchParams.set('state', state);
+	const url = new URL(`https://${shopDomain}/admin/oauth/authorize`);
+	url.searchParams.set("client_id", env.SHOPIFY_APP_API_KEY);
+	url.searchParams.set("scope", env.SHOPIFY_APP_SCOPES.join(","));
+	url.searchParams.set("redirect_uri", buildOAuthCallbackUrl());
+	url.searchParams.set("state", state);
 
-  if (returnTo) {
-    url.searchParams.set('return_to', returnTo);
-  }
+	if (returnTo) {
+		url.searchParams.set("return_to", returnTo);
+	}
 
-  return url.toString();
+	return url.toString();
 }
 
-async function assertSingleStoreInstallAllowed(shopDomain: string): Promise<void> {
-  const result = await query<{ shop_domain: string; status: string }>(
-    `
+async function assertSingleStoreInstallAllowed(
+	shopDomain: string,
+): Promise<void> {
+	const result = await query<{ shop_domain: string; status: string }>(
+		`
       SELECT shop_domain, status
       FROM shopify_app_installations
       WHERE shop_domain <> $1
@@ -373,21 +400,25 @@ async function assertSingleStoreInstallAllowed(shopDomain: string): Promise<void
       ORDER BY updated_at DESC
       LIMIT 1
     `,
-    [shopDomain]
-  );
+		[shopDomain],
+	);
 
-  if (result.rowCount) {
-    throw new ShopifyHttpError(
-      409,
-      'shopify_store_already_connected',
-      `A different Shopify store is already connected for this MVP environment: ${result.rows[0].shop_domain}`
-    );
-  }
+	if (result.rowCount) {
+		throw new ShopifyHttpError(
+			409,
+			"shopify_store_already_connected",
+			`A different Shopify store is already connected for this MVP environment: ${result.rows[0].shop_domain}`,
+		);
+	}
 }
 
-async function persistOAuthState(shopDomain: string, state: string, returnTo: string | null): Promise<void> {
-  await query(
-    `
+async function persistOAuthState(
+	shopDomain: string,
+	state: string,
+	returnTo: string | null,
+): Promise<void> {
+	await query(
+		`
       INSERT INTO shopify_oauth_states (
         shop_domain,
         state_digest,
@@ -396,14 +427,22 @@ async function persistOAuthState(shopDomain: string, state: string, returnTo: st
       )
       VALUES ($1, $2, $3, now() + ($4 || ' minutes')::interval)
     `,
-    [shopDomain, createOAuthStateDigest(state), returnTo, String(OAUTH_STATE_TTL_MINUTES)]
-  );
+		[
+			shopDomain,
+			createOAuthStateDigest(state),
+			returnTo,
+			String(OAUTH_STATE_TTL_MINUTES),
+		],
+	);
 }
 
-async function consumeOAuthState(shopDomain: string, state: string): Promise<ShopifyInstallStateRow> {
-  return withTransaction(async (client) => {
-    const stateResult = await client.query<ShopifyInstallStateRow>(
-      `
+async function consumeOAuthState(
+	shopDomain: string,
+	state: string,
+): Promise<ShopifyInstallStateRow> {
+	return withTransaction(async (client) => {
+		const stateResult = await client.query<ShopifyInstallStateRow>(
+			`
         SELECT id, return_to
         FROM shopify_oauth_states
         WHERE shop_domain = $1
@@ -414,327 +453,404 @@ async function consumeOAuthState(shopDomain: string, state: string): Promise<Sho
         LIMIT 1
         FOR UPDATE
       `,
-      [shopDomain, createOAuthStateDigest(state)]
-    );
+			[shopDomain, createOAuthStateDigest(state)],
+		);
 
-    if (!stateResult.rowCount) {
-      throw new ShopifyHttpError(400, 'invalid_oauth_state', 'OAuth state is invalid or expired');
-    }
+		if (!stateResult.rowCount) {
+			throw new ShopifyHttpError(
+				400,
+				"invalid_oauth_state",
+				"OAuth state is invalid or expired",
+			);
+		}
 
-    await client.query(
-      `
+		await client.query(
+			`
         UPDATE shopify_oauth_states
         SET consumed_at = now()
         WHERE id = $1
       `,
-      [stateResult.rows[0].id]
-    );
+			[stateResult.rows[0].id],
+		);
 
-    return stateResult.rows[0];
-  });
+		return stateResult.rows[0];
+	});
 }
 
-async function exchangeCodeForAccessToken(shopDomain: string, code: string): Promise<{ accessToken: string; scopes: string[] }> {
-  const response = await fetch(`https://${shopDomain}/admin/oauth/access_token`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      accept: 'application/json'
-    },
-    body: JSON.stringify({
-      client_id: env.SHOPIFY_APP_API_KEY,
-      client_secret: env.SHOPIFY_APP_API_SECRET,
-      code
-    })
-  });
+async function exchangeCodeForAccessToken(
+	shopDomain: string,
+	code: string,
+): Promise<{ accessToken: string; scopes: string[] }> {
+	const response = await fetch(
+		`https://${shopDomain}/admin/oauth/access_token`,
+		{
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				accept: "application/json",
+			},
+			body: JSON.stringify({
+				client_id: env.SHOPIFY_APP_API_KEY,
+				client_secret: env.SHOPIFY_APP_API_SECRET,
+				code,
+			}),
+		},
+	);
 
-  const payload = (await response.json()) as {
-    access_token?: string;
-    scope?: string;
-    error?: string;
-    error_description?: string;
-  };
+	const payload = (await response.json()) as {
+		access_token?: string;
+		scope?: string;
+		error?: string;
+		error_description?: string;
+	};
 
-  if (!response.ok || !payload.access_token) {
-    throw new ShopifyHttpError(502, 'shopify_token_exchange_failed', 'Shopify OAuth token exchange failed', payload);
-  }
+	if (!response.ok || !payload.access_token) {
+		throw new ShopifyHttpError(
+			502,
+			"shopify_token_exchange_failed",
+			"Shopify OAuth token exchange failed",
+			payload,
+		);
+	}
 
-  return {
-    accessToken: payload.access_token,
-    scopes: payload.scope
-      ? payload.scope
-          .split(',')
-          .map((value) => value.trim())
-          .filter(Boolean)
-      : []
-  };
+	return {
+		accessToken: payload.access_token,
+		scopes: payload.scope
+			? payload.scope
+					.split(",")
+					.map((value) => value.trim())
+					.filter(Boolean)
+			: [],
+	};
 }
 
 async function callShopifyAdminGraphql<TData>(
-  shopDomain: string,
-  accessToken: string,
-  graphqlQuery: string,
-  variables?: Record<string, unknown>
+	shopDomain: string,
+	accessToken: string,
+	graphqlQuery: string,
+	variables?: Record<string, unknown>,
 ): Promise<TData> {
-  const response = await fetch(`https://${shopDomain}/admin/api/${env.SHOPIFY_APP_API_VERSION}/graphql.json`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      accept: 'application/json',
-      'x-shopify-access-token': accessToken
-    },
-    body: JSON.stringify({
-      query: graphqlQuery,
-      variables: variables ?? {}
-    })
-  });
+	const response = await fetch(
+		`https://${shopDomain}/admin/api/${env.SHOPIFY_APP_API_VERSION}/graphql.json`,
+		{
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				accept: "application/json",
+				"x-shopify-access-token": accessToken,
+			},
+			body: JSON.stringify({
+				query: graphqlQuery,
+				variables: variables ?? {},
+			}),
+		},
+	);
 
-  const payload = (await response.json()) as {
-    data?: TData;
-    errors?: Array<{ message: string }>;
-  };
+	const payload = (await response.json()) as {
+		data?: TData;
+		errors?: Array<{ message: string }>;
+	};
 
-  if (!response.ok || payload.errors?.length || !payload.data) {
-    throw new ShopifyHttpError(502, 'shopify_admin_api_failed', 'Shopify Admin API request failed', payload);
-  }
+	if (!response.ok || payload.errors?.length || !payload.data) {
+		throw new ShopifyHttpError(
+			502,
+			"shopify_admin_api_failed",
+			"Shopify Admin API request failed",
+			payload,
+		);
+	}
 
-  return payload.data;
+	return payload.data;
 }
 
 async function callShopifyAdminRest<TData>(
-  shopDomain: string,
-  accessToken: string,
-  path: string,
-  searchParams?: URLSearchParams
+	shopDomain: string,
+	accessToken: string,
+	path: string,
+	searchParams?: URLSearchParams,
 ): Promise<{ data: TData; linkHeader: string | null }> {
-  const url = new URL(`https://${shopDomain}/admin/api/${env.SHOPIFY_APP_API_VERSION}/${path.replace(/^\//, '')}`);
+	const url = new URL(
+		`https://${shopDomain}/admin/api/${env.SHOPIFY_APP_API_VERSION}/${path.replace(/^\//, "")}`,
+	);
 
-  if (searchParams) {
-    url.search = searchParams.toString();
-  }
+	if (searchParams) {
+		url.search = searchParams.toString();
+	}
 
-  const response = await fetch(url, {
-    method: 'GET',
-    headers: {
-      accept: 'application/json',
-      'x-shopify-access-token': accessToken
-    }
-  });
+	const response = await fetch(url, {
+		method: "GET",
+		headers: {
+			accept: "application/json",
+			"x-shopify-access-token": accessToken,
+		},
+	});
 
-  const payload = (await response.json()) as TData & {
-    errors?: Array<{ message: string }>;
-    error?: string;
-  };
+	const payload = (await response.json()) as TData & {
+		errors?: Array<{ message: string }>;
+		error?: string;
+	};
 
-  if (!response.ok || ('errors' in payload && Array.isArray(payload.errors) && payload.errors.length > 0)) {
-    throw new ShopifyHttpError(502, 'shopify_admin_api_failed', 'Shopify Admin API request failed', payload);
-  }
+	if (
+		!response.ok ||
+		("errors" in payload &&
+			Array.isArray(payload.errors) &&
+			payload.errors.length > 0)
+	) {
+		throw new ShopifyHttpError(
+			502,
+			"shopify_admin_api_failed",
+			"Shopify Admin API request failed",
+			payload,
+		);
+	}
 
-  return {
-    data: payload,
-    linkHeader: response.headers.get('link')
-  };
+	return {
+		data: payload,
+		linkHeader: response.headers.get("link"),
+	};
 }
 
-function parseDateOnly(dateString: string): { year: number; month: number; day: number } {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateString);
-
-  if (!match) {
-    throw new ShopifyHttpError(400, 'invalid_date', 'Date must use YYYY-MM-DD format');
-  }
-
-  return {
-    year: Number(match[1]),
-    month: Number(match[2]),
-    day: Number(match[3])
-  };
-}
-
-function getTimeZoneLocalParts(date: Date, timeZone: string): {
-  year: number;
-  month: number;
-  day: number;
-  hour: number;
-  minute: number;
-  second: number;
+function parseDateOnly(dateString: string): {
+	year: number;
+	month: number;
+	day: number;
 } {
-  const formatter = new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hourCycle: 'h23'
-  });
+	const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateString);
 
-  const parts = formatter.formatToParts(date);
-  const get = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? '0');
+	if (!match) {
+		throw new ShopifyHttpError(
+			400,
+			"invalid_date",
+			"Date must use YYYY-MM-DD format",
+		);
+	}
 
-  return {
-    year: get('year'),
-    month: get('month'),
-    day: get('day'),
-    hour: get('hour'),
-    minute: get('minute'),
-    second: get('second')
-  };
+	return {
+		year: Number(match[1]),
+		month: Number(match[2]),
+		day: Number(match[3]),
+	};
+}
+
+function getTimeZoneLocalParts(
+	date: Date,
+	timeZone: string,
+): {
+	year: number;
+	month: number;
+	day: number;
+	hour: number;
+	minute: number;
+	second: number;
+} {
+	const formatter = new Intl.DateTimeFormat("en-US", {
+		timeZone,
+		year: "numeric",
+		month: "2-digit",
+		day: "2-digit",
+		hour: "2-digit",
+		minute: "2-digit",
+		second: "2-digit",
+		hourCycle: "h23",
+	});
+
+	const parts = formatter.formatToParts(date);
+	const get = (type: string) =>
+		Number(parts.find((part) => part.type === type)?.value ?? "0");
+
+	return {
+		year: get("year"),
+		month: get("month"),
+		day: get("day"),
+		hour: get("hour"),
+		minute: get("minute"),
+		second: get("second"),
+	};
 }
 
 function convertLocalDateTimeInTimeZoneToUtc(
-  dateString: string,
-  timeZone: string,
-  kind: 'start' | 'end'
+	dateString: string,
+	timeZone: string,
+	kind: "start" | "end",
 ): string {
-  const { year, month, day } = parseDateOnly(dateString);
-  const target = {
-    year,
-    month,
-    day,
-    hour: kind === 'start' ? 0 : 23,
-    minute: kind === 'start' ? 0 : 59,
-    second: kind === 'start' ? 0 : 59
-  };
+	const { year, month, day } = parseDateOnly(dateString);
+	const target = {
+		year,
+		month,
+		day,
+		hour: kind === "start" ? 0 : 23,
+		minute: kind === "start" ? 0 : 59,
+		second: kind === "start" ? 0 : 59,
+	};
 
-  let utcMillis = Date.UTC(target.year, target.month - 1, target.day, target.hour, target.minute, target.second);
+	let utcMillis = Date.UTC(
+		target.year,
+		target.month - 1,
+		target.day,
+		target.hour,
+		target.minute,
+		target.second,
+	);
 
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const actual = getTimeZoneLocalParts(new Date(utcMillis), timeZone);
-    const actualMillis = Date.UTC(
-      actual.year,
-      actual.month - 1,
-      actual.day,
-      actual.hour,
-      actual.minute,
-      actual.second
-    );
-    const targetMillis = Date.UTC(
-      target.year,
-      target.month - 1,
-      target.day,
-      target.hour,
-      target.minute,
-      target.second
-    );
-    const deltaMs = actualMillis - targetMillis;
+	for (let attempt = 0; attempt < 4; attempt += 1) {
+		const actual = getTimeZoneLocalParts(new Date(utcMillis), timeZone);
+		const actualMillis = Date.UTC(
+			actual.year,
+			actual.month - 1,
+			actual.day,
+			actual.hour,
+			actual.minute,
+			actual.second,
+		);
+		const targetMillis = Date.UTC(
+			target.year,
+			target.month - 1,
+			target.day,
+			target.hour,
+			target.minute,
+			target.second,
+		);
+		const deltaMs = actualMillis - targetMillis;
 
-    if (deltaMs === 0) {
-      break;
-    }
+		if (deltaMs === 0) {
+			break;
+		}
 
-    utcMillis -= deltaMs;
-  }
+		utcMillis -= deltaMs;
+	}
 
-  if (kind === 'end') {
-    utcMillis += 999;
-  }
+	if (kind === "end") {
+		utcMillis += 999;
+	}
 
-  return new Date(utcMillis).toISOString();
+	return new Date(utcMillis).toISOString();
 }
 
 function extractShopifyNextPageInfo(linkHeader: string | null): string | null {
-  if (!linkHeader) {
-    return null;
-  }
+	if (!linkHeader) {
+		return null;
+	}
 
-  const nextLink = linkHeader
-    .split(',')
-    .map((entry) => entry.trim())
-    .find((entry) => entry.includes('rel="next"'));
+	const nextLink = linkHeader
+		.split(",")
+		.map((entry) => entry.trim())
+		.find((entry) => entry.includes('rel="next"'));
 
-  if (!nextLink) {
-    return null;
-  }
+	if (!nextLink) {
+		return null;
+	}
 
-  const match = nextLink.match(/<([^>]+)>/);
-  if (!match) {
-    return null;
-  }
+	const match = nextLink.match(/<([^>]+)>/);
+	if (!match) {
+		return null;
+	}
 
-  const url = new URL(match[1]);
-  return url.searchParams.get('page_info');
+	const url = new URL(match[1]);
+	return url.searchParams.get("page_info");
 }
 
 async function backfillShopifyOrders(
-  shopDomain: string,
-  accessToken: string,
-  reportingTimezone: string,
-  startDate: string,
-  endDate: string
-): Promise<{ importedOrders: number; processedOrders: number; duplicatedOrders: number }> {
-  let pageInfo: string | null = null;
-  let importedOrders = 0;
-  let processedOrders = 0;
-  let duplicatedOrders = 0;
+	shopDomain: string,
+	accessToken: string,
+	reportingTimezone: string,
+	startDate: string,
+	endDate: string,
+): Promise<{
+	importedOrders: number;
+	processedOrders: number;
+	duplicatedOrders: number;
+}> {
+	let pageInfo: string | null = null;
+	let importedOrders = 0;
+	let processedOrders = 0;
+	let duplicatedOrders = 0;
 
-  do {
-    const searchParams = new URLSearchParams();
-    searchParams.set('limit', '250');
+	do {
+		const searchParams = new URLSearchParams();
+		searchParams.set("limit", "250");
 
-    if (pageInfo) {
-      searchParams.set('page_info', pageInfo);
-    } else {
-      searchParams.set('status', 'any');
-      searchParams.set('processed_at_min', convertLocalDateTimeInTimeZoneToUtc(startDate, reportingTimezone, 'start'));
-      searchParams.set('processed_at_max', convertLocalDateTimeInTimeZoneToUtc(endDate, reportingTimezone, 'end'));
-      searchParams.set('order', 'processed_at asc');
-    }
+		if (pageInfo) {
+			searchParams.set("page_info", pageInfo);
+		} else {
+			searchParams.set("status", "any");
+			searchParams.set(
+				"processed_at_min",
+				convertLocalDateTimeInTimeZoneToUtc(
+					startDate,
+					reportingTimezone,
+					"start",
+				),
+			);
+			searchParams.set(
+				"processed_at_max",
+				convertLocalDateTimeInTimeZoneToUtc(endDate, reportingTimezone, "end"),
+			);
+			searchParams.set("order", "processed_at asc");
+		}
 
-    const { data, linkHeader } = await callShopifyAdminRest<ShopifyOrdersRestResponse>(
-      shopDomain,
-      accessToken,
-      'orders.json',
-      searchParams
-    );
+		const { data, linkHeader } =
+			await callShopifyAdminRest<ShopifyOrdersRestResponse>(
+				shopDomain,
+				accessToken,
+				"orders.json",
+				searchParams,
+			);
 
-    const rawOrders = Array.isArray(data.orders) ? data.orders : [];
+		const rawOrders = Array.isArray(data.orders) ? data.orders : [];
 
-    for (const rawOrder of rawOrders) {
-      const payload = shopifyOrderPayloadSchema.parse(rawOrder);
-      const persisted = await persistWebhook({
-        payload,
-        rawPayload: rawOrder,
-        rawBody: Buffer.from(JSON.stringify(rawOrder)),
-        shopDomain,
-        topic: 'orders/backfill',
-        webhookId: null
-      });
+		for (const rawOrder of rawOrders) {
+			const payload = shopifyOrderPayloadSchema.parse(rawOrder);
+			const persisted = await persistWebhook({
+				payload,
+				rawPayload: rawOrder,
+				rawBody: Buffer.from(JSON.stringify(rawOrder)),
+				shopDomain,
+				topic: "orders/backfill",
+				webhookId: null,
+			});
 
-      importedOrders += 1;
-      if (persisted.duplicated) {
-        duplicatedOrders += 1;
-      } else {
-        processedOrders += 1;
-      }
-    }
+			importedOrders += 1;
+			if (persisted.duplicated) {
+				duplicatedOrders += 1;
+			} else {
+				processedOrders += 1;
+			}
+		}
 
-    pageInfo = extractShopifyNextPageInfo(linkHeader);
-  } while (pageInfo);
+		pageInfo = extractShopifyNextPageInfo(linkHeader);
+	} while (pageInfo);
 
-  return {
-    importedOrders,
-    processedOrders,
-    duplicatedOrders
-  };
+	return {
+		importedOrders,
+		processedOrders,
+		duplicatedOrders,
+	};
 }
 
 async function recoverShopifyAttributionHints(
-  reportingTimezone: string,
-  startDate: string,
-  endDate: string
+	reportingTimezone: string,
+	startDate: string,
+	endDate: string,
 ): Promise<ShopifyAttributionRecoveryResponse> {
-  const processedAtMin = convertLocalDateTimeInTimeZoneToUtc(startDate, reportingTimezone, 'start');
-  const processedAtMax = convertLocalDateTimeInTimeZoneToUtc(endDate, reportingTimezone, 'end');
+	const processedAtMin = convertLocalDateTimeInTimeZoneToUtc(
+		startDate,
+		reportingTimezone,
+		"start",
+	);
+	const processedAtMax = convertLocalDateTimeInTimeZoneToUtc(
+		endDate,
+		reportingTimezone,
+		"end",
+	);
 
-  const result = await query<{
-    shopify_order_id: string;
-    shopify_customer_id: string | null;
-    landing_session_id: string | null;
-    payload_hash: string | null;
-    raw_payload: unknown;
-  }>(
-    `
+	const result = await query<{
+		shopify_order_id: string;
+		shopify_customer_id: string | null;
+		landing_session_id: string | null;
+		payload_hash: string | null;
+		raw_payload: unknown;
+	}>(
+		`
       SELECT
         o.shopify_order_id,
         o.shopify_customer_id,
@@ -758,110 +874,130 @@ async function recoverShopifyAttributionHints(
         )
       ORDER BY o.processed_at ASC, o.shopify_order_id ASC
     `,
-    [processedAtMin, processedAtMax]
-  );
+		[processedAtMin, processedAtMax],
+	);
 
-  let rescannedOrders = 0;
-  let relinkedOrders = 0;
-  let requeuedOrders = 0;
-  let shopifyHintAttributedOrders = 0;
+	let rescannedOrders = 0;
+	let relinkedOrders = 0;
+	let requeuedOrders = 0;
+	let shopifyHintAttributedOrders = 0;
 
-  for (const row of result.rows) {
-    const parsedPayload = shopifyOrderPayloadSchema.safeParse(row.raw_payload);
+	for (const row of result.rows) {
+		const parsedPayload = shopifyOrderPayloadSchema.safeParse(row.raw_payload);
 
-    if (!parsedPayload.success) {
-      logWarning('shopify_attribution_hint_recovery_skipped', {
-        shopifyOrderId: row.shopify_order_id,
-        reason: 'invalid_raw_payload',
-        issues: parsedPayload.error.issues
-      });
-      continue;
-    }
+		if (!parsedPayload.success) {
+			logWarning("shopify_attribution_hint_recovery_skipped", {
+				shopifyOrderId: row.shopify_order_id,
+				reason: "invalid_raw_payload",
+				issues: parsedPayload.error.issues,
+			});
+			continue;
+		}
 
-    rescannedOrders += 1;
+		rescannedOrders += 1;
 
-    await withTransaction(async (client) => {
-      const resolvedLandingSessionId = await resolveLandingSessionId(client, parsedPayload.data);
-      const shouldUpdateLandingSessionId =
-        resolvedLandingSessionId !== null && resolvedLandingSessionId !== row.landing_session_id;
+		await withTransaction(async (client) => {
+			const resolvedLandingSessionId = await resolveLandingSessionId(
+				client,
+				parsedPayload.data,
+			);
+			const shouldUpdateLandingSessionId =
+				resolvedLandingSessionId !== null &&
+				resolvedLandingSessionId !== row.landing_session_id;
 
-      if (shouldUpdateLandingSessionId) {
-        await client.query(
-          `
+			if (shouldUpdateLandingSessionId) {
+				await client.query(
+					`
             UPDATE shopify_orders
             SET
               landing_session_id = $2::uuid,
               ingested_at = now()
             WHERE shopify_order_id = $1
           `,
-          [row.shopify_order_id, resolvedLandingSessionId]
-        );
-        relinkedOrders += 1;
-      }
+					[row.shopify_order_id, resolvedLandingSessionId],
+				);
+				relinkedOrders += 1;
+			}
 
-      await stitchKnownCustomerIdentity(client, {
-        shopifyOrderId: row.shopify_order_id,
-        shopifyCustomerId: row.shopify_customer_id,
-        email: parsedPayload.data.email ?? parsedPayload.data.customer?.email ?? null,
-        phoneHash: buildHashedContactProfile({
-          email: parsedPayload.data.email ?? parsedPayload.data.customer?.email ?? null,
-          phone: parsedPayload.data.customer?.phone ?? null
-        }).phoneHash,
-        landingSessionId: resolvedLandingSessionId ?? row.landing_session_id,
-        checkoutToken: parsedPayload.data.checkout_token ?? null,
-        cartToken: parsedPayload.data.cart_token ?? null,
-        sourceTimestamp:
-          parsedPayload.data.updated_at ??
-          parsedPayload.data.processed_at ??
-          parsedPayload.data.created_at ??
-          new Date().toISOString(),
-        evidenceSource: 'backfill',
-        sourceTable: 'shopify_orders',
-        sourceRecordId: row.shopify_order_id,
-        idempotencyKey: `shopify_order_recovery_identity:${row.shopify_order_id}:${row.payload_hash ?? 'no_hash'}`
-      });
+			await stitchKnownCustomerIdentity(client, {
+				shopifyOrderId: row.shopify_order_id,
+				shopifyCustomerId: row.shopify_customer_id,
+				email:
+					parsedPayload.data.email ??
+					parsedPayload.data.customer?.email ??
+					null,
+				phoneHash: buildHashedContactProfile({
+					email:
+						parsedPayload.data.email ??
+						parsedPayload.data.customer?.email ??
+						null,
+					phone: parsedPayload.data.customer?.phone ?? null,
+				}).phoneHash,
+				landingSessionId: resolvedLandingSessionId ?? row.landing_session_id,
+				checkoutToken: parsedPayload.data.checkout_token ?? null,
+				cartToken: parsedPayload.data.cart_token ?? null,
+				sourceTimestamp:
+					parsedPayload.data.updated_at ??
+					parsedPayload.data.processed_at ??
+					parsedPayload.data.created_at ??
+					new Date().toISOString(),
+				evidenceSource: "backfill",
+				sourceTable: "shopify_orders",
+				sourceRecordId: row.shopify_order_id,
+				idempotencyKey: `shopify_order_recovery_identity:${row.shopify_order_id}:${row.payload_hash ?? "no_hash"}`,
+			});
 
-      const shopifyHintAttribution =
-        resolvedLandingSessionId === null ? extractShopifyHintAttribution(parsedPayload.data) : null;
+			const shopifyHintAttribution =
+				resolvedLandingSessionId === null
+					? extractShopifyHintAttribution(parsedPayload.data)
+					: null;
 
-      if (shopifyHintAttribution) {
-        await applySyntheticAttributionForOrder(
-          row.shopify_order_id,
-          {
-            ...shopifyHintAttribution,
-            attributionReason: 'shopify_hint_derived'
-          },
-          client
-        );
-        shopifyHintAttributedOrders += 1;
-        return;
-      }
+			if (shopifyHintAttribution) {
+				await applySyntheticAttributionForOrder(
+					row.shopify_order_id,
+					{
+						...shopifyHintAttribution,
+						matchSource: "shopify_hint_fallback",
+						attributionReason: "shopify_hint_derived",
+					},
+					client,
+				);
+				shopifyHintAttributedOrders += 1;
+				return;
+			}
 
-      await enqueueAttributionForOrder(row.shopify_order_id, 'shopify_attribution_hint_recovery', client);
-      requeuedOrders += 1;
-    });
-  }
+			await enqueueAttributionForOrder(
+				row.shopify_order_id,
+				"shopify_attribution_hint_recovery",
+				client,
+			);
+			requeuedOrders += 1;
+		});
+	}
 
-  return {
-    rescannedOrders,
-    relinkedOrders,
-    requeuedOrders,
-    shopifyHintAttributedOrders
-  };
+	return {
+		rescannedOrders,
+		relinkedOrders,
+		requeuedOrders,
+		shopifyHintAttributedOrders,
+	};
 }
 
-async function fetchShopIdentity(shopDomain: string, accessToken: string): Promise<ShopifyShopIdentity> {
-  const data = await callShopifyAdminGraphql<{
-    shop: {
-      name: string | null;
-      email: string | null;
-      currencyCode: string | null;
-      myshopifyDomain: string;
-    };
-  }>(
-    shopDomain,
-    accessToken,
-    `
+async function fetchShopIdentity(
+	shopDomain: string,
+	accessToken: string,
+): Promise<ShopifyShopIdentity> {
+	const data = await callShopifyAdminGraphql<{
+		shop: {
+			name: string | null;
+			email: string | null;
+			currencyCode: string | null;
+			myshopifyDomain: string;
+		};
+	}>(
+		shopDomain,
+		accessToken,
+		`
       query ConnectedShop {
         shop {
           name
@@ -870,43 +1006,43 @@ async function fetchShopIdentity(shopDomain: string, accessToken: string): Promi
           myshopifyDomain
         }
       }
-    `
-  );
+    `,
+	);
 
-  return {
-    myshopifyDomain: data.shop.myshopifyDomain,
-    name: data.shop.name,
-    email: data.shop.email,
-    currencyCode: data.shop.currencyCode,
-    raw: data.shop
-  };
+	return {
+		myshopifyDomain: data.shop.myshopifyDomain,
+		name: data.shop.name,
+		email: data.shop.email,
+		currencyCode: data.shop.currencyCode,
+		raw: data.shop,
+	};
 }
 
 async function provisionWebhookSubscriptions(
-  shopDomain: string,
-  accessToken: string,
-  webhookBaseUrl: string
+	shopDomain: string,
+	accessToken: string,
+	webhookBaseUrl: string,
 ): Promise<ShopifyWebhookSubscription[]> {
-  const subscriptions: ShopifyWebhookSubscription[] = [];
+	const subscriptions: ShopifyWebhookSubscription[] = [];
 
-  for (const subscription of SHOPIFY_WEBHOOK_TOPICS) {
-    const callbackUrl = `${webhookBaseUrl}${subscription.deliveryPath}`;
-    const data = await callShopifyAdminGraphql<{
-      webhookSubscriptionCreate: {
-        userErrors: Array<{ field: string[] | null; message: string }>;
-        webhookSubscription: {
-          id: string;
-          topic: string;
-          endpoint: {
-            __typename: string;
-            callbackUrl?: string | null;
-          } | null;
-        } | null;
-      };
-    }>(
-      shopDomain,
-      accessToken,
-      `
+	for (const subscription of SHOPIFY_WEBHOOK_TOPICS) {
+		const callbackUrl = `${webhookBaseUrl}${subscription.deliveryPath}`;
+		const data = await callShopifyAdminGraphql<{
+			webhookSubscriptionCreate: {
+				userErrors: Array<{ field: string[] | null; message: string }>;
+				webhookSubscription: {
+					id: string;
+					topic: string;
+					endpoint: {
+						__typename: string;
+						callbackUrl?: string | null;
+					} | null;
+				} | null;
+			};
+		}>(
+			shopDomain,
+			accessToken,
+			`
         mutation RegisterWebhook($topic: WebhookSubscriptionTopic!, $callbackUrl: URL!) {
           webhookSubscriptionCreate(
             topic: $topic
@@ -932,41 +1068,46 @@ async function provisionWebhookSubscriptions(
           }
         }
       `,
-      {
-        topic: subscription.topic,
-        callbackUrl
-      }
-    );
+			{
+				topic: subscription.topic,
+				callbackUrl,
+			},
+		);
 
-    if (data.webhookSubscriptionCreate.userErrors.length > 0 || !data.webhookSubscriptionCreate.webhookSubscription) {
-      throw new ShopifyHttpError(
-        502,
-        'shopify_webhook_registration_failed',
-        `Failed to register Shopify webhook for ${subscription.topic}`,
-        data.webhookSubscriptionCreate.userErrors
-      );
-    }
+		if (
+			data.webhookSubscriptionCreate.userErrors.length > 0 ||
+			!data.webhookSubscriptionCreate.webhookSubscription
+		) {
+			throw new ShopifyHttpError(
+				502,
+				"shopify_webhook_registration_failed",
+				`Failed to register Shopify webhook for ${subscription.topic}`,
+				data.webhookSubscriptionCreate.userErrors,
+			);
+		}
 
-    subscriptions.push({
-      topic: data.webhookSubscriptionCreate.webhookSubscription.topic,
-      id: data.webhookSubscriptionCreate.webhookSubscription.id,
-      callbackUrl: data.webhookSubscriptionCreate.webhookSubscription.endpoint?.callbackUrl ?? null
-    });
-  }
+		subscriptions.push({
+			topic: data.webhookSubscriptionCreate.webhookSubscription.topic,
+			id: data.webhookSubscriptionCreate.webhookSubscription.id,
+			callbackUrl:
+				data.webhookSubscriptionCreate.webhookSubscription.endpoint
+					?.callbackUrl ?? null,
+		});
+	}
 
-  return subscriptions;
+	return subscriptions;
 }
 
 async function upsertShopifyInstallation(params: {
-  shopDomain: string;
-  accessToken: string;
-  scopes: string[];
-  webhookBaseUrl: string;
-  webhookSubscriptions: ShopifyWebhookSubscription[];
-  shopIdentity: ShopifyShopIdentity;
+	shopDomain: string;
+	accessToken: string;
+	scopes: string[];
+	webhookBaseUrl: string;
+	webhookSubscriptions: ShopifyWebhookSubscription[];
+	shopIdentity: ShopifyShopIdentity;
 }): Promise<void> {
-  await query(
-    `
+	await query(
+		`
       INSERT INTO shopify_app_installations (
         shop_domain,
         access_token_encrypted,
@@ -1012,24 +1153,24 @@ async function upsertShopifyInstallation(params: {
         raw_shop_data = $10::jsonb,
         updated_at = now()
     `,
-    [
-      params.shopDomain,
-      params.accessToken,
-      env.SHOPIFY_APP_ENCRYPTION_KEY,
-      params.scopes,
-      params.webhookBaseUrl,
-      JSON.stringify(params.webhookSubscriptions),
-      params.shopIdentity.name,
-      params.shopIdentity.email,
-      params.shopIdentity.currencyCode,
-      JSON.stringify(params.shopIdentity.raw)
-    ]
-  );
+		[
+			params.shopDomain,
+			params.accessToken,
+			env.SHOPIFY_APP_ENCRYPTION_KEY,
+			params.scopes,
+			params.webhookBaseUrl,
+			JSON.stringify(params.webhookSubscriptions),
+			params.shopIdentity.name,
+			params.shopIdentity.email,
+			params.shopIdentity.currencyCode,
+			JSON.stringify(params.shopIdentity.raw),
+		],
+	);
 }
 
 async function getShopifyInstallationSummary(): Promise<ShopifyInstallationSummaryRow | null> {
-  const result = await query<ShopifyInstallationSummaryRow>(
-    `
+	const result = await query<ShopifyInstallationSummaryRow>(
+		`
       SELECT
         shop_domain,
         status,
@@ -1046,15 +1187,17 @@ async function getShopifyInstallationSummary(): Promise<ShopifyInstallationSumma
       FROM shopify_app_installations
       ORDER BY updated_at DESC
       LIMIT 1
-    `
-  );
+    `,
+	);
 
-  return result.rows[0] ?? null;
+	return result.rows[0] ?? null;
 }
 
-async function getActiveShopifyAccessToken(shopDomain: string): Promise<string> {
-  const result = await query<{ access_token: string }>(
-    `
+async function getActiveShopifyAccessToken(
+	shopDomain: string,
+): Promise<string> {
+	const result = await query<{ access_token: string }>(
+		`
       SELECT
         pgp_sym_decrypt(access_token_encrypted, $2) AS access_token
       FROM shopify_app_installations
@@ -1062,33 +1205,37 @@ async function getActiveShopifyAccessToken(shopDomain: string): Promise<string> 
         AND status = 'active'
       LIMIT 1
     `,
-    [shopDomain, env.SHOPIFY_APP_ENCRYPTION_KEY]
-  );
+		[shopDomain, env.SHOPIFY_APP_ENCRYPTION_KEY],
+	);
 
-  if (!result.rowCount) {
-    throw new ShopifyHttpError(404, 'shopify_installation_not_found', 'No active Shopify installation was found');
-  }
+	if (!result.rowCount) {
+		throw new ShopifyHttpError(
+			404,
+			"shopify_installation_not_found",
+			"No active Shopify installation was found",
+		);
+	}
 
-  return result.rows[0].access_token;
+	return result.rows[0].access_token;
 }
 
 async function getActiveInstalledShopDomain(): Promise<string | null> {
-  const result = await query<{ shop_domain: string }>(
-    `
+	const result = await query<{ shop_domain: string }>(
+		`
       SELECT shop_domain
       FROM shopify_app_installations
       WHERE status = 'active'
       ORDER BY updated_at DESC
       LIMIT 1
-    `
-  );
+    `,
+	);
 
-  return result.rows[0]?.shop_domain ?? null;
+	return result.rows[0]?.shop_domain ?? null;
 }
 
 async function markInstallationUninstalled(shopDomain: string): Promise<void> {
-  await query(
-    `
+	await query(
+		`
       UPDATE shopify_app_installations
       SET
         status = 'uninstalled',
@@ -1096,52 +1243,60 @@ async function markInstallationUninstalled(shopDomain: string): Promise<void> {
         updated_at = now()
       WHERE shop_domain = $1
     `,
-    [shopDomain]
-  );
+		[shopDomain],
+	);
 }
 
 function getAttributeValue(
-  attributes: Array<z.infer<typeof shopifyAttributeSchema>> | undefined,
-  key: string
+	attributes: Array<z.infer<typeof shopifyAttributeSchema>> | undefined,
+	key: string,
 ): string | null {
-  const match = attributes?.find((attribute) => attribute.name === key);
+	const match = attributes?.find((attribute) => attribute.name === key);
 
-  if (match?.value === undefined || match.value === null) {
-    return null;
-  }
+	if (match?.value === undefined || match.value === null) {
+		return null;
+	}
 
-  const normalized = String(match.value).trim();
-  return normalized ? normalized : null;
+	const normalized = String(match.value).trim();
+	return normalized ? normalized : null;
 }
 
 function toNumericString(value: string | number | undefined): string {
-  if (value === undefined) {
-    return '0';
-  }
+	if (value === undefined) {
+		return "0";
+	}
 
-  return String(value);
+	return String(value);
 }
 
 function toNullableUuid(value: string | null): string | null {
-  if (!value) {
-    return null;
-  }
+	if (!value) {
+		return null;
+	}
 
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
-    ? value
-    : null;
+	return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+		value,
+	)
+		? value
+		: null;
 }
 
-function normalizeNullableString(value: string | null | undefined): string | null {
-  return normalizeAttributionString(value);
+function normalizeNullableString(
+	value: string | null | undefined,
+): string | null {
+	return normalizeAttributionString(value);
 }
 
-function buildLineItemExternalId(orderId: string, lineItem: ShopifyLineItemPayload, index: number): string {
-  if (lineItem.id !== undefined && lineItem.id !== null) {
-    return String(lineItem.id);
-  }
+function buildLineItemExternalId(
+	orderId: string,
+	lineItem: ShopifyLineItemPayload,
+	index: number,
+): string {
+	if (lineItem.id !== undefined && lineItem.id !== null) {
+		return String(lineItem.id);
+	}
 
-  return `${orderId}:line:${index + 1}`;
+	return `${orderId}:line:${index + 1}`;
 }
 
 function normalizeLineItemText(value: string | null | undefined): string | null {
@@ -1149,35 +1304,38 @@ function normalizeLineItemText(value: string | null | undefined): string | null 
 }
 
 async function resolveLandingSessionId(
-  client: PoolClient,
-  payload: ShopifyOrderPayload
+	client: PoolClient,
+	payload: ShopifyOrderPayload,
 ): Promise<string | null> {
-  const sessionExists = async (sessionId: string): Promise<boolean> => {
-    const existingSession = await client.query<{ id: string }>(
-      `
+	const sessionExists = async (sessionId: string): Promise<boolean> => {
+		const existingSession = await client.query<{ id: string }>(
+			`
         SELECT s.id::text AS id
         FROM tracking_sessions s
         WHERE s.id = $1::uuid
         LIMIT 1
       `,
-      [sessionId]
-    );
+			[sessionId],
+		);
 
-    return (existingSession.rowCount ?? 0) > 0;
-  };
+		return (existingSession.rowCount ?? 0) > 0;
+	};
 
-  const explicitSessionId =
-    getAttributeValue(payload.note_attributes, 'roas_radar_session_id') ??
-    getAttributeValue(payload.attributes, 'roas_radar_session_id');
-  const normalizedExplicitSessionId = toNullableUuid(explicitSessionId);
+	const explicitSessionId =
+		getAttributeValue(payload.note_attributes, "roas_radar_session_id") ??
+		getAttributeValue(payload.attributes, "roas_radar_session_id");
+	const normalizedExplicitSessionId = toNullableUuid(explicitSessionId);
 
-  if (normalizedExplicitSessionId && (await sessionExists(normalizedExplicitSessionId))) {
-    return normalizedExplicitSessionId;
-  }
+	if (
+		normalizedExplicitSessionId &&
+		(await sessionExists(normalizedExplicitSessionId))
+	) {
+		return normalizedExplicitSessionId;
+	}
 
-  if (payload.checkout_token) {
-    const checkoutMatch = await client.query<{ session_id: string }>(
-      `
+	if (payload.checkout_token) {
+		const checkoutMatch = await client.query<{ session_id: string }>(
+			`
         SELECT e.session_id
         FROM tracking_events e
         INNER JOIN tracking_sessions s ON s.id = e.session_id
@@ -1185,17 +1343,17 @@ async function resolveLandingSessionId(
         ORDER BY e.occurred_at DESC
         LIMIT 1
       `,
-      [payload.checkout_token]
-    );
+			[payload.checkout_token],
+		);
 
-    if (checkoutMatch.rowCount) {
-      return checkoutMatch.rows[0].session_id;
-    }
-  }
+		if (checkoutMatch.rowCount) {
+			return checkoutMatch.rows[0].session_id;
+		}
+	}
 
-  if (payload.cart_token) {
-    const cartMatch = await client.query<{ session_id: string }>(
-      `
+	if (payload.cart_token) {
+		const cartMatch = await client.query<{ session_id: string }>(
+			`
         SELECT e.session_id
         FROM tracking_events e
         INNER JOIN tracking_sessions s ON s.id = e.session_id
@@ -1203,32 +1361,35 @@ async function resolveLandingSessionId(
         ORDER BY e.occurred_at DESC
         LIMIT 1
       `,
-      [payload.cart_token]
-    );
+			[payload.cart_token],
+		);
 
-    if (cartMatch.rowCount) {
-      return cartMatch.rows[0].session_id;
-    }
-  }
+		if (cartMatch.rowCount) {
+			return cartMatch.rows[0].session_id;
+		}
+	}
 
-  return null;
+	return null;
 }
 
 async function upsertShopifyOrderLineItems(
-  client: PoolClient,
-  shopifyOrderId: string,
-  lineItems: ShopifyLineItemPayload[],
-  rawLineItems: unknown[]
+	client: PoolClient,
+	shopifyOrderId: string,
+	lineItems: ShopifyLineItemPayload[],
+	rawLineItems: unknown[],
 ): Promise<void> {
-  // Keep this aligned with docs/raw-payload-persistence-contract.md: raw Shopify
-  // line-item JSON must come from the decoded source node, not the schema-reduced projection.
-  await client.query('DELETE FROM shopify_order_line_items WHERE shopify_order_id = $1', [shopifyOrderId]);
+	// Keep this aligned with docs/raw-payload-persistence-contract.md: raw Shopify
+	// line-item JSON must come from the decoded source node, not the schema-reduced projection.
+	await client.query(
+		"DELETE FROM shopify_order_line_items WHERE shopify_order_id = $1",
+		[shopifyOrderId],
+	);
 
-  for (const [index, lineItem] of lineItems.entries()) {
-    const rawLineItem = rawLineItems[index] ?? lineItem;
+	for (const [index, lineItem] of lineItems.entries()) {
+		const rawLineItem = rawLineItems[index] ?? lineItem;
 
-    await client.query(
-      `
+		await client.query(
+			`
         INSERT INTO shopify_order_line_items (
           shopify_order_id,
           shopify_line_item_id,
@@ -1266,64 +1427,74 @@ async function upsertShopifyOrderLineItems(
           now()
         )
       `,
-      [
-        shopifyOrderId,
-        buildLineItemExternalId(shopifyOrderId, lineItem, index),
-        lineItem.product_id !== undefined && lineItem.product_id !== null ? String(lineItem.product_id) : null,
-        lineItem.variant_id !== undefined && lineItem.variant_id !== null ? String(lineItem.variant_id) : null,
-        normalizeLineItemText(lineItem.sku),
-        normalizeLineItemText(lineItem.title),
-        normalizeLineItemText(lineItem.name),
-        normalizeLineItemText(lineItem.vendor),
-        lineItem.quantity ?? 0,
-        toNumericString(lineItem.price),
-        toNumericString(lineItem.total_discount),
-        normalizeLineItemText(lineItem.fulfillment_status),
-        lineItem.requires_shipping ?? null,
-        lineItem.taxable ?? null,
-        // Preserve the original decoded Shopify line item alongside normalized columns.
-        JSON.stringify(rawLineItem)
-      ]
-    );
-  }
+			[
+				shopifyOrderId,
+				buildLineItemExternalId(shopifyOrderId, lineItem, index),
+				lineItem.product_id !== undefined && lineItem.product_id !== null
+					? String(lineItem.product_id)
+					: null,
+				lineItem.variant_id !== undefined && lineItem.variant_id !== null
+					? String(lineItem.variant_id)
+					: null,
+				normalizeLineItemText(lineItem.sku),
+				normalizeLineItemText(lineItem.title),
+				normalizeLineItemText(lineItem.name),
+				normalizeLineItemText(lineItem.vendor),
+				lineItem.quantity ?? 0,
+				toNumericString(lineItem.price),
+				toNumericString(lineItem.total_discount),
+				normalizeLineItemText(lineItem.fulfillment_status),
+				lineItem.requires_shipping ?? null,
+				lineItem.taxable ?? null,
+				// Preserve the original decoded Shopify line item alongside normalized columns.
+				JSON.stringify(rawLineItem),
+			],
+		);
+	}
 }
 
 function extractRawShopifyLineItems(rawPayload: unknown): unknown[] {
-  if (!rawPayload || typeof rawPayload !== 'object') {
-    return [];
-  }
+	if (!rawPayload || typeof rawPayload !== "object") {
+		return [];
+	}
 
-  const { line_items: rawLineItems } = rawPayload as { line_items?: unknown };
-  return Array.isArray(rawLineItems) ? rawLineItems : [];
+	const { line_items: rawLineItems } = rawPayload as { line_items?: unknown };
+	return Array.isArray(rawLineItems) ? rawLineItems : [];
 }
 
-function extractShopifyReceiptExternalId(rawPayload: unknown, webhookId: string | null): string | null {
-  if (rawPayload && typeof rawPayload === 'object') {
-    const { id } = rawPayload as { id?: unknown };
+function extractShopifyReceiptExternalId(
+	rawPayload: unknown,
+	webhookId: string | null,
+): string | null {
+	if (rawPayload && typeof rawPayload === "object") {
+		const { id } = rawPayload as { id?: unknown };
 
-    if (typeof id === 'string' || typeof id === 'number') {
-      return String(id);
-    }
-  }
+		if (typeof id === "string" || typeof id === "number") {
+			return String(id);
+		}
+	}
 
-  return webhookId;
+	return webhookId;
 }
 
 async function createOrReuseWebhookReceipt(
-  topic: string,
-  shopDomain: string,
-  webhookId: string | null,
-  payloadHash: string,
-  rawPayload: unknown
+	topic: string,
+	shopDomain: string,
+	webhookId: string | null,
+	payloadHash: string,
+	rawPayload: unknown,
 ): Promise<WebhookReceiptRow> {
-  // docs/raw-payload-persistence-contract.md requires covered Shopify raw JSONB
-  // payloads to match the decoded-and-parsed source payload exactly.
-  const rawPayloadJson = JSON.stringify(rawPayload);
-  const payloadSizeBytes = Buffer.byteLength(rawPayloadJson, 'utf8');
-  const payloadExternalId = extractShopifyReceiptExternalId(rawPayload, webhookId);
+	// docs/raw-payload-persistence-contract.md requires covered Shopify raw JSONB
+	// payloads to match the decoded-and-parsed source payload exactly.
+	const rawPayloadJson = JSON.stringify(rawPayload);
+	const payloadSizeBytes = Buffer.byteLength(rawPayloadJson, "utf8");
+	const payloadExternalId = extractShopifyReceiptExternalId(
+		rawPayload,
+		webhookId,
+	);
 
-  const insertResult = await query<WebhookReceiptRow>(
-    `
+	const insertResult = await query<WebhookReceiptRow>(
+		`
       INSERT INTO shopify_webhook_receipts (
         topic,
         shop_domain,
@@ -1339,15 +1510,23 @@ async function createOrReuseWebhookReceipt(
       ON CONFLICT DO NOTHING
       RETURNING id, status, processed_at
     `,
-    [topic, shopDomain, webhookId, payloadHash, payloadExternalId, payloadSizeBytes, rawPayloadJson]
-  );
+		[
+			topic,
+			shopDomain,
+			webhookId,
+			payloadHash,
+			payloadExternalId,
+			payloadSizeBytes,
+			rawPayloadJson,
+		],
+	);
 
-  if (insertResult.rowCount) {
-    return insertResult.rows[0];
-  }
+	if (insertResult.rowCount) {
+		return insertResult.rows[0];
+	}
 
-  const existingResult = await query<WebhookReceiptRow>(
-    `
+	const existingResult = await query<WebhookReceiptRow>(
+		`
       SELECT
         id,
         status,
@@ -1364,47 +1543,58 @@ async function createOrReuseWebhookReceipt(
       ORDER BY id DESC
       LIMIT 1
     `,
-    [webhookId, topic, shopDomain, payloadHash]
-  );
+		[webhookId, topic, shopDomain, payloadHash],
+	);
 
-  if (!existingResult.rowCount) {
-    throw new Error('Failed to create Shopify webhook receipt.');
-  }
+	if (!existingResult.rowCount) {
+		throw new Error("Failed to create Shopify webhook receipt.");
+	}
 
-  return existingResult.rows[0];
+	return existingResult.rows[0];
 }
 
-async function markWebhookReceiptStatus(receiptId: number, status: 'processed' | 'failed' | 'ignored'): Promise<void> {
-  await query(
-    `
+async function markWebhookReceiptStatus(
+	receiptId: number,
+	status: "processed" | "failed" | "ignored",
+): Promise<void> {
+	await query(
+		`
       UPDATE shopify_webhook_receipts
       SET
         status = $2,
         processed_at = CASE WHEN $2 IN ('processed', 'ignored') THEN now() ELSE processed_at END
       WHERE id = $1
     `,
-    [receiptId, status]
-  );
+		[receiptId, status],
+	);
 }
 
-async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPayload, rawPayload: unknown): Promise<void> {
-  const shopifyCustomerId = payload.customer?.id ? String(payload.customer.id) : null;
-  const normalizedOrderEmail = normalizeEmailAddress(payload.email ?? payload.customer?.email ?? null);
-  const { emailHash: orderEmailHash, phoneHash } = buildHashedContactProfile({
-    email: normalizedOrderEmail,
-    phone: payload.customer?.phone ?? null
-  });
-  const shopifyOrderId = String(payload.id);
-  const rawLineItems = extractRawShopifyLineItems(rawPayload);
-  const rawPayloadMetadata = buildRawPayloadStorageMetadata(rawPayload);
-  const { rawPayloadJson, payloadSizeBytes, payloadHash } = rawPayloadMetadata;
+async function normalizeShopifyOrder(
+	receiptId: number,
+	payload: ShopifyOrderPayload,
+	rawPayload: unknown,
+): Promise<void> {
+	const shopifyCustomerId = payload.customer?.id
+		? String(payload.customer.id)
+		: null;
+	const normalizedOrderEmail = normalizeEmailAddress(
+		payload.email ?? payload.customer?.email ?? null,
+	);
+	const { emailHash: orderEmailHash, phoneHash } = buildHashedContactProfile({
+		email: normalizedOrderEmail,
+		phone: payload.customer?.phone ?? null,
+	});
+	const shopifyOrderId = String(payload.id);
+	const rawLineItems = extractRawShopifyLineItems(rawPayload);
+	const rawPayloadMetadata = buildRawPayloadStorageMetadata(rawPayload);
+	const { rawPayloadJson, payloadSizeBytes, payloadHash } = rawPayloadMetadata;
 
-  await withTransaction(async (client) => {
-    const landingSessionId = await resolveLandingSessionId(client, payload);
+	await withTransaction(async (client) => {
+		const landingSessionId = await resolveLandingSessionId(client, payload);
 
-    if (shopifyCustomerId) {
-      await client.query(
-        `
+		if (shopifyCustomerId) {
+			await client.query(
+				`
           INSERT INTO shopify_customers (
             shopify_customer_id,
             email,
@@ -1423,12 +1613,12 @@ async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPay
             phone_hash = COALESCE(EXCLUDED.phone_hash, shopify_customers.phone_hash),
             updated_at = now()
         `,
-        [shopifyCustomerId, orderEmailHash, phoneHash]
-      );
-    }
+				[shopifyCustomerId, orderEmailHash, phoneHash],
+			);
+		}
 
-    const orderUpsertResult = await client.query<RawPayloadIntegrityRow>(
-      `
+		const orderUpsertResult = await client.query<RawPayloadIntegrityRow>(
+			`
         INSERT INTO shopify_orders (
           shopify_order_id,
           shopify_order_number,
@@ -1511,385 +1701,437 @@ async function normalizeShopifyOrder(receiptId: number, payload: ShopifyOrderPay
           payload_hash AS "storedPayloadHash",
           raw_payload AS "persistedRawPayload"
       `,
-      [
-        shopifyOrderId,
-        payload.order_number ? String(payload.order_number) : null,
-        shopifyCustomerId,
-        orderEmailHash,
-        phoneHash,
-        payload.currency ?? 'USD',
-        toNumericString(payload.subtotal_price),
-        toNumericString(payload.total_price),
-        payload.financial_status ?? null,
-        payload.fulfillment_status ?? null,
-        payload.processed_at ?? null,
-        payload.created_at ?? null,
-        payload.updated_at ?? null,
-        landingSessionId,
-        payload.checkout_token ?? null,
-        payload.cart_token ?? null,
-        payload.source_name ?? null,
-        shopifyOrderId,
-        payloadSizeBytes,
-        payloadHash,
-        rawPayloadJson
-      ]
-    );
+			[
+				shopifyOrderId,
+				payload.order_number ? String(payload.order_number) : null,
+				shopifyCustomerId,
+				orderEmailHash,
+				phoneHash,
+				payload.currency ?? "USD",
+				toNumericString(payload.subtotal_price),
+				toNumericString(payload.total_price),
+				payload.financial_status ?? null,
+				payload.fulfillment_status ?? null,
+				payload.processed_at ?? null,
+				payload.created_at ?? null,
+				payload.updated_at ?? null,
+				landingSessionId,
+				payload.checkout_token ?? null,
+				payload.cart_token ?? null,
+				payload.source_name ?? null,
+				shopifyOrderId,
+				payloadSizeBytes,
+				payloadHash,
+				rawPayloadJson,
+			],
+		);
 
-    // shopify_orders.raw_payload is a covered raw-source surface under
-    // docs/raw-payload-persistence-contract.md. Keep normalized columns separate.
-    logRawPayloadIntegrityMismatch(
-      rawPayloadMetadata,
-      orderUpsertResult.rows[0],
-      {
-        surface: 'shopify_orders',
-        operation: 'upsert',
-        recordId: shopifyOrderId,
-        fields: {
-          receiptId
-        }
-      }
-    );
+		// shopify_orders.raw_payload is a covered raw-source surface under
+		// docs/raw-payload-persistence-contract.md. Keep normalized columns separate.
+		logRawPayloadIntegrityMismatch(
+			rawPayloadMetadata,
+			orderUpsertResult.rows[0],
+			{
+				surface: "shopify_orders",
+				operation: "upsert",
+				recordId: shopifyOrderId,
+				fields: {
+					receiptId,
+				},
+			},
+		);
 
-    await upsertShopifyOrderLineItems(client, shopifyOrderId, payload.line_items, rawLineItems);
+		await upsertShopifyOrderLineItems(
+			client,
+			shopifyOrderId,
+			payload.line_items,
+			rawLineItems,
+		);
 
-    await stitchKnownCustomerIdentity(client, {
-      shopifyOrderId,
-      shopifyCustomerId,
-      email: normalizedOrderEmail,
-      phoneHash,
-      landingSessionId,
-      checkoutToken: payload.checkout_token ?? null,
-      cartToken: payload.cart_token ?? null,
-      sourceTimestamp: payload.updated_at ?? payload.processed_at ?? payload.created_at ?? new Date().toISOString(),
-      evidenceSource: 'shopify_order_webhook',
-      sourceTable: 'shopify_orders',
-      sourceRecordId: shopifyOrderId,
-      idempotencyKey: `shopify_order_identity:${shopifyOrderId}:${payloadHash}`
-    });
+		await stitchKnownCustomerIdentity(client, {
+			shopifyOrderId,
+			shopifyCustomerId,
+			email: normalizedOrderEmail,
+			phoneHash,
+			landingSessionId,
+			checkoutToken: payload.checkout_token ?? null,
+			cartToken: payload.cart_token ?? null,
+			sourceTimestamp:
+				payload.updated_at ??
+				payload.processed_at ??
+				payload.created_at ??
+				new Date().toISOString(),
+			evidenceSource: "shopify_order_webhook",
+			sourceTable: "shopify_orders",
+			sourceRecordId: shopifyOrderId,
+			idempotencyKey: `shopify_order_identity:${shopifyOrderId}:${payloadHash}`,
+		});
 
-    await enqueueAttributionForOrder(shopifyOrderId, 'shopify_order_upserted', client);
-    await enqueueShopifyOrderWriteback(shopifyOrderId, 'shopify_order_upserted', client);
+		await enqueueAttributionForOrder(
+			shopifyOrderId,
+			"shopify_order_upserted",
+			client,
+		);
+		await enqueueShopifyOrderWriteback(
+			shopifyOrderId,
+			"shopify_order_upserted",
+			client,
+		);
 
-    await client.query(
-      `
+		await client.query(
+			`
         UPDATE shopify_webhook_receipts
         SET
           status = 'processed',
           processed_at = now()
         WHERE id = $1
       `,
-      [receiptId]
-    );
-  });
+			[receiptId],
+		);
+	});
 }
 
-async function persistWebhook(input: PersistWebhookInput): Promise<{ duplicated: boolean }> {
-  const payloadHash = createHash('sha256').update(input.rawBody).digest('hex');
-  const receipt = await createOrReuseWebhookReceipt(
-    input.topic,
-    input.shopDomain,
-    input.webhookId,
-    payloadHash,
-    input.rawPayload
-  );
+async function persistWebhook(
+	input: PersistWebhookInput,
+): Promise<{ duplicated: boolean }> {
+	const payloadHash = createHash("sha256").update(input.rawBody).digest("hex");
+	const receipt = await createOrReuseWebhookReceipt(
+		input.topic,
+		input.shopDomain,
+		input.webhookId,
+		payloadHash,
+		input.rawPayload,
+	);
 
-  if (receipt.status === 'processed') {
-    if (input.topic === 'orders/backfill') {
-      await normalizeShopifyOrder(receipt.id, input.payload, input.rawPayload);
-      logInfo('shopify_webhook_reprocessed_from_backfill', {
-        topic: input.topic,
-        shopDomain: input.shopDomain,
-        webhookId: input.webhookId,
-        shopifyOrderId: String(input.payload.id)
-      });
-      return { duplicated: true };
-    }
+	if (receipt.status === "processed") {
+		if (input.topic === "orders/backfill") {
+			await normalizeShopifyOrder(receipt.id, input.payload, input.rawPayload);
+			logInfo("shopify_webhook_reprocessed_from_backfill", {
+				topic: input.topic,
+				shopDomain: input.shopDomain,
+				webhookId: input.webhookId,
+				shopifyOrderId: String(input.payload.id),
+			});
+			return { duplicated: true };
+		}
 
-    logInfo('shopify_webhook_duplicate', {
-      topic: input.topic,
-      shopDomain: input.shopDomain,
-      webhookId: input.webhookId
-    });
-    return { duplicated: true };
-  }
+		logInfo("shopify_webhook_duplicate", {
+			topic: input.topic,
+			shopDomain: input.shopDomain,
+			webhookId: input.webhookId,
+		});
+		return { duplicated: true };
+	}
 
-  try {
-    // Preserve every decoded Shopify order payload in shopify_orders, regardless of source_name.
-    await normalizeShopifyOrder(receipt.id, input.payload, input.rawPayload);
-    logInfo('shopify_webhook_processed', {
-      topic: input.topic,
-      shopDomain: input.shopDomain,
-      webhookId: input.webhookId,
-      duplicated: false,
-      shopifyOrderId: String(input.payload.id)
-    });
-    return { duplicated: false };
-  } catch (error) {
-    await markWebhookReceiptStatus(receipt.id, 'failed');
-    throw error;
-  }
+	try {
+		// Preserve every decoded Shopify order payload in shopify_orders, regardless of source_name.
+		await normalizeShopifyOrder(receipt.id, input.payload, input.rawPayload);
+		logInfo("shopify_webhook_processed", {
+			topic: input.topic,
+			shopDomain: input.shopDomain,
+			webhookId: input.webhookId,
+			duplicated: false,
+			shopifyOrderId: String(input.payload.id),
+		});
+		return { duplicated: false };
+	} catch (error) {
+		await markWebhookReceiptStatus(receipt.id, "failed");
+		throw error;
+	}
 }
 
 function createOrderWebhookHandler(defaultTopic: string): RequestHandler {
-  return async (req, res, next) => {
-    try {
-      const rawBody = req.body as Buffer;
-      const signature = req.header('x-shopify-hmac-sha256') ?? undefined;
+	return async (req, res, next) => {
+		try {
+			const rawBody = req.body as Buffer;
+			const signature = req.header("x-shopify-hmac-sha256") ?? undefined;
 
-      if (!Buffer.isBuffer(rawBody)) {
-        logWarning('shopify_webhook_rejected', {
-          topic: defaultTopic,
-          reason: 'missing_raw_payload'
-        });
-        res.status(400).json({ error: 'Expected a raw Shopify webhook payload.' });
-        return;
-      }
+			if (!Buffer.isBuffer(rawBody)) {
+				logWarning("shopify_webhook_rejected", {
+					topic: defaultTopic,
+					reason: "missing_raw_payload",
+				});
+				res
+					.status(400)
+					.json({ error: "Expected a raw Shopify webhook payload." });
+				return;
+			}
 
-      if (!verifyWebhookSignature(rawBody, signature)) {
-        logWarning('shopify_webhook_rejected', {
-          topic: defaultTopic,
-          reason: 'invalid_signature'
-        });
-        res.status(401).json({ error: 'Invalid Shopify webhook signature.' });
-        return;
-      }
+			if (!verifyWebhookSignature(rawBody, signature)) {
+				logWarning("shopify_webhook_rejected", {
+					topic: defaultTopic,
+					reason: "invalid_signature",
+				});
+				res.status(401).json({ error: "Invalid Shopify webhook signature." });
+				return;
+			}
 
-      const shopDomain = normalizeShopDomain(req.header('x-shopify-shop-domain') ?? 'unknown.myshopify.com');
-      const activeShopDomain = await getActiveInstalledShopDomain();
+			const shopDomain = normalizeShopDomain(
+				req.header("x-shopify-shop-domain") ?? "unknown.myshopify.com",
+			);
+			const activeShopDomain = await getActiveInstalledShopDomain();
 
-      if (activeShopDomain && activeShopDomain !== shopDomain) {
-        logWarning('shopify_webhook_rejected', {
-          topic: defaultTopic,
-          reason: 'shop_domain_mismatch',
-          shopDomain
-        });
-        res.status(403).json({ error: 'Webhook shop domain does not match the connected store.' });
-        return;
-      }
+			if (activeShopDomain && activeShopDomain !== shopDomain) {
+				logWarning("shopify_webhook_rejected", {
+					topic: defaultTopic,
+					reason: "shop_domain_mismatch",
+					shopDomain,
+				});
+				res.status(403).json({
+					error: "Webhook shop domain does not match the connected store.",
+				});
+				return;
+			}
 
-      const rawPayload = JSON.parse(rawBody.toString('utf8'));
-      const payload = shopifyOrderPayloadSchema.parse(rawPayload);
-      await persistWebhook({
-        payload,
-        rawPayload,
-        rawBody,
-        topic: req.header('x-shopify-topic') ?? defaultTopic,
-        shopDomain,
-        webhookId: req.header('x-shopify-webhook-id') ?? null
-      });
+			const rawPayload = JSON.parse(rawBody.toString("utf8"));
+			const payload = shopifyOrderPayloadSchema.parse(rawPayload);
+			await persistWebhook({
+				payload,
+				rawPayload,
+				rawBody,
+				topic: req.header("x-shopify-topic") ?? defaultTopic,
+				shopDomain,
+				webhookId: req.header("x-shopify-webhook-id") ?? null,
+			});
 
-      res.status(200).json({ ok: true });
-    } catch (error) {
-      logError('shopify_webhook_failed', error, {
-        topic: req.header('x-shopify-topic') ?? defaultTopic,
-        webhookId: req.header('x-shopify-webhook-id') ?? null
-      });
-      next(error);
-    }
-  };
+			res.status(200).json({ ok: true });
+		} catch (error) {
+			logError("shopify_webhook_failed", error, {
+				topic: req.header("x-shopify-topic") ?? defaultTopic,
+				webhookId: req.header("x-shopify-webhook-id") ?? null,
+			});
+			next(error);
+		}
+	};
 }
 
 function createAppUninstalledWebhookHandler(): RequestHandler {
-  return async (req, res, next) => {
-    try {
-      const rawBody = req.body as Buffer;
-      const signature = req.header('x-shopify-hmac-sha256') ?? undefined;
+	return async (req, res, next) => {
+		try {
+			const rawBody = req.body as Buffer;
+			const signature = req.header("x-shopify-hmac-sha256") ?? undefined;
 
-      if (!Buffer.isBuffer(rawBody)) {
-        logWarning('shopify_webhook_rejected', {
-          topic: 'app/uninstalled',
-          reason: 'missing_raw_payload'
-        });
-        res.status(400).json({ error: 'Expected a raw Shopify webhook payload.' });
-        return;
-      }
+			if (!Buffer.isBuffer(rawBody)) {
+				logWarning("shopify_webhook_rejected", {
+					topic: "app/uninstalled",
+					reason: "missing_raw_payload",
+				});
+				res
+					.status(400)
+					.json({ error: "Expected a raw Shopify webhook payload." });
+				return;
+			}
 
-      if (!verifyWebhookSignature(rawBody, signature)) {
-        logWarning('shopify_webhook_rejected', {
-          topic: 'app/uninstalled',
-          reason: 'invalid_signature'
-        });
-        res.status(401).json({ error: 'Invalid Shopify webhook signature.' });
-        return;
-      }
+			if (!verifyWebhookSignature(rawBody, signature)) {
+				logWarning("shopify_webhook_rejected", {
+					topic: "app/uninstalled",
+					reason: "invalid_signature",
+				});
+				res.status(401).json({ error: "Invalid Shopify webhook signature." });
+				return;
+			}
 
-      const shopDomain = normalizeShopDomain(req.header('x-shopify-shop-domain') ?? 'unknown.myshopify.com');
-      await markInstallationUninstalled(shopDomain);
-      logInfo('shopify_app_uninstalled', {
-        shopDomain
-      });
+			const shopDomain = normalizeShopDomain(
+				req.header("x-shopify-shop-domain") ?? "unknown.myshopify.com",
+			);
+			await markInstallationUninstalled(shopDomain);
+			logInfo("shopify_app_uninstalled", {
+				shopDomain,
+			});
 
-      res.status(200).json({ ok: true });
-    } catch (error) {
-      logError('shopify_webhook_failed', error, {
-        topic: 'app/uninstalled'
-      });
-      next(error);
-    }
-  };
+			res.status(200).json({ ok: true });
+		} catch (error) {
+			logError("shopify_webhook_failed", error, {
+				topic: "app/uninstalled",
+			});
+			next(error);
+		}
+	};
 }
 
 export function createShopifyPublicRouter(): Router {
-  const router = Router();
+	const router = Router();
 
-  router.get('/install', async (req, res, next) => {
-    try {
-      assertShopifyAppConfig();
+	router.get("/install", async (req, res, next) => {
+		try {
+			assertShopifyAppConfig();
 
-      const input = installRequestSchema.parse(req.query);
-      const shopDomain = normalizeShopDomain(input.shop);
-      const returnTo = normalizeReturnTo(input.returnTo);
+			const input = installRequestSchema.parse(req.query);
+			const shopDomain = normalizeShopDomain(input.shop);
+			const returnTo = normalizeReturnTo(input.returnTo);
 
-      await assertSingleStoreInstallAllowed(shopDomain);
+			await assertSingleStoreInstallAllowed(shopDomain);
 
-      const state = randomBytes(32).toString('hex');
-      await persistOAuthState(shopDomain, state, returnTo);
+			const state = randomBytes(32).toString("hex");
+			await persistOAuthState(shopDomain, state, returnTo);
 
-      res.redirect(302, buildShopifyInstallUrl(shopDomain, state, returnTo));
-    } catch (error) {
-      next(error);
-    }
-  });
+			res.redirect(302, buildShopifyInstallUrl(shopDomain, state, returnTo));
+		} catch (error) {
+			next(error);
+		}
+	});
 
-  router.get('/oauth/callback', async (req, res, next) => {
-    try {
-      assertShopifyAppConfig();
+	router.get("/oauth/callback", async (req, res, next) => {
+		try {
+			assertShopifyAppConfig();
 
-      const input = callbackQuerySchema.parse(req.query);
-      const shopDomain = normalizeShopDomain(input.shop);
+			const input = callbackQuerySchema.parse(req.query);
+			const shopDomain = normalizeShopDomain(input.shop);
 
-      if (!verifyShopifyOAuthHmac(req.originalUrl, input.hmac)) {
-        throw new ShopifyHttpError(401, 'invalid_shopify_oauth_hmac', 'Invalid Shopify OAuth callback signature');
-      }
+			if (!verifyShopifyOAuthHmac(req.originalUrl, input.hmac)) {
+				throw new ShopifyHttpError(
+					401,
+					"invalid_shopify_oauth_hmac",
+					"Invalid Shopify OAuth callback signature",
+				);
+			}
 
-      await assertSingleStoreInstallAllowed(shopDomain);
-      const state = await consumeOAuthState(shopDomain, input.state);
-      const { accessToken, scopes } = await exchangeCodeForAccessToken(shopDomain, input.code);
-      const shopIdentity = await fetchShopIdentity(shopDomain, accessToken);
-      const canonicalShopDomain = normalizeShopDomain(shopIdentity.myshopifyDomain);
-      const webhookBaseUrl = `${getAppBaseUrl()}/webhooks/shopify`;
-      const webhookSubscriptions = await provisionWebhookSubscriptions(
-        canonicalShopDomain,
-        accessToken,
-        webhookBaseUrl
-      );
+			await assertSingleStoreInstallAllowed(shopDomain);
+			const state = await consumeOAuthState(shopDomain, input.state);
+			const { accessToken, scopes } = await exchangeCodeForAccessToken(
+				shopDomain,
+				input.code,
+			);
+			const shopIdentity = await fetchShopIdentity(shopDomain, accessToken);
+			const canonicalShopDomain = normalizeShopDomain(
+				shopIdentity.myshopifyDomain,
+			);
+			const webhookBaseUrl = `${getAppBaseUrl()}/webhooks/shopify`;
+			const webhookSubscriptions = await provisionWebhookSubscriptions(
+				canonicalShopDomain,
+				accessToken,
+				webhookBaseUrl,
+			);
 
-      await upsertShopifyInstallation({
-        shopDomain: canonicalShopDomain,
-        accessToken,
-        scopes,
-        webhookBaseUrl,
-        webhookSubscriptions,
-        shopIdentity
-      });
+			await upsertShopifyInstallation({
+				shopDomain: canonicalShopDomain,
+				accessToken,
+				scopes,
+				webhookBaseUrl,
+				webhookSubscriptions,
+				shopIdentity,
+			});
 
-      const redirectTarget = state.return_to ?? normalizeReturnTo(env.SHOPIFY_APP_POST_INSTALL_REDIRECT_URL) ?? null;
+			const redirectTarget =
+				state.return_to ??
+				normalizeReturnTo(env.SHOPIFY_APP_POST_INSTALL_REDIRECT_URL) ??
+				null;
 
-      if (redirectTarget) {
-        const redirectUrl = redirectTarget.startsWith('/')
-          ? `${getAppBaseUrl()}${redirectTarget}`
-          : new URL(redirectTarget).toString();
-        const destination = new URL(redirectUrl);
-        destination.searchParams.set('shop', canonicalShopDomain);
-        destination.searchParams.set('status', 'connected');
-        res.redirect(302, destination.toString());
-        return;
-      }
+			if (redirectTarget) {
+				const redirectUrl = redirectTarget.startsWith("/")
+					? `${getAppBaseUrl()}${redirectTarget}`
+					: new URL(redirectTarget).toString();
+				const destination = new URL(redirectUrl);
+				destination.searchParams.set("shop", canonicalShopDomain);
+				destination.searchParams.set("status", "connected");
+				res.redirect(302, destination.toString());
+				return;
+			}
 
-      res.status(200).json({
-        ok: true,
-        shopDomain: canonicalShopDomain,
-        scopes,
-        webhooksRegistered: webhookSubscriptions
-      });
-    } catch (error) {
-      next(error);
-    }
-  });
+			res.status(200).json({
+				ok: true,
+				shopDomain: canonicalShopDomain,
+				scopes,
+				webhooksRegistered: webhookSubscriptions,
+			});
+		} catch (error) {
+			next(error);
+		}
+	});
 
-  return router;
+	return router;
 }
 
 export function createShopifyWebhookRouter(): Router {
-  const router = Router();
+	const router = Router();
 
-  router.post('/orders-create', createOrderWebhookHandler('orders/create'));
-  router.post('/orders-paid', createOrderWebhookHandler('orders/paid'));
-  router.post('/app-uninstalled', createAppUninstalledWebhookHandler());
+	router.post("/orders-create", createOrderWebhookHandler("orders/create"));
+	router.post("/orders-paid", createOrderWebhookHandler("orders/paid"));
+	router.post("/app-uninstalled", createAppUninstalledWebhookHandler());
 
-  return router;
+	return router;
 }
 
 export function createShopifyAdminRouter(): Router {
-  const router = Router();
+	const router = Router();
 
-  router.use(attachAuthContext);
-  router.use(requireAdmin);
+	router.use(attachAuthContext);
+	router.use(requireAdmin);
 
-  router.get('/connection', async (_req, res, next) => {
-    try {
-      const installation = await getShopifyInstallationSummary();
+	router.get("/connection", async (_req, res, next) => {
+		try {
+			const installation = await getShopifyInstallationSummary();
 
-      if (!installation) {
-        res.json({
-          connected: false,
-          shopDomain: null,
-          installUrl: null,
-          reconnectUrl: null
-        });
-        return;
-      }
+			if (!installation) {
+				res.json({
+					connected: false,
+					shopDomain: null,
+					installUrl: null,
+					reconnectUrl: null,
+				});
+				return;
+			}
 
-      let reconnectUrl: string | null = null;
+			let reconnectUrl: string | null = null;
 
-      if (env.SHOPIFY_APP_API_KEY && env.SHOPIFY_APP_API_SECRET && env.SHOPIFY_APP_API_VERSION && env.SHOPIFY_APP_BASE_URL) {
-        const params = new URLSearchParams({ shop: installation.shop_domain });
-        reconnectUrl = `${getAppBaseUrl()}/shopify/install?${params.toString()}`;
-      }
+			if (
+				env.SHOPIFY_APP_API_KEY &&
+				env.SHOPIFY_APP_API_SECRET &&
+				env.SHOPIFY_APP_API_VERSION &&
+				env.SHOPIFY_APP_BASE_URL
+			) {
+				const params = new URLSearchParams({ shop: installation.shop_domain });
+				reconnectUrl = `${getAppBaseUrl()}/shopify/install?${params.toString()}`;
+			}
 
-      res.json({
-        connected: installation.status === 'active',
-        shopDomain: installation.shop_domain,
-        status: installation.status,
-        installedAt: installation.installed_at.toISOString(),
-        reconnectedAt: installation.reconnected_at?.toISOString() ?? null,
-        uninstalledAt: installation.uninstalled_at?.toISOString() ?? null,
-        scopes: installation.scopes,
-        webhookBaseUrl: installation.webhook_base_url,
-        webhookSubscriptions: installation.webhook_subscriptions,
-        shop: {
-          name: installation.shop_name,
-          email: installation.shop_email,
-          currency: installation.shop_currency
-        },
-        reconnectUrl
-      });
-    } catch (error) {
-      next(error);
-    }
-  });
+			res.json({
+				connected: installation.status === "active",
+				shopDomain: installation.shop_domain,
+				status: installation.status,
+				installedAt: installation.installed_at.toISOString(),
+				reconnectedAt: installation.reconnected_at?.toISOString() ?? null,
+				uninstalledAt: installation.uninstalled_at?.toISOString() ?? null,
+				scopes: installation.scopes,
+				webhookBaseUrl: installation.webhook_base_url,
+				webhookSubscriptions: installation.webhook_subscriptions,
+				shop: {
+					name: installation.shop_name,
+					email: installation.shop_email,
+					currency: installation.shop_currency,
+				},
+				reconnectUrl,
+			});
+		} catch (error) {
+			next(error);
+		}
+	});
 
-  router.post('/webhooks/sync', async (_req, res, next) => {
-    try {
-      assertShopifyAppConfig();
+	router.post("/webhooks/sync", async (_req, res, next) => {
+		try {
+			assertShopifyAppConfig();
 
-      const installation = await getShopifyInstallationSummary();
+			const installation = await getShopifyInstallationSummary();
 
-      if (!installation || installation.status !== 'active') {
-        throw new ShopifyHttpError(404, 'shopify_installation_not_found', 'No active Shopify installation was found');
-      }
+			if (!installation || installation.status !== "active") {
+				throw new ShopifyHttpError(
+					404,
+					"shopify_installation_not_found",
+					"No active Shopify installation was found",
+				);
+			}
 
-      const accessToken = await getActiveShopifyAccessToken(installation.shop_domain);
-      const webhookBaseUrl = `${getAppBaseUrl()}/webhooks/shopify`;
-      const webhookSubscriptions = await provisionWebhookSubscriptions(
-        installation.shop_domain,
-        accessToken,
-        webhookBaseUrl
-      );
+			const accessToken = await getActiveShopifyAccessToken(
+				installation.shop_domain,
+			);
+			const webhookBaseUrl = `${getAppBaseUrl()}/webhooks/shopify`;
+			const webhookSubscriptions = await provisionWebhookSubscriptions(
+				installation.shop_domain,
+				accessToken,
+				webhookBaseUrl,
+			);
 
-      await query(
-        `
+			await query(
+				`
           UPDATE shopify_app_installations
           SET
             webhook_base_url = $2,
@@ -1897,81 +2139,95 @@ export function createShopifyAdminRouter(): Router {
             updated_at = now()
           WHERE shop_domain = $1
         `,
-        [installation.shop_domain, webhookBaseUrl, JSON.stringify(webhookSubscriptions)]
-      );
+				[
+					installation.shop_domain,
+					webhookBaseUrl,
+					JSON.stringify(webhookSubscriptions),
+				],
+			);
 
-      res.status(200).json({
-        ok: true,
-        shopDomain: installation.shop_domain,
-        webhookSubscriptions
-      });
-    } catch (error) {
-      next(error);
-    }
-  });
+			res.status(200).json({
+				ok: true,
+				shopDomain: installation.shop_domain,
+				webhookSubscriptions,
+			});
+		} catch (error) {
+			next(error);
+		}
+	});
 
-  router.post('/orders/backfill', async (req, res, next) => {
-    try {
-      assertShopifyAppConfig();
+	router.post("/orders/backfill", async (req, res, next) => {
+		try {
+			assertShopifyAppConfig();
 
-      const input = shopifyBackfillRequestSchema.parse(req.body ?? {});
-      const installation = await getShopifyInstallationSummary();
+			const input = shopifyBackfillRequestSchema.parse(req.body ?? {});
+			const installation = await getShopifyInstallationSummary();
 
-      if (!installation || installation.status !== 'active') {
-        throw new ShopifyHttpError(404, 'shopify_installation_not_found', 'No active Shopify installation was found');
-      }
+			if (!installation || installation.status !== "active") {
+				throw new ShopifyHttpError(
+					404,
+					"shopify_installation_not_found",
+					"No active Shopify installation was found",
+				);
+			}
 
-      const accessToken = await getActiveShopifyAccessToken(installation.shop_domain);
-      const reportingTimezone = await getReportingTimezone();
-      const result = await backfillShopifyOrders(
-        installation.shop_domain,
-        accessToken,
-        reportingTimezone,
-        input.startDate,
-        input.endDate
-      );
+			const accessToken = await getActiveShopifyAccessToken(
+				installation.shop_domain,
+			);
+			const reportingTimezone = await getReportingTimezone();
+			const result = await backfillShopifyOrders(
+				installation.shop_domain,
+				accessToken,
+				reportingTimezone,
+				input.startDate,
+				input.endDate,
+			);
 
-      res.status(200).json({
-        ok: true,
-        shopDomain: installation.shop_domain,
-        startDate: input.startDate,
-        endDate: input.endDate,
-        ...result
-      });
-    } catch (error) {
-      next(error);
-    }
-  });
+			res.status(200).json({
+				ok: true,
+				shopDomain: installation.shop_domain,
+				startDate: input.startDate,
+				endDate: input.endDate,
+				...result,
+			});
+		} catch (error) {
+			next(error);
+		}
+	});
 
-  router.post('/orders/recover-attribution', async (req, res, next) => {
-    try {
-      const input = shopifyBackfillRequestSchema.parse(req.body ?? {});
-      const reportingTimezone = await getReportingTimezone();
-      const result = await recoverShopifyAttributionHints(reportingTimezone, input.startDate, input.endDate);
+	router.post("/orders/recover-attribution", async (req, res, next) => {
+		try {
+			const input = shopifyBackfillRequestSchema.parse(req.body ?? {});
+			const reportingTimezone = await getReportingTimezone();
+			const result = await recoverShopifyAttributionHints(
+				reportingTimezone,
+				input.startDate,
+				input.endDate,
+			);
 
-      res.status(200).json({
-        ok: true,
-        startDate: input.startDate,
-        endDate: input.endDate,
-        ...result
-      });
-    } catch (error) {
-      next(error);
-    }
-  });
+			res.status(200).json({
+				ok: true,
+				startDate: input.startDate,
+				endDate: input.endDate,
+				...result,
+			});
+		} catch (error) {
+			next(error);
+		}
+	});
 
-  return router;
+	return router;
 }
 
 export const __shopifyTestUtils = {
-  normalizeShopDomain,
-  createOAuthHmacMessage,
-  verifyShopifyOAuthHmac,
-  buildShopifyInstallUrl,
-  verifyWebhookSignature,
-  buildLineItemExternalId,
-  extractRawShopifyLineItems,
-  persistWebhook,
-  extractShopifyHintAttribution,
-  recoverShopifyAttributionHints
+	normalizeShopDomain,
+	createOAuthHmacMessage,
+	verifyShopifyOAuthHmac,
+	buildShopifyInstallUrl,
+	verifyWebhookSignature,
+	buildLineItemExternalId,
+	extractRawShopifyLineItems,
+	persistWebhook,
+	extractShopifyHintAttribution,
+	recoverShopifyAttributionHints,
 };

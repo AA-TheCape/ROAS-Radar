@@ -91,7 +91,7 @@ The goal is to avoid wide JSONB GIN indexes and repeated `raw_payload ->>` scans
 Use the staging-safe plan check before approving changes to raw-payload lookup paths:
 
 ```bash
-npm run db:verify-raw-payload-query-plans
+node scripts/verify-raw-payload-query-plans.mjs
 ```
 
 The script seeds representative rows inside a transaction, runs `EXPLAIN (FORMAT JSON)` against the supported lookup patterns, asserts that the targeted lookup indexes are used, and then rolls the data back.
@@ -112,8 +112,21 @@ Operational pruning runs through the scheduled `session-attribution:retention` C
 
 The cleanup contract is:
 
-1. delete expired `session_attribution_touch_events` rows in batches
-2. delete expired `session_attribution_identities` rows in batches
-3. skip rows whose `roas_radar_session_id` is still referenced by `order_attribution_links`
+1. delete expired `ga4_fallback_candidates` rows in batches using `retained_until`
+2. delete expired `session_attribution_touch_events` rows in batches
+3. delete expired `session_attribution_identities` rows in batches
+4. skip rows whose `roas_radar_session_id` is still referenced by `order_attribution_links`
+
+`ga4_fallback_candidates` is range-partitioned by `occurred_at` month and lookup queries are expected to use the keyed partition indexes for:
+
+- `customer_identity_id + occurred_at`
+- `email_hash + occurred_at`
+- `transaction_id + occurred_at`
+
+Use the staging-safe plan check before approving lookup-path changes:
+
+```bash
+node scripts/verify-ga4-fallback-query-plans.mjs
+```
 
 `order_attribution_links` rows are not pruned by the 30-day session cleanup job.

@@ -1,26 +1,38 @@
-import type { PoolClient } from 'pg';
+import type { PoolClient } from "pg";
 
-import { ATTRIBUTION_MODELS } from '../attribution/engine.js';
-import { getReportingTimezone } from '../settings/index.js';
+import { ATTRIBUTION_MODELS } from "../attribution/engine.js";
+import { getReportingTimezone } from "../settings/index.js";
 
 function normalizeMetricDates(metricDates: string[]): string[] {
-  return [...new Set(metricDates.map((value) => value.trim()).filter((value) => /^\d{4}-\d{2}-\d{2}$/.test(value)))].sort();
+	return [
+		...new Set(
+			metricDates
+				.map((value) => value.trim())
+				.filter((value) => /^\d{4}-\d{2}-\d{2}$/.test(value)),
+		),
+	].sort();
 }
 
-export async function refreshDailyReportingMetrics(client: PoolClient, metricDates: string[]): Promise<void> {
-  const normalizedMetricDates = normalizeMetricDates(metricDates);
+export async function refreshDailyReportingMetrics(
+	client: PoolClient,
+	metricDates: string[],
+): Promise<void> {
+	const normalizedMetricDates = normalizeMetricDates(metricDates);
 
-  if (normalizedMetricDates.length === 0) {
-    return;
-  }
+	if (normalizedMetricDates.length === 0) {
+		return;
+	}
 
-  const reportingTimezone = await getReportingTimezone(client);
+	const reportingTimezone = await getReportingTimezone(client);
 
-  await client.query('SELECT pg_advisory_xact_lock($1)', [82134721]);
-  await client.query('DELETE FROM daily_reporting_metrics WHERE metric_date = ANY($1::date[])', [normalizedMetricDates]);
+	await client.query("SELECT pg_advisory_xact_lock($1)", [82134721]);
+	await client.query(
+		"DELETE FROM daily_reporting_metrics WHERE metric_date = ANY($1::date[])",
+		[normalizedMetricDates],
+	);
 
-  await client.query(
-    `
+	await client.query(
+		`
       WITH attribution_models AS (
         SELECT unnest($3::text[]) AS attribution_model
       ),
@@ -61,6 +73,7 @@ export async function refreshDailyReportingMetrics(client: PoolClient, metricDat
             ORDER BY COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) ASC, o.shopify_order_id ASC
           ) AS customer_order_rank
         FROM shopify_orders o
+        WHERE COALESCE(o.source_name, '') = 'web'
       ),
       attributed_order_rows AS (
         SELECT
@@ -86,7 +99,8 @@ export async function refreshDailyReportingMetrics(client: PoolClient, metricDat
           ON o.shopify_order_id = c.shopify_order_id
         INNER JOIN order_customer_rankings r
           ON r.shopify_order_id = o.shopify_order_id
-        WHERE DATE(timezone($2::text, COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at))) = ANY($1::date[])
+        WHERE COALESCE(o.source_name, '') = 'web'
+          AND DATE(timezone($2::text, COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at))) = ANY($1::date[])
         GROUP BY 1, 2, 3, 4, 5, 6, 7
       ),
       spend_source_rows AS (
@@ -215,14 +229,16 @@ export async function refreshDailyReportingMetrics(client: PoolClient, metricDat
       ) combined
       GROUP BY 1, 2, 3, 4, 5, 6, 7
     `,
-    [normalizedMetricDates, reportingTimezone, ATTRIBUTION_MODELS]
-  );
+		[normalizedMetricDates, reportingTimezone, ATTRIBUTION_MODELS],
+	);
 }
 
-export async function refreshAllDailyReportingMetrics(client: PoolClient): Promise<void> {
-  const reportingTimezone = await getReportingTimezone(client);
-  const result = await client.query<{ metric_date: string }>(
-    `
+export async function refreshAllDailyReportingMetrics(
+	client: PoolClient,
+): Promise<void> {
+	const reportingTimezone = await getReportingTimezone(client);
+	const result = await client.query<{ metric_date: string }>(
+		`
       SELECT DISTINCT metric_date::text
       FROM (
         SELECT DATE(timezone($1::text, first_seen_at)) AS metric_date
@@ -246,11 +262,11 @@ export async function refreshAllDailyReportingMetrics(client: PoolClient): Promi
       WHERE metric_date IS NOT NULL
       ORDER BY metric_date ASC
     `,
-    [reportingTimezone]
-  );
+		[reportingTimezone],
+	);
 
-  await refreshDailyReportingMetrics(
-    client,
-    result.rows.map((row) => row.metric_date)
-  );
+	await refreshDailyReportingMetrics(
+		client,
+		result.rows.map((row) => row.metric_date),
+	);
 }

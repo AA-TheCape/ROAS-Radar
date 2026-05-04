@@ -1,81 +1,107 @@
-import type { PoolClient } from 'pg';
+import type { PoolClient, QueryResultRow } from "pg";
 
-import { env } from '../../config/env.js';
-import { query, withTransaction } from '../../db/pool.js';
-import { logError, logInfo } from '../../observability/index.js';
+import { env } from "../../config/env.js";
+import { query, withTransaction } from "../../db/pool.js";
+import { logError, logInfo } from "../../observability/index.js";
 
-export type DeadLetterStatus = 'pending_replay' | 'replayed';
-export type ReplayItemOutcome = 'replayed' | 'skipped' | 'failed' | 'dry_run';
+export type DeadLetterStatus = "pending_replay" | "replayed";
 
-export type DeadLetterInput = {
-  eventType: string;
-  sourceTable: string;
-  sourceRecordId: string;
-  sourceQueueKey?: string | null;
-  payload?: unknown;
-  error: unknown;
+const DEFAULT_DEAD_LETTER_REPLAY_MAX_BATCH_SIZE = 100;
+
+type Queryable = Pick<PoolClient, "query">;
+
+type SerializedError = {
+	message: string;
+	context: Record<string, unknown>;
 };
 
-export type ReplayFilters = {
-  requestedBy?: string;
-  eventType?: string;
-  sourceTable?: string;
-  status?: DeadLetterStatus;
-  fromTime?: Date;
-  toTime?: Date;
-  windowStart?: Date;
-  windowEnd?: Date;
-  limit?: number;
-  dryRun?: boolean;
-};
-
-export type ReplayDeadLettersResult = {
-  replayRunId: number;
-  candidateCount: number;
-  replayedCount: number;
-  skippedCount: number;
-  failedCount: number;
-  dryRunCount: number;
-};
+type DeadLetterSourceTable =
+	| "shopify_order_writeback_jobs"
+	| "attribution_jobs"
+	| "ga4_bigquery_hourly_jobs";
 
 type DeadLetterRow = {
-  id: number;
-  event_type: string;
-  source_table: string;
-  source_record_id: string;
-  source_queue_key: string | null;
+	id: number;
+	event_type: string;
+	source_table: string;
+	source_record_id: string;
+	source_queue_key: string | null;
 };
 
-function serializeError(error: unknown): { message: string; context: Record<string, unknown> } {
-  if (error instanceof Error) {
-    const extraContext = error as unknown as Record<string, unknown>;
-    return {
-      message: error.message,
-      context: {
-        name: error.name,
-        message: error.message,
-        stack: error.stack,
-        ...extraContext
-      }
-    };
-  }
+type ReplayFiltersInput = {
+	requestedBy?: string | null;
+	eventType?: string | null;
+	sourceTable?: string | null;
+	status?: DeadLetterStatus;
+	fromTime?: Date | null;
+	toTime?: Date | null;
+	windowStart?: Date | null;
+	windowEnd?: Date | null;
+	limit?: number;
+	dryRun?: boolean;
+};
 
-  if (typeof error === 'object' && error !== null) {
-    const context = error as Record<string, unknown>;
-    return {
-      message: String(context.message ?? 'Unknown error'),
-      context
-    };
-  }
+type NormalizedReplayFilters = {
+	requestedBy: string | null;
+	eventType: string | null;
+	sourceTable: string | null;
+	status: DeadLetterStatus;
+	fromTime: Date | null;
+	toTime: Date | null;
+	limit: number;
+	dryRun: boolean;
+};
 
-  return {
-    message: String(error),
-    context: { value: error }
-  };
+type InsertReplayRunItemInput = {
+	replayRunId: number;
+	deadLetter: DeadLetterRow;
+	outcome: "replayed" | "skipped" | "failed" | "dry_run";
+	message: string;
+};
+
+type RecordDeadLetterInput = {
+	eventType: string;
+	sourceTable: string;
+	sourceRecordId: string;
+	sourceQueueKey?: string | null;
+	payload?: Record<string, unknown>;
+	error: unknown;
+};
+
+type ReplayRunIdRow = QueryResultRow & { id: number };
+type CountRow = QueryResultRow & { total: string };
+
+function serializeError(error: unknown): SerializedError {
+	if (error instanceof Error) {
+		const { name, message, stack, ...extraContext } = error as Error &
+			Record<string, unknown>;
+		return {
+			message,
+			context: {
+				name,
+				message,
+				stack,
+				...extraContext,
+			},
+		};
+	}
+
+	if (typeof error === "object" && error !== null) {
+		const context = error as Record<string, unknown>;
+		return {
+			message: String(context.message ?? "Unknown error"),
+			context,
+		};
+	}
+
+	return {
+		message: String(error),
+		context: { value: error },
+	};
 }
 
-async function ensureDeadLetterTables(client: PoolClient): Promise<void> {
-  await client.query(`
+async function ensureDeadLetterTables(client: Queryable): Promise<void> {
+	await client.query(`
     CREATE TABLE IF NOT EXISTS event_dead_letters (
       id bigserial PRIMARY KEY,
       event_type text NOT NULL,
@@ -95,13 +121,11 @@ async function ensureDeadLetterTables(client: PoolClient): Promise<void> {
       updated_at timestamptz NOT NULL DEFAULT now()
     )
   `);
-
-  await client.query(`
+	await client.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS event_dead_letters_source_uidx
       ON event_dead_letters (event_type, source_table, source_record_id)
   `);
-
-  await client.query(`
+	await client.query(`
     CREATE TABLE IF NOT EXISTS event_replay_runs (
       id bigserial PRIMARY KEY,
       replay_scope text NOT NULL DEFAULT 'filtered',
@@ -123,93 +147,75 @@ async function ensureDeadLetterTables(client: PoolClient): Promise<void> {
       completed_at timestamptz
     )
   `);
-
-  await client.query(`
+	await client.query(`
     ALTER TABLE event_replay_runs
       ADD COLUMN IF NOT EXISTS replay_scope text NOT NULL DEFAULT 'filtered'
   `);
-
-  await client.query(`
+	await client.query(`
     ALTER TABLE event_replay_runs
       ADD COLUMN IF NOT EXISTS event_type text
   `);
-
-  await client.query(`
+	await client.query(`
     ALTER TABLE event_replay_runs
       ADD COLUMN IF NOT EXISTS source_table text
   `);
-
-  await client.query(`
+	await client.query(`
     ALTER TABLE event_replay_runs
       ADD COLUMN IF NOT EXISTS window_start timestamptz
   `);
-
-  await client.query(`
+	await client.query(`
     ALTER TABLE event_replay_runs
       ADD COLUMN IF NOT EXISTS window_end timestamptz
   `);
-
-  await client.query(`
+	await client.query(`
     ALTER TABLE event_replay_runs
       ADD COLUMN IF NOT EXISTS requested_by text
   `);
-
-  await client.query(`
+	await client.query(`
     ALTER TABLE event_replay_runs
       ADD COLUMN IF NOT EXISTS filters jsonb NOT NULL DEFAULT '{}'::jsonb
   `);
-
-  await client.query(`
+	await client.query(`
     ALTER TABLE event_replay_runs
       ADD COLUMN IF NOT EXISTS dry_run boolean NOT NULL DEFAULT false
   `);
-
-  await client.query(`
+	await client.query(`
     ALTER TABLE event_replay_runs
       ADD COLUMN IF NOT EXISTS requested_at timestamptz NOT NULL DEFAULT now()
   `);
-
-  await client.query(`
+	await client.query(`
     ALTER TABLE event_replay_runs
       ADD COLUMN IF NOT EXISTS candidate_count integer NOT NULL DEFAULT 0
   `);
-
-  await client.query(`
+	await client.query(`
     ALTER TABLE event_replay_runs
       ADD COLUMN IF NOT EXISTS replayed_count integer NOT NULL DEFAULT 0
   `);
-
-  await client.query(`
+	await client.query(`
     ALTER TABLE event_replay_runs
       ADD COLUMN IF NOT EXISTS skipped_count integer NOT NULL DEFAULT 0
   `);
-
-  await client.query(`
+	await client.query(`
     ALTER TABLE event_replay_runs
       ADD COLUMN IF NOT EXISTS failed_count integer NOT NULL DEFAULT 0
   `);
-
-  await client.query(`
+	await client.query(`
     ALTER TABLE event_replay_runs
       ADD COLUMN IF NOT EXISTS dry_run_count integer NOT NULL DEFAULT 0
   `);
-
-  await client.query(`
+	await client.query(`
     ALTER TABLE event_replay_runs
       ADD COLUMN IF NOT EXISTS results jsonb NOT NULL DEFAULT '{}'::jsonb
   `);
-
-  await client.query(`
+	await client.query(`
     ALTER TABLE event_replay_runs
       ADD COLUMN IF NOT EXISTS started_at timestamptz NOT NULL DEFAULT now()
   `);
-
-  await client.query(`
+	await client.query(`
     ALTER TABLE event_replay_runs
       ADD COLUMN IF NOT EXISTS completed_at timestamptz
   `);
-
-  await client.query(`
+	await client.query(`
     CREATE TABLE IF NOT EXISTS event_replay_run_items (
       id bigserial PRIMARY KEY,
       replay_run_id bigint NOT NULL REFERENCES event_replay_runs(id) ON DELETE CASCADE,
@@ -221,37 +227,38 @@ async function ensureDeadLetterTables(client: PoolClient): Promise<void> {
       created_at timestamptz NOT NULL DEFAULT now()
     )
   `);
-
-  await client.query(`
+	await client.query(`
     ALTER TABLE event_replay_run_items
       ADD COLUMN IF NOT EXISTS source_table text
   `);
-
-  await client.query(`
+	await client.query(`
     ALTER TABLE event_replay_run_items
       ADD COLUMN IF NOT EXISTS source_record_id text
   `);
-
-  await client.query(`
+	await client.query(`
     ALTER TABLE event_replay_run_items
       ADD COLUMN IF NOT EXISTS outcome text
   `);
-
-  await client.query(`
+	await client.query(`
     ALTER TABLE event_replay_run_items
       ADD COLUMN IF NOT EXISTS message text
   `);
-
-  await client.query(`
+	await client.query(`
     ALTER TABLE event_replay_run_items
       ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now()
   `);
 }
 
-async function requeueSourceRecord(client: PoolClient, deadLetter: DeadLetterRow): Promise<'replayed' | 'skipped'> {
-  if (deadLetter.source_table === 'shopify_order_writeback_jobs') {
-    const result = await client.query(
-      `
+async function requeueSourceRecord(
+	client: Queryable,
+	deadLetter: DeadLetterRow,
+): Promise<"replayed" | "skipped"> {
+	if (
+		(deadLetter.source_table as DeadLetterSourceTable) ===
+		"shopify_order_writeback_jobs"
+	) {
+		const result = await client.query(
+			`
         UPDATE shopify_order_writeback_jobs
         SET
           status = 'pending',
@@ -263,15 +270,16 @@ async function requeueSourceRecord(client: PoolClient, deadLetter: DeadLetterRow
           updated_at = now()
         WHERE id = $1::bigint
       `,
-      [deadLetter.source_record_id]
-    );
+			[deadLetter.source_record_id],
+		);
+		return result.rowCount ? "replayed" : "skipped";
+	}
 
-    return result.rowCount ? 'replayed' : 'skipped';
-  }
-
-  if (deadLetter.source_table === 'attribution_jobs') {
-    const result = await client.query(
-      `
+	if (
+		(deadLetter.source_table as DeadLetterSourceTable) === "attribution_jobs"
+	) {
+		const result = await client.query(
+			`
         UPDATE attribution_jobs
         SET
           status = 'pending',
@@ -283,46 +291,68 @@ async function requeueSourceRecord(client: PoolClient, deadLetter: DeadLetterRow
           updated_at = now()
         WHERE id = $1::bigint
       `,
-      [deadLetter.source_record_id]
-    );
+			[deadLetter.source_record_id],
+		);
+		return result.rowCount ? "replayed" : "skipped";
+	}
 
-    return result.rowCount ? 'replayed' : 'skipped';
-  }
+	if (
+		(deadLetter.source_table as DeadLetterSourceTable) ===
+		"ga4_bigquery_hourly_jobs"
+	) {
+		const result = await client.query(
+			`
+        UPDATE ga4_bigquery_hourly_jobs
+        SET
+          status = 'pending',
+          available_at = now(),
+          locked_at = NULL,
+          locked_by = NULL,
+          last_error = NULL,
+          dead_lettered_at = NULL,
+          updated_at = now()
+        WHERE pipeline_name = $1
+          AND hour_start = $2::timestamptz
+      `,
+			[deadLetter.source_queue_key, deadLetter.source_record_id],
+		);
+		return result.rowCount ? "replayed" : "skipped";
+	}
 
-  return 'skipped';
+	return "skipped";
 }
 
-function normalizeReplayFilters(filters: ReplayFilters) {
-  const requestedBy = filters.requestedBy?.trim() || null;
-  const fromTime = filters.fromTime ?? filters.windowStart ?? null;
-  const toTime = filters.toTime ?? filters.windowEnd ?? null;
-  const limit = Math.max(1, Math.min(filters.limit ?? env.DEAD_LETTER_REPLAY_MAX_BATCH_SIZE, 500));
-  const status = filters.status ?? 'pending_replay';
-  const dryRun = filters.dryRun ?? false;
+function normalizeReplayFilters(
+	filters: ReplayFiltersInput,
+): NormalizedReplayFilters {
+	const requestedBy = filters.requestedBy?.trim() || null;
+	const fromTime = filters.fromTime ?? filters.windowStart ?? null;
+	const toTime = filters.toTime ?? filters.windowEnd ?? null;
+	const limit = Math.max(
+		1,
+		Math.min(filters.limit ?? DEFAULT_DEAD_LETTER_REPLAY_MAX_BATCH_SIZE, 500),
+	);
+	const status = filters.status ?? "pending_replay";
+	const dryRun = filters.dryRun ?? false;
 
-  return {
-    requestedBy,
-    eventType: filters.eventType ?? null,
-    sourceTable: filters.sourceTable ?? null,
-    status,
-    fromTime,
-    toTime,
-    limit,
-    dryRun
-  };
+	return {
+		requestedBy,
+		eventType: filters.eventType ?? null,
+		sourceTable: filters.sourceTable ?? null,
+		status,
+		fromTime,
+		toTime,
+		limit,
+		dryRun,
+	};
 }
 
 async function insertReplayRunItem(
-  client: PoolClient,
-  input: {
-    replayRunId: number;
-    deadLetter: DeadLetterRow;
-    outcome: ReplayItemOutcome;
-    message: string;
-  }
+	client: Queryable,
+	input: InsertReplayRunItemInput,
 ): Promise<void> {
-  await client.query(
-    `
+	await client.query(
+		`
       INSERT INTO event_replay_run_items (
         replay_run_id,
         dead_letter_id,
@@ -333,17 +363,26 @@ async function insertReplayRunItem(
       )
       VALUES ($1, $2, $3, $4, $5, $6)
     `,
-    [input.replayRunId, input.deadLetter.id, input.deadLetter.source_table, input.deadLetter.source_record_id, input.outcome, input.message]
-  );
+		[
+			input.replayRunId,
+			input.deadLetter.id,
+			input.deadLetter.source_table,
+			input.deadLetter.source_record_id,
+			input.outcome,
+			input.message,
+		],
+	);
 }
 
-export async function recordDeadLetter(client: PoolClient, input: DeadLetterInput): Promise<void> {
-  await ensureDeadLetterTables(client);
+export async function recordDeadLetter(
+	client: Queryable,
+	input: RecordDeadLetterInput,
+): Promise<void> {
+	await ensureDeadLetterTables(client);
+	const serializedError = serializeError(input.error);
 
-  const serializedError = serializeError(input.error);
-
-  await client.query(
-    `
+	await client.query(
+		`
       INSERT INTO event_dead_letters (
         event_type,
         source_table,
@@ -386,25 +425,24 @@ export async function recordDeadLetter(client: PoolClient, input: DeadLetterInpu
         replayed_at = NULL,
         updated_at = now()
     `,
-    [
-      input.eventType,
-      input.sourceTable,
-      input.sourceRecordId,
-      input.sourceQueueKey ?? null,
-      serializedError.message,
-      JSON.stringify(input.payload ?? {}),
-      JSON.stringify(serializedError.context)
-    ]
-  );
+		[
+			input.eventType,
+			input.sourceTable,
+			input.sourceRecordId,
+			input.sourceQueueKey ?? null,
+			serializedError.message,
+			JSON.stringify(input.payload ?? {}),
+			JSON.stringify(serializedError.context),
+		],
+	);
 }
 
-export async function replayDeadLetters(filters: ReplayFilters): Promise<ReplayDeadLettersResult> {
-  return withTransaction(async (client) => {
-    await ensureDeadLetterTables(client);
-
-    const normalized = normalizeReplayFilters(filters);
-    const replayRunResult = await client.query<{ id: number }>(
-      `
+export async function replayDeadLetters(filters: ReplayFiltersInput) {
+	return withTransaction(async (client) => {
+		await ensureDeadLetterTables(client);
+		const normalized = normalizeReplayFilters(filters);
+		const replayRunResult = await client.query<ReplayRunIdRow>(
+			`
         INSERT INTO event_replay_runs (
           replay_scope,
           event_type,
@@ -420,30 +458,35 @@ export async function replayDeadLetters(filters: ReplayFilters): Promise<ReplayD
         VALUES ($1, $2, $3, $4, $5, $6, $7, now(), $8::jsonb, now())
         RETURNING id
       `,
-      [
-        normalized.eventType || normalized.sourceTable || normalized.fromTime || normalized.toTime ? 'filtered' : 'all_pending',
-        normalized.eventType,
-        normalized.sourceTable,
-        normalized.fromTime,
-        normalized.toTime,
-        normalized.requestedBy,
-        normalized.dryRun,
-        JSON.stringify({
-          requestedBy: normalized.requestedBy,
-          eventType: normalized.eventType,
-          sourceTable: normalized.sourceTable,
-          status: normalized.status,
-          fromTime: normalized.fromTime?.toISOString() ?? null,
-          toTime: normalized.toTime?.toISOString() ?? null,
-          limit: normalized.limit,
-          dryRun: normalized.dryRun
-        })
-      ]
-    );
+			[
+				normalized.eventType ||
+				normalized.sourceTable ||
+				normalized.fromTime ||
+				normalized.toTime
+					? "filtered"
+					: "all_pending",
+				normalized.eventType,
+				normalized.sourceTable,
+				normalized.fromTime,
+				normalized.toTime,
+				normalized.requestedBy,
+				normalized.dryRun,
+				JSON.stringify({
+					requestedBy: normalized.requestedBy,
+					eventType: normalized.eventType,
+					sourceTable: normalized.sourceTable,
+					status: normalized.status,
+					fromTime: normalized.fromTime?.toISOString() ?? null,
+					toTime: normalized.toTime?.toISOString() ?? null,
+					limit: normalized.limit,
+					dryRun: normalized.dryRun,
+				}),
+			],
+		);
+		const replayRunId = replayRunResult.rows[0].id;
 
-    const replayRunId = replayRunResult.rows[0].id;
-    const candidates = await client.query<DeadLetterRow>(
-      `
+		const candidates = await client.query<DeadLetterRow>(
+			`
         SELECT
           id,
           event_type,
@@ -460,33 +503,39 @@ export async function replayDeadLetters(filters: ReplayFilters): Promise<ReplayD
         LIMIT $6
         FOR UPDATE SKIP LOCKED
       `,
-      [normalized.status, normalized.eventType, normalized.sourceTable, normalized.fromTime, normalized.toTime, normalized.limit]
-    );
+			[
+				normalized.status,
+				normalized.eventType,
+				normalized.sourceTable,
+				normalized.fromTime,
+				normalized.toTime,
+				normalized.limit,
+			],
+		);
 
-    let replayedCount = 0;
-    let skippedCount = 0;
-    let failedCount = 0;
-    let dryRunCount = 0;
+		let replayedCount = 0;
+		let skippedCount = 0;
+		let failedCount = 0;
+		let dryRunCount = 0;
 
-    for (const deadLetter of candidates.rows) {
-      if (normalized.dryRun) {
-        dryRunCount += 1;
-        await insertReplayRunItem(client, {
-          replayRunId,
-          deadLetter,
-          outcome: 'dry_run',
-          message: 'dry run only; source record was not requeued'
-        });
-        continue;
-      }
+		for (const deadLetter of candidates.rows) {
+			if (normalized.dryRun) {
+				dryRunCount += 1;
+				await insertReplayRunItem(client, {
+					replayRunId,
+					deadLetter,
+					outcome: "dry_run",
+					message: "dry run only; source record was not requeued",
+				});
+				continue;
+			}
 
-      try {
-        const outcome = await requeueSourceRecord(client, deadLetter);
-
-        if (outcome === 'replayed') {
-          replayedCount += 1;
-          await client.query(
-            `
+			try {
+				const outcome = await requeueSourceRecord(client, deadLetter);
+				if (outcome === "replayed") {
+					replayedCount += 1;
+					await client.query(
+						`
               UPDATE event_dead_letters
               SET
                 status = 'replayed',
@@ -495,41 +544,42 @@ export async function replayDeadLetters(filters: ReplayFilters): Promise<ReplayD
                 updated_at = now()
               WHERE id = $1
             `,
-            [deadLetter.id, replayRunId]
-          );
-        } else {
-          skippedCount += 1;
-        }
+						[deadLetter.id, replayRunId],
+					);
+				} else {
+					skippedCount += 1;
+				}
 
-        await insertReplayRunItem(client, {
-          replayRunId,
-          deadLetter,
-          outcome,
-          message: outcome === 'replayed' ? 'source record requeued' : 'source record was not found or unsupported'
-        });
-      } catch (error) {
-        failedCount += 1;
-        const serializedError = serializeError(error);
+				await insertReplayRunItem(client, {
+					replayRunId,
+					deadLetter,
+					outcome,
+					message:
+						outcome === "replayed"
+							? "source record requeued"
+							: "source record was not found or unsupported",
+				});
+			} catch (error) {
+				failedCount += 1;
+				const serializedError = serializeError(error);
+				await insertReplayRunItem(client, {
+					replayRunId,
+					deadLetter,
+					outcome: "failed",
+					message: serializedError.message,
+				});
+				logError("dead_letter_replay_failed", error, {
+					replayRunId,
+					deadLetterId: deadLetter.id,
+					eventType: deadLetter.event_type,
+					sourceTable: deadLetter.source_table,
+					sourceRecordId: deadLetter.source_record_id,
+				});
+			}
+		}
 
-        await insertReplayRunItem(client, {
-          replayRunId,
-          deadLetter,
-          outcome: 'failed',
-          message: serializedError.message
-        });
-
-        logError('dead_letter_replay_failed', error, {
-          replayRunId,
-          deadLetterId: deadLetter.id,
-          eventType: deadLetter.event_type,
-          sourceTable: deadLetter.source_table,
-          sourceRecordId: deadLetter.source_record_id
-        });
-      }
-    }
-
-    await client.query(
-      `
+		await client.query(
+			`
         UPDATE event_replay_runs
         SET
           candidate_count = $2,
@@ -541,58 +591,55 @@ export async function replayDeadLetters(filters: ReplayFilters): Promise<ReplayD
           completed_at = now()
         WHERE id = $1
       `,
-      [
-        replayRunId,
-        candidates.rowCount,
-        replayedCount,
-        skippedCount,
-        failedCount,
-        dryRunCount,
-        JSON.stringify({
-          candidateCount: candidates.rows.length,
-          replayedCount,
-          skippedCount,
-          failedCount,
-          dryRunCount
-        })
-      ]
-    );
+			[
+				replayRunId,
+				candidates.rowCount,
+				replayedCount,
+				skippedCount,
+				failedCount,
+				dryRunCount,
+				JSON.stringify({
+					candidateCount: candidates.rows.length,
+					replayedCount,
+					skippedCount,
+					failedCount,
+					dryRunCount,
+				}),
+			],
+		);
 
-    logInfo('dead_letter_replay_completed', {
-      replayRunId,
-      requestedBy: normalized.requestedBy,
-      dryRun: normalized.dryRun,
-      candidateCount: candidates.rows.length,
-      replayedCount,
-      skippedCount,
-      failedCount,
-      dryRunCount
-    });
+		logInfo("dead_letter_replay_completed", {
+			replayRunId,
+			requestedBy: normalized.requestedBy,
+			dryRun: normalized.dryRun,
+			candidateCount: candidates.rows.length,
+			replayedCount,
+			skippedCount,
+			failedCount,
+			dryRunCount,
+		});
 
-    return {
-      replayRunId,
-      candidateCount: candidates.rows.length,
-      replayedCount,
-      skippedCount,
-      failedCount,
-      dryRunCount
-    };
-  });
+		return {
+			replayRunId,
+			candidateCount: candidates.rows.length,
+			replayedCount,
+			skippedCount,
+			failedCount,
+			dryRunCount,
+		};
+	});
 }
 
-export async function countPendingDeadLetters(): Promise<number> {
-  try {
-    const result = await query<{ total: string }>(
-      `
-        SELECT COUNT(*)::text AS total
-        FROM event_dead_letters
-        WHERE status = 'pending_replay'
-      `
-    );
-
-    return Number(result.rows[0]?.total ?? '0');
-  } catch (error) {
-    logError('dead_letter_count_failed', error, {});
-    return 0;
-  }
+export async function countPendingDeadLetters() {
+	try {
+		const result = await query<CountRow>(`
+      SELECT COUNT(*)::text AS total
+      FROM event_dead_letters
+      WHERE status = 'pending_replay'
+    `);
+		return Number(result.rows[0]?.total ?? "0");
+	} catch (error) {
+		logError("dead_letter_count_failed", error, {});
+		return 0;
+	}
 }

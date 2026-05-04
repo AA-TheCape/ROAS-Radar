@@ -1,26 +1,38 @@
-import assert from 'node:assert/strict';
-import test from 'node:test';
+import assert from "node:assert/strict";
+import test from "node:test";
 
-process.env.DATABASE_URL ??= 'postgres://postgres:postgres@localhost:5432/roas_radar_test';
-process.env.GOOGLE_ADS_ENCRYPTION_KEY = 'google-ads-encryption-key';
-process.env.GOOGLE_ADS_SYNC_LOOKBACK_DAYS = '3';
-process.env.GOOGLE_ADS_SYNC_INITIAL_LOOKBACK_DAYS = '5';
+process.env.DATABASE_URL ??=
+	"postgres://postgres:postgres@localhost:5432/roas_radar_test";
+process.env.GOOGLE_ADS_ENCRYPTION_KEY = "google-ads-encryption-key";
+process.env.GOOGLE_ADS_SYNC_LOOKBACK_DAYS = "3";
+process.env.GOOGLE_ADS_SYNC_INITIAL_LOOKBACK_DAYS = "5";
 
-const { __googleAdsTestUtils } = await import('../src/modules/google-ads/index.js');
+const { __googleAdsTestUtils } = await import(
+	"../src/modules/google-ads/index.js"
+);
 
-test('normalizeGoogleAdsCustomerId strips hyphens', () => {
-  assert.equal(__googleAdsTestUtils.normalizeGoogleAdsCustomerId('123-456-7890'), '1234567890');
-  assert.equal(__googleAdsTestUtils.normalizeGoogleAdsCustomerId('9876543210'), '9876543210');
+test("normalizeGoogleAdsCustomerId strips hyphens", () => {
+	assert.equal(
+		__googleAdsTestUtils.normalizeGoogleAdsCustomerId("123-456-7890"),
+		"1234567890",
+	);
+	assert.equal(
+		__googleAdsTestUtils.normalizeGoogleAdsCustomerId("9876543210"),
+		"9876543210",
+	);
 });
 
-test('computeRetryDelaySeconds backs off exponentially and caps at one hour', () => {
-  assert.equal(__googleAdsTestUtils.computeRetryDelaySeconds(1), 60);
-  assert.equal(__googleAdsTestUtils.computeRetryDelaySeconds(2), 120);
-  assert.equal(__googleAdsTestUtils.computeRetryDelaySeconds(10), 3600);
+test("computeRetryDelaySeconds backs off exponentially and caps at one hour", () => {
+	assert.equal(__googleAdsTestUtils.computeRetryDelaySeconds(1), 60);
+	assert.equal(__googleAdsTestUtils.computeRetryDelaySeconds(2), 120);
+	assert.equal(__googleAdsTestUtils.computeRetryDelaySeconds(10), 3600);
 });
 
-test('buildPlanningDates uses the initial lookback before the first successful sync', () => {
-  const dates = __googleAdsTestUtils.buildPlanningDates(new Date('2026-04-11T12:00:00.000Z'), null);
+test("buildPlanningDates uses the initial lookback before the first successful sync", () => {
+	const dates = __googleAdsTestUtils.buildPlanningDates(
+		new Date("2026-04-11T12:00:00.000Z"),
+		null,
+	);
 
   assert.deepEqual(dates, ['2026-04-11']);
 });
@@ -112,220 +124,76 @@ test('normalizeSpendSnapshot maps ad groups into Meta-aligned adset fields and e
     ]
   });
 
-  assert.equal(rows.length, 5);
-  assert.equal(rows[0].granularity, 'account');
-  assert.equal(rows[1].granularity, 'campaign');
-  assert.equal(rows[2].granularity, 'adset');
-  assert.equal(rows[2].adsetId, 'adgroup_1');
-  assert.equal(rows[3].granularity, 'ad');
-  assert.equal(rows[3].adId, 'ad_1');
-  assert.equal(rows[4].granularity, 'creative');
-  assert.equal(rows[4].creativeId, 'ad_1');
-  assert.equal(rows[4].spend, '2.34');
-  assert.equal(rows[1].canonicalSource, 'google');
-  assert.equal(rows[1].canonicalMedium, 'cpc');
-  assert.equal(rows[1].canonicalCampaign, 'brand');
-  assert.equal(rows[1].canonicalContent, 'unknown');
-  assert.equal(rows[4].canonicalContent, 'headline a');
+	assert.equal(rows.length, 5);
+	assert.equal(rows[0].granularity, "account");
+	assert.equal(rows[1].granularity, "campaign");
+	assert.equal(rows[2].granularity, "adset");
+	assert.equal(rows[2].adsetId, "adgroup_1");
+	assert.equal(rows[3].granularity, "ad");
+	assert.equal(rows[3].adId, "ad_1");
+	assert.equal(rows[4].granularity, "creative");
+	assert.equal(rows[4].creativeId, "ad_1");
+	assert.equal(rows[4].spend, "2.34");
+	assert.equal(rows[1].canonicalSource, "google");
+	assert.equal(rows[1].canonicalMedium, "cpc");
+	assert.equal(rows[1].canonicalCampaign, "brand");
+	assert.equal(rows[1].canonicalContent, "unknown");
+	assert.equal(rows[4].canonicalContent, "headline a");
 });
 
-test('buildGoogleAdsMetadataRecords normalizes ids and collapses whitespace for latest names', () => {
-  const rows = __googleAdsTestUtils.buildGoogleAdsMetadataRecords({
-    accountId: ' 1234567890 ',
-    observedAt: new Date('2026-04-11T12:00:00.000Z'),
-    campaignRows: [
-      {
-        campaign: {
-          id: ' cmp_1 ',
-          name: '  Brand    Search  '
-        }
-      }
-    ],
-    adsetRows: [
-      {
-        adGroup: {
-          id: ' adgroup_1 ',
-          name: ' Search   US '
-        }
-      }
-    ],
-    adRows: [
-      {
-        adGroupAd: {
-          ad: {
-            id: ' ad_1 ',
-            name: ' Headline   A '
-          }
-        }
-      },
-      {
-        adGroupAd: {
-          ad: {
-            id: 'ad_1',
-            resourceName: 'customers/1234567890/adGroupAds/1'
-          }
-        }
-      }
-    ]
-  });
+test("formatGoogleAdsError includes API status and details payload", () => {
+	const error = __googleAdsTestUtils.createGoogleAdsApiErrorForTest(
+		403,
+		"Google Ads API request failed",
+		{
+			error: {
+				code: 403,
+				message: "The caller does not have permission",
+				status: "PERMISSION_DENIED",
+			},
+		},
+	);
 
-  assert.deepEqual(rows, [
-    {
-      platform: 'google_ads',
-      accountId: '1234567890',
-      entityType: 'campaign',
-      entityId: 'cmp_1',
-      latestName: 'Brand Search',
-      lastSeenAt: new Date('2026-04-11T12:00:00.000Z')
-    },
-    {
-      platform: 'google_ads',
-      accountId: '1234567890',
-      entityType: 'adset',
-      entityId: 'adgroup_1',
-      latestName: 'Search US',
-      lastSeenAt: new Date('2026-04-11T12:00:00.000Z')
-    },
-    {
-      platform: 'google_ads',
-      accountId: '1234567890',
-      entityType: 'ad',
-      entityId: 'ad_1',
-      latestName: 'Headline A',
-      lastSeenAt: new Date('2026-04-11T12:00:00.000Z')
-    }
-  ]);
+	const message = __googleAdsTestUtils.formatGoogleAdsError(error);
+
+	assert.equal(
+		message,
+		'Google Ads API request failed (status 403; details={"error":{"code":403,"message":"The caller does not have permission","status":"PERMISSION_DENIED"}})',
+	);
 });
 
-test('buildGoogleAdsMetadataRecords keeps the latest non-blank name when later duplicates are blank', () => {
-  const observedAt = new Date('2026-04-11T12:00:00.000Z');
+test("extractGoogleAdsProviderRetryDelaySeconds reads quota retry delay from Google API details", () => {
+	const retryDelaySeconds =
+		__googleAdsTestUtils.extractGoogleAdsProviderRetryDelaySeconds([
+			{
+				error: {
+					code: 429,
+					message: "Resource has been exhausted (e.g. check quota).",
+					status: "RESOURCE_EXHAUSTED",
+					details: [
+						{
+							"@type":
+								"type.googleapis.com/google.ads.googleads.v22.errors.GoogleAdsFailure",
+							errors: [
+								{
+									errorCode: {
+										quotaError: "RESOURCE_EXHAUSTED",
+									},
+									message: "Too many requests. Retry in 17941 seconds.",
+									details: {
+										quotaErrorDetails: {
+											rateScope: "DEVELOPER",
+											rateName: "Number of operations for basic access",
+											retryDelay: "17941s",
+										},
+									},
+								},
+							],
+						},
+					],
+				},
+			},
+		]);
 
-  const rows = __googleAdsTestUtils.buildGoogleAdsMetadataRecords({
-    accountId: ' 1234567890 ',
-    observedAt,
-    campaignRows: [
-      {
-        campaign: {
-          id: ' cmp_1 ',
-          name: '  Spring    Search  '
-        }
-      },
-      {
-        campaign: {
-          id: 'cmp_1',
-          name: '   '
-        }
-      }
-    ],
-    adsetRows: [
-      {
-        adGroup: {
-          id: ' adgroup_1 ',
-          name: ' US   Search '
-        }
-      },
-      {
-        adGroup: {
-          id: 'adgroup_1',
-          name: ''
-        }
-      }
-    ],
-    adRows: [
-      {
-        adGroupAd: {
-          ad: {
-            id: ' ad_1 ',
-            name: ' Headline   A '
-          }
-        }
-      },
-      {
-        adGroupAd: {
-          ad: {
-            id: 'ad_1',
-            name: ' '
-          }
-        }
-      }
-    ]
-  });
-
-  assert.deepEqual(rows, [
-    {
-      platform: 'google_ads',
-      accountId: '1234567890',
-      entityType: 'campaign',
-      entityId: 'cmp_1',
-      latestName: 'Spring Search',
-      lastSeenAt: observedAt
-    },
-    {
-      platform: 'google_ads',
-      accountId: '1234567890',
-      entityType: 'adset',
-      entityId: 'adgroup_1',
-      latestName: 'US Search',
-      lastSeenAt: observedAt
-    },
-    {
-      platform: 'google_ads',
-      accountId: '1234567890',
-      entityType: 'ad',
-      entityId: 'ad_1',
-      latestName: 'Headline A',
-      lastSeenAt: observedAt
-    }
-  ]);
-});
-
-test('formatGoogleAdsError includes API status and details payload', () => {
-  const error = __googleAdsTestUtils.createGoogleAdsApiErrorForTest(403, 'Google Ads API request failed', {
-    error: {
-      code: 403,
-      message: 'The caller does not have permission',
-      status: 'PERMISSION_DENIED'
-    }
-  });
-
-  const message = __googleAdsTestUtils.formatGoogleAdsError(error);
-
-  assert.equal(
-    message,
-    'Google Ads API request failed (status 403; details={"error":{"code":403,"message":"The caller does not have permission","status":"PERMISSION_DENIED"}})'
-  );
-});
-
-test('extractGoogleAdsProviderRetryDelaySeconds reads quota retry delay from Google API details', () => {
-  const retryDelaySeconds = __googleAdsTestUtils.extractGoogleAdsProviderRetryDelaySeconds([
-    {
-      error: {
-        code: 429,
-        message: 'Resource has been exhausted (e.g. check quota).',
-        status: 'RESOURCE_EXHAUSTED',
-        details: [
-          {
-            '@type': 'type.googleapis.com/google.ads.googleads.v22.errors.GoogleAdsFailure',
-            errors: [
-              {
-                errorCode: {
-                  quotaError: 'RESOURCE_EXHAUSTED'
-                },
-                message: 'Too many requests. Retry in 17941 seconds.',
-                details: {
-                  quotaErrorDetails: {
-                    rateScope: 'DEVELOPER',
-                    rateName: 'Number of operations for basic access',
-                    retryDelay: '17941s'
-                  }
-                }
-              }
-            ]
-          }
-        ]
-      }
-    }
-  ]);
-
-  assert.equal(retryDelaySeconds, 17941);
+	assert.equal(retryDelaySeconds, 17941);
 });
