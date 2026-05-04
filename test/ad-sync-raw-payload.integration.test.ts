@@ -234,7 +234,8 @@ async function loadMetaRawPersistence() {
           raw_account_payload_size_bytes,
           raw_account_payload_hash
         FROM meta_ads_connections
-        WHERE id = 1
+        ORDER BY id DESC
+        LIMIT 1
       `
     ),
     pool.query<{
@@ -248,8 +249,7 @@ async function loadMetaRawPersistence() {
       `
         SELECT level, raw_payload, payload_source, payload_external_id, payload_size_bytes, payload_hash
         FROM meta_ads_raw_spend_records
-        WHERE connection_id = 1
-        ORDER BY id ASC
+        ORDER BY connection_id ASC, id ASC
       `
     )
   ]);
@@ -277,7 +277,8 @@ async function loadGoogleRawPersistence() {
           raw_customer_payload_size_bytes,
           raw_customer_payload_hash
         FROM google_ads_connections
-        WHERE id = 1
+        ORDER BY id DESC
+        LIMIT 1
       `
     ),
     pool.query<{
@@ -291,8 +292,7 @@ async function loadGoogleRawPersistence() {
       `
         SELECT level, raw_payload, payload_source, payload_external_id, payload_size_bytes, payload_hash
         FROM google_ads_raw_spend_records
-        WHERE connection_id = 1
-        ORDER BY id ASC
+        ORDER BY connection_id ASC, id ASC
       `
     )
   ]);
@@ -305,8 +305,8 @@ async function loadGoogleRawPersistence() {
 
 async function loadAdProjectionCounts() {
   const [metaResult, googleResult] = await Promise.all([
-    pool.query<{ count: string }>('SELECT count(*)::text AS count FROM meta_ads_daily_spend WHERE connection_id = 1'),
-    pool.query<{ count: string }>('SELECT count(*)::text AS count FROM google_ads_daily_spend WHERE connection_id = 1')
+    pool.query<{ count: string }>('SELECT count(*)::text AS count FROM meta_ads_daily_spend'),
+    pool.query<{ count: string }>('SELECT count(*)::text AS count FROM google_ads_daily_spend')
   ]);
 
   return {
@@ -315,14 +315,13 @@ async function loadAdProjectionCounts() {
   };
 }
 
-async function seedMetaSyncJob(): Promise<void> {
+async function seedMetaSyncJob(): Promise<{ connectionId: number; jobId: number }> {
   const rawAccountData = buildMetaAccountFixture();
   const rawAccountJson = JSON.stringify(rawAccountData);
 
-  await pool.query(
+  const connectionResult = await pool.query<{ id: number }>(
     `
       INSERT INTO meta_ads_connections (
-        id,
         ad_account_id,
         access_token_encrypted,
         token_type,
@@ -339,7 +338,6 @@ async function seedMetaSyncJob(): Promise<void> {
         raw_account_payload_hash
       )
       VALUES (
-        1,
         '123456789',
         pgp_sym_encrypt($1, $2, 'cipher-algo=aes256, compress-algo=0'),
         'Bearer',
@@ -355,6 +353,7 @@ async function seedMetaSyncJob(): Promise<void> {
         $4,
         $5
       )
+      RETURNING id
     `,
     [
       'meta-access-token',
@@ -364,30 +363,32 @@ async function seedMetaSyncJob(): Promise<void> {
       createHash('sha256').update(rawAccountJson).digest('hex')
     ]
   );
+  const connectionId = connectionResult.rows[0].id;
 
-  await pool.query(
+  const jobResult = await pool.query<{ id: number }>(
     `
       INSERT INTO meta_ads_sync_jobs (
-        id,
         connection_id,
         sync_date,
         status,
         available_at,
         updated_at
       )
-      VALUES (1, 1, '2026-04-11'::date, 'pending', now(), now())
-    `
+      VALUES ($1, '2026-04-11'::date, 'pending', now(), now())
+      RETURNING id
+    `,
+    [connectionId]
   );
+  return { connectionId, jobId: jobResult.rows[0].id };
 }
 
-async function seedGoogleSyncJob(): Promise<void> {
+async function seedGoogleSyncJob(): Promise<{ connectionId: number; jobId: number }> {
   const rawCustomerData = buildGoogleCustomerFixture();
   const rawCustomerJson = JSON.stringify(rawCustomerData);
 
-  await pool.query(
+  const connectionResult = await pool.query<{ id: number }>(
     `
       INSERT INTO google_ads_connections (
-        id,
         customer_id,
         login_customer_id,
         developer_token_encrypted,
@@ -408,7 +409,6 @@ async function seedGoogleSyncJob(): Promise<void> {
         raw_customer_payload_hash
       )
       VALUES (
-        1,
         '1234567890',
         NULL,
         pgp_sym_encrypt($1, $4, 'cipher-algo=aes256, compress-algo=0'),
@@ -428,6 +428,7 @@ async function seedGoogleSyncJob(): Promise<void> {
         $7,
         $8
       )
+      RETURNING id
     `,
     [
       process.env.GOOGLE_ADS_DEVELOPER_TOKEN,
@@ -440,8 +441,9 @@ async function seedGoogleSyncJob(): Promise<void> {
       createHash('sha256').update(rawCustomerJson).digest('hex')
     ]
   );
+  const connectionId = connectionResult.rows[0].id;
 
-  await pool.query(
+  const jobResult = await pool.query<{ id: number }>(
     `
       INSERT INTO google_ads_sync_jobs (
         connection_id,
@@ -450,9 +452,12 @@ async function seedGoogleSyncJob(): Promise<void> {
         available_at,
         updated_at
       )
-      VALUES (1, '2026-04-11'::date, 'pending', now(), now())
-    `
+      VALUES ($1, '2026-04-11'::date, 'pending', now(), now())
+      RETURNING id
+    `,
+    [connectionId]
   );
+  return { connectionId, jobId: jobResult.rows[0].id };
 }
 
 test('Meta Ads and Google Ads sync preserve raw payloads without trimming', { concurrency: false }, async () => {

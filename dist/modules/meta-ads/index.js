@@ -7,6 +7,7 @@ import { query, withTransaction } from '../../db/pool.js';
 import { attachAuthContext, requireAdmin } from '../auth/index.js';
 import { buildCanonicalSpendDimensions } from '../marketing-dimensions/index.js';
 import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
+import { buildRawPayloadStorageMetadata } from '../../src/shared/raw-payload-storage.js';
 const META_OAUTH_STATE_TTL_MINUTES = 10;
 const META_GRAPH_BASE_URL = 'https://graph.facebook.com';
 const META_SYNC_JOB_STATUSES = ['pending', 'processing', 'retry', 'completed', 'failed'];
@@ -646,7 +647,7 @@ async function fetchInsightsForLevel(accessToken, adAccountId, syncDate, level) 
         rows.push(...(page.data ?? []));
         nextUrl = page.paging?.next ? new URL(page.paging.next) : null;
     }
-    return rows.filter((row) => buildInsightsEntityId(level, row));
+    return rows;
 }
 async function fetchCreativeMap(accessToken, adIds) {
     const creativeMap = {};
@@ -673,12 +674,11 @@ async function fetchCreativeMap(accessToken, adIds) {
 async function persistDailySpendSnapshot(client, params) {
     await client.query('DELETE FROM meta_ads_daily_spend WHERE connection_id = $1 AND report_date = $2::date', [params.connectionId, params.syncDate]);
     await client.query('DELETE FROM meta_ads_raw_spend_records WHERE connection_id = $1 AND report_date = $2::date', [params.connectionId, params.syncDate]);
+    const rolledDailyRows = new Map();
     for (const level of META_SPEND_LEVELS) {
         for (const row of params.rowsByLevel[level]) {
-            const entityId = buildInsightsEntityId(level, row);
-            if (!entityId) {
-                continue;
-            }
+            const entityId = buildInsightsEntityId(level, row) || null;
+            const rawPayloadMetadata = buildRawPayloadStorageMetadata(row);
             const rawInsert = await client.query(`
           INSERT INTO meta_ads_raw_spend_records (
             connection_id,
@@ -691,9 +691,14 @@ async function persistDailySpendSnapshot(client, params) {
             impressions,
             clicks,
             raw_payload,
+            payload_source,
+            payload_received_at,
+            payload_external_id,
+            payload_size_bytes,
+            payload_hash,
             updated_at
           )
-          VALUES ($1, $2, $3::date, $4, $5, $6, $7::numeric, $8, $9, $10::jsonb, now())
+          VALUES ($1, $2, $3::date, $4, $5, $6, $7::numeric, $8, $9, $10::jsonb, $11, now(), $12, $13, $14, now())
           RETURNING id
         `, [
                 params.connectionId,
@@ -705,12 +710,37 @@ async function persistDailySpendSnapshot(client, params) {
                 parseMetricDecimal(row.spend),
                 parseMetricInteger(row.impressions),
                 parseMetricInteger(row.clicks),
-                JSON.stringify(row)
+                rawPayloadMetadata.rawPayloadJson,
+                'meta_ads_insights',
+                entityId,
+                rawPayloadMetadata.payloadSizeBytes,
+                rawPayloadMetadata.payloadHash
             ]);
+            if (!entityId) {
+                continue;
+            }
             const rawRecordId = rawInsert.rows[0].id;
             const normalizedRows = normalizeInsightRows(row, params.creativeMap, params.currency);
             for (const normalizedRow of normalizedRows) {
-                await client.query(`
+                const rollupKey = `${normalizedRow.granularity}\u0000${normalizedRow.entityKey}`;
+                const existing = rolledDailyRows.get(rollupKey);
+                if (!existing) {
+                    rolledDailyRows.set(rollupKey, {
+                        rawRecordId,
+                        normalizedRow: {
+                            ...normalizedRow
+                        }
+                    });
+                    continue;
+                }
+                existing.normalizedRow.spend = (Number(existing.normalizedRow.spend) + Number(normalizedRow.spend)).toFixed(2);
+                existing.normalizedRow.impressions += normalizedRow.impressions;
+                existing.normalizedRow.clicks += normalizedRow.clicks;
+            }
+        }
+    }
+    for (const { rawRecordId, normalizedRow } of rolledDailyRows.values()) {
+        await client.query(`
             INSERT INTO meta_ads_daily_spend (
               connection_id,
               raw_record_id,
@@ -746,35 +776,33 @@ async function persistDailySpendSnapshot(client, params) {
               $23::numeric, $24, $25, $26::jsonb, now()
             )
           `, [
-                    params.connectionId,
-                    rawRecordId,
-                    params.syncJobId,
-                    params.syncDate,
-                    normalizedRow.granularity,
-                    normalizedRow.entityKey,
-                    normalizedRow.accountId,
-                    normalizedRow.accountName,
-                    normalizedRow.campaignId,
-                    normalizedRow.campaignName,
-                    normalizedRow.adsetId,
-                    normalizedRow.adsetName,
-                    normalizedRow.adId,
-                    normalizedRow.adName,
-                    normalizedRow.creativeId,
-                    normalizedRow.creativeName,
-                    normalizedRow.canonicalSource,
-                    normalizedRow.canonicalMedium,
-                    normalizedRow.canonicalCampaign,
-                    normalizedRow.canonicalContent,
-                    normalizedRow.canonicalTerm,
-                    normalizedRow.currency,
-                    normalizedRow.spend,
-                    normalizedRow.impressions,
-                    normalizedRow.clicks,
-                    JSON.stringify(normalizedRow.rawPayload)
-                ]);
-            }
-        }
+            params.connectionId,
+            rawRecordId,
+            params.syncJobId,
+            params.syncDate,
+            normalizedRow.granularity,
+            normalizedRow.entityKey,
+            normalizedRow.accountId,
+            normalizedRow.accountName,
+            normalizedRow.campaignId,
+            normalizedRow.campaignName,
+            normalizedRow.adsetId,
+            normalizedRow.adsetName,
+            normalizedRow.adId,
+            normalizedRow.adName,
+            normalizedRow.creativeId,
+            normalizedRow.creativeName,
+            normalizedRow.canonicalSource,
+            normalizedRow.canonicalMedium,
+            normalizedRow.canonicalCampaign,
+            normalizedRow.canonicalContent,
+            normalizedRow.canonicalTerm,
+            normalizedRow.currency,
+            normalizedRow.spend,
+            normalizedRow.impressions,
+            normalizedRow.clicks,
+            JSON.stringify(normalizedRow.rawPayload)
+        ]);
     }
     await refreshDailyReportingMetrics(client, [params.syncDate]);
 }
