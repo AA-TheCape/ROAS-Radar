@@ -188,3 +188,77 @@ test('normalizeOrderValueRows keeps the selected action type stable when one met
   assert.equal(normalized[0]?.attributedRevenue, 12);
   assert.equal(normalized[0]?.purchaseCount, null);
 });
+
+test('buildMetaAdsMetadataRecords normalizes ids and collapses duplicate names to the latest non-blank value', () => {
+  const observedAt = new Date('2026-04-11T12:00:00.000Z');
+
+  const records = __metaAdsTestUtils.buildMetaAdsMetadataRecords({
+    accountId: ' 123456789 ',
+    observedAt,
+    campaignRows: [
+      { id: ' cmp_1 ', name: '  Brand   Search ' },
+      { id: 'cmp_1', name: ' ' },
+      { id: 'cmp_2', name: ' Prospecting ' }
+    ],
+    adsetRows: [{ id: ' adset_1 ', name: ' US   Ad Set ' }],
+    adRows: [{ id: ' ad_1 ', name: ' Headline   A ' }]
+  });
+
+  assert.deepEqual(records, [
+    {
+      platform: 'meta_ads',
+      accountId: '123456789',
+      entityType: 'campaign',
+      entityId: 'cmp_1',
+      latestName: 'Brand Search',
+      lastSeenAt: observedAt
+    },
+    {
+      platform: 'meta_ads',
+      accountId: '123456789',
+      entityType: 'campaign',
+      entityId: 'cmp_2',
+      latestName: 'Prospecting',
+      lastSeenAt: observedAt
+    },
+    {
+      platform: 'meta_ads',
+      accountId: '123456789',
+      entityType: 'adset',
+      entityId: 'adset_1',
+      latestName: 'US Ad Set',
+      lastSeenAt: observedAt
+    },
+    {
+      platform: 'meta_ads',
+      accountId: '123456789',
+      entityType: 'ad',
+      entityId: 'ad_1',
+      latestName: 'Headline A',
+      lastSeenAt: observedAt
+    }
+  ]);
+});
+
+test('isRetryableMetaAdsApiError treats Meta rate-limit codes as retryable even on HTTP 400 responses', () => {
+  const rateLimited = __metaAdsTestUtils.createMetaAdsApiErrorForTest(400, 'Application request limit reached', {
+    error: {
+      code: 4,
+      error_subcode: 123,
+      message: 'Application request limit reached'
+    }
+  });
+  const invalid = __metaAdsTestUtils.createMetaAdsApiErrorForTest(400, 'Invalid parameter', {
+    error: {
+      code: 100,
+      message: 'Invalid parameter'
+    }
+  });
+
+  assert.equal(__metaAdsTestUtils.isRetryableMetaAdsApiError(rateLimited), true);
+  assert.equal(__metaAdsTestUtils.isRetryableMetaAdsApiError(invalid), false);
+  assert.equal(
+    __metaAdsTestUtils.formatMetaAdsError(rateLimited),
+    'Application request limit reached (status=400, code=4, subcode=123)'
+  );
+});

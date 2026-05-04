@@ -1,0 +1,4 @@
+New warning alert:
+- `ROAS Radar __ENVIRONMENT__ Campaign Metadata Freshness Breach`
+
+Triggers when stale metadata entity count is above 0 for 30 minutes.

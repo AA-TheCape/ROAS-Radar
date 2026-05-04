@@ -20,6 +20,8 @@ export async function resetE2EDatabase(): Promise<void> {
   await resetIntegrationTables(pool, [
     'app_sessions',
     'app_users',
+    'campaign_metadata_backfill_runs',
+    'ad_platform_entity_metadata',
     'ad_sync_api_transactions',
     'google_ads_oauth_states',
     'google_ads_settings',

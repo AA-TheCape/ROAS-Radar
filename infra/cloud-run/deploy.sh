@@ -93,14 +93,18 @@ for var in \
   MIGRATOR_JOB_NAME \
   META_ADS_JOB_NAME \
   META_ADS_ORDER_VALUE_JOB_NAME \
+  META_ADS_METADATA_JOB_NAME \
   GOOGLE_ADS_JOB_NAME \
+  GOOGLE_ADS_METADATA_JOB_NAME \
   RETENTION_JOB_NAME \
   DATA_QUALITY_JOB_NAME \
   IDENTITY_GRAPH_BACKFILL_JOB_NAME \
   ORDER_ATTRIBUTION_MATERIALIZATION_JOB_NAME \
   META_ADS_SCHEDULER_JOB_NAME \
   META_ADS_ORDER_VALUE_SCHEDULER_JOB_NAME \
+  META_ADS_METADATA_SCHEDULER_NAME \
   GOOGLE_ADS_SCHEDULER_JOB_NAME \
+  GOOGLE_ADS_METADATA_SCHEDULER_NAME \
   RETENTION_SCHEDULER_JOB_NAME \
   DATA_QUALITY_SCHEDULER_JOB_NAME \
   IDENTITY_GRAPH_BACKFILL_SCHEDULER_JOB_NAME \
@@ -146,7 +150,15 @@ for var in \
   META_ADS_ORDER_VALUE_ANOMALY_MIN_ROWS \
   META_ADS_ORDER_VALUE_NULL_SPIKE_MIN_RATIO \
   META_ADS_ORDER_VALUE_NULL_SPIKE_RATIO_DELTA \
+  META_ADS_METADATA_SCHEDULE \
+  META_ADS_METADATA_TIME_ZONE \
+  META_ADS_METADATA_SCHEDULER_ENABLED \
+  META_ADS_METADATA_REFRESH_REQUESTED_BY \
   GOOGLE_ADS_SYNC_SCHEDULE \
+  GOOGLE_ADS_METADATA_SCHEDULE \
+  GOOGLE_ADS_METADATA_TIME_ZONE \
+  GOOGLE_ADS_METADATA_SCHEDULER_ENABLED \
+  GOOGLE_ADS_METADATA_REFRESH_REQUESTED_BY \
   RETENTION_SCHEDULE \
   DATA_QUALITY_SCHEDULE \
   IDENTITY_GRAPH_BACKFILL_SCHEDULE \
@@ -250,6 +262,73 @@ ensure_job_invoker() {
     --region="$GCP_REGION" \
     --member="$MEMBER" \
     --role="roles/run.invoker" >/dev/null
+}
+
+deploy_metadata_refresh_job() {
+  JOB_NAME="$1"
+  JOB_SERVICE_ACCOUNT="$2"
+  PACKAGE_SCRIPT="$3"
+  REQUESTED_BY_ENV_NAME="$4"
+  REQUESTED_BY_VALUE="$5"
+
+  gcloud run jobs deploy "$JOB_NAME" \
+    --project="$GCP_PROJECT_ID" \
+    --region="$GCP_REGION" \
+    --image="$IMAGE_URI" \
+    --service-account="$JOB_SERVICE_ACCOUNT" \
+    --cpu=1 \
+    --memory=512Mi \
+    --max-retries=1 \
+    --task-timeout=1800 \
+    --parallelism=1 \
+    --tasks=1 \
+    --command=npm \
+    --args=run,"$PACKAGE_SCRIPT" \
+    --set-env-vars="${COMMON_ENV_VARS}@DATABASE_POOL_MAX=$ADS_SYNC_DATABASE_POOL_MAX@$REQUESTED_BY_ENV_NAME=$REQUESTED_BY_VALUE" \
+    --set-secrets="DATABASE_URL=DATABASE_URL:latest,META_ADS_APP_SECRET=META_ADS_APP_SECRET:latest,META_ADS_ENCRYPTION_KEY=META_ADS_ENCRYPTION_KEY:latest,GOOGLE_ADS_ENCRYPTION_KEY=GOOGLE_ADS_ENCRYPTION_KEY:latest" \
+    --set-cloudsql-instances="$CLOUD_SQL_CONNECTION_NAME"
+}
+
+configure_metadata_scheduler() {
+  TARGET_JOB_NAME="$1"
+  SCHEDULER_NAME="$2"
+  CRON_SCHEDULE="$3"
+  TIME_ZONE="$4"
+  ENABLED="$5"
+
+  if gcloud scheduler jobs describe "$SCHEDULER_NAME" \
+    --project="$GCP_PROJECT_ID" \
+    --location="$GCP_REGION" >/dev/null 2>&1; then
+    gcloud scheduler jobs update http "$SCHEDULER_NAME" \
+      --project="$GCP_PROJECT_ID" \
+      --location="$GCP_REGION" \
+      --schedule="$CRON_SCHEDULE" \
+      --time-zone="$TIME_ZONE" \
+      --uri="$ADS_JOB_ENDPOINT_BASE/$TARGET_JOB_NAME:run" \
+      --http-method=POST \
+      --oauth-service-account-email="$SCHEDULER_INVOKER_SA" \
+      --oauth-token-scope="https://www.googleapis.com/auth/cloud-platform"
+  else
+    gcloud scheduler jobs create http "$SCHEDULER_NAME" \
+      --project="$GCP_PROJECT_ID" \
+      --location="$GCP_REGION" \
+      --schedule="$CRON_SCHEDULE" \
+      --time-zone="$TIME_ZONE" \
+      --uri="$ADS_JOB_ENDPOINT_BASE/$TARGET_JOB_NAME:run" \
+      --http-method=POST \
+      --oauth-service-account-email="$SCHEDULER_INVOKER_SA" \
+      --oauth-token-scope="https://www.googleapis.com/auth/cloud-platform"
+  fi
+
+  if [ "$ENABLED" = "true" ]; then
+    gcloud scheduler jobs resume "$SCHEDULER_NAME" \
+      --project="$GCP_PROJECT_ID" \
+      --location="$GCP_REGION" >/dev/null || true
+  else
+    gcloud scheduler jobs pause "$SCHEDULER_NAME" \
+      --project="$GCP_PROJECT_ID" \
+      --location="$GCP_REGION" >/dev/null
+  fi
 }
 
 if [ "${SKIP_BUILDS:-false}" != "true" ]; then
@@ -407,6 +486,26 @@ gcloud run jobs deploy "$GOOGLE_ADS_JOB_NAME" \
 ensure_job_invoker "$GOOGLE_ADS_JOB_NAME" "serviceAccount:$SCHEDULER_INVOKER_SA"
 ensure_job_invoker "$GOOGLE_ADS_JOB_NAME" "serviceAccount:$WORKER_SA"
 
+echo "Deploying Meta Ads metadata refresh job $META_ADS_METADATA_JOB_NAME"
+deploy_metadata_refresh_job \
+  "$META_ADS_METADATA_JOB_NAME" \
+  "$META_ADS_SA" \
+  "meta-ads:metadata-refresh:start" \
+  "META_ADS_METADATA_REFRESH_REQUESTED_BY" \
+  "$META_ADS_METADATA_REFRESH_REQUESTED_BY"
+ensure_job_invoker "$META_ADS_METADATA_JOB_NAME" "serviceAccount:$SCHEDULER_INVOKER_SA"
+ensure_job_invoker "$META_ADS_METADATA_JOB_NAME" "serviceAccount:$WORKER_SA"
+
+echo "Deploying Google Ads metadata refresh job $GOOGLE_ADS_METADATA_JOB_NAME"
+deploy_metadata_refresh_job \
+  "$GOOGLE_ADS_METADATA_JOB_NAME" \
+  "$GOOGLE_ADS_SA" \
+  "google-ads:metadata-refresh:start" \
+  "GOOGLE_ADS_METADATA_REFRESH_REQUESTED_BY" \
+  "$GOOGLE_ADS_METADATA_REFRESH_REQUESTED_BY"
+ensure_job_invoker "$GOOGLE_ADS_METADATA_JOB_NAME" "serviceAccount:$SCHEDULER_INVOKER_SA"
+ensure_job_invoker "$GOOGLE_ADS_METADATA_JOB_NAME" "serviceAccount:$WORKER_SA"
+
 echo "Deploying session retention job $RETENTION_JOB_NAME"
 gcloud run jobs deploy "$RETENTION_JOB_NAME" \
   --project="$GCP_PROJECT_ID" \
@@ -513,6 +612,22 @@ upsert_scheduler_job \
 
 echo "Configuring Google Ads scheduler job $GOOGLE_ADS_SCHEDULER_JOB_NAME"
 upsert_scheduler_job "$GOOGLE_ADS_SCHEDULER_JOB_NAME" "$GOOGLE_ADS_JOB_NAME" "$GOOGLE_ADS_SYNC_SCHEDULE"
+
+echo "Configuring Meta Ads metadata scheduler job $META_ADS_METADATA_SCHEDULER_NAME"
+configure_metadata_scheduler \
+  "$META_ADS_METADATA_JOB_NAME" \
+  "$META_ADS_METADATA_SCHEDULER_NAME" \
+  "$META_ADS_METADATA_SCHEDULE" \
+  "$META_ADS_METADATA_TIME_ZONE" \
+  "$META_ADS_METADATA_SCHEDULER_ENABLED"
+
+echo "Configuring Google Ads metadata scheduler job $GOOGLE_ADS_METADATA_SCHEDULER_NAME"
+configure_metadata_scheduler \
+  "$GOOGLE_ADS_METADATA_JOB_NAME" \
+  "$GOOGLE_ADS_METADATA_SCHEDULER_NAME" \
+  "$GOOGLE_ADS_METADATA_SCHEDULE" \
+  "$GOOGLE_ADS_METADATA_TIME_ZONE" \
+  "$GOOGLE_ADS_METADATA_SCHEDULER_ENABLED"
 
 echo "Configuring session retention scheduler job $RETENTION_SCHEDULER_JOB_NAME"
 upsert_scheduler_job "$RETENTION_SCHEDULER_JOB_NAME" "$RETENTION_JOB_NAME" "$RETENTION_SCHEDULE"

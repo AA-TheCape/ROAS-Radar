@@ -86,6 +86,48 @@ type Ga4IngestionSummaryInput = {
   }>;
 };
 
+type CampaignMetadataCoverageLogInput = {
+  resolutionScope: 'campaign' | 'campaign_group';
+  platform: 'google_ads' | 'meta_ads' | 'mixed';
+  entityType: 'campaign';
+  requestedCount: number;
+  matchedCount: number;
+  resolvedCount: number;
+  fallbackCount: number;
+  unresolvedCount: number;
+  unresolvedEntityIds?: string[];
+  startDate: string;
+  endDate: string;
+  source?: string | null;
+};
+
+type CampaignMetadataFreshnessSnapshotLogInput = {
+  platform: 'google_ads' | 'meta_ads';
+  entityType: 'campaign' | 'adset' | 'ad';
+  freshEntityCount: number;
+  staleEntityCount: number;
+  freshnessThresholdHours: number;
+  oldestLastSeenAt: string | null;
+  newestLastSeenAt: string | null;
+};
+
+type CampaignMetadataSyncJobLifecycleLogInput = {
+  stage: 'started' | 'completed' | 'failed';
+  platform: 'google_ads' | 'meta_ads' | 'all';
+  workerId: string;
+  jobId?: string | null;
+  requestedBy?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  durationMs?: number | null;
+  plannedInserts?: number | null;
+  plannedUpdates?: number | null;
+  campaignResolvedRate?: number | null;
+  overallUnresolvedRate?: number | null;
+  staleEntityCount?: number | null;
+  error?: unknown;
+};
+
 const requestContextStorage = new AsyncLocalStorage<RequestContext>();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -552,6 +594,72 @@ export function summarizeGa4IngestionResult(input: Ga4IngestionSummaryInput): Se
   };
 }
 
+export function emitCampaignMetadataResolutionCoverageLog(input: CampaignMetadataCoverageLogInput): void {
+  const requestedCount = Math.max(0, input.requestedCount);
+  const resolvedRate = requestedCount > 0 ? input.resolvedCount / requestedCount : 0;
+  const fallbackRate = requestedCount > 0 ? input.fallbackCount / requestedCount : 0;
+  const unresolvedRate = requestedCount > 0 ? input.unresolvedCount / requestedCount : 0;
+
+  logInfo('campaign_metadata_resolution_coverage', {
+    service: process.env.K_SERVICE ?? 'roas-radar',
+    resolutionScope: input.resolutionScope,
+    platform: input.platform,
+    entityType: input.entityType,
+    requestedCount,
+    matchedCount: input.matchedCount,
+    resolvedCount: input.resolvedCount,
+    fallbackCount: input.fallbackCount,
+    unresolvedCount: input.unresolvedCount,
+    resolvedRate,
+    fallbackRate,
+    unresolvedRate,
+    unresolvedEntityIds: (input.unresolvedEntityIds ?? []).slice(0, 10),
+    startDate: input.startDate,
+    endDate: input.endDate,
+    source: input.source ?? null
+  });
+}
+
+export function emitCampaignMetadataFreshnessSnapshotLog(input: CampaignMetadataFreshnessSnapshotLogInput): void {
+  logInfo('campaign_metadata_freshness_snapshot', {
+    service: process.env.K_SERVICE ?? 'roas-radar',
+    platform: input.platform,
+    entityType: input.entityType,
+    freshEntityCount: input.freshEntityCount,
+    staleEntityCount: input.staleEntityCount,
+    freshnessThresholdHours: input.freshnessThresholdHours,
+    oldestLastSeenAt: input.oldestLastSeenAt,
+    newestLastSeenAt: input.newestLastSeenAt
+  });
+}
+
+export function emitCampaignMetadataSyncJobLifecycleLog(input: CampaignMetadataSyncJobLifecycleLogInput): void {
+  const fields: SerializableFields = {
+    service: process.env.K_SERVICE ?? 'roas-radar',
+    stage: input.stage,
+    platform: input.platform,
+    workerId: input.workerId,
+    jobId: input.jobId ?? null,
+    requestedBy: input.requestedBy ?? null,
+    startedAt: input.startedAt ?? null,
+    completedAt: input.completedAt ?? null,
+    durationMs: input.durationMs ?? null,
+    plannedInserts: input.plannedInserts ?? null,
+    plannedUpdates: input.plannedUpdates ?? null,
+    campaignResolvedRate: input.campaignResolvedRate ?? null,
+    overallUnresolvedRate: input.overallUnresolvedRate ?? null,
+    staleEntityCount: input.staleEntityCount ?? null
+  };
+
+  if (input.stage === 'failed') {
+    fields.alertable = true;
+    logError('campaign_metadata_sync_job_lifecycle', input.error ?? new Error('Campaign metadata sync failed'), fields);
+    return;
+  }
+
+  logInfo('campaign_metadata_sync_job_lifecycle', fields);
+}
+
 export function buildAttributionBacklogLog(snapshot: AttributionBacklogSnapshot): string {
   return JSON.stringify({
     severity: 'INFO',
@@ -572,5 +680,8 @@ export const __observabilityTestUtils = {
   summarizeOrderAttributionBackfillReport,
   summarizeAttributionObservation,
   summarizeDualWriteConsistency,
-  summarizeResolverOutcome
+  summarizeResolverOutcome,
+  emitCampaignMetadataResolutionCoverageLog,
+  emitCampaignMetadataFreshnessSnapshotLog,
+  emitCampaignMetadataSyncJobLifecycleLog
 };

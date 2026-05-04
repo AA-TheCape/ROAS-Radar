@@ -13,7 +13,6 @@ const { resetE2EDatabase } = await import('./e2e-harness.js');
 test.beforeEach(async () => {
   await resetE2EDatabase();
 });
-
 test.afterEach(async () => {
   await resetE2EDatabase();
 });
@@ -113,4 +112,3 @@ test('processMetaAdsSyncQueue plans spend sync jobs into meta_ads_sync_jobs with
   assert.equal(plannedFor.rows[0]?.last_sync_planned_for, '2026-04-11');
   assert.equal(orderValueJobs.rows[0]?.count, '0');
 });
-

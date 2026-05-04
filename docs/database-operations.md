@@ -14,6 +14,42 @@ Validate that migrations remain idempotent with:
 npm run db:migrate:check
 ```
 
+## Campaign Metadata Lookup
+
+Use `ad_platform_entity_metadata` as the canonical latest-name resolution table for Google Ads and Meta entity labels.
+
+Do not use these reporting or raw-source tables as the metadata source of truth:
+
+- `meta_ads_raw_spend_records`
+- `google_ads_raw_spend_records`
+- `meta_ads_daily_spend`
+- `google_ads_daily_spend`
+
+Preferred resolution query shape:
+
+```sql
+SELECT latest_name, last_seen_at, updated_at
+FROM ad_platform_entity_metadata
+WHERE platform = $1
+  AND account_id = $2
+  AND entity_type = $3
+  AND entity_id = $4
+  AND tenant_id IS NOT DISTINCT FROM $5
+  AND workspace_id IS NOT DISTINCT FROM $6;
+```
+
+The uniqueness contract is one row per `(platform, account_id, entity_type, entity_id, tenant_id, workspace_id)` scope, with `NULL` tenant and workspace treated as one shared unscoped namespace.
+
+## Campaign Metadata Query Plan Verification
+
+Use the staging-safe plan check before approving changes to metadata resolution lookups:
+
+```bash
+npm run db:verify-campaign-metadata-query-plans
+```
+
+The script seeds representative rows inside a transaction, runs `EXPLAIN (FORMAT JSON)` against the exact-match lookup paths, asserts that the metadata lookup indexes are used, and then rolls the data back.
+
 ## Raw Payload Querying
 
 For raw-source retention tables, lookup queries must prefer metadata columns over JSONB predicates.

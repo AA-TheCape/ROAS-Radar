@@ -1,3 +1,29 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+
+import { resolveMetaAdsRuntimeDescriptor } from "../src/modules/meta-ads/runtime.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const repoRoot = path.join(__dirname, "..");
+const deployScript = readFileSync(path.join(repoRoot, "infra/cloud-run/deploy.sh"), "utf8");
+const spendSection =
+	deployScript.match(/gcloud run jobs deploy "\$META_ADS_JOB_NAME"[\s\S]*?ensure_job_invoker "\$META_ADS_JOB_NAME"/)?.[0] ?? "";
+const orderValueSection =
+	deployScript.match(/gcloud run jobs deploy "\$META_ADS_ORDER_VALUE_JOB_NAME"[\s\S]*?ensure_job_invoker "\$META_ADS_ORDER_VALUE_JOB_NAME"/)?.[0] ?? "";
+const originalMetaAdsJobMode = process.env.META_ADS_JOB_MODE;
+
+test.afterEach(() => {
+	if (originalMetaAdsJobMode === undefined) {
+		Reflect.deleteProperty(process.env, "META_ADS_JOB_MODE");
+	} else {
+		process.env.META_ADS_JOB_MODE = originalMetaAdsJobMode;
+	}
+});
+
 test("resolveMetaAdsRuntimeDescriptor rejects mixed-mode Cloud Run execution", () => {
 	process.env.META_ADS_JOB_MODE = "order_value";
 

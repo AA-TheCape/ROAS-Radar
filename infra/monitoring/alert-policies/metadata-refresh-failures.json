@@ -1,0 +1,4 @@
+Replaced placeholder content with a real alert policy:
+- `ROAS Radar __ENVIRONMENT__ Campaign Metadata Sync Failures`
+
+Triggers when failed metadata sync lifecycle events are present over 15 minutes.

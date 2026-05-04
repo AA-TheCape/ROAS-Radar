@@ -1,0 +1,4 @@
+New warning alert:
+- `ROAS Radar __ENVIRONMENT__ Campaign Metadata Resolution Hit Rate`
+
+Triggers when campaign-level resolution hit rate drops below 85% for 15 minutes.

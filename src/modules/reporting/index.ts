@@ -10,6 +10,11 @@ import {
 	resolveRunDate,
 } from "../data-quality/index.js";
 import { getReportingTimezone } from "../settings/index.js";
+import {
+	buildCampaignResolutionGroupKey,
+	resolveCampaignDisplayMetadata,
+	type CampaignDisplayResolution,
+} from "./metadata-resolution.js";
 
 class ReportingHttpError extends Error {
 	statusCode: number;
@@ -128,6 +133,21 @@ type SpendDetailRow = {
 	medium: string;
 	campaign: string;
 	spend: string | number;
+};
+
+type CampaignLabelResponseFields = {
+	campaignDisplayName?: string;
+	campaignEntityId?: string | null;
+	campaignPlatform?: "google_ads" | "meta_ads" | null;
+	campaignNameResolutionStatus?: "resolved" | "fallback_name" | "unresolved";
+	campaignLabel?: {
+		displayName: string;
+		entityId: string | null;
+		platform: "google_ads" | "meta_ads" | null;
+		resolutionStatus: "resolved" | "fallback_name" | "unresolved";
+		lastSeenAt: string | null;
+		updatedAt: string | null;
+	};
 };
 
 type TimeseriesRow = {
@@ -357,6 +377,27 @@ function normalizeAttributionTier(value: string | null | undefined): ReportingAt
   return attributionTierSchema.safeParse(value).success ? (value as ReportingAttributionTier) : 'unattributed';
 }
 
+function buildCampaignLabelFields(resolution: CampaignDisplayResolution | undefined): CampaignLabelResponseFields {
+	if (!resolution?.campaignDisplayName) {
+		return {};
+	}
+
+	return {
+		campaignDisplayName: resolution.campaignDisplayName,
+		campaignEntityId: resolution.campaignEntityId,
+		campaignPlatform: resolution.campaignPlatform,
+		campaignNameResolutionStatus: resolution.campaignNameResolutionStatus,
+		campaignLabel: {
+			displayName: resolution.campaignDisplayName,
+			entityId: resolution.campaignEntityId,
+			platform: resolution.campaignPlatform,
+			resolutionStatus: resolution.campaignNameResolutionStatus,
+			lastSeenAt: resolution.lastSeenAt,
+			updatedAt: resolution.updatedAt,
+		},
+	};
+}
+
 function countDaysInRange(startDate: string, endDate: string): number {
 	const start = Date.parse(`${startDate}T00:00:00.000Z`);
 	const end = Date.parse(`${endDate}T00:00:00.000Z`);
@@ -368,11 +409,17 @@ function countDaysInRange(startDate: string, endDate: string): number {
 	return Math.floor((end - start) / 86_400_000) + 1;
 }
 
+const REPORTING_SCHEMA_VERSION = "2026-05-02";
+
 export function createReportingRouter(): Router {
 	const router = Router();
 
 	router.use(attachAuthContext);
 	router.use(requireAuthenticated);
+	router.use((_req, res, next) => {
+		res.setHeader("X-ROAS-Radar-Reporting-Schema", REPORTING_SCHEMA_VERSION);
+		next();
+	});
 
 	router.get("/summary", async (req, res, next) => {
 		try {
@@ -431,7 +478,7 @@ export function createReportingRouter(): Router {
 				input.source,
 				input.campaign,
 			);
-			const result = await query<CampaignRow>(
+				const result = await query<CampaignRow>(
 				`
           SELECT
             source,
@@ -448,28 +495,38 @@ export function createReportingRouter(): Router {
           ORDER BY revenue DESC, orders DESC, visits DESC, source ASC, campaign ASC
           LIMIT $${filters.params.length + 3}
         `,
-				[input.startDate, input.endDate, ...filters.params, input.limit],
-			);
+					[input.startDate, input.endDate, ...filters.params, input.limit],
+				);
+				const campaignMetadata = await resolveCampaignDisplayMetadata(
+					input.startDate,
+					input.endDate,
+					result.rows.map((row) => row.campaign),
+					input.source,
+				);
 
-			res.json({
-				rows: result.rows.map((row) => {
-					const visits = Number(row.visits);
-					const orders = Number(row.orders);
-					const revenue = Number(row.revenue);
+				res.json({
+					rows: result.rows.map((row) => {
+						const visits = Number(row.visits);
+						const orders = Number(row.orders);
+						const revenue = Number(row.revenue);
+						const resolution = campaignMetadata.byGroup.get(
+							buildCampaignResolutionGroupKey(row.source, row.medium, row.campaign),
+						);
 
-					return {
-						source: row.source,
-						medium: row.medium,
-						campaign: row.campaign,
-						content: normalizeContent(row.content),
-						visits,
-						orders,
-						revenue,
-						conversionRate: visits > 0 ? orders / visits : 0,
-					};
-				}),
-				nextCursor: null,
-			});
+						return {
+							source: row.source,
+							medium: row.medium,
+							campaign: row.campaign,
+							content: normalizeContent(row.content),
+							visits,
+							orders,
+							revenue,
+							conversionRate: visits > 0 ? orders / visits : 0,
+							...buildCampaignLabelFields(resolution),
+						};
+					}),
+					nextCursor: null,
+				});
 		} catch (error) {
 			next(error);
 		}
@@ -502,48 +559,61 @@ export function createReportingRouter(): Router {
 
 			const groupMap = new Map<
 				string,
-				{
-					source: string;
-					medium: string;
-					channel: string;
-					subtotal: number;
-					campaigns: Array<{
-						campaign: string;
-						spend: number;
-					}>;
-				}
-			>();
+					{
+						source: string;
+						medium: string;
+						channel: string;
+						subtotal: number;
+						campaigns: Array<
+							{
+								campaign: string;
+								spend: number;
+							} & CampaignLabelResponseFields
+						>;
+					}
+				>();
+				const campaignMetadata = await resolveCampaignDisplayMetadata(
+					input.startDate,
+					input.endDate,
+					result.rows.map((row) => row.campaign),
+					input.source,
+				);
 
-			for (const row of result.rows) {
-				const spend = Number(row.spend);
-				const source = row.source;
-				const medium = row.medium;
-				const channel = `${source} / ${medium}`;
-				const groupKey = `${source}\u0000${medium}`;
-				const existingGroup = groupMap.get(groupKey);
+				for (const row of result.rows) {
+					const spend = Number(row.spend);
+					const source = row.source;
+					const medium = row.medium;
+					const channel = `${source} / ${medium}`;
+					const groupKey = `${source}\u0000${medium}`;
+					const existingGroup = groupMap.get(groupKey);
+					const labelFields = buildCampaignLabelFields(
+						campaignMetadata.byGroup.get(buildCampaignResolutionGroupKey(source, medium, row.campaign)),
+					);
 
-				if (existingGroup) {
-					existingGroup.subtotal += spend;
-					existingGroup.campaigns.push({
-						campaign: row.campaign,
-						spend,
-					});
-					continue;
-				}
+					if (existingGroup) {
+						existingGroup.subtotal += spend;
+						existingGroup.campaigns.push({
+							campaign: row.campaign,
+							spend,
+							...labelFields,
+						});
+						continue;
+					}
 
 				groupMap.set(groupKey, {
 					source,
 					medium,
 					channel,
 					subtotal: spend,
-					campaigns: [
-						{
-							campaign: row.campaign,
-							spend,
-						},
-					],
-				});
-			}
+						campaigns: [
+							{
+								campaign: row.campaign,
+								spend,
+								...labelFields,
+							},
+						],
+					});
+				}
 
 			const groups = [...groupMap.values()].sort(
 				(left, right) =>
@@ -591,7 +661,7 @@ export function createReportingRouter(): Router {
 					: input.groupBy === "campaign"
 						? "campaign"
 						: "metric_date::text";
-			const result = await query<TimeseriesRow>(
+				const result = await query<TimeseriesRow>(
 				`
           SELECT
             ${groupExpr} AS bucket,
@@ -605,12 +675,21 @@ export function createReportingRouter(): Router {
           GROUP BY bucket
           ORDER BY bucket ASC
         `,
-				[input.startDate, input.endDate, ...filters.params],
-			);
+					[input.startDate, input.endDate, ...filters.params],
+				);
+				const campaignMetadata =
+					input.groupBy === "campaign"
+						? await resolveCampaignDisplayMetadata(
+								input.startDate,
+								input.endDate,
+								result.rows.map((row) => row.bucket),
+								input.source,
+							)
+						: null;
 
-			const bucketMetrics = result.rows.map((row) => {
-				const metrics = calculatePerformanceMetrics({
-					visits: row.visits,
+				const bucketMetrics = result.rows.map((row) => {
+					const metrics = calculatePerformanceMetrics({
+						visits: row.visits,
 					orders: row.orders,
 					attributedRevenue: row.revenue,
 					spend: row.spend,
@@ -621,19 +700,25 @@ export function createReportingRouter(): Router {
 					visits: metrics.visits,
 					orders: metrics.orders,
 					revenue: metrics.attributedRevenue,
-					spend: metrics.spend,
-					conversionRate: metrics.conversionRate,
-					roas: metrics.roas,
-				};
-			});
+						spend: metrics.spend,
+						conversionRate: metrics.conversionRate,
+						roas: metrics.roas,
+						...(input.groupBy === "campaign"
+							? buildCampaignLabelFields(campaignMetadata?.byCampaign.get(row.bucket))
+							: {}),
+					};
+				});
 
 			res.json({
 				points: bucketMetrics.map((row) => ({
 					date: row.bucket,
-					visits: row.visits,
-					orders: row.orders,
-					revenue: row.revenue,
-				})),
+						visits: row.visits,
+						orders: row.orders,
+						revenue: row.revenue,
+						...(input.groupBy === "campaign"
+							? buildCampaignLabelFields(campaignMetadata?.byCampaign.get(row.bucket))
+							: {}),
+					})),
 				lowestBuckets: [...bucketMetrics]
 					.sort(
 						(left, right) =>

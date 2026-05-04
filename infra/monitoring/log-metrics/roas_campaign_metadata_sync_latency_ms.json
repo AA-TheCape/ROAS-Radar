@@ -1,0 +1,7 @@
+New distribution metric extracting `jsonPayload.durationMs` from completed
+`campaign_metadata_sync_job_lifecycle` logs.
+
+Labels:
+- service
+- worker_id
+- dry_run

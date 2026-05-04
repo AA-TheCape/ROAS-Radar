@@ -590,6 +590,20 @@ test('Meta Ads and Google Ads sync preserve raw payloads without trimming', { co
         );
       }
 
+      if (url.searchParams.get('ids') === 'ad_1' && url.searchParams.get('fields') === 'creative{id,name}') {
+        return new Response(
+          JSON.stringify({
+            ad_1: {
+              creative: {
+                id: 'creative_1',
+                name: 'Ad One Creative'
+              }
+            }
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        );
+      }
+
       throw new Error(`Unexpected Meta Ads fetch ${url.toString()}`);
     }) as typeof globalThis.fetch;
 

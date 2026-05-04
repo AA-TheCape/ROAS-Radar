@@ -12,6 +12,8 @@ Use this runbook when deploying or operating the scheduled Cloud Run workers in 
   - `roas-radar-migrate`
   - `roas-radar-meta-ads-sync`
   - `roas-radar-meta-order-value-sync`
+  - `roas-radar-meta-ads-metadata-refresh`
+  - `roas-radar-google-ads-metadata-refresh`
   - `roas-radar-google-ads-sync`
   - `roas-radar-session-retention`
   - `roas-radar-data-quality`
@@ -43,6 +45,8 @@ Do not sign off staging or continue to production unless the smoke evidence incl
 - `META_ADS_SCHEDULER_ATTEMPT_DEADLINE`, `META_ADS_SCHEDULER_MAX_RETRY_ATTEMPTS`, `META_ADS_SCHEDULER_MIN_BACKOFF`, `META_ADS_SCHEDULER_MAX_BACKOFF`, and `META_ADS_SCHEDULER_MAX_DOUBLINGS` control Cloud Scheduler retry behavior.
 - `META_ADS_JOB_TIMEOUT_SECONDS` and `META_ADS_JOB_MAX_RETRIES` control the Cloud Run Job execution budget.
 - `META_ADS_ORDER_VALUE_SYNC_ENABLED` is the emergency kill switch for Meta order-value extraction without disabling the broader deploy surface.
+- `META_ADS_METADATA_SCHEDULER_NAME` and `GOOGLE_ADS_METADATA_SCHEDULER_NAME` identify the campaign metadata refresh schedulers created by deploys.
+- `META_ADS_METADATA_REFRESH_REQUESTED_BY` and `GOOGLE_ADS_METADATA_REFRESH_REQUESTED_BY` should appear in `campaign_metadata_sync_job_lifecycle` logs for scheduler-triggered refreshes.
 
 Recommended operating posture:
 
@@ -58,3 +62,5 @@ Recommended operating posture:
 3. If the service rollout itself must be reverted, use `sh infra/cloud-run/rollback.sh <environment> <deploy-metadata-file> previous`.
 4. After remediation, resume the scheduler:
    `sh infra/cloud-run/scheduler.sh <environment> meta-order-value resume`
+
+For upstream metadata quota incidents, pause the affected campaign metadata scheduler with `gcloud scheduler jobs pause`, then use `gcloud scheduler jobs resume` after `campaign_metadata_sync_job_lifecycle` logs show successful manual or scheduler refreshes.

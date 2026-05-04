@@ -1,0 +1,9 @@
+Replaced placeholder content with a real count metric for
+`campaign_metadata_sync_job_lifecycle` events.
+
+Labels:
+- service
+- stage
+- status
+- worker_id
+- dry_run

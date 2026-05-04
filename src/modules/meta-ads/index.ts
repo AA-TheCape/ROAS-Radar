@@ -14,6 +14,7 @@ import {
 } from '../../shared/raw-payload-storage.js';
 import { attachAuthContext, requireAdmin } from '../auth/index.js';
 import { buildCanonicalSpendDimensions } from '../marketing-dimensions/index.js';
+import { emitCampaignMetadataSyncJobLifecycleLog } from '../../observability/index.js';
 import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
 import {
   __metaAdsTestUtils as __metaOrderValueTestUtils,
@@ -28,6 +29,11 @@ const META_SYNC_JOB_STATUSES = ['pending', 'processing', 'retry', 'completed', '
 const META_SPEND_LEVELS = ['account', 'campaign', 'adset', 'ad'] as const;
 const META_SPEND_GRANULARITIES = ['account', 'campaign', 'adset', 'ad', 'creative'] as const;
 const META_ADS_SYNC_TIME_ZONE = 'America/Los_Angeles';
+const META_METADATA_ENTITY_ORDER: Record<MetaMetadataEntityType, number> = {
+  campaign: 0,
+  adset: 1,
+  ad: 2
+};
 
 const oauthStartQuerySchema = z.object({
   redirectPath: z.string().optional()
@@ -69,6 +75,8 @@ type MetaAdsConnectionRow = {
   account_name: string | null;
   account_currency: string | null;
 };
+
+type MetaAdsMetadataConnection = Pick<MetaAdsConnectionRow, 'id' | 'ad_account_id' | 'access_token'>;
 
 type MetaAdsConnectionSummaryRow = {
   id: number;
@@ -128,6 +136,17 @@ type MetaAdsInsightRow = {
   impressions?: string;
   clicks?: string;
   objective?: string;
+};
+
+type MetaMetadataEntityType = 'campaign' | 'adset' | 'ad';
+
+type MetaMetadataRecord = {
+  platform: 'meta_ads';
+  accountId: string;
+  entityType: MetaMetadataEntityType;
+  entityId: string;
+  latestName: string | null;
+  lastSeenAt: Date;
 };
 
 type MetaAdsTokenResponse = {
@@ -240,6 +259,20 @@ function normalizeMetaAdsScopes(rawValue: string | string[] | undefined): string
     .split(',')
     .map((entry) => entry.trim())
     .filter(Boolean);
+}
+
+function normalizeString(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function collapseWhitespace(value: string | null | undefined): string | null {
+  const normalized = normalizeString(value);
+  return normalized ? normalized.replace(/\s+/g, ' ') : null;
 }
 
 function normalizeMetaAdAccountId(value: string): string {
@@ -508,16 +541,16 @@ function buildIncrementalPlanningDates(
   return buildPlanningDates(now, lastSyncCompletedAt);
 }
 
-function buildInsightsEntityId(level: MetaSpendLevel, row: MetaAdsInsightRow): string {
+function buildInsightsEntityId(level: MetaSpendLevel, row: MetaAdsInsightRow): string | null {
   switch (level) {
     case 'account':
-      return row.account_id ?? '';
+      return row.account_id ?? null;
     case 'campaign':
-      return row.campaign_id ?? '';
+      return row.campaign_id ?? null;
     case 'adset':
-      return row.adset_id ?? '';
+      return row.adset_id ?? null;
     case 'ad':
-      return row.ad_id ?? '';
+      return row.ad_id ?? null;
   }
 }
 
@@ -1066,7 +1099,7 @@ async function fetchInsightsForLevel(
     nextUrl = page.paging?.next ? new URL(page.paging.next) : null;
   }
 
-  return rows.filter((row) => buildInsightsEntityId(level, row));
+  return rows;
 }
 
 async function fetchCreativeMap(accessToken: string, adIds: string[]): Promise<MetaAdsCreativeMap> {
@@ -1123,10 +1156,6 @@ async function persistDailySpendSnapshot(
   for (const level of META_SPEND_LEVELS) {
     for (const row of params.rowsByLevel[level]) {
       const entityId = buildInsightsEntityId(level, row);
-
-      if (!entityId) {
-        continue;
-      }
 
       const rawPayloadMetadata = buildRawPayloadStorageMetadata(row);
       const { rawPayloadJson, payloadSizeBytes, payloadHash } = rawPayloadMetadata;
@@ -1442,10 +1471,291 @@ function buildMetricsLog(result: MetaAdsQueueProcessResult): string {
   });
 }
 
+export function buildMetaAdsMetadataRecords(input: {
+  accountId: string;
+  observedAt: Date;
+  campaignRows: Array<{ id?: string; name?: string }>;
+  adsetRows: Array<{ id?: string; name?: string }>;
+  adRows: Array<{ id?: string; name?: string }>;
+}): MetaMetadataRecord[] {
+  const accountId = normalizeString(input.accountId);
+
+  if (!accountId) {
+    return [];
+  }
+
+  const records = new Map<string, MetaMetadataRecord>();
+  const upsert = (entityType: MetaMetadataEntityType, entityId: string | undefined, latestName: string | null) => {
+    const normalizedEntityId = normalizeString(entityId);
+
+    if (!normalizedEntityId) {
+      return;
+    }
+
+    const key = `${entityType}\u0000${normalizedEntityId}`;
+    const existing = records.get(key);
+
+    if (!existing) {
+      records.set(key, {
+        platform: 'meta_ads',
+        accountId,
+        entityType,
+        entityId: normalizedEntityId,
+        latestName,
+        lastSeenAt: input.observedAt
+      });
+      return;
+    }
+
+    if (latestName) {
+      existing.latestName = latestName;
+    }
+
+    existing.lastSeenAt = input.observedAt;
+  };
+
+  for (const row of input.campaignRows) {
+    upsert('campaign', row.id, collapseWhitespace(row.name));
+  }
+
+  for (const row of input.adsetRows) {
+    upsert('adset', row.id, collapseWhitespace(row.name));
+  }
+
+  for (const row of input.adRows) {
+    upsert('ad', row.id, collapseWhitespace(row.name));
+  }
+
+  return [...records.values()].sort(
+    (left, right) =>
+      META_METADATA_ENTITY_ORDER[left.entityType] - META_METADATA_ENTITY_ORDER[right.entityType] ||
+      left.entityId.localeCompare(right.entityId)
+  );
+}
+
+async function loadActiveMetaAdsConnections(): Promise<MetaAdsMetadataConnection[]> {
+  const result = await query<MetaAdsMetadataConnection>(
+    `
+      SELECT
+        id,
+        ad_account_id,
+        pgp_sym_decrypt(access_token_encrypted, $1) AS access_token
+      FROM meta_ads_connections
+      WHERE status = 'active'
+      ORDER BY id ASC
+    `,
+    [env.META_ADS_ENCRYPTION_KEY]
+  );
+
+  return result.rows;
+}
+
+async function acquireMetadataRefreshLock(platform: string, accountId: string): Promise<boolean> {
+  const result = await query<{ acquired: boolean }>(
+    "SELECT pg_try_advisory_lock(hashtext($1), hashtext($2)) AS acquired",
+    [platform, accountId]
+  );
+
+  return Boolean(result.rows[0]?.acquired);
+}
+
+async function releaseMetadataRefreshLock(platform: string, accountId: string): Promise<void> {
+  await query("SELECT pg_advisory_unlock(hashtext($1), hashtext($2))", [platform, accountId]);
+}
+
+async function fetchMetaCollection(
+  connection: MetaAdsMetadataConnection,
+  path: string
+): Promise<Array<{ id?: string; name?: string }>> {
+  const url = new URL(`${META_GRAPH_BASE_URL}/${env.META_ADS_API_VERSION}/act_${connection.ad_account_id}/${path}`);
+  url.searchParams.set('fields', 'id,name');
+  url.searchParams.set('limit', '1000');
+  url.searchParams.set('access_token', connection.access_token);
+
+  const response = await fetch(url);
+  const payload = (await response.json()) as { data?: Array<{ id?: string; name?: string }> } & MetaAdsApiErrorBody;
+
+  if (!response.ok) {
+    throw new MetaAdsApiError(response.status, 'Meta Ads API request failed', payload as MetaAdsApiErrorBody);
+  }
+
+  return payload.data ?? [];
+}
+
+async function upsertMetaMetadataRecords(records: MetaMetadataRecord[]): Promise<void> {
+  for (const record of records) {
+    if (!record.latestName) {
+      continue;
+    }
+
+    await query(
+      `
+        INSERT INTO ad_platform_entity_metadata (
+          platform,
+          account_id,
+          entity_type,
+          entity_id,
+          latest_name,
+          last_seen_at,
+          updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, now())
+        ON CONFLICT (
+          platform,
+          account_id,
+          entity_type,
+          entity_id,
+          COALESCE(tenant_id, ''),
+          COALESCE(workspace_id, '')
+        )
+        DO UPDATE
+        SET
+          latest_name = CASE
+            WHEN EXCLUDED.latest_name <> '' THEN EXCLUDED.latest_name
+            ELSE ad_platform_entity_metadata.latest_name
+          END,
+          last_seen_at = GREATEST(ad_platform_entity_metadata.last_seen_at, EXCLUDED.last_seen_at),
+          updated_at = now()
+      `,
+      [record.platform, record.accountId, record.entityType, record.entityId, record.latestName, record.lastSeenAt]
+    );
+  }
+}
+
+export async function refreshMetaAdsMetadataForConnection(
+  connection: MetaAdsMetadataConnection,
+  now = new Date(),
+  workerId = 'meta-ads-metadata-refresh',
+  requestedBy?: string
+): Promise<{ skipped: boolean; recordCount: number }> {
+  const acquired = await acquireMetadataRefreshLock('meta_ads', connection.ad_account_id);
+
+  if (!acquired) {
+    return { skipped: true, recordCount: 0 };
+  }
+
+  const startedAt = new Date();
+  emitCampaignMetadataSyncJobLifecycleLog({
+    stage: 'started',
+    platform: 'meta_ads',
+    workerId,
+    jobId: String(connection.id),
+    requestedBy,
+    startedAt: startedAt.toISOString()
+  });
+
+  try {
+    const [campaignRows, adsetRows, adRows] = await Promise.all([
+      fetchMetaCollection(connection, 'campaigns'),
+      fetchMetaCollection(connection, 'adsets'),
+      fetchMetaCollection(connection, 'ads')
+    ]);
+
+    const records = buildMetaAdsMetadataRecords({
+      accountId: connection.ad_account_id,
+      observedAt: now,
+      campaignRows,
+      adsetRows,
+      adRows
+    });
+
+    await upsertMetaMetadataRecords(records);
+
+    emitCampaignMetadataSyncJobLifecycleLog({
+      stage: 'completed',
+      platform: 'meta_ads',
+      workerId,
+      jobId: String(connection.id),
+      requestedBy,
+      startedAt: startedAt.toISOString(),
+      completedAt: new Date().toISOString()
+    });
+
+    return { skipped: false, recordCount: records.length };
+  } catch (error) {
+    emitCampaignMetadataSyncJobLifecycleLog({
+      stage: 'failed',
+      platform: 'meta_ads',
+      workerId,
+      jobId: String(connection.id),
+      requestedBy,
+      startedAt: startedAt.toISOString(),
+      completedAt: new Date().toISOString(),
+      error
+    });
+    throw error;
+  } finally {
+    await releaseMetadataRefreshLock('meta_ads', connection.ad_account_id);
+  }
+}
+
+export async function refreshActiveMetaAdsMetadataConnections(options?: {
+  now?: Date;
+  workerId?: string;
+  requestedBy?: string;
+}): Promise<{ attempted: number; refreshed: number; skipped: number }> {
+  const connections = await loadActiveMetaAdsConnections();
+  let refreshed = 0;
+  let skipped = 0;
+
+  for (const connection of connections) {
+    const result = await refreshMetaAdsMetadataForConnection(
+      connection,
+      options?.now ?? new Date(),
+      options?.workerId ?? 'meta-ads-metadata-refresh',
+      options?.requestedBy
+    );
+
+    if (result.skipped) {
+      skipped += 1;
+    } else {
+      refreshed += 1;
+    }
+  }
+
+  return {
+    attempted: connections.length,
+    refreshed,
+    skipped
+  };
+}
+
+export function isRetryableMetaAdsApiError(error: unknown): boolean {
+  if (!(error instanceof MetaAdsApiError)) {
+    return false;
+  }
+
+  const code = error.details?.error?.code;
+  return code === 4 || code === 17 || code === 32 || code === 613;
+}
+
+export function formatMetaAdsError(error: unknown): string {
+  if (!(error instanceof MetaAdsApiError)) {
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  const code = error.details?.error?.code;
+  const subcode = error.details?.error?.error_subcode;
+
+  if (typeof code === 'number') {
+    return `${error.message} (status=${error.statusCode}, code=${code}, subcode=${subcode ?? 'unknown'})`;
+  }
+
+  return `${error.message} (status=${error.statusCode})`;
+}
+
+function createMetaAdsApiErrorForTest(
+  statusCode: number,
+  message: string,
+  details: MetaAdsApiErrorBody | null = null
+): MetaAdsApiError {
+  return new MetaAdsApiError(statusCode, message, details);
+}
+
 export async function processMetaAdsSyncQueue(options: MetaAdsQueueProcessOptions = {}): Promise<MetaAdsQueueProcessResult> {
   const startedAt = Date.now();
   const workerId = options.workerId ?? `meta-ads-sync-${randomBytes(6).toString('hex')}`;
-  const limit = options.limit ?? env.META_ADS_SYNC_BATCH_SIZE;
+  const limit = options.limit ?? 0;
   const now = options.now ?? new Date();
   const enqueuedJobs = await planIncrementalSyncs(now);
   const jobs = await claimSyncJobs(workerId, limit);
@@ -1649,9 +1959,13 @@ export const __metaAdsTestUtils = {
   shouldRefreshToken,
   buildPlanningDates,
   buildIncrementalPlanningDates,
+  buildMetaAdsMetadataRecords,
   listDateRangeInclusive,
   normalizeInsightRows,
   rollupNormalizedSpendRows,
   rollupPersistableSpendRows,
+  createMetaAdsApiErrorForTest,
+  isRetryableMetaAdsApiError,
+  formatMetaAdsError,
   ...__metaOrderValueTestUtils
 };

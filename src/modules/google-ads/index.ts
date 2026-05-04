@@ -18,6 +18,7 @@ import {
 } from "../ad-sync-audit/index.js";
 import { attachAuthContext, requireAdmin } from "../auth/index.js";
 import { buildCanonicalSpendDimensions } from "../marketing-dimensions/index.js";
+import { emitCampaignMetadataSyncJobLifecycleLog } from "../../observability/index.js";
 import { refreshDailyReportingMetrics } from "../reporting/aggregates.js";
 
 const GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -29,6 +30,11 @@ const GOOGLE_ADS_SYNC_JOB_STATUSES = ['pending', 'processing', 'retry', 'complet
 const GOOGLE_ADS_SPEND_GRANULARITIES = ['account', 'campaign', 'adset', 'ad', 'creative'] as const;
 const GOOGLE_ADS_SYNC_TIME_ZONE = 'America/Los_Angeles';
 const GOOGLE_ADS_STALE_PROCESSING_TIMEOUT_MINUTES = 90;
+const GOOGLE_METADATA_ENTITY_ORDER: Record<GoogleMetadataEntityType, number> = {
+	campaign: 0,
+	adset: 1,
+	ad: 2,
+};
 
 const oauthStartQuerySchema = z.object({
 	customerId: z.string().min(1),
@@ -73,6 +79,17 @@ type GoogleAdsConnectionSecretRow = {
 	customer_descriptive_name: string | null;
 	currency_code: string | null;
 };
+
+type GoogleAdsMetadataConnection = Pick<
+	GoogleAdsConnectionSecretRow,
+	| "id"
+	| "customer_id"
+	| "login_customer_id"
+	| "developer_token"
+	| "client_id"
+	| "client_secret"
+	| "refresh_token"
+>;
 
 type GoogleAdsConnectionSummaryRow = {
 	id: number;
@@ -200,6 +217,17 @@ type GoogleAdsAdApiRow = {
 	segments?: {
 		date?: string;
 	};
+};
+
+type GoogleMetadataEntityType = "campaign" | "adset" | "ad";
+
+type GoogleMetadataRecord = {
+	platform: "google_ads";
+	accountId: string;
+	entityType: GoogleMetadataEntityType;
+	entityId: string;
+	latestName: string | null;
+	lastSeenAt: Date;
 };
 
 type GoogleAdsNormalizedSpendRow = {
@@ -397,6 +425,20 @@ function normalizeGoogleAdsScopes(
 		.split(",")
 		.map((entry) => entry.trim())
 		.filter(Boolean);
+}
+
+function normalizeString(value: string | null | undefined): string | null {
+	if (typeof value !== "string") {
+		return null;
+	}
+
+	const trimmed = value.trim();
+	return trimmed ? trimmed : null;
+}
+
+function collapseWhitespace(value: string | null | undefined): string | null {
+	const normalized = normalizeString(value);
+	return normalized ? normalized.replace(/\s+/g, " ") : null;
 }
 
 function normalizeGoogleAdsCustomerId(value: string): string {
@@ -2170,6 +2212,296 @@ function buildMetricsLog(result: GoogleAdsQueueProcessResult): string {
 	});
 }
 
+export function buildGoogleAdsMetadataRecords(input: {
+	accountId: string;
+	observedAt: Date;
+	campaignRows: Array<{ campaign?: { id?: string; name?: string } }>;
+	adsetRows: Array<{ adGroup?: { id?: string; name?: string } }>;
+	adRows: Array<{
+		adGroupAd?: {
+			ad?: {
+				id?: string;
+				name?: string;
+				resourceName?: string;
+			};
+		};
+	}>;
+}): GoogleMetadataRecord[] {
+	const accountId = normalizeString(input.accountId);
+
+	if (!accountId) {
+		return [];
+	}
+
+	const records = new Map<string, GoogleMetadataRecord>();
+	const upsert = (
+		entityType: GoogleMetadataEntityType,
+		entityId: string | undefined,
+		latestName: string | null,
+	) => {
+		const normalizedEntityId = normalizeString(entityId);
+
+		if (!normalizedEntityId) {
+			return;
+		}
+
+		const key = `${entityType}\u0000${normalizedEntityId}`;
+		const existing = records.get(key);
+
+		if (!existing) {
+			records.set(key, {
+				platform: "google_ads",
+				accountId,
+				entityType,
+				entityId: normalizedEntityId,
+				latestName,
+				lastSeenAt: input.observedAt,
+			});
+			return;
+		}
+
+		if (latestName) {
+			existing.latestName = latestName;
+		}
+
+		existing.lastSeenAt = input.observedAt;
+	};
+
+	for (const row of input.campaignRows) {
+		upsert("campaign", row.campaign?.id, collapseWhitespace(row.campaign?.name));
+	}
+
+	for (const row of input.adsetRows) {
+		upsert("adset", row.adGroup?.id, collapseWhitespace(row.adGroup?.name));
+	}
+
+	for (const row of input.adRows) {
+		upsert("ad", row.adGroupAd?.ad?.id, collapseWhitespace(row.adGroupAd?.ad?.name));
+	}
+
+	return [...records.values()].sort(
+		(left, right) =>
+			GOOGLE_METADATA_ENTITY_ORDER[left.entityType] - GOOGLE_METADATA_ENTITY_ORDER[right.entityType] ||
+			left.entityId.localeCompare(right.entityId),
+	);
+}
+
+async function loadActiveGoogleAdsConnections(): Promise<GoogleAdsMetadataConnection[]> {
+	const result = await query<GoogleAdsMetadataConnection>(
+		`
+      SELECT
+        id,
+        customer_id,
+        login_customer_id,
+        pgp_sym_decrypt(developer_token_encrypted, $1) AS developer_token,
+        client_id,
+        pgp_sym_decrypt(client_secret_encrypted, $1) AS client_secret,
+        pgp_sym_decrypt(refresh_token_encrypted, $1) AS refresh_token
+      FROM google_ads_connections
+      WHERE status = 'active'
+      ORDER BY id ASC
+    `,
+		[env.GOOGLE_ADS_ENCRYPTION_KEY],
+	);
+
+	return result.rows;
+}
+
+async function acquireMetadataRefreshLock(platform: string, accountId: string): Promise<boolean> {
+	const result = await query<{ acquired: boolean }>(
+		"SELECT pg_try_advisory_lock(hashtext($1), hashtext($2)) AS acquired",
+		[platform, accountId],
+	);
+
+	return Boolean(result.rows[0]?.acquired);
+}
+
+async function releaseMetadataRefreshLock(platform: string, accountId: string): Promise<void> {
+	await query("SELECT pg_advisory_unlock(hashtext($1), hashtext($2))", [platform, accountId]);
+}
+
+async function fetchGoogleAccessToken(connection: GoogleAdsMetadataConnection): Promise<string> {
+	return exchangeRefreshToken(connection as GoogleAdsConnectionSecretRow);
+}
+
+async function fetchGoogleMetadataRows<T>(
+	connection: GoogleAdsMetadataConnection,
+	accessToken: string,
+	gaql: string,
+): Promise<T[]> {
+	return googleAdsSearch<T>({
+		connection: connection as GoogleAdsConnectionSecretRow,
+		accessToken,
+		gaql,
+	});
+}
+
+async function upsertGoogleMetadataRecords(records: GoogleMetadataRecord[]): Promise<void> {
+	for (const record of records) {
+		if (!record.latestName) {
+			continue;
+		}
+
+		await query(
+			`
+        INSERT INTO ad_platform_entity_metadata (
+          platform,
+          account_id,
+          entity_type,
+          entity_id,
+          latest_name,
+          last_seen_at,
+          updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, now())
+        ON CONFLICT (
+          platform,
+          account_id,
+          entity_type,
+          entity_id,
+          COALESCE(tenant_id, ''),
+          COALESCE(workspace_id, '')
+        )
+        DO UPDATE
+        SET
+          latest_name = CASE
+            WHEN EXCLUDED.latest_name <> '' THEN EXCLUDED.latest_name
+            ELSE ad_platform_entity_metadata.latest_name
+          END,
+          last_seen_at = GREATEST(ad_platform_entity_metadata.last_seen_at, EXCLUDED.last_seen_at),
+          updated_at = now()
+      `,
+			[
+				record.platform,
+				record.accountId,
+				record.entityType,
+				record.entityId,
+				record.latestName,
+				record.lastSeenAt,
+			],
+		);
+	}
+}
+
+export async function refreshGoogleAdsMetadataForConnection(
+	connection: GoogleAdsMetadataConnection,
+	now = new Date(),
+	workerId = "google-ads-metadata-refresh",
+	requestedBy?: string,
+): Promise<{ skipped: boolean; recordCount: number }> {
+	const acquired = await acquireMetadataRefreshLock("google_ads", connection.customer_id);
+
+	if (!acquired) {
+		return { skipped: true, recordCount: 0 };
+	}
+
+	const startedAt = new Date();
+	emitCampaignMetadataSyncJobLifecycleLog({
+		stage: "started",
+		platform: "google_ads",
+		workerId,
+		jobId: String(connection.id),
+		requestedBy,
+		startedAt: startedAt.toISOString(),
+	});
+
+	try {
+		const accessToken = await fetchGoogleAccessToken(connection);
+		const [campaignRows, adsetRows, adRows] = await Promise.all([
+			fetchGoogleMetadataRows<{ campaign?: { id?: string; name?: string } }>(
+				connection,
+				accessToken,
+				"SELECT campaign.id, campaign.name FROM campaign WHERE campaign.id IS NOT NULL",
+			),
+			fetchGoogleMetadataRows<{ adGroup?: { id?: string; name?: string } }>(
+				connection,
+				accessToken,
+				"SELECT ad_group.id, ad_group.name FROM ad_group WHERE ad_group.id IS NOT NULL",
+			),
+			fetchGoogleMetadataRows<{
+				adGroupAd?: {
+					ad?: {
+						id?: string;
+						name?: string;
+						resourceName?: string;
+					};
+				};
+			}>(
+				connection,
+				accessToken,
+				"SELECT ad_group_ad.ad.id, ad_group_ad.ad.name, ad_group_ad.ad.resource_name FROM ad_group_ad WHERE ad_group_ad.ad.id IS NOT NULL",
+			),
+		]);
+
+		const records = buildGoogleAdsMetadataRecords({
+			accountId: connection.customer_id,
+			observedAt: now,
+			campaignRows,
+			adsetRows,
+			adRows,
+		});
+
+		await upsertGoogleMetadataRecords(records);
+
+		emitCampaignMetadataSyncJobLifecycleLog({
+			stage: "completed",
+			platform: "google_ads",
+			workerId,
+			jobId: String(connection.id),
+			requestedBy,
+			startedAt: startedAt.toISOString(),
+			completedAt: new Date().toISOString(),
+		});
+
+		return { skipped: false, recordCount: records.length };
+	} catch (error) {
+		emitCampaignMetadataSyncJobLifecycleLog({
+			stage: "failed",
+			platform: "google_ads",
+			workerId,
+			jobId: String(connection.id),
+			requestedBy,
+			startedAt: startedAt.toISOString(),
+			completedAt: new Date().toISOString(),
+			error,
+		});
+		throw error;
+	} finally {
+		await releaseMetadataRefreshLock("google_ads", connection.customer_id);
+	}
+}
+
+export async function refreshActiveGoogleAdsMetadataConnections(options?: {
+	now?: Date;
+	workerId?: string;
+	requestedBy?: string;
+}): Promise<{ attempted: number; refreshed: number; skipped: number }> {
+	const connections = await loadActiveGoogleAdsConnections();
+	let refreshed = 0;
+	let skipped = 0;
+
+	for (const connection of connections) {
+		const result = await refreshGoogleAdsMetadataForConnection(
+			connection,
+			options?.now ?? new Date(),
+			options?.workerId ?? "google-ads-metadata-refresh",
+			options?.requestedBy,
+		);
+
+		if (result.skipped) {
+			skipped += 1;
+		} else {
+			refreshed += 1;
+		}
+	}
+
+	return {
+		attempted: connections.length,
+		refreshed,
+		skipped,
+	};
+}
+
 export async function processGoogleAdsSyncQueue(
 	options: GoogleAdsQueueProcessOptions = {},
 ): Promise<GoogleAdsQueueProcessResult> {
@@ -2449,6 +2781,7 @@ export const __googleAdsTestUtils = {
 	listDateRangeInclusive,
 	buildPlanningDates,
 	buildReconciliationWindow,
+	buildGoogleAdsMetadataRecords,
 	computeRetryDelaySeconds,
 	normalizeSpendSnapshot,
 	formatGoogleAdsError,
