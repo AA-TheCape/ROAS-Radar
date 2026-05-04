@@ -41,4 +41,39 @@ Healthy expectations:
 ## Triage
 
 1. Confirm the scheduler is enabled when it should be:
+   - `META_ADS_METADATA_SCHEDULER_NAME`
+   - `GOOGLE_ADS_METADATA_SCHEDULER_NAME`
+2. Confirm the Cloud Scheduler caller identity is the expected source in `campaign_metadata_sync_job_lifecycle`:
+   - `META_ADS_METADATA_REFRESH_REQUESTED_BY`
+   - `GOOGLE_ADS_METADATA_REFRESH_REQUESTED_BY`
+3. Check for recent `stage="failed"` events and note `platform`, `workerId`, and `requestedBy`.
+4. Verify stale rows are scoped correctly by `(platform, account_id, entity_type, entity_id)` before treating a name collision as a refresh bug.
 
+## Cloud Scheduler Operations
+
+Create or refresh the schedulers through `./infra/cloud-run/deploy.sh`. The deploy workflow is the supported path because it keeps scheduler settings aligned with the environment templates and the Cloud Run job names.
+
+To pause one platform without affecting the other:
+
+```bash
+gcloud scheduler jobs pause "$META_ADS_METADATA_SCHEDULER_NAME" --location "$GCP_REGION"
+gcloud scheduler jobs pause "$GOOGLE_ADS_METADATA_SCHEDULER_NAME" --location "$GCP_REGION"
+```
+
+To resume:
+
+```bash
+gcloud scheduler jobs resume "$META_ADS_METADATA_SCHEDULER_NAME" --location "$GCP_REGION"
+gcloud scheduler jobs resume "$GOOGLE_ADS_METADATA_SCHEDULER_NAME" --location "$GCP_REGION"
+```
+
+Use the per-platform pause or resume controls during upstream quota incidents, rollout verification, or backfill windows where only one metadata source should run.
+
+## Verification
+
+After a scheduler change or deploy, verify:
+
+- `campaign_metadata_sync_job_lifecycle` logs show the expected `requestedBy` value
+- `campaign_metadata_freshness_snapshot` shows stale counts stabilizing or falling
+- `campaign_metadata_resolution_coverage` stays consistent with recent reporting windows
+- duplicate entity ids remain isolated by `(platform, account_id, entity_type, entity_id)` rather than cross-platform name leakage

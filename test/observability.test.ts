@@ -2,12 +2,23 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 process.env.DATABASE_URL ??= 'postgres://postgres:postgres@127.0.0.1:5432/roas_radar_test';
+const originalKService = process.env.K_SERVICE;
+process.env.K_SERVICE = 'roas-radar-observability-test';
 
 const {
   emitCampaignMetadataFreshnessSnapshotLog,
   emitCampaignMetadataResolutionCoverageLog,
   emitCampaignMetadataSyncJobLifecycleLog
 } = await import('../src/observability/index.js');
+
+test.after(() => {
+  if (originalKService === undefined) {
+    Reflect.deleteProperty(process.env, 'K_SERVICE');
+    return;
+  }
+
+  process.env.K_SERVICE = originalKService;
+});
 
 async function captureStructuredLogs<T>(callback: () => T | Promise<T>): Promise<{
   entries: Array<Record<string, unknown>>;
@@ -68,7 +79,7 @@ test('campaign metadata resolution coverage logs include dashboard rates and tri
     event: 'campaign_metadata_resolution_coverage',
     message: 'campaign_metadata_resolution_coverage',
     timestamp: entries[0]?.timestamp,
-    service: 'roas-radar',
+    service: 'roas-radar-observability-test',
     resolutionScope: 'campaign_group',
     platform: 'google_ads',
     entityType: 'campaign',
@@ -106,7 +117,7 @@ test('campaign metadata freshness snapshot logs expose the fields used by freshn
     event: 'campaign_metadata_freshness_snapshot',
     message: 'campaign_metadata_freshness_snapshot',
     timestamp: entries[0]?.timestamp,
-    service: 'roas-radar',
+    service: 'roas-radar-observability-test',
     platform: 'meta_ads',
     entityType: 'adset',
     freshEntityCount: 19,
@@ -157,7 +168,7 @@ test('campaign metadata sync lifecycle logs emit success payloads and alertable 
     event: 'campaign_metadata_sync_job_lifecycle',
     message: 'campaign_metadata_sync_job_lifecycle',
     timestamp: entries[0]?.timestamp,
-    service: 'roas-radar',
+    service: 'roas-radar-observability-test',
     stage: 'completed',
     platform: 'google_ads',
     workerId: 'google-ads-metadata-refresh-worker',
@@ -178,7 +189,7 @@ test('campaign metadata sync lifecycle logs emit success payloads and alertable 
     event: 'campaign_metadata_sync_job_lifecycle',
     message: 'campaign_metadata_sync_job_lifecycle',
     timestamp: entries[1]?.timestamp,
-    service: 'roas-radar',
+    service: 'roas-radar-observability-test',
     stage: 'failed',
     platform: 'meta_ads',
     workerId: 'meta-ads-metadata-refresh-worker',
