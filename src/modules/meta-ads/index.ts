@@ -541,16 +541,16 @@ function buildIncrementalPlanningDates(
   return buildPlanningDates(now, lastSyncCompletedAt);
 }
 
-function buildInsightsEntityId(level: MetaSpendLevel, row: MetaAdsInsightRow): string {
+function buildInsightsEntityId(level: MetaSpendLevel, row: MetaAdsInsightRow): string | null {
   switch (level) {
     case 'account':
-      return row.account_id ?? '';
+      return row.account_id ?? null;
     case 'campaign':
-      return row.campaign_id ?? '';
+      return row.campaign_id ?? null;
     case 'adset':
-      return row.adset_id ?? '';
+      return row.adset_id ?? null;
     case 'ad':
-      return row.ad_id ?? '';
+      return row.ad_id ?? null;
   }
 }
 
@@ -1099,7 +1099,7 @@ async function fetchInsightsForLevel(
     nextUrl = page.paging?.next ? new URL(page.paging.next) : null;
   }
 
-  return rows.filter((row) => buildInsightsEntityId(level, row));
+  return rows;
 }
 
 async function fetchCreativeMap(accessToken: string, adIds: string[]): Promise<MetaAdsCreativeMap> {
@@ -1156,10 +1156,6 @@ async function persistDailySpendSnapshot(
   for (const level of META_SPEND_LEVELS) {
     for (const row of params.rowsByLevel[level]) {
       const entityId = buildInsightsEntityId(level, row);
-
-      if (!entityId) {
-        continue;
-      }
 
       const rawPayloadMetadata = buildRawPayloadStorageMetadata(row);
       const { rawPayloadJson, payloadSizeBytes, payloadHash } = rawPayloadMetadata;
