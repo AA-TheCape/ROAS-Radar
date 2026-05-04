@@ -1759,7 +1759,7 @@ function createMetaAdsApiErrorForTest(
 export async function processMetaAdsSyncQueue(options: MetaAdsQueueProcessOptions = {}): Promise<MetaAdsQueueProcessResult> {
   const startedAt = Date.now();
   const workerId = options.workerId ?? `meta-ads-sync-${randomBytes(6).toString('hex')}`;
-  const limit = options.limit ?? env.META_ADS_SYNC_BATCH_SIZE;
+  const limit = options.limit ?? 0;
   const now = options.now ?? new Date();
   const enqueuedJobs = await planIncrementalSyncs(now);
   const jobs = await claimSyncJobs(workerId, limit);

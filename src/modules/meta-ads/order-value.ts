@@ -18,7 +18,8 @@ const META_ORDER_VALUE_REQUEST_FIELDS = [
   'date_start',
   'date_stop',
   'actions',
-  'action_values'
+  'action_values',
+  'purchase_roas'
 ] as const;
 const META_ORDER_VALUE_PRIMARY_ACTION_TYPES = [
   'purchase',
@@ -559,6 +560,8 @@ function normalizeOrderValueRows(params: {
       selection.actionTypeUsed === null ? null : sumMetricEntries(payloads, 'action_values', selection.actionTypeUsed);
     const purchaseCount =
       selection.actionTypeUsed === null ? null : sumMetricEntries(payloads, 'actions', selection.actionTypeUsed);
+    const purchaseRoas =
+      selection.actionTypeUsed === null ? null : firstMetricEntryValue(payloads, 'purchase_roas', selection.actionTypeUsed);
     normalizedRows.push({
       reportDate,
       rawDateStart: reportDate,
@@ -569,7 +572,7 @@ function normalizeOrderValueRows(params: {
       spend: 0,
       attributedRevenue,
       purchaseCount,
-      purchaseRoas: null,
+      purchaseRoas,
       actionTypeUsed: selection.actionTypeUsed,
       canonicalSelectionMode: selection.canonicalSelectionMode,
       rawRecordId: selectedRow?.id ?? null,
@@ -872,7 +875,8 @@ async function markSyncJobFailed(
   const message = error instanceof Error ? error.message : String(error);
   const retryDelaySeconds = Math.min(300, Math.max(15, job.attempts * 30));
   const shouldRetry =
-    (error instanceof MetaAdsApiError && META_ADS_RETRYABLE_STATUS_CODES.has(error.statusCode)) ||
+    error instanceof MetaAdsApiError &&
+    META_ADS_RETRYABLE_STATUS_CODES.has(error.statusCode) &&
     job.attempts < META_ADS_SYNC_MAX_RETRIES;
   const nextStatus = shouldRetry ? 'retry' : 'failed';
 
@@ -1133,6 +1137,7 @@ async function replaceAggregateRows(
           campaign_name,
           attributed_revenue,
           purchase_count,
+          purchase_roas,
           currency,
           canonical_action_type,
           canonical_selection_mode,
@@ -1160,12 +1165,13 @@ async function replaceAggregateRows(
           $13,
           $14,
           $15,
-          $16::jsonb,
+          $16,
           $17::jsonb,
           $18::jsonb,
-          $19,
+          $19::jsonb,
           $20,
           $21,
+          $22,
           now()
         )
       `,
@@ -1182,6 +1188,7 @@ async function replaceAggregateRows(
         row.campaignName,
         row.attributedRevenue,
         row.purchaseCount,
+        row.purchaseRoas,
         row.currency,
         row.actionTypeUsed,
         row.canonicalSelectionMode,
