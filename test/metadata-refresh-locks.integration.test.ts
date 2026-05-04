@@ -407,7 +407,7 @@ test(
         throw new Error(`Unexpected fetch ${url.toString()}`);
       }) as typeof globalThis.fetch;
 
-      await lockClient.query(`SELECT pg_advisory_lock(hashtext($1), hashtext($2))`, ['google_ads', 'shared-account']);
+      await lockClient.query("SELECT pg_advisory_lock(hashtext($1), hashtext($2))", ['google_ads', 'shared-account']);
 
       const skippedGoogleRefresh = await refreshGoogleAdsMetadataForConnection(
         {
@@ -471,7 +471,7 @@ test(
       ]);
     } finally {
       await lockClient
-        .query(`SELECT pg_advisory_unlock(hashtext($1), hashtext($2))`, ['google_ads', 'shared-account'])
+        .query("SELECT pg_advisory_unlock(hashtext($1), hashtext($2))", ['google_ads', 'shared-account'])
         .catch(() => undefined);
       lockClient.release();
       globalThis.fetch = previousFetch;

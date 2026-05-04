@@ -2309,7 +2309,7 @@ async function loadActiveGoogleAdsConnections(): Promise<GoogleAdsMetadataConnec
 
 async function acquireMetadataRefreshLock(platform: string, accountId: string): Promise<boolean> {
 	const result = await query<{ acquired: boolean }>(
-		`SELECT pg_try_advisory_lock(hashtext($1), hashtext($2)) AS acquired`,
+		"SELECT pg_try_advisory_lock(hashtext($1), hashtext($2)) AS acquired",
 		[platform, accountId],
 	);
 
@@ -2317,7 +2317,7 @@ async function acquireMetadataRefreshLock(platform: string, accountId: string): 
 }
 
 async function releaseMetadataRefreshLock(platform: string, accountId: string): Promise<void> {
-	await query(`SELECT pg_advisory_unlock(hashtext($1), hashtext($2))`, [platform, accountId]);
+	await query("SELECT pg_advisory_unlock(hashtext($1), hashtext($2))", [platform, accountId]);
 }
 
 async function fetchGoogleAccessToken(connection: GoogleAdsMetadataConnection): Promise<string> {
