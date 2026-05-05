@@ -12,6 +12,16 @@ function readRepoFile(relativePath: string): string {
   return readFileSync(path.join(repoRoot, relativePath), 'utf8');
 }
 
+function extractSection(text: string, startMarker: string, endMarker: string): string {
+  const start = text.indexOf(startMarker);
+  const end = text.indexOf(endMarker, start);
+
+  assert.notEqual(start, -1, `missing section marker: ${startMarker}`);
+  assert.notEqual(end, -1, `missing section marker: ${endMarker}`);
+
+  return text.slice(start, end);
+}
+
 test('cloud run deploy script manages metadata refresh jobs and scheduler pause controls', () => {
   const script = readRepoFile('infra/cloud-run/deploy.sh');
 
@@ -22,6 +32,31 @@ test('cloud run deploy script manages metadata refresh jobs and scheduler pause 
   assert.match(script, /gcloud scheduler jobs create http "\$SCHEDULER_NAME"/);
   assert.match(script, /gcloud scheduler jobs pause "\$SCHEDULER_NAME"/);
   assert.match(script, /gcloud scheduler jobs resume "\$SCHEDULER_NAME"/);
+});
+
+test('cloud run metadata refresh jobs use provider-specific secret bindings', () => {
+  const script = readRepoFile('infra/cloud-run/deploy.sh');
+  const metaAdsSection = extractSection(
+    script,
+    'echo "Deploying Meta Ads metadata refresh job $META_ADS_METADATA_JOB_NAME"',
+    'echo "Deploying Google Ads metadata refresh job $GOOGLE_ADS_METADATA_JOB_NAME"'
+  );
+  const googleAdsSection = extractSection(
+    script,
+    'echo "Deploying Google Ads metadata refresh job $GOOGLE_ADS_METADATA_JOB_NAME"',
+    'echo "Deploying session retention job $RETENTION_JOB_NAME"'
+  );
+
+  assert.match(
+    metaAdsSection,
+    /DATABASE_URL=DATABASE_URL:latest,META_ADS_APP_SECRET=META_ADS_APP_SECRET:latest,META_ADS_ENCRYPTION_KEY=META_ADS_ENCRYPTION_KEY:latest/
+  );
+  assert.doesNotMatch(metaAdsSection, /GOOGLE_ADS_ENCRYPTION_KEY/);
+  assert.match(
+    googleAdsSection,
+    /DATABASE_URL=DATABASE_URL:latest,GOOGLE_ADS_ENCRYPTION_KEY=GOOGLE_ADS_ENCRYPTION_KEY:latest/
+  );
+  assert.doesNotMatch(googleAdsSection, /META_ADS_(APP_SECRET|ENCRYPTION_KEY)/);
 });
 
 test('cloud run environment templates declare per-platform metadata scheduler controls', () => {

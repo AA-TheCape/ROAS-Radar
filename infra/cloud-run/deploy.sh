@@ -270,6 +270,7 @@ deploy_metadata_refresh_job() {
   PACKAGE_SCRIPT="$3"
   REQUESTED_BY_ENV_NAME="$4"
   REQUESTED_BY_VALUE="$5"
+  SECRET_FLAGS="$6"
 
   gcloud run jobs deploy "$JOB_NAME" \
     --project="$GCP_PROJECT_ID" \
@@ -285,7 +286,7 @@ deploy_metadata_refresh_job() {
     --command=npm \
     --args=run,"$PACKAGE_SCRIPT" \
     --set-env-vars="${COMMON_ENV_VARS}@DATABASE_POOL_MAX=$ADS_SYNC_DATABASE_POOL_MAX@$REQUESTED_BY_ENV_NAME=$REQUESTED_BY_VALUE" \
-    --set-secrets="DATABASE_URL=DATABASE_URL:latest,META_ADS_APP_SECRET=META_ADS_APP_SECRET:latest,META_ADS_ENCRYPTION_KEY=META_ADS_ENCRYPTION_KEY:latest,GOOGLE_ADS_ENCRYPTION_KEY=GOOGLE_ADS_ENCRYPTION_KEY:latest" \
+    --set-secrets="$SECRET_FLAGS" \
     --set-cloudsql-instances="$CLOUD_SQL_CONNECTION_NAME"
 }
 
@@ -492,7 +493,8 @@ deploy_metadata_refresh_job \
   "$META_ADS_SA" \
   "meta-ads:metadata-refresh:start" \
   "META_ADS_METADATA_REFRESH_REQUESTED_BY" \
-  "$META_ADS_METADATA_REFRESH_REQUESTED_BY"
+  "$META_ADS_METADATA_REFRESH_REQUESTED_BY" \
+  "DATABASE_URL=DATABASE_URL:latest,META_ADS_APP_SECRET=META_ADS_APP_SECRET:latest,META_ADS_ENCRYPTION_KEY=META_ADS_ENCRYPTION_KEY:latest"
 ensure_job_invoker "$META_ADS_METADATA_JOB_NAME" "serviceAccount:$SCHEDULER_INVOKER_SA"
 ensure_job_invoker "$META_ADS_METADATA_JOB_NAME" "serviceAccount:$WORKER_SA"
 
@@ -502,7 +504,8 @@ deploy_metadata_refresh_job \
   "$GOOGLE_ADS_SA" \
   "google-ads:metadata-refresh:start" \
   "GOOGLE_ADS_METADATA_REFRESH_REQUESTED_BY" \
-  "$GOOGLE_ADS_METADATA_REFRESH_REQUESTED_BY"
+  "$GOOGLE_ADS_METADATA_REFRESH_REQUESTED_BY" \
+  "DATABASE_URL=DATABASE_URL:latest,GOOGLE_ADS_ENCRYPTION_KEY=GOOGLE_ADS_ENCRYPTION_KEY:latest"
 ensure_job_invoker "$GOOGLE_ADS_METADATA_JOB_NAME" "serviceAccount:$SCHEDULER_INVOKER_SA"
 ensure_job_invoker "$GOOGLE_ADS_METADATA_JOB_NAME" "serviceAccount:$WORKER_SA"
 
