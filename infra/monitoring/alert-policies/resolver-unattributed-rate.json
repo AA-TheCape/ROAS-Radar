@@ -8,11 +8,6 @@
   "enabled": true,
   "severity": "WARNING",
   "notificationChannels": __ALERT_NOTIFICATION_CHANNELS__,
-  "alertStrategy": {
-    "notificationRateLimit": {
-      "period": "3600s"
-    }
-  },
   "conditions": [
     {
       "displayName": "Unattributed outcomes exceed 20 orders in 15 minutes",

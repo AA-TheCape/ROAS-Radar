@@ -14,6 +14,42 @@ Validate that migrations remain idempotent with:
 npm run db:migrate:check
 ```
 
+## Campaign Metadata Lookup
+
+Use `ad_platform_entity_metadata` as the canonical latest-name resolution table for Google Ads and Meta entity labels.
+
+Do not use these reporting or raw-source tables as the metadata source of truth:
+
+- `meta_ads_raw_spend_records`
+- `google_ads_raw_spend_records`
+- `meta_ads_daily_spend`
+- `google_ads_daily_spend`
+
+Preferred resolution query shape:
+
+```sql
+SELECT latest_name, last_seen_at, updated_at
+FROM ad_platform_entity_metadata
+WHERE platform = $1
+  AND account_id = $2
+  AND entity_type = $3
+  AND entity_id = $4
+  AND tenant_id IS NOT DISTINCT FROM $5
+  AND workspace_id IS NOT DISTINCT FROM $6;
+```
+
+The uniqueness contract is one row per `(platform, account_id, entity_type, entity_id, tenant_id, workspace_id)` scope, with `NULL` tenant and workspace treated as one shared unscoped namespace.
+
+## Campaign Metadata Query Plan Verification
+
+Use the staging-safe plan check before approving changes to metadata resolution lookups:
+
+```bash
+npm run db:verify-campaign-metadata-query-plans
+```
+
+The script seeds representative rows inside a transaction, runs `EXPLAIN (FORMAT JSON)` against the exact-match lookup paths, asserts that the metadata lookup indexes are used, and then rolls the data back.
+
 ## Raw Payload Querying
 
 For raw-source retention tables, lookup queries must prefer metadata columns over JSONB predicates.
@@ -55,7 +91,7 @@ The goal is to avoid wide JSONB GIN indexes and repeated `raw_payload ->>` scans
 Use the staging-safe plan check before approving changes to raw-payload lookup paths:
 
 ```bash
-npm run db:verify-raw-payload-query-plans
+node scripts/verify-raw-payload-query-plans.mjs
 ```
 
 The script seeds representative rows inside a transaction, runs `EXPLAIN (FORMAT JSON)` against the supported lookup patterns, asserts that the targeted lookup indexes are used, and then rolls the data back.
@@ -120,8 +156,21 @@ Operational pruning runs through the scheduled `session-attribution:retention` C
 
 The cleanup contract is:
 
-1. delete expired `session_attribution_touch_events` rows in batches
-2. delete expired `session_attribution_identities` rows in batches
-3. skip rows whose `roas_radar_session_id` is still referenced by `order_attribution_links`
+1. delete expired `ga4_fallback_candidates` rows in batches using `retained_until`
+2. delete expired `session_attribution_touch_events` rows in batches
+3. delete expired `session_attribution_identities` rows in batches
+4. skip rows whose `roas_radar_session_id` is still referenced by `order_attribution_links`
+
+`ga4_fallback_candidates` is range-partitioned by `occurred_at` month and lookup queries are expected to use the keyed partition indexes for:
+
+- `customer_identity_id + occurred_at`
+- `email_hash + occurred_at`
+- `transaction_id + occurred_at`
+
+Use the staging-safe plan check before approving lookup-path changes:
+
+```bash
+node scripts/verify-ga4-fallback-query-plans.mjs
+```
 
 `order_attribution_links` rows are not pruned by the 30-day session cleanup job.

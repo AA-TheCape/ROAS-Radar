@@ -1,47 +1,48 @@
-import React from 'react';
-import ReactDOM from 'react-dom/client';
+import React from "react";
+import ReactDOM from "react-dom/client";
 
-import App from './App';
-import { AttributionTracker } from './lib/attributionTracking';
-import './styles.css';
+import App from "./App";
+import { AttributionTracker } from "./lib/attributionTracking";
+import "./styles.css";
 
 declare global {
-  interface Window {
-    __ROAS_RADAR_RUNTIME_CONFIG__?: {
-      apiBaseUrl?: string;
-      reportingToken?: string;
-      reportingTenantId?: string;
-    };
-  }
+	interface Window {
+		__ROAS_RADAR_RUNTIME_CONFIG__?: {
+			apiBaseUrl?: string;
+			reportingToken?: string;
+			reportingTenantId?: string;
+		};
+	}
 }
 
-const rootElement = document.getElementById('root');
+const rootElement = document.getElementById("root");
 
 if (!(rootElement instanceof HTMLElement)) {
-  throw new Error('Root element not found');
+	throw new Error("Root element not found");
 }
 
 const rootContainer = rootElement;
 
 async function bootstrap() {
-  const response = await fetch('/config.json', {
-    headers: {
-      accept: 'application/json'
-    }
-  });
+	const response = await fetch("/config.json", {
+		headers: {
+			accept: "application/json",
+		},
+	});
 
-  if (response.ok) {
-    window.__ROAS_RADAR_RUNTIME_CONFIG__ = (await response.json()) as Window['__ROAS_RADAR_RUNTIME_CONFIG__'];
-  }
+	if (response.ok) {
+		window.__ROAS_RADAR_RUNTIME_CONFIG__ =
+			(await response.json()) as Window["__ROAS_RADAR_RUNTIME_CONFIG__"];
+	}
 
-  ReactDOM.createRoot(rootContainer).render(
-    <React.StrictMode>
-      <AttributionTracker />
-      <App />
-    </React.StrictMode>
-  );
+	ReactDOM.createRoot(rootContainer).render(
+		<React.StrictMode>
+			<AttributionTracker />
+			<App />
+		</React.StrictMode>,
+	);
 }
 
 bootstrap().catch((error) => {
-  throw error;
+	throw error;
 });

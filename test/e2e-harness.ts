@@ -1,22 +1,27 @@
-process.env.DATABASE_URL ??= 'postgres://postgres:postgres@127.0.0.1:5432/roas_radar';
+process.env.DATABASE_URL ??=
+	"postgres://postgres:postgres@127.0.0.1:5432/roas_radar";
 
 import { resetIntegrationTables } from './integration-test-helpers.js';
 
 let cachedPool: typeof import('../src/db/pool.js').pool | null = null;
 
 async function getPool() {
-  if (cachedPool) {
-    return cachedPool;
-  }
+	if (cachedPool) {
+		return cachedPool;
+	}
 
-  const poolModule = await import('../src/db/pool.js');
-  cachedPool = poolModule.pool;
-  return cachedPool;
+	const poolModule = await import("../src/db/pool.js");
+	cachedPool = poolModule.pool;
+	return cachedPool;
 }
 
 export async function resetE2EDatabase(): Promise<void> {
   const pool = await getPool();
   await resetIntegrationTables(pool, [
+    'app_sessions',
+    'app_users',
+    'campaign_metadata_backfill_runs',
+    'ad_platform_entity_metadata',
     'attribution_explain_records',
     'attribution_model_credits',
     'attribution_model_summaries',
@@ -24,6 +29,14 @@ export async function resetE2EDatabase(): Promise<void> {
     'attribution_order_inputs',
     'attribution_runs',
     'ad_sync_api_transactions',
+    'google_ads_oauth_states',
+    'google_ads_settings',
+    'meta_ads_order_value_sync_jobs',
+    'meta_ads_order_value_raw_records',
+    'meta_ads_order_value_sync_runs',
+    'meta_ads_order_value_aggregates',
+    'meta_ads_oauth_states',
+    'meta_ads_settings',
     'google_ads_reconciliation_runs',
     'google_ads_daily_spend',
     'google_ads_raw_spend_records',

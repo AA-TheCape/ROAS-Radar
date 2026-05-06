@@ -37,6 +37,10 @@ The attribution-engine v1 tables added in `0040_add_attribution_engine_v1_tables
 
 - `db/rollbacks/0040_add_attribution_engine_v1_tables.down.sql`
 
+The Meta order-value aggregate table added in `0040_add_meta_order_value_aggregates.sql` can be rolled back with:
+
+- `db/rollbacks/0040_add_meta_order_value_aggregates.down.sql`
+
 ## Session Attribution Capture Schema
 
 Migration `0019_add_session_attribution_capture_tables.sql` adds three additive tables for canonical first-party capture persistence:

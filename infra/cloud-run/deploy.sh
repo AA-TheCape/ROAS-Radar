@@ -2,8 +2,12 @@
 
 set -eu
 
-if [ "$#" -ne 1 ]; then
+usage() {
   echo "usage: $0 <environment>" >&2
+}
+
+if [ "$#" -ne 1 ]; then
+  usage
   exit 1
 fi
 
@@ -18,8 +22,27 @@ if [ ! -f "$ENV_FILE" ]; then
   exit 1
 fi
 
+set -a
 # shellcheck disable=SC1090
 . "$ENV_FILE"
+set +a
+
+IMAGE_NAME=${IMAGE_NAME:-${API_IMAGE_NAME:-roas-radar-app}}
+IMAGE_NAME_DASHBOARD=${IMAGE_NAME_DASHBOARD:-${DASHBOARD_IMAGE_NAME:-roas-radar-dashboard}}
+API_MIN_INSTANCES=${API_MIN_INSTANCES:-0}
+API_MAX_INSTANCES=${API_MAX_INSTANCES:-3}
+API_CPU=${API_CPU:-2}
+API_MEMORY=${API_MEMORY:-2Gi}
+API_CONCURRENCY=${API_CONCURRENCY:-16}
+API_TIMEOUT_SECONDS=${API_TIMEOUT_SECONDS:-900}
+DASHBOARD_MIN_INSTANCES=${DASHBOARD_MIN_INSTANCES:-0}
+DASHBOARD_MAX_INSTANCES=${DASHBOARD_MAX_INSTANCES:-2}
+WORKER_MIN_INSTANCES=${WORKER_MIN_INSTANCES:-1}
+WORKER_MAX_INSTANCES=${WORKER_MAX_INSTANCES:-1}
+WORKER_CPU=${WORKER_CPU:-2}
+WORKER_MEMORY=${WORKER_MEMORY:-1Gi}
+WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-2}
+WORKER_TIMEOUT_SECONDS=${WORKER_TIMEOUT_SECONDS:-900}
 
 require_var() {
   eval "value=\${$1:-}"
@@ -62,22 +85,26 @@ EOF
 for var in \
   GCP_PROJECT_ID \
   GCP_REGION \
-  CLOUD_SQL_CONNECTION_NAME \
   ARTIFACT_REGISTRY_REPOSITORY \
-  IMAGE_NAME \
-  IMAGE_NAME_DASHBOARD \
+  CLOUD_SQL_CONNECTION_NAME \
   API_SERVICE_NAME \
   DASHBOARD_SERVICE_NAME \
   WORKER_SERVICE_NAME \
   MIGRATOR_JOB_NAME \
   META_ADS_JOB_NAME \
+  META_ADS_ORDER_VALUE_JOB_NAME \
+  META_ADS_METADATA_JOB_NAME \
   GOOGLE_ADS_JOB_NAME \
+  GOOGLE_ADS_METADATA_JOB_NAME \
   RETENTION_JOB_NAME \
   DATA_QUALITY_JOB_NAME \
   IDENTITY_GRAPH_BACKFILL_JOB_NAME \
   ORDER_ATTRIBUTION_MATERIALIZATION_JOB_NAME \
   META_ADS_SCHEDULER_JOB_NAME \
+  META_ADS_ORDER_VALUE_SCHEDULER_JOB_NAME \
+  META_ADS_METADATA_SCHEDULER_NAME \
   GOOGLE_ADS_SCHEDULER_JOB_NAME \
+  GOOGLE_ADS_METADATA_SCHEDULER_NAME \
   RETENTION_SCHEDULER_JOB_NAME \
   DATA_QUALITY_SCHEDULER_JOB_NAME \
   IDENTITY_GRAPH_BACKFILL_SCHEDULER_JOB_NAME \
@@ -95,20 +122,6 @@ for var in \
   SCHEDULER_INVOKER_SERVICE_ACCOUNT_NAME \
   API_INGRESS \
   DASHBOARD_INGRESS \
-  API_MIN_INSTANCES \
-  API_MAX_INSTANCES \
-  API_CPU \
-  API_MEMORY \
-  API_CONCURRENCY \
-  API_TIMEOUT_SECONDS \
-  DASHBOARD_MIN_INSTANCES \
-  DASHBOARD_MAX_INSTANCES \
-  WORKER_MIN_INSTANCES \
-  WORKER_MAX_INSTANCES \
-  WORKER_CPU \
-  WORKER_MEMORY \
-  WORKER_CONCURRENCY \
-  WORKER_TIMEOUT_SECONDS \
   DATABASE_POOL_MAX \
   WORKER_DATABASE_POOL_MAX \
   ADS_SYNC_DATABASE_POOL_MAX \
@@ -118,9 +131,34 @@ for var in \
   TRACKING_BODY_LIMIT \
   SHOPIFY_WEBHOOK_BODY_LIMIT \
   SHOPIFY_APP_BASE_URL \
+  META_ADS_API_VERSION \
   ADS_SYNC_TIME_ZONE \
   META_ADS_SYNC_SCHEDULE \
+  META_ADS_ORDER_VALUE_SYNC_SCHEDULE \
+  META_ADS_ORDER_VALUE_SCHEDULER_PAUSED \
+  META_ADS_SCHEDULER_PAUSED \
+  META_ADS_SCHEDULER_ATTEMPT_DEADLINE \
+  META_ADS_SCHEDULER_MAX_RETRY_ATTEMPTS \
+  META_ADS_SCHEDULER_MIN_BACKOFF \
+  META_ADS_SCHEDULER_MAX_BACKOFF \
+  META_ADS_SCHEDULER_MAX_DOUBLINGS \
+  META_ADS_JOB_TIMEOUT_SECONDS \
+  META_ADS_JOB_MAX_RETRIES \
+  META_ADS_ORDER_VALUE_SYNC_ENABLED \
+  META_ADS_ORDER_VALUE_SYNC_INTERVAL_MS \
+  META_ADS_ORDER_VALUE_WINDOW_DAYS \
+  META_ADS_ORDER_VALUE_ANOMALY_MIN_ROWS \
+  META_ADS_ORDER_VALUE_NULL_SPIKE_MIN_RATIO \
+  META_ADS_ORDER_VALUE_NULL_SPIKE_RATIO_DELTA \
+  META_ADS_METADATA_SCHEDULE \
+  META_ADS_METADATA_TIME_ZONE \
+  META_ADS_METADATA_SCHEDULER_ENABLED \
+  META_ADS_METADATA_REFRESH_REQUESTED_BY \
   GOOGLE_ADS_SYNC_SCHEDULE \
+  GOOGLE_ADS_METADATA_SCHEDULE \
+  GOOGLE_ADS_METADATA_TIME_ZONE \
+  GOOGLE_ADS_METADATA_SCHEDULER_ENABLED \
+  GOOGLE_ADS_METADATA_REFRESH_REQUESTED_BY \
   RETENTION_SCHEDULE \
   DATA_QUALITY_SCHEDULE \
   IDENTITY_GRAPH_BACKFILL_SCHEDULE \
@@ -152,7 +190,7 @@ ORDER_ATTRIBUTION_MATERIALIZATION_SA="$ORDER_ATTRIBUTION_MATERIALIZATION_JOB_SER
 SCHEDULER_INVOKER_SA="$SCHEDULER_INVOKER_SERVICE_ACCOUNT_NAME@$GCP_PROJECT_ID.iam.gserviceaccount.com"
 
 COMMON_SECRET_FLAGS="DATABASE_URL=DATABASE_URL:latest,REPORTING_API_TOKEN=REPORTING_API_TOKEN:latest,SHOPIFY_WEBHOOK_SECRET=SHOPIFY_WEBHOOK_SECRET:latest,SHOPIFY_APP_API_KEY=SHOPIFY_APP_API_KEY:latest,SHOPIFY_APP_API_SECRET=SHOPIFY_APP_API_SECRET:latest,SHOPIFY_APP_ENCRYPTION_KEY=SHOPIFY_APP_ENCRYPTION_KEY:latest,META_ADS_APP_SECRET=META_ADS_APP_SECRET:latest,META_ADS_ENCRYPTION_KEY=META_ADS_ENCRYPTION_KEY:latest,GOOGLE_ADS_ENCRYPTION_KEY=GOOGLE_ADS_ENCRYPTION_KEY:latest"
-COMMON_ENV_VARS="^@^NODE_ENV=production@DATABASE_POOL_MIN=0@DATABASE_SSL=false@TRACKING_ALLOWED_ORIGINS=$TRACKING_ALLOWED_ORIGINS@API_JSON_BODY_LIMIT=$API_JSON_BODY_LIMIT@TRACKING_BODY_LIMIT=$TRACKING_BODY_LIMIT@SHOPIFY_WEBHOOK_BODY_LIMIT=$SHOPIFY_WEBHOOK_BODY_LIMIT@SHOPIFY_APP_BASE_URL=$SHOPIFY_APP_BASE_URL@SHOPIFY_APP_API_VERSION=${SHOPIFY_APP_API_VERSION:-2026-01}@SHOPIFY_APP_SCOPES=${SHOPIFY_APP_SCOPES:-read_orders}@SHOPIFY_APP_POST_INSTALL_REDIRECT_URL=${SHOPIFY_APP_POST_INSTALL_REDIRECT_URL:-}@META_ADS_APP_ID=${META_ADS_APP_ID:-}@META_ADS_APP_BASE_URL=${META_ADS_APP_BASE_URL:-$SHOPIFY_APP_BASE_URL}@META_ADS_APP_SCOPES=${META_ADS_APP_SCOPES:-ads_read}@META_ADS_AD_ACCOUNT_ID=${META_ADS_AD_ACCOUNT_ID:-}@GOOGLE_ADS_API_VERSION=${GOOGLE_ADS_API_VERSION:-v19}"
+COMMON_ENV_VARS="^@^NODE_ENV=production@DATABASE_POOL_MIN=0@DATABASE_SSL=false@TRACKING_ALLOWED_ORIGINS=$TRACKING_ALLOWED_ORIGINS@API_JSON_BODY_LIMIT=$API_JSON_BODY_LIMIT@TRACKING_BODY_LIMIT=$TRACKING_BODY_LIMIT@SHOPIFY_WEBHOOK_BODY_LIMIT=$SHOPIFY_WEBHOOK_BODY_LIMIT@SHOPIFY_APP_BASE_URL=$SHOPIFY_APP_BASE_URL@SHOPIFY_APP_API_VERSION=${SHOPIFY_APP_API_VERSION:-2026-01}@SHOPIFY_APP_SCOPES=${SHOPIFY_APP_SCOPES:-read_orders}@SHOPIFY_APP_POST_INSTALL_REDIRECT_URL=${SHOPIFY_APP_POST_INSTALL_REDIRECT_URL:-}@META_ADS_APP_ID=${META_ADS_APP_ID:-}@META_ADS_APP_BASE_URL=${META_ADS_APP_BASE_URL:-$SHOPIFY_APP_BASE_URL}@META_ADS_APP_SCOPES=${META_ADS_APP_SCOPES:-ads_read}@META_ADS_AD_ACCOUNT_ID=${META_ADS_AD_ACCOUNT_ID:-}@META_ADS_API_VERSION=${META_ADS_API_VERSION:-v25.0}@GOOGLE_ADS_API_VERSION=${GOOGLE_ADS_API_VERSION:-v19}"
 ADS_JOB_ENDPOINT_BASE="https://$GCP_REGION-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/$GCP_PROJECT_ID/jobs"
 
 API_PREVIOUS_REVISION=$(get_latest_ready_revision "$API_SERVICE_NAME")
@@ -163,6 +201,12 @@ upsert_scheduler_job() {
   SCHEDULER_JOB_NAME="$1"
   TARGET_JOB_NAME="$2"
   CRON_SCHEDULE="$3"
+  PAUSED_STATE="${4:-false}"
+  ATTEMPT_DEADLINE="${5:-1800s}"
+  MAX_RETRY_ATTEMPTS="${6:-0}"
+  MIN_BACKOFF="${7:-300s}"
+  MAX_BACKOFF="${8:-1800s}"
+  MAX_DOUBLINGS="${9:-1}"
 
   if gcloud scheduler jobs describe "$SCHEDULER_JOB_NAME" \
     --project="$GCP_PROJECT_ID" \
@@ -174,6 +218,11 @@ upsert_scheduler_job() {
       --time-zone="$ADS_SYNC_TIME_ZONE" \
       --uri="$ADS_JOB_ENDPOINT_BASE/$TARGET_JOB_NAME:run" \
       --http-method=POST \
+      --attempt-deadline="$ATTEMPT_DEADLINE" \
+      --max-retry-attempts="$MAX_RETRY_ATTEMPTS" \
+      --min-backoff="$MIN_BACKOFF" \
+      --max-backoff="$MAX_BACKOFF" \
+      --max-doublings="$MAX_DOUBLINGS" \
       --oauth-service-account-email="$SCHEDULER_INVOKER_SA" \
       --oauth-token-scope="https://www.googleapis.com/auth/cloud-platform"
   else
@@ -184,8 +233,23 @@ upsert_scheduler_job() {
       --time-zone="$ADS_SYNC_TIME_ZONE" \
       --uri="$ADS_JOB_ENDPOINT_BASE/$TARGET_JOB_NAME:run" \
       --http-method=POST \
+      --attempt-deadline="$ATTEMPT_DEADLINE" \
+      --max-retry-attempts="$MAX_RETRY_ATTEMPTS" \
+      --min-backoff="$MIN_BACKOFF" \
+      --max-backoff="$MAX_BACKOFF" \
+      --max-doublings="$MAX_DOUBLINGS" \
       --oauth-service-account-email="$SCHEDULER_INVOKER_SA" \
       --oauth-token-scope="https://www.googleapis.com/auth/cloud-platform"
+  fi
+
+  if [ "$PAUSED_STATE" = "true" ]; then
+    gcloud scheduler jobs pause "$SCHEDULER_JOB_NAME" \
+      --project="$GCP_PROJECT_ID" \
+      --location="$GCP_REGION" >/dev/null
+  else
+    gcloud scheduler jobs resume "$SCHEDULER_JOB_NAME" \
+      --project="$GCP_PROJECT_ID" \
+      --location="$GCP_REGION" >/dev/null || true
   fi
 }
 
@@ -200,31 +264,79 @@ ensure_job_invoker() {
     --role="roles/run.invoker" >/dev/null
 }
 
-if [ "${SKIP_BUILDS:-false}" != "true" ]; then
-  echo "Building image $IMAGE_URI"
-  gcloud builds submit "$REPO_ROOT" \
-    --project="$GCP_PROJECT_ID" \
-    --tag="$IMAGE_URI"
+deploy_metadata_refresh_job() {
+  JOB_NAME="$1"
+  JOB_SERVICE_ACCOUNT="$2"
+  PACKAGE_SCRIPT="$3"
+  REQUESTED_BY_ENV_NAME="$4"
+  REQUESTED_BY_VALUE="$5"
+  SECRET_FLAGS="$6"
 
-  echo "Building dashboard image $DASHBOARD_IMAGE_URI"
-  DASHBOARD_BUILD_CONFIG=$(mktemp)
-  cat >"$DASHBOARD_BUILD_CONFIG" <<EOF
-steps:
-  - name: gcr.io/cloud-builders/docker
-    args:
-      - build
-      - -f
-      - dashboard/Dockerfile
-      - -t
-      - $DASHBOARD_IMAGE_URI
-      - .
-images:
-  - $DASHBOARD_IMAGE_URI
-EOF
-  gcloud builds submit "$REPO_ROOT" \
+  gcloud run jobs deploy "$JOB_NAME" \
     --project="$GCP_PROJECT_ID" \
-    --config="$DASHBOARD_BUILD_CONFIG"
-  rm -f "$DASHBOARD_BUILD_CONFIG"
+    --region="$GCP_REGION" \
+    --image="$IMAGE_URI" \
+    --service-account="$JOB_SERVICE_ACCOUNT" \
+    --cpu=1 \
+    --memory=512Mi \
+    --max-retries=1 \
+    --task-timeout=1800 \
+    --parallelism=1 \
+    --tasks=1 \
+    --command=npm \
+    --args=run,"$PACKAGE_SCRIPT" \
+    --set-env-vars="${COMMON_ENV_VARS}@DATABASE_POOL_MAX=$ADS_SYNC_DATABASE_POOL_MAX@$REQUESTED_BY_ENV_NAME=$REQUESTED_BY_VALUE" \
+    --set-secrets="$SECRET_FLAGS" \
+    --set-cloudsql-instances="$CLOUD_SQL_CONNECTION_NAME"
+}
+
+configure_metadata_scheduler() {
+  TARGET_JOB_NAME="$1"
+  SCHEDULER_NAME="$2"
+  CRON_SCHEDULE="$3"
+  TIME_ZONE="$4"
+  ENABLED="$5"
+
+  if gcloud scheduler jobs describe "$SCHEDULER_NAME" \
+    --project="$GCP_PROJECT_ID" \
+    --location="$GCP_REGION" >/dev/null 2>&1; then
+    gcloud scheduler jobs update http "$SCHEDULER_NAME" \
+      --project="$GCP_PROJECT_ID" \
+      --location="$GCP_REGION" \
+      --schedule="$CRON_SCHEDULE" \
+      --time-zone="$TIME_ZONE" \
+      --uri="$ADS_JOB_ENDPOINT_BASE/$TARGET_JOB_NAME:run" \
+      --http-method=POST \
+      --oauth-service-account-email="$SCHEDULER_INVOKER_SA" \
+      --oauth-token-scope="https://www.googleapis.com/auth/cloud-platform"
+  else
+    gcloud scheduler jobs create http "$SCHEDULER_NAME" \
+      --project="$GCP_PROJECT_ID" \
+      --location="$GCP_REGION" \
+      --schedule="$CRON_SCHEDULE" \
+      --time-zone="$TIME_ZONE" \
+      --uri="$ADS_JOB_ENDPOINT_BASE/$TARGET_JOB_NAME:run" \
+      --http-method=POST \
+      --oauth-service-account-email="$SCHEDULER_INVOKER_SA" \
+      --oauth-token-scope="https://www.googleapis.com/auth/cloud-platform"
+  fi
+
+  if [ "$ENABLED" = "true" ]; then
+    gcloud scheduler jobs resume "$SCHEDULER_NAME" \
+      --project="$GCP_PROJECT_ID" \
+      --location="$GCP_REGION" >/dev/null || true
+  else
+    gcloud scheduler jobs pause "$SCHEDULER_NAME" \
+      --project="$GCP_PROJECT_ID" \
+      --location="$GCP_REGION" >/dev/null
+  fi
+}
+
+if [ "${SKIP_BUILDS:-false}" != "true" ]; then
+  if ! command_exists docker; then
+    echo "docker is required unless SKIP_BUILDS=true" >&2
+    exit 1
+  fi
 fi
 
 echo "Deploying migration job $MIGRATOR_JOB_NAME"
@@ -311,7 +423,7 @@ gcloud run deploy "$DASHBOARD_SERVICE_NAME" \
   --memory=256Mi \
   --concurrency=80 \
   --timeout=300 \
-  --set-env-vars="NODE_ENV=production,DASHBOARD_API_BASE_URL=$DASHBOARD_API_BASE_URL,DASHBOARD_REPORTING_TENANT_ID=${DASHBOARD_REPORTING_TENANT_ID:-roas-radar}" \
+  --set-env-vars="NODE_ENV=production,DASHBOARD_API_BASE_URL=$DASHBOARD_API_BASE_URL,DASHBOARD_REPORTING_TENANT_ID=${DASHBOARD_REPORTING_TENANT_ID:-1}" \
   --set-secrets="DASHBOARD_REPORTING_API_TOKEN=REPORTING_API_TOKEN:latest"
 DASHBOARD_LATEST_REVISION=$(get_latest_ready_revision "$DASHBOARD_SERVICE_NAME")
 
@@ -323,17 +435,37 @@ gcloud run jobs deploy "$META_ADS_JOB_NAME" \
   --service-account="$META_ADS_SA" \
   --cpu=1 \
   --memory=512Mi \
-  --max-retries=1 \
-  --task-timeout=1800 \
+  --max-retries="$META_ADS_JOB_MAX_RETRIES" \
+  --task-timeout="$META_ADS_JOB_TIMEOUT_SECONDS" \
   --parallelism=1 \
   --tasks=1 \
   --command=npm \
   --args=run,meta-ads:sync:start \
-  --set-env-vars="${COMMON_ENV_VARS}@DATABASE_POOL_MAX=$ADS_SYNC_DATABASE_POOL_MAX@META_ADS_WORKER_LOOP=false" \
+  --set-env-vars="${COMMON_ENV_VARS}@DATABASE_POOL_MAX=$ADS_SYNC_DATABASE_POOL_MAX@META_ADS_WORKER_LOOP=false@META_ADS_JOB_MODE=spend" \
   --set-secrets="DATABASE_URL=DATABASE_URL:latest,META_ADS_APP_SECRET=META_ADS_APP_SECRET:latest,META_ADS_ENCRYPTION_KEY=META_ADS_ENCRYPTION_KEY:latest" \
   --set-cloudsql-instances="$CLOUD_SQL_CONNECTION_NAME"
 ensure_job_invoker "$META_ADS_JOB_NAME" "serviceAccount:$SCHEDULER_INVOKER_SA"
 ensure_job_invoker "$META_ADS_JOB_NAME" "serviceAccount:$WORKER_SA"
+
+echo "Deploying Meta Ads order value sync job $META_ADS_ORDER_VALUE_JOB_NAME"
+gcloud run jobs deploy "$META_ADS_ORDER_VALUE_JOB_NAME" \
+  --project="$GCP_PROJECT_ID" \
+  --region="$GCP_REGION" \
+  --image="$IMAGE_URI" \
+  --service-account="$META_ADS_SA" \
+  --cpu=1 \
+  --memory=512Mi \
+  --max-retries="$META_ADS_JOB_MAX_RETRIES" \
+  --task-timeout="$META_ADS_JOB_TIMEOUT_SECONDS" \
+  --parallelism=1 \
+  --tasks=1 \
+  --command=npm \
+  --args=run,meta-ads:order-value:start \
+  --set-env-vars="${COMMON_ENV_VARS}@DATABASE_POOL_MAX=$ADS_SYNC_DATABASE_POOL_MAX@META_ADS_JOB_MODE=order_value@META_ADS_ORDER_VALUE_SYNC_ENABLED=$META_ADS_ORDER_VALUE_SYNC_ENABLED@META_ADS_ORDER_VALUE_SYNC_INTERVAL_MS=$META_ADS_ORDER_VALUE_SYNC_INTERVAL_MS@META_ADS_ORDER_VALUE_WINDOW_DAYS=$META_ADS_ORDER_VALUE_WINDOW_DAYS@META_ADS_ORDER_VALUE_ANOMALY_MIN_ROWS=$META_ADS_ORDER_VALUE_ANOMALY_MIN_ROWS@META_ADS_ORDER_VALUE_NULL_SPIKE_MIN_RATIO=$META_ADS_ORDER_VALUE_NULL_SPIKE_MIN_RATIO@META_ADS_ORDER_VALUE_NULL_SPIKE_RATIO_DELTA=$META_ADS_ORDER_VALUE_NULL_SPIKE_RATIO_DELTA" \
+  --set-secrets="DATABASE_URL=DATABASE_URL:latest,META_ADS_APP_SECRET=META_ADS_APP_SECRET:latest,META_ADS_ENCRYPTION_KEY=META_ADS_ENCRYPTION_KEY:latest" \
+  --set-cloudsql-instances="$CLOUD_SQL_CONNECTION_NAME"
+ensure_job_invoker "$META_ADS_ORDER_VALUE_JOB_NAME" "serviceAccount:$SCHEDULER_INVOKER_SA"
+ensure_job_invoker "$META_ADS_ORDER_VALUE_JOB_NAME" "serviceAccount:$WORKER_SA"
 
 echo "Deploying Google Ads sync job $GOOGLE_ADS_JOB_NAME"
 gcloud run jobs deploy "$GOOGLE_ADS_JOB_NAME" \
@@ -354,6 +486,28 @@ gcloud run jobs deploy "$GOOGLE_ADS_JOB_NAME" \
   --set-cloudsql-instances="$CLOUD_SQL_CONNECTION_NAME"
 ensure_job_invoker "$GOOGLE_ADS_JOB_NAME" "serviceAccount:$SCHEDULER_INVOKER_SA"
 ensure_job_invoker "$GOOGLE_ADS_JOB_NAME" "serviceAccount:$WORKER_SA"
+
+echo "Deploying Meta Ads metadata refresh job $META_ADS_METADATA_JOB_NAME"
+deploy_metadata_refresh_job \
+  "$META_ADS_METADATA_JOB_NAME" \
+  "$META_ADS_SA" \
+  "meta-ads:metadata-refresh:start" \
+  "META_ADS_METADATA_REFRESH_REQUESTED_BY" \
+  "$META_ADS_METADATA_REFRESH_REQUESTED_BY" \
+  "DATABASE_URL=DATABASE_URL:latest,META_ADS_APP_SECRET=META_ADS_APP_SECRET:latest,META_ADS_ENCRYPTION_KEY=META_ADS_ENCRYPTION_KEY:latest"
+ensure_job_invoker "$META_ADS_METADATA_JOB_NAME" "serviceAccount:$SCHEDULER_INVOKER_SA"
+ensure_job_invoker "$META_ADS_METADATA_JOB_NAME" "serviceAccount:$WORKER_SA"
+
+echo "Deploying Google Ads metadata refresh job $GOOGLE_ADS_METADATA_JOB_NAME"
+deploy_metadata_refresh_job \
+  "$GOOGLE_ADS_METADATA_JOB_NAME" \
+  "$GOOGLE_ADS_SA" \
+  "google-ads:metadata-refresh:start" \
+  "GOOGLE_ADS_METADATA_REFRESH_REQUESTED_BY" \
+  "$GOOGLE_ADS_METADATA_REFRESH_REQUESTED_BY" \
+  "DATABASE_URL=DATABASE_URL:latest,GOOGLE_ADS_ENCRYPTION_KEY=GOOGLE_ADS_ENCRYPTION_KEY:latest"
+ensure_job_invoker "$GOOGLE_ADS_METADATA_JOB_NAME" "serviceAccount:$SCHEDULER_INVOKER_SA"
+ensure_job_invoker "$GOOGLE_ADS_METADATA_JOB_NAME" "serviceAccount:$WORKER_SA"
 
 echo "Deploying session retention job $RETENTION_JOB_NAME"
 gcloud run jobs deploy "$RETENTION_JOB_NAME" \
@@ -436,10 +590,47 @@ ensure_job_invoker "$ORDER_ATTRIBUTION_MATERIALIZATION_JOB_NAME" "serviceAccount
 ensure_job_invoker "$ORDER_ATTRIBUTION_MATERIALIZATION_JOB_NAME" "serviceAccount:$WORKER_SA"
 
 echo "Configuring Meta Ads scheduler job $META_ADS_SCHEDULER_JOB_NAME"
-upsert_scheduler_job "$META_ADS_SCHEDULER_JOB_NAME" "$META_ADS_JOB_NAME" "$META_ADS_SYNC_SCHEDULE"
+upsert_scheduler_job \
+  "$META_ADS_SCHEDULER_JOB_NAME" \
+  "$META_ADS_JOB_NAME" \
+  "$META_ADS_SYNC_SCHEDULE" \
+  "$META_ADS_SCHEDULER_PAUSED" \
+  "$META_ADS_SCHEDULER_ATTEMPT_DEADLINE" \
+  "$META_ADS_SCHEDULER_MAX_RETRY_ATTEMPTS" \
+  "$META_ADS_SCHEDULER_MIN_BACKOFF" \
+  "$META_ADS_SCHEDULER_MAX_BACKOFF" \
+  "$META_ADS_SCHEDULER_MAX_DOUBLINGS"
+
+echo "Configuring Meta Ads order value scheduler job $META_ADS_ORDER_VALUE_SCHEDULER_JOB_NAME"
+upsert_scheduler_job \
+  "$META_ADS_ORDER_VALUE_SCHEDULER_JOB_NAME" \
+  "$META_ADS_ORDER_VALUE_JOB_NAME" \
+  "$META_ADS_ORDER_VALUE_SYNC_SCHEDULE" \
+  "$META_ADS_ORDER_VALUE_SCHEDULER_PAUSED" \
+  "$META_ADS_SCHEDULER_ATTEMPT_DEADLINE" \
+  "$META_ADS_SCHEDULER_MAX_RETRY_ATTEMPTS" \
+  "$META_ADS_SCHEDULER_MIN_BACKOFF" \
+  "$META_ADS_SCHEDULER_MAX_BACKOFF" \
+  "$META_ADS_SCHEDULER_MAX_DOUBLINGS"
 
 echo "Configuring Google Ads scheduler job $GOOGLE_ADS_SCHEDULER_JOB_NAME"
 upsert_scheduler_job "$GOOGLE_ADS_SCHEDULER_JOB_NAME" "$GOOGLE_ADS_JOB_NAME" "$GOOGLE_ADS_SYNC_SCHEDULE"
+
+echo "Configuring Meta Ads metadata scheduler job $META_ADS_METADATA_SCHEDULER_NAME"
+configure_metadata_scheduler \
+  "$META_ADS_METADATA_JOB_NAME" \
+  "$META_ADS_METADATA_SCHEDULER_NAME" \
+  "$META_ADS_METADATA_SCHEDULE" \
+  "$META_ADS_METADATA_TIME_ZONE" \
+  "$META_ADS_METADATA_SCHEDULER_ENABLED"
+
+echo "Configuring Google Ads metadata scheduler job $GOOGLE_ADS_METADATA_SCHEDULER_NAME"
+configure_metadata_scheduler \
+  "$GOOGLE_ADS_METADATA_JOB_NAME" \
+  "$GOOGLE_ADS_METADATA_SCHEDULER_NAME" \
+  "$GOOGLE_ADS_METADATA_SCHEDULE" \
+  "$GOOGLE_ADS_METADATA_TIME_ZONE" \
+  "$GOOGLE_ADS_METADATA_SCHEDULER_ENABLED"
 
 echo "Configuring session retention scheduler job $RETENTION_SCHEDULER_JOB_NAME"
 upsert_scheduler_job "$RETENTION_SCHEDULER_JOB_NAME" "$RETENTION_JOB_NAME" "$RETENTION_SCHEDULE"

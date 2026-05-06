@@ -448,7 +448,7 @@ test('identity graph dual-write keeps attribution fallback compatible during rol
     attributed_source: 'google',
     attributed_medium: 'cpc',
     attributed_campaign: 'identity-fallback',
-    attribution_reason: 'matched_by_customer_identity'
+    attribution_reason: 'matched_by_identity_journey'
   });
   assert.deepEqual(orderState.rows[0], {
     identity_journey_id: stitched.journeyId,

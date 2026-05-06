@@ -1,290 +1,356 @@
-import path from 'node:path';
-import { createRequire } from 'node:module';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createRequire } from "node:module";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-export const repoRoot = path.resolve(__dirname, '..');
-const requireFromDashboard = createRequire(path.join(repoRoot, 'dashboard/package.json'));
+export const repoRoot = path.resolve(__dirname, "..");
+const requireFromDashboard = createRequire(
+	path.join(repoRoot, "dashboard/package.json"),
+);
 
-export const React = requireFromDashboard('react') as typeof import('../dashboard/node_modules/react');
-export const { renderToStaticMarkup } = requireFromDashboard('react-dom/server') as typeof import('../dashboard/node_modules/react-dom/server');
-export const { createRoot } = requireFromDashboard('react-dom/client') as typeof import('../dashboard/node_modules/react-dom/client');
-export const { flushSync } = requireFromDashboard('react-dom') as typeof import('../dashboard/node_modules/react-dom');
-export const { JSDOM } = requireFromDashboard('jsdom') as typeof import('../dashboard/node_modules/jsdom');
+export const React = requireFromDashboard("react") as {
+	createElement: typeof import("react").createElement;
+};
+export const { renderToStaticMarkup } = requireFromDashboard(
+	"react-dom/server",
+) as {
+	renderToStaticMarkup: typeof import("react-dom/server").renderToStaticMarkup;
+};
+export const { createRoot } = requireFromDashboard("react-dom/client") as {
+	createRoot: typeof import("react-dom/client").createRoot;
+};
+export const { flushSync } = requireFromDashboard("react-dom") as {
+	flushSync: typeof import("react-dom").flushSync;
+};
+export const { JSDOM } = requireFromDashboard("jsdom") as {
+	JSDOM: typeof import("jsdom").JSDOM;
+};
 export const h = React.createElement;
 
 type AsyncSection<T> = {
-  data: T | null;
-  loading: boolean;
-  error: string | null;
+	data: T | null;
+	loading: boolean;
+	error: string | null;
 };
 
 type DomOptions = {
-  markup?: string;
-  width?: number;
-  height?: number;
-  url?: string;
+	markup?: string;
+	width?: number;
+	height?: number;
+	url?: string;
 };
 
 type MountedUi = {
-  cleanup: () => void;
-  container: HTMLDivElement;
-  dom: import('../dashboard/node_modules/jsdom').JSDOM;
-  root: import('../dashboard/node_modules/react-dom/client').Root;
+	cleanup: () => void;
+	container: HTMLDivElement;
+	dom: import("../dashboard/node_modules/jsdom").JSDOM;
+	root: import("../dashboard/node_modules/react-dom/client").Root;
 };
 
-function installDomGlobals(dom: import('../dashboard/node_modules/jsdom').JSDOM, width: number, height: number) {
-  const { window } = dom;
+function installDomGlobals(
+	dom: import("../dashboard/node_modules/jsdom").JSDOM,
+	width: number,
+	height: number,
+) {
+	const { window } = dom;
 
-  Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
-  Object.defineProperty(window, 'innerHeight', { configurable: true, value: height });
+	Object.defineProperty(window, "innerWidth", {
+		configurable: true,
+		value: width,
+	});
+	Object.defineProperty(window, "innerHeight", {
+		configurable: true,
+		value: height,
+	});
 
-  if (!window.matchMedia) {
-    window.matchMedia = ((query: string) => ({
-      matches: false,
-      media: query,
-      onchange: null,
-      addListener() {},
-      removeListener() {},
-      addEventListener() {},
-      removeEventListener() {},
-      dispatchEvent() {
-        return false;
-      }
-    })) as typeof window.matchMedia;
-  }
+	if (!window.matchMedia) {
+		window.matchMedia = ((query: string) => ({
+			matches: false,
+			media: query,
+			onchange: null,
+			addListener() {},
+			removeListener() {},
+			addEventListener() {},
+			removeEventListener() {},
+			dispatchEvent() {
+				return false;
+			},
+		})) as typeof window.matchMedia;
+	}
 
-  class ResizeObserver {
-    private readonly callback: ResizeObserverCallback;
+	class ResizeObserver {
+		private readonly callback: ResizeObserverCallback;
 
-    constructor(callback: ResizeObserverCallback) {
-      this.callback = callback;
-    }
+		constructor(callback: ResizeObserverCallback) {
+			this.callback = callback;
+		}
 
-    observe(target: Element) {
-      this.callback(
-        [
-          {
-            target,
-            contentRect: {
-              x: 0,
-              y: 0,
-              top: 0,
-              right: width,
-              bottom: height,
-              left: 0,
-              width,
-              height,
-              toJSON() {
-                return { width, height };
-              }
-            }
-          } as ResizeObserverEntry
-        ],
-        this as unknown as ResizeObserver
-      );
-    }
+		observe(target: Element) {
+			this.callback(
+				[
+					{
+						target,
+						contentRect: {
+							x: 0,
+							y: 0,
+							top: 0,
+							right: width,
+							bottom: height,
+							left: 0,
+							width,
+							height,
+							toJSON() {
+								return { width, height };
+							},
+						},
+					} as ResizeObserverEntry,
+				],
+				this as unknown as ResizeObserver,
+			);
+		}
 
-    unobserve() {}
+		unobserve() {}
 
-    disconnect() {}
-  }
+		disconnect() {}
+	}
 
-  const elementWidth = width;
-  const elementHeight = Math.max(320, Math.min(height, 900));
+	const elementWidth = width;
+	const elementHeight = Math.max(320, Math.min(height, 900));
 
-  Object.defineProperty(window.HTMLElement.prototype, 'clientWidth', {
-    configurable: true,
-    get() {
-      return elementWidth;
-    }
-  });
-  Object.defineProperty(window.HTMLElement.prototype, 'clientHeight', {
-    configurable: true,
-    get() {
-      return elementHeight;
-    }
-  });
-  Object.defineProperty(window.HTMLElement.prototype, 'offsetWidth', {
-    configurable: true,
-    get() {
-      return elementWidth;
-    }
-  });
-  Object.defineProperty(window.HTMLElement.prototype, 'offsetHeight', {
-    configurable: true,
-    get() {
-      return elementHeight;
-    }
-  });
+	Object.defineProperty(window.HTMLElement.prototype, "clientWidth", {
+		configurable: true,
+		get() {
+			return elementWidth;
+		},
+	});
+	Object.defineProperty(window.HTMLElement.prototype, "clientHeight", {
+		configurable: true,
+		get() {
+			return elementHeight;
+		},
+	});
+	Object.defineProperty(window.HTMLElement.prototype, "offsetWidth", {
+		configurable: true,
+		get() {
+			return elementWidth;
+		},
+	});
+	Object.defineProperty(window.HTMLElement.prototype, "offsetHeight", {
+		configurable: true,
+		get() {
+			return elementHeight;
+		},
+	});
 
-  window.HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect() {
-    return {
-      x: 0,
-      y: 0,
-      top: 0,
-      right: elementWidth,
-      bottom: elementHeight,
-      left: 0,
-      width: elementWidth,
-      height: elementHeight,
-      toJSON() {
-        return { width: elementWidth, height: elementHeight };
-      }
-    };
-  };
+	window.HTMLElement.prototype.getBoundingClientRect =
+		function getBoundingClientRect() {
+			return {
+				x: 0,
+				y: 0,
+				top: 0,
+				right: elementWidth,
+				bottom: elementHeight,
+				left: 0,
+				width: elementWidth,
+				height: elementHeight,
+				toJSON() {
+					return { width: elementWidth, height: elementHeight };
+				},
+			};
+		};
 
-  if (!window.SVGElement.prototype.getBBox) {
-    window.SVGElement.prototype.getBBox = () => ({ x: 0, y: 0, width: 120, height: 24 });
-  }
+	if (!window.SVGElement.prototype.getBBox) {
+		window.SVGElement.prototype.getBBox = () => ({
+			x: 0,
+			y: 0,
+			width: 120,
+			height: 24,
+		});
+	}
 
-  if (!window.SVGElement.prototype.getComputedTextLength) {
-    window.SVGElement.prototype.getComputedTextLength = () => 120;
-  }
+	if (!window.SVGElement.prototype.getComputedTextLength) {
+		window.SVGElement.prototype.getComputedTextLength = () => 120;
+	}
 
-  Object.assign(globalThis, {
-    window,
-    document: window.document,
-    HTMLElement: window.HTMLElement,
-    SVGElement: window.SVGElement,
-    Node: window.Node,
-    Event: window.Event,
-    KeyboardEvent: window.KeyboardEvent,
-    MouseEvent: window.MouseEvent,
-    getComputedStyle: window.getComputedStyle.bind(window),
-    requestAnimationFrame: (callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0),
-    cancelAnimationFrame: (handle: number) => clearTimeout(handle),
-    ResizeObserver
-  });
+	Object.assign(globalThis, {
+		window,
+		document: window.document,
+		HTMLElement: window.HTMLElement,
+		SVGElement: window.SVGElement,
+		Node: window.Node,
+		Event: window.Event,
+		KeyboardEvent: window.KeyboardEvent,
+		MouseEvent: window.MouseEvent,
+		getComputedStyle: window.getComputedStyle.bind(window),
+		requestAnimationFrame: (callback: FrameRequestCallback) =>
+			setTimeout(() => callback(Date.now()), 0),
+		cancelAnimationFrame: (handle: number) => clearTimeout(handle),
+		ResizeObserver,
+	});
 
-  Object.defineProperty(globalThis, 'navigator', {
-    configurable: true,
-    value: window.navigator
-  });
+	Object.defineProperty(globalThis, "navigator", {
+		configurable: true,
+		value: window.navigator,
+	});
 
-  Object.defineProperty(globalThis, 'localStorage', {
-    configurable: true,
-    value: window.localStorage
-  });
+	Object.defineProperty(globalThis, "localStorage", {
+		configurable: true,
+		value: window.localStorage,
+	});
 }
 
 export function createDom({
-  markup = '<!doctype html><html><body></body></html>',
-  width = 1280,
-  height = 900,
-  url = 'http://localhost/'
+	markup = "<!doctype html><html><body></body></html>",
+	width = 1280,
+	height = 900,
+	url = "http://localhost/",
 }: DomOptions = {}) {
-  const dom = new JSDOM(markup, { pretendToBeVisual: true, url });
-  installDomGlobals(dom, width, height);
-  return dom;
+	const dom = new JSDOM(markup, { pretendToBeVisual: true, url });
+	installDomGlobals(dom, width, height);
+	return dom;
 }
 
 export async function loadDashboardModule<T>(relativePath: string): Promise<T> {
-  return import(pathToFileURL(path.join(repoRoot, relativePath)).href) as Promise<T>;
+	return import(
+		pathToFileURL(path.join(repoRoot, relativePath)).href
+	) as Promise<T>;
 }
 
 export async function tick(ms = 0) {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+	await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export async function mountUi(element: React.ReactElement, options: Omit<DomOptions, 'markup'> = {}): Promise<MountedUi> {
-  const dom = createDom(options);
-  const container = dom.window.document.createElement('div');
-  dom.window.document.body.appendChild(container);
-  const root = createRoot(container);
+export async function mountUi(
+	element: React.ReactElement,
+	options: Omit<DomOptions, "markup"> = {},
+): Promise<MountedUi> {
+	const dom = createDom(options);
+	const container = dom.window.document.createElement("div");
+	dom.window.document.body.appendChild(container);
+	const root = createRoot(container);
 
-  flushSync(() => {
-    root.render(element);
-  });
-  await tick();
+	flushSync(() => {
+		root.render(element);
+	});
+	await tick();
 
-  return {
-    dom,
-    container,
-    root,
-    cleanup: () => {
-      flushSync(() => {
-        root.unmount();
-      });
-      dom.window.close();
-    }
-  };
+	return {
+		dom,
+		container,
+		root,
+		cleanup: () => {
+			flushSync(() => {
+				root.unmount();
+			});
+			dom.window.close();
+		},
+	};
 }
 
 export function click(element: Element) {
-  element.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
+	element.dispatchEvent(
+		new window.MouseEvent("click", { bubbles: true, cancelable: true }),
+	);
 }
 
-export function keydown(element: Element, key: string, options: { shiftKey?: boolean } = {}) {
-  element.dispatchEvent(
-    new window.KeyboardEvent('keydown', {
-      key,
-      bubbles: true,
-      cancelable: true,
-      shiftKey: options.shiftKey ?? false
-    })
-  );
+export function keydown(
+	element: Element,
+	key: string,
+	options: { shiftKey?: boolean } = {},
+) {
+	element.dispatchEvent(
+		new window.KeyboardEvent("keydown", {
+			key,
+			bubbles: true,
+			cancelable: true,
+			shiftKey: options.shiftKey ?? false,
+		}),
+	);
 }
 
-export function changeInputValue(element: HTMLInputElement | HTMLSelectElement, value: string) {
-  const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), 'value');
-  descriptor?.set?.call(element, value);
-  element.dispatchEvent(new window.Event('input', { bubbles: true, cancelable: true }));
-  element.dispatchEvent(new window.Event('change', { bubbles: true, cancelable: true }));
+export function changeInputValue(
+	element: HTMLInputElement | HTMLSelectElement,
+	value: string,
+) {
+	const descriptor = Object.getOwnPropertyDescriptor(
+		Object.getPrototypeOf(element),
+		"value",
+	);
+	descriptor?.set?.call(element, value);
+	element.dispatchEvent(
+		new window.Event("input", { bubbles: true, cancelable: true }),
+	);
+	element.dispatchEvent(
+		new window.Event("change", { bubbles: true, cancelable: true }),
+	);
 }
 
 export function normalizeHtml(value: string) {
-  return value.replace(/\s+</g, '<').replace(/>\s+/g, '>').replace(/\s{2,}/g, ' ').trim();
+	return value
+		.replace(/\s+</g, "<")
+		.replace(/>\s+/g, ">")
+		.replace(/\s{2,}/g, " ")
+		.trim();
 }
 
 export function noop() {}
 
-export function createShellProps(overrides: Partial<import('../dashboard/src/components/AuthenticatedAppShell').AuthenticatedAppShellProps> = {}) {
-  return {
-    navItems: [
-      {
-        key: 'dashboard',
-        label: 'Dashboard',
-        description: 'Summary metrics, campaign performance, time-based revenue trends, and attributed order rows.'
-      },
-      {
-        key: 'settings',
-        label: 'Settings',
-        description: 'Reporting timezone, platform connections, sync actions, and dashboard user access.'
-      }
-    ],
-    activeNavKey: 'dashboard',
-    onNavigate: noop,
-    breadcrumbs: [
-      { label: 'Authenticated app' },
-      { label: 'Dashboard', current: true }
-    ],
-    topbarMeta: h(
-      'div',
-      { className: 'space-y-3' },
-      h(
-        'div',
-        { className: 'space-y-1' },
-        h('p', { className: 'font-semibold text-ink' }, 'Taylor Operator'),
-        h('p', null, 'taylor@roasradar.dev')
-      ),
-      h(
-        'div',
-        { 'aria-label': 'Current timestamp', className: 'space-y-1 border-t border-line/60 pt-3 text-caption text-ink-muted' },
-        h('p', { className: 'font-semibold uppercase tracking-[0.14em] text-teal' }, 'Current time'),
-        h('p', null, 'Apr 20, 12:15 PM PDT'),
-        h('p', null, 'UTC Apr 20, 7:15 PM')
-      )
-    ),
-    headerActions: h('button', { type: 'button' }, 'Logout'),
-    children: h('div', null, 'Shell content'),
-    ...overrides
-  };
+export function createShellProps(overrides: Record<string, unknown> = {}) {
+	return {
+		navItems: [
+			{
+				key: "dashboard",
+				label: "Dashboard",
+				description:
+					"Summary metrics, campaign performance, time-based revenue trends, and attributed order rows.",
+			},
+			{
+				key: "settings",
+				label: "Settings",
+				description:
+					"Reporting timezone, platform connections, sync actions, and dashboard user access.",
+			},
+		],
+		activeNavKey: "dashboard",
+		onNavigate: noop,
+		breadcrumbs: [
+			{ label: "Authenticated app" },
+			{ label: "Dashboard", current: true },
+		],
+		topbarMeta: h(
+			"div",
+			{ className: "space-y-3" },
+			h(
+				"div",
+				{ className: "space-y-1" },
+				h("p", { className: "font-semibold text-ink" }, "Taylor Operator"),
+				h("p", null, "taylor@roasradar.dev"),
+			),
+			h(
+				"div",
+				{
+					"aria-label": "Current timestamp",
+					className:
+						"space-y-1 border-t border-line/60 pt-3 text-caption text-ink-muted",
+				},
+				h(
+					"p",
+					{ className: "font-semibold uppercase tracking-[0.14em] text-teal" },
+					"Current time",
+				),
+				h("p", null, "Apr 20, 12:15 PM PDT"),
+				h("p", null, "UTC Apr 20, 7:15 PM"),
+			),
+		),
+		headerActions: h("button", { type: "button" }, "Logout"),
+		children: h("div", null, "Shell content"),
+		...overrides,
+	};
 }
 
 export function createReportingDashboardProps(
-  overrides: Partial<import('../dashboard/src/components/ReportingDashboard').default extends (props: infer P) => unknown ? P : never> = {}
+	overrides: Record<string, unknown> = {},
 ) {
   const base = {
     filters: {
@@ -329,22 +395,46 @@ export function createReportingDashboardProps(
         {
           source: 'google',
           medium: 'cpc',
-          campaign: 'Spring Search',
+          campaign: 'spring-search',
           content: 'hero',
           visits: 4800,
           orders: 122,
           revenue: 18320,
-          conversionRate: 0.0254
+          conversionRate: 0.0254,
+          campaignDisplayName: 'Spring Search',
+          campaignEntityId: 'cmp_google_spring_search',
+          campaignPlatform: 'google_ads',
+          campaignNameResolutionStatus: 'resolved',
+          campaignLabel: {
+            displayName: 'Spring Search',
+            entityId: 'cmp_google_spring_search',
+            platform: 'google_ads',
+            resolutionStatus: 'resolved',
+            lastSeenAt: '2026-04-20T07:00:00.000Z',
+            updatedAt: '2026-04-20T07:30:00.000Z'
+          }
         },
         {
           source: 'meta',
           medium: 'paid_social',
-          campaign: 'Prospecting Carousel',
+          campaign: 'prospecting-carousel',
           content: 'video',
           visits: 3600,
           orders: 84,
           revenue: 12960,
-          conversionRate: 0.0233
+          conversionRate: 0.0233,
+          campaignDisplayName: 'Prospecting Carousel',
+          campaignEntityId: 'cmp_meta_prospecting_carousel',
+          campaignPlatform: 'meta_ads',
+          campaignNameResolutionStatus: 'fallback_name',
+          campaignLabel: {
+            displayName: 'Prospecting Carousel',
+            entityId: 'cmp_meta_prospecting_carousel',
+            platform: 'meta_ads',
+            resolutionStatus: 'fallback_name',
+            lastSeenAt: '2026-04-20T08:00:00.000Z',
+            updatedAt: '2026-04-20T08:30:00.000Z'
+          }
         }
       ],
       loading: false,
@@ -429,8 +519,38 @@ export function createReportingDashboardProps(
           channel: 'google / cpc',
           subtotal: 7320,
           campaigns: [
-            { campaign: 'Spring Search', spend: 5220 },
-            { campaign: 'Brand Search', spend: 2100 }
+            {
+              campaign: 'spring-search',
+              spend: 5220,
+              campaignDisplayName: 'Spring Search',
+              campaignEntityId: 'cmp_google_spring_search',
+              campaignPlatform: 'google_ads',
+              campaignNameResolutionStatus: 'resolved',
+              campaignLabel: {
+                displayName: 'Spring Search',
+                entityId: 'cmp_google_spring_search',
+                platform: 'google_ads',
+                resolutionStatus: 'resolved',
+                lastSeenAt: '2026-04-20T07:00:00.000Z',
+                updatedAt: '2026-04-20T07:30:00.000Z'
+              }
+            },
+            {
+              campaign: 'brand-search',
+              spend: 2100,
+              campaignDisplayName: 'Brand Search',
+              campaignEntityId: 'cmp_google_brand_search',
+              campaignPlatform: 'google_ads',
+              campaignNameResolutionStatus: 'resolved',
+              campaignLabel: {
+                displayName: 'Brand Search',
+                entityId: 'cmp_google_brand_search',
+                platform: 'google_ads',
+                resolutionStatus: 'resolved',
+                lastSeenAt: '2026-04-20T07:15:00.000Z',
+                updatedAt: '2026-04-20T07:35:00.000Z'
+              }
+            }
           ]
         },
         {
@@ -439,8 +559,38 @@ export function createReportingDashboardProps(
           channel: 'meta / paid_social',
           subtotal: 4056,
           campaigns: [
-            { campaign: 'Prospecting Carousel', spend: 2556 },
-            { campaign: 'Retargeting Video', spend: 1500 }
+            {
+              campaign: 'prospecting-carousel',
+              spend: 2556,
+              campaignDisplayName: 'Prospecting Carousel',
+              campaignEntityId: 'cmp_meta_prospecting_carousel',
+              campaignPlatform: 'meta_ads',
+              campaignNameResolutionStatus: 'fallback_name',
+              campaignLabel: {
+                displayName: 'Prospecting Carousel',
+                entityId: 'cmp_meta_prospecting_carousel',
+                platform: 'meta_ads',
+                resolutionStatus: 'fallback_name',
+                lastSeenAt: '2026-04-20T08:00:00.000Z',
+                updatedAt: '2026-04-20T08:30:00.000Z'
+              }
+            },
+            {
+              campaign: 'retargeting-video',
+              spend: 1500,
+              campaignDisplayName: 'Retargeting Video',
+              campaignEntityId: 'cmp_meta_retargeting_video',
+              campaignPlatform: 'meta_ads',
+              campaignNameResolutionStatus: 'resolved',
+              campaignLabel: {
+                displayName: 'Retargeting Video',
+                entityId: 'cmp_meta_retargeting_video',
+                platform: 'meta_ads',
+                resolutionStatus: 'resolved',
+                lastSeenAt: '2026-04-20T08:20:00.000Z',
+                updatedAt: '2026-04-20T08:35:00.000Z'
+              }
+            }
           ]
         }
       ],
@@ -450,14 +600,14 @@ export function createReportingDashboardProps(
     onOpenOrderDetails: noop
   };
 
-  return {
-    ...base,
-    ...overrides
-  };
+	return {
+		...base,
+		...overrides,
+	};
 }
 
 export function createOrderDetailsProps(
-  overrides: Partial<import('../dashboard/src/components/OrderDetailsView').default extends (props: infer P) => unknown ? P : never> = {}
+	overrides: Record<string, unknown> = {},
 ) {
   const base = {
     selectedOrderId: '1105',
@@ -597,202 +747,208 @@ export function createOrderDetailsProps(
     } satisfies AsyncSection<import('../dashboard/src/lib/api').OrderDetailsResponse>
   };
 
-  return {
-    ...base,
-    ...overrides
-  };
+	return {
+		...base,
+		...overrides,
+	};
 }
 
 export function createSettingsAdminProps(
-  overrides: Partial<import('../dashboard/src/components/SettingsAdminView').default extends (props: infer P) => unknown ? P : never> = {}
+	overrides: Record<string, unknown> = {},
 ) {
-  const base = {
-    isAdmin: true,
-    reportingTimezone: 'America/Los_Angeles',
-    defaultReportingTimezone: 'America/Los_Angeles',
-    reportingTimezoneOptions: ['America/Los_Angeles', 'UTC'],
-    filters: { startDate: '2026-04-01', endDate: '2026-04-20' },
-    appSettings: {
-      data: {
-        reportingTimezone: 'America/Los_Angeles',
-        updatedAt: '2026-04-20T18:45:00.000Z'
-      },
-      loading: false,
-      error: null
-    } satisfies AsyncSection<import('../dashboard/src/lib/api').AppSettings>,
-    settingsForm: { reportingTimezone: 'America/Los_Angeles' },
-    setSettingsForm: noop,
-    usersSection: {
-      data: [
-        {
-          id: 1,
-          email: 'taylor@roasradar.dev',
-          displayName: 'Taylor Operator',
-          isAdmin: true,
-          status: 'active',
-          lastLoginAt: '2026-04-20T19:15:00.000Z',
-          createdAt: '2026-04-01T12:00:00.000Z'
-        }
-      ],
-      loading: false,
-      error: null
-    } satisfies AsyncSection<import('../dashboard/src/lib/api').AuthUser[]>,
-    newUserForm: {
-      email: 'new.user@example.com',
-      password: 'super-secret-password',
-      displayName: 'New User',
-      isAdmin: false
-    },
-    setNewUserForm: noop,
-    shopifyConnection: {
-      data: {
-        connected: true,
-        shopDomain: 'demo-shop.myshopify.com',
-        status: 'active',
-        installedAt: '2026-04-01T13:00:00.000Z',
-        webhookBaseUrl: 'https://api.roasradar.dev',
-        reconnectUrl: null,
-        shop: {
-          name: 'Demo Shop',
-          email: 'owner@demo-shop.com',
-          currency: 'USD'
-        }
-      },
-      loading: false,
-      error: null
-    } satisfies AsyncSection<import('../dashboard/src/lib/api').ShopifyConnectionResponse>,
-    shopifyBackfillRange: { startDate: '2026-04-01', endDate: '2026-04-20' },
-    setShopifyBackfillRange: noop,
-    shopifyOrderAttributionBackfillOptions: {
-      dryRun: true,
-      limit: '500',
-      webOrdersOnly: true,
-      skipShopifyWriteback: false
-    },
-    orderAttributionBackfillJob: {
-      data: null,
-      loading: false,
-      error: null
-    } satisfies AsyncSection<import('../dashboard/src/lib/api').OrderAttributionBackfillJobResponse>,
-    metaConnection: {
-      data: {
-        config: {
-          source: 'database',
-          appId: 'meta-app-id',
-          appBaseUrl: 'https://app.roasradar.dev',
-          appScopes: ['ads_read'],
-          adAccountId: 'act_123',
-          appSecretConfigured: true,
-          missingFields: []
-        },
-        connection: {
-          id: 2,
-          ad_account_id: 'act_123',
-          granted_scopes: ['ads_read'],
-          token_expires_at: null,
-          last_refreshed_at: '2026-04-20T12:00:00.000Z',
-          last_sync_started_at: '2026-04-20T15:00:00.000Z',
-          last_sync_completed_at: '2026-04-20T15:04:00.000Z',
-          last_sync_status: 'success',
-          last_sync_error: null,
-          status: 'connected',
-          account_name: 'North America Prospecting',
-          account_currency: 'USD'
-        }
-      },
-      loading: false,
-      error: null
-    } satisfies AsyncSection<{
-      config: import('../dashboard/src/lib/api').MetaAdsConfigSummary;
-      connection: import('../dashboard/src/lib/api').MetaAdsConnection | null;
-    }>,
-    metaConfigForm: {
-      appId: 'meta-app-id',
-      appSecret: '',
-      appBaseUrl: 'https://app.roasradar.dev',
-      appScopes: 'ads_read',
-      adAccountId: 'act_123'
-    },
-    setMetaConfigForm: noop,
-    googleConnection: {
-      data: {
-        config: {
-          source: 'database',
-          developerTokenConfigured: true,
-          appBaseUrl: 'https://app.roasradar.dev',
-          appScopes: ['https://www.googleapis.com/auth/adwords'],
-          clientId: 'client-id',
-          clientSecretConfigured: true,
-          missingFields: []
-        },
-        connection: {
-          id: 3,
-          customer_id: '123-456-7890',
-          login_customer_id: '111-222-3333',
-          token_scopes: ['https://www.googleapis.com/auth/adwords'],
-          last_refreshed_at: '2026-04-20T12:00:00.000Z',
-          last_sync_started_at: '2026-04-20T16:00:00.000Z',
-          last_sync_completed_at: '2026-04-20T16:06:00.000Z',
-          last_sync_status: 'success',
-          last_sync_error: null,
-          status: 'connected',
-          customer_descriptive_name: 'Demo Google Ads',
-          currency_code: 'USD'
-        },
-        reconciliation: {
-          checked_range_start: '2026-04-01',
-          checked_range_end: '2026-04-20',
-          missing_dates: [],
-          enqueued_jobs: 0,
-          status: 'up_to_date',
-          checked_at: '2026-04-20T16:07:00.000Z'
-        }
-      },
-      loading: false,
-      error: null
-    } satisfies AsyncSection<import('../dashboard/src/lib/api').GoogleAdsStatusResponse>,
-    googleConfigForm: {
-      developerToken: 'developer-token',
-      clientId: 'client-id',
-      clientSecret: 'client-secret',
-      appBaseUrl: 'https://app.roasradar.dev',
-      appScopes: 'https://www.googleapis.com/auth/adwords'
-    },
-    setGoogleConfigForm: noop,
-    googleForm: {
-      customerId: '123-456-7890',
-      loginCustomerId: '111-222-3333',
-      developerToken: 'developer-token',
-      clientId: 'client-id',
-      clientSecret: 'client-secret',
-      refreshToken: 'refresh-token'
-    },
-    setGoogleForm: noop,
-    actionFeedback: {
-      context: null,
-      loading: null,
-      error: null,
-      message: 'Saved Meta Ads configuration.'
-    },
-    onSettingsSave: noop,
-    onCreateUser: noop,
-    onShopifyBackfill: noop,
-    onMetaConfigSave: noop,
-    onGoogleConfigSave: noop,
-    onGoogleConnect: noop,
-    onShopifyTest: noop,
-    onShopifyWebhookSync: noop,
-    onShopifyAttributionRecovery: noop,
-    onShopifyOrderAttributionBackfill: noop,
-    onOrderAttributionBackfillRefresh: noop,
-    onMetaConnect: noop,
-    onMetaSync: noop,
-    onGoogleSync: noop,
-    onGoogleReconcile: noop
-  };
+	const base = {
+		isAdmin: true,
+		reportingTimezone: "America/Los_Angeles",
+		defaultReportingTimezone: "America/Los_Angeles",
+		reportingTimezoneOptions: ["America/Los_Angeles", "UTC"],
+		filters: { startDate: "2026-04-01", endDate: "2026-04-20" },
+		appSettings: {
+			data: {
+				reportingTimezone: "America/Los_Angeles",
+				updatedAt: "2026-04-20T18:45:00.000Z",
+			},
+			loading: false,
+			error: null,
+		} satisfies AsyncSection<import("../dashboard/src/lib/api").AppSettings>,
+		settingsForm: { reportingTimezone: "America/Los_Angeles" },
+		setSettingsForm: noop,
+		usersSection: {
+			data: [
+				{
+					id: 1,
+					email: "taylor@roasradar.dev",
+					displayName: "Taylor Operator",
+					isAdmin: true,
+					status: "active",
+					lastLoginAt: "2026-04-20T19:15:00.000Z",
+					createdAt: "2026-04-01T12:00:00.000Z",
+				},
+			],
+			loading: false,
+			error: null,
+		} satisfies AsyncSection<import("../dashboard/src/lib/api").AuthUser[]>,
+		newUserForm: {
+			email: "new.user@example.com",
+			password: "super-secret-password",
+			displayName: "New User",
+			isAdmin: false,
+		},
+		setNewUserForm: noop,
+		shopifyConnection: {
+			data: {
+				connected: true,
+				shopDomain: "demo-shop.myshopify.com",
+				status: "active",
+				installedAt: "2026-04-01T13:00:00.000Z",
+				webhookBaseUrl: "https://api.roasradar.dev",
+				reconnectUrl: null,
+				shop: {
+					name: "Demo Shop",
+					email: "owner@demo-shop.com",
+					currency: "USD",
+				},
+			},
+			loading: false,
+			error: null,
+		} satisfies AsyncSection<
+			import("../dashboard/src/lib/api").ShopifyConnectionResponse
+		>,
+		shopifyBackfillRange: { startDate: "2026-04-01", endDate: "2026-04-20" },
+		setShopifyBackfillRange: noop,
+		shopifyOrderAttributionBackfillOptions: {
+			dryRun: true,
+			limit: "500",
+			webOrdersOnly: true,
+			skipShopifyWriteback: false,
+		},
+		orderAttributionBackfillJob: {
+			data: null,
+			loading: false,
+			error: null,
+		} satisfies AsyncSection<
+			import("../dashboard/src/lib/api").OrderAttributionBackfillJobResponse
+		>,
+		metaConnection: {
+			data: {
+				config: {
+					source: "database",
+					appId: "meta-app-id",
+					appBaseUrl: "https://app.roasradar.dev",
+					appScopes: ["ads_read"],
+					adAccountId: "act_123",
+					appSecretConfigured: true,
+					missingFields: [],
+				},
+				connection: {
+					id: 2,
+					ad_account_id: "act_123",
+					granted_scopes: ["ads_read"],
+					token_expires_at: null,
+					last_refreshed_at: "2026-04-20T12:00:00.000Z",
+					last_sync_started_at: "2026-04-20T15:00:00.000Z",
+					last_sync_completed_at: "2026-04-20T15:04:00.000Z",
+					last_sync_status: "success",
+					last_sync_error: null,
+					status: "connected",
+					account_name: "North America Prospecting",
+					account_currency: "USD",
+				},
+			},
+			loading: false,
+			error: null,
+		} satisfies AsyncSection<{
+			config: import("../dashboard/src/lib/api").MetaAdsConfigSummary;
+			connection: import("../dashboard/src/lib/api").MetaAdsConnection | null;
+		}>,
+		metaConfigForm: {
+			appId: "meta-app-id",
+			appSecret: "",
+			appBaseUrl: "https://app.roasradar.dev",
+			appScopes: "ads_read",
+			adAccountId: "act_123",
+		},
+		setMetaConfigForm: noop,
+		googleConnection: {
+			data: {
+				config: {
+					source: "database",
+					developerTokenConfigured: true,
+					appBaseUrl: "https://app.roasradar.dev",
+					appScopes: ["https://www.googleapis.com/auth/adwords"],
+					clientId: "client-id",
+					clientSecretConfigured: true,
+					missingFields: [],
+				},
+				connection: {
+					id: 3,
+					customer_id: "123-456-7890",
+					login_customer_id: "111-222-3333",
+					token_scopes: ["https://www.googleapis.com/auth/adwords"],
+					last_refreshed_at: "2026-04-20T12:00:00.000Z",
+					last_sync_started_at: "2026-04-20T16:00:00.000Z",
+					last_sync_completed_at: "2026-04-20T16:06:00.000Z",
+					last_sync_status: "success",
+					last_sync_error: null,
+					status: "connected",
+					customer_descriptive_name: "Demo Google Ads",
+					currency_code: "USD",
+				},
+				reconciliation: {
+					checked_range_start: "2026-04-01",
+					checked_range_end: "2026-04-20",
+					missing_dates: [],
+					enqueued_jobs: 0,
+					status: "up_to_date",
+					checked_at: "2026-04-20T16:07:00.000Z",
+				},
+			},
+			loading: false,
+			error: null,
+		} satisfies AsyncSection<
+			import("../dashboard/src/lib/api").GoogleAdsStatusResponse
+		>,
+		googleConfigForm: {
+			developerToken: "developer-token",
+			clientId: "client-id",
+			clientSecret: "client-secret",
+			appBaseUrl: "https://app.roasradar.dev",
+			appScopes: "https://www.googleapis.com/auth/adwords",
+		},
+		setGoogleConfigForm: noop,
+		googleForm: {
+			customerId: "123-456-7890",
+			loginCustomerId: "111-222-3333",
+			developerToken: "developer-token",
+			clientId: "client-id",
+			clientSecret: "client-secret",
+			refreshToken: "refresh-token",
+		},
+		setGoogleForm: noop,
+		actionFeedback: {
+			context: null,
+			loading: null,
+			error: null,
+			message: "Saved Meta Ads configuration.",
+		},
+		onSettingsSave: noop,
+		onCreateUser: noop,
+		onShopifyBackfill: noop,
+		onMetaConfigSave: noop,
+		onGoogleConfigSave: noop,
+		onGoogleConnect: noop,
+		onShopifyTest: noop,
+		onShopifyWebhookSync: noop,
+		onShopifyAttributionRecovery: noop,
+		onShopifyOrderAttributionBackfill: noop,
+		onOrderAttributionBackfillRefresh: noop,
+		onMetaConnect: noop,
+		onMetaSync: noop,
+		onGoogleSync: noop,
+		onGoogleReconcile: noop,
+	};
 
-  return {
-    ...base,
-    ...overrides
-  };
+	return {
+		...base,
+		...overrides,
+	};
 }

@@ -1,423 +1,479 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID } from "node:crypto";
 
-import { query, withTransaction } from '../../db/pool.js';
-import { logError, logInfo } from '../../observability/index.js';
-import { ingestIdentityEdges } from './index.js';
+import { query, withTransaction } from "../../db/pool.js";
+import { logError, logInfo } from "../../observability/index.js";
+import { ingestIdentityEdges } from "./index.js";
 
 const IDENTITY_BACKFILL_SOURCES = [
-  'tracking_sessions',
-  'tracking_events',
-  'shopify_customers',
-  'shopify_orders'
+	"tracking_sessions",
+	"tracking_events",
+	"shopify_customers",
+	"shopify_orders",
 ] as const;
 
 const DEFAULT_IDENTITY_GRAPH_BACKFILL_BATCH_SIZE = 250;
 
 type IdentityGraphBackfillSource = (typeof IDENTITY_BACKFILL_SOURCES)[number];
-type IdentityGraphBackfillOutcome = 'linked' | 'skipped' | 'conflict';
-type IdentityGraphBackfillRunStatus = 'processing' | 'completed' | 'failed';
+type IdentityGraphBackfillOutcome = "linked" | "skipped" | "conflict";
+type IdentityGraphBackfillRunStatus = "processing" | "completed" | "failed";
 
 type OutcomeCount = {
-  linked: number;
-  skipped: number;
-  conflict: number;
-  deduplicated: number;
+	linked: number;
+	skipped: number;
+	conflict: number;
+	deduplicated: number;
 };
 
 type SourceCheckpoint = {
-  lastTimestamp: string | null;
-  lastCursor: string | null;
-  completed: boolean;
+	lastTimestamp: string | null;
+	lastCursor: string | null;
+	completed: boolean;
 };
 
 type SourceReconciliation = {
-  expected: number;
-  processed: number;
-  remaining: number;
-  matches: boolean;
+	expected: number;
+	processed: number;
+	remaining: number;
+	matches: boolean;
 };
 
 type BackfillMetrics = {
-  expectedCounts: Record<IdentityGraphBackfillSource, number>;
-  processedCounts: Record<IdentityGraphBackfillSource, number>;
-  outcomeCounts: Record<IdentityGraphBackfillSource, OutcomeCount>;
-  ingestionMetrics: {
-    processedNodes: number;
-    attachedNodes: number;
-    rehomedNodes: number;
-    quarantinedNodes: number;
-  };
+	expectedCounts: Record<IdentityGraphBackfillSource, number>;
+	processedCounts: Record<IdentityGraphBackfillSource, number>;
+	outcomeCounts: Record<IdentityGraphBackfillSource, OutcomeCount>;
+	ingestionMetrics: {
+		processedNodes: number;
+		attachedNodes: number;
+		rehomedNodes: number;
+		quarantinedNodes: number;
+	};
 };
 
 type BackfillReconciliation = {
-  matches: boolean;
-  sources: Record<IdentityGraphBackfillSource, SourceReconciliation>;
+	matches: boolean;
+	sources: Record<IdentityGraphBackfillSource, SourceReconciliation>;
 };
 
 type BackfillScope = {
-  startAt: string | null;
-  endAt: string | null;
-  batchSize: number;
-  sources: IdentityGraphBackfillSource[];
+	startAt: string | null;
+	endAt: string | null;
+	batchSize: number;
+	sources: IdentityGraphBackfillSource[];
 };
 
 type IdentityGraphBackfillReport = {
-  runId: string;
-  status: IdentityGraphBackfillRunStatus;
-  requestedBy: string;
-  workerId: string;
-  scope: BackfillScope;
-  checkpoints: Record<IdentityGraphBackfillSource, SourceCheckpoint>;
-  metrics: BackfillMetrics;
-  reconciliation: BackfillReconciliation;
-  startedAt: string;
-  completedAt: string | null;
+	runId: string;
+	status: IdentityGraphBackfillRunStatus;
+	requestedBy: string;
+	workerId: string;
+	scope: BackfillScope;
+	checkpoints: Record<IdentityGraphBackfillSource, SourceCheckpoint>;
+	metrics: BackfillMetrics;
+	reconciliation: BackfillReconciliation;
+	startedAt: string;
+	completedAt: string | null;
 };
 
 type IdentityGraphBackfillOptions = {
-  requestedBy: string;
-  workerId: string;
-  runId?: string | null;
-  startAt?: Date | string | null;
-  endAt?: Date | string | null;
-  batchSize?: number;
-  sources?: IdentityGraphBackfillSource[];
-  maxBatches?: number;
+	requestedBy: string;
+	workerId: string;
+	runId?: string | null;
+	startAt?: Date | string | null;
+	endAt?: Date | string | null;
+	batchSize?: number;
+	sources?: IdentityGraphBackfillSource[];
+	maxBatches?: number;
 };
 
 type IdentityGraphBackfillRunRow = {
-  id: string;
-  status: IdentityGraphBackfillRunStatus;
-  requested_by: string;
-  worker_id: string | null;
-  options: unknown;
-  checkpoints: unknown;
-  metrics: unknown;
-  reconciliation: unknown;
-  report: unknown;
-  error_code: string | null;
-  error_message: string | null;
-  started_at: Date;
-  completed_at: Date | null;
+	id: string;
+	status: IdentityGraphBackfillRunStatus;
+	requested_by: string;
+	worker_id: string | null;
+	options: unknown;
+	checkpoints: unknown;
+	metrics: unknown;
+	reconciliation: unknown;
+	report: unknown;
+	error_code: string | null;
+	error_message: string | null;
+	started_at: Date;
+	completed_at: Date | null;
 };
 
 type TrackingSessionBackfillRow = {
-  session_id: string;
-  source_timestamp: Date;
+	session_id: string;
+	source_timestamp: Date;
 };
 
 type TrackingEventBackfillRow = {
-  event_id: string;
-  session_id: string;
-  checkout_token: string | null;
-  cart_token: string | null;
-  source_timestamp: Date;
+	event_id: string;
+	session_id: string;
+	checkout_token: string | null;
+	cart_token: string | null;
+	source_timestamp: Date;
 };
 
 type ShopifyCustomerBackfillRow = {
-  row_id: string;
-  shopify_customer_id: string | null;
-  email_hash: string | null;
-  phone_hash: string | null;
-  source_timestamp: Date;
+	row_id: string;
+	shopify_customer_id: string | null;
+	email_hash: string | null;
+	phone_hash: string | null;
+	source_timestamp: Date;
 };
 
 type ShopifyOrderBackfillRow = {
-  row_id: string;
-  shopify_order_id: string;
-  landing_session_id: string | null;
-  checkout_token: string | null;
-  cart_token: string | null;
-  shopify_customer_id: string | null;
-  email_hash: string | null;
-  phone_hash: string | null;
-  source_timestamp: Date;
+	row_id: string;
+	shopify_order_id: string;
+	landing_session_id: string | null;
+	checkout_token: string | null;
+	cart_token: string | null;
+	shopify_customer_id: string | null;
+	email_hash: string | null;
+	phone_hash: string | null;
+	source_timestamp: Date;
 };
 
 type SourceRow =
-  | ({ source: 'tracking_sessions'; cursorKey: string } & TrackingSessionBackfillRow)
-  | ({ source: 'tracking_events'; cursorKey: string } & TrackingEventBackfillRow)
-  | ({ source: 'shopify_customers'; cursorKey: string } & ShopifyCustomerBackfillRow)
-  | ({ source: 'shopify_orders'; cursorKey: string } & ShopifyOrderBackfillRow);
+	| ({
+			source: "tracking_sessions";
+			cursorKey: string;
+	  } & TrackingSessionBackfillRow)
+	| ({
+			source: "tracking_events";
+			cursorKey: string;
+	  } & TrackingEventBackfillRow)
+	| ({
+			source: "shopify_customers";
+			cursorKey: string;
+	  } & ShopifyCustomerBackfillRow)
+	| ({ source: "shopify_orders"; cursorKey: string } & ShopifyOrderBackfillRow);
 
 function buildEmptyOutcomeCount(): OutcomeCount {
-  return {
-    linked: 0,
-    skipped: 0,
-    conflict: 0,
-    deduplicated: 0
-  };
+	return {
+		linked: 0,
+		skipped: 0,
+		conflict: 0,
+		deduplicated: 0,
+	};
 }
 
 function buildEmptyMetrics(): BackfillMetrics {
-  return {
-    expectedCounts: {
-      tracking_sessions: 0,
-      tracking_events: 0,
-      shopify_customers: 0,
-      shopify_orders: 0
-    },
-    processedCounts: {
-      tracking_sessions: 0,
-      tracking_events: 0,
-      shopify_customers: 0,
-      shopify_orders: 0
-    },
-    outcomeCounts: {
-      tracking_sessions: buildEmptyOutcomeCount(),
-      tracking_events: buildEmptyOutcomeCount(),
-      shopify_customers: buildEmptyOutcomeCount(),
-      shopify_orders: buildEmptyOutcomeCount()
-    },
-    ingestionMetrics: {
-      processedNodes: 0,
-      attachedNodes: 0,
-      rehomedNodes: 0,
-      quarantinedNodes: 0
-    }
-  };
+	return {
+		expectedCounts: {
+			tracking_sessions: 0,
+			tracking_events: 0,
+			shopify_customers: 0,
+			shopify_orders: 0,
+		},
+		processedCounts: {
+			tracking_sessions: 0,
+			tracking_events: 0,
+			shopify_customers: 0,
+			shopify_orders: 0,
+		},
+		outcomeCounts: {
+			tracking_sessions: buildEmptyOutcomeCount(),
+			tracking_events: buildEmptyOutcomeCount(),
+			shopify_customers: buildEmptyOutcomeCount(),
+			shopify_orders: buildEmptyOutcomeCount(),
+		},
+		ingestionMetrics: {
+			processedNodes: 0,
+			attachedNodes: 0,
+			rehomedNodes: 0,
+			quarantinedNodes: 0,
+		},
+	};
 }
 
-function buildEmptyCheckpoints(): Record<IdentityGraphBackfillSource, SourceCheckpoint> {
-  return {
-    tracking_sessions: {
-      lastTimestamp: null,
-      lastCursor: null,
-      completed: false
-    },
-    tracking_events: {
-      lastTimestamp: null,
-      lastCursor: null,
-      completed: false
-    },
-    shopify_customers: {
-      lastTimestamp: null,
-      lastCursor: null,
-      completed: false
-    },
-    shopify_orders: {
-      lastTimestamp: null,
-      lastCursor: null,
-      completed: false
-    }
-  };
+function buildEmptyCheckpoints(): Record<
+	IdentityGraphBackfillSource,
+	SourceCheckpoint
+> {
+	return {
+		tracking_sessions: {
+			lastTimestamp: null,
+			lastCursor: null,
+			completed: false,
+		},
+		tracking_events: {
+			lastTimestamp: null,
+			lastCursor: null,
+			completed: false,
+		},
+		shopify_customers: {
+			lastTimestamp: null,
+			lastCursor: null,
+			completed: false,
+		},
+		shopify_orders: {
+			lastTimestamp: null,
+			lastCursor: null,
+			completed: false,
+		},
+	};
 }
 
-function normalizeNullableString(value: string | null | undefined): string | null {
-  const normalized = value?.trim();
-  return normalized ? normalized : null;
+function normalizeNullableString(
+	value: string | null | undefined,
+): string | null {
+	const normalized = value?.trim();
+	return normalized ? normalized : null;
 }
 
-function normalizeDateInput(value: Date | string | null | undefined, fieldName: string): string | null {
-  if (value == null) {
-    return null;
-  }
+function normalizeDateInput(
+	value: Date | string | null | undefined,
+	fieldName: string,
+): string | null {
+	if (value == null) {
+		return null;
+	}
 
-  const normalized = value instanceof Date ? value : new Date(value);
+	const normalized = value instanceof Date ? value : new Date(value);
 
-  if (Number.isNaN(normalized.getTime())) {
-    throw new Error(`Invalid ${fieldName} value`);
-  }
+	if (Number.isNaN(normalized.getTime())) {
+		throw new Error(`Invalid ${fieldName} value`);
+	}
 
-  return normalized.toISOString();
+	return normalized.toISOString();
 }
 
-function normalizeSourceList(sources?: IdentityGraphBackfillSource[]): IdentityGraphBackfillSource[] {
-  if (!sources || sources.length === 0) {
-    return [...IDENTITY_BACKFILL_SOURCES];
-  }
+function normalizeSourceList(
+	sources?: IdentityGraphBackfillSource[],
+): IdentityGraphBackfillSource[] {
+	if (!sources || sources.length === 0) {
+		return [...IDENTITY_BACKFILL_SOURCES];
+	}
 
-  const requestedSources = [...new Set(sources)];
+	const requestedSources = [...new Set(sources)];
 
-  for (const source of requestedSources) {
-    if (!IDENTITY_BACKFILL_SOURCES.includes(source)) {
-      throw new Error(`Unsupported identity graph backfill source: ${source}`);
-    }
-  }
+	for (const source of requestedSources) {
+		if (!IDENTITY_BACKFILL_SOURCES.includes(source)) {
+			throw new Error(`Unsupported identity graph backfill source: ${source}`);
+		}
+	}
 
-  return IDENTITY_BACKFILL_SOURCES.filter((source) => requestedSources.includes(source));
+	return IDENTITY_BACKFILL_SOURCES.filter((source) =>
+		requestedSources.includes(source),
+	);
 }
 
 function normalizeBatchSize(batchSize?: number): number {
-  const normalized = Math.floor(batchSize ?? DEFAULT_IDENTITY_GRAPH_BACKFILL_BATCH_SIZE);
+	const normalized = Math.floor(
+		batchSize ?? DEFAULT_IDENTITY_GRAPH_BACKFILL_BATCH_SIZE,
+	);
 
-  if (!Number.isFinite(normalized) || normalized <= 0) {
-    throw new Error('Identity graph backfill batch size must be a positive integer');
-  }
+	if (!Number.isFinite(normalized) || normalized <= 0) {
+		throw new Error(
+			"Identity graph backfill batch size must be a positive integer",
+		);
+	}
 
-  return normalized;
+	return normalized;
 }
 
-function normalizeBackfillScope(options: IdentityGraphBackfillOptions): BackfillScope {
-  const startAt = normalizeDateInput(options.startAt, 'startAt');
-  const endAt = normalizeDateInput(options.endAt, 'endAt');
+function normalizeBackfillScope(
+	options: IdentityGraphBackfillOptions,
+): BackfillScope {
+	const startAt = normalizeDateInput(options.startAt, "startAt");
+	const endAt = normalizeDateInput(options.endAt, "endAt");
 
-  if (startAt && endAt && startAt > endAt) {
-    throw new Error('Identity graph backfill startAt must be before or equal to endAt');
-  }
+	if (startAt && endAt && startAt > endAt) {
+		throw new Error(
+			"Identity graph backfill startAt must be before or equal to endAt",
+		);
+	}
 
-  return {
-    startAt,
-    endAt,
-    batchSize: normalizeBatchSize(options.batchSize),
-    sources: normalizeSourceList(options.sources)
-  };
+	return {
+		startAt,
+		endAt,
+		batchSize: normalizeBatchSize(options.batchSize),
+		sources: normalizeSourceList(options.sources),
+	};
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
+	return typeof value === "object" && value !== null;
 }
 
 function parseOutcomeCount(value: unknown): OutcomeCount {
-  const record = isRecord(value) ? value : {};
+	const record = isRecord(value) ? value : {};
 
-  return {
-    linked: Number(record.linked ?? 0),
-    skipped: Number(record.skipped ?? 0),
-    conflict: Number(record.conflict ?? 0),
-    deduplicated: Number(record.deduplicated ?? 0)
-  };
+	return {
+		linked: Number(record.linked ?? 0),
+		skipped: Number(record.skipped ?? 0),
+		conflict: Number(record.conflict ?? 0),
+		deduplicated: Number(record.deduplicated ?? 0),
+	};
 }
 
-function parseCheckpoints(value: unknown): Record<IdentityGraphBackfillSource, SourceCheckpoint> {
-  const defaults = buildEmptyCheckpoints();
-  const record = isRecord(value) ? value : {};
+function parseCheckpoints(
+	value: unknown,
+): Record<IdentityGraphBackfillSource, SourceCheckpoint> {
+	const defaults = buildEmptyCheckpoints();
+	const record = isRecord(value) ? value : {};
 
-  for (const source of IDENTITY_BACKFILL_SOURCES) {
-    const sourceValue = isRecord(record[source]) ? record[source] : {};
-    defaults[source] = {
-      lastTimestamp: typeof sourceValue.lastTimestamp === 'string' ? sourceValue.lastTimestamp : null,
-      lastCursor: typeof sourceValue.lastCursor === 'string' ? sourceValue.lastCursor : null,
-      completed: sourceValue.completed === true
-    };
-  }
+	for (const source of IDENTITY_BACKFILL_SOURCES) {
+		const sourceValue = isRecord(record[source]) ? record[source] : {};
+		defaults[source] = {
+			lastTimestamp:
+				typeof sourceValue.lastTimestamp === "string"
+					? sourceValue.lastTimestamp
+					: null,
+			lastCursor:
+				typeof sourceValue.lastCursor === "string"
+					? sourceValue.lastCursor
+					: null,
+			completed: sourceValue.completed === true,
+		};
+	}
 
-  return defaults;
+	return defaults;
 }
 
 function parseMetrics(value: unknown): BackfillMetrics {
-  const defaults = buildEmptyMetrics();
-  const record = isRecord(value) ? value : {};
-  const expectedCounts = isRecord(record.expectedCounts) ? record.expectedCounts : {};
-  const processedCounts = isRecord(record.processedCounts) ? record.processedCounts : {};
-  const outcomeCounts = isRecord(record.outcomeCounts) ? record.outcomeCounts : {};
-  const ingestionMetrics = isRecord(record.ingestionMetrics) ? record.ingestionMetrics : {};
+	const defaults = buildEmptyMetrics();
+	const record = isRecord(value) ? value : {};
+	const expectedCounts = isRecord(record.expectedCounts)
+		? record.expectedCounts
+		: {};
+	const processedCounts = isRecord(record.processedCounts)
+		? record.processedCounts
+		: {};
+	const outcomeCounts = isRecord(record.outcomeCounts)
+		? record.outcomeCounts
+		: {};
+	const ingestionMetrics = isRecord(record.ingestionMetrics)
+		? record.ingestionMetrics
+		: {};
 
-  for (const source of IDENTITY_BACKFILL_SOURCES) {
-    defaults.expectedCounts[source] = Number(expectedCounts[source] ?? 0);
-    defaults.processedCounts[source] = Number(processedCounts[source] ?? 0);
-    defaults.outcomeCounts[source] = parseOutcomeCount(outcomeCounts[source]);
-  }
+	for (const source of IDENTITY_BACKFILL_SOURCES) {
+		defaults.expectedCounts[source] = Number(expectedCounts[source] ?? 0);
+		defaults.processedCounts[source] = Number(processedCounts[source] ?? 0);
+		defaults.outcomeCounts[source] = parseOutcomeCount(outcomeCounts[source]);
+	}
 
-  defaults.ingestionMetrics = {
-    processedNodes: Number(ingestionMetrics.processedNodes ?? 0),
-    attachedNodes: Number(ingestionMetrics.attachedNodes ?? 0),
-    rehomedNodes: Number(ingestionMetrics.rehomedNodes ?? 0),
-    quarantinedNodes: Number(ingestionMetrics.quarantinedNodes ?? 0)
-  };
+	defaults.ingestionMetrics = {
+		processedNodes: Number(ingestionMetrics.processedNodes ?? 0),
+		attachedNodes: Number(ingestionMetrics.attachedNodes ?? 0),
+		rehomedNodes: Number(ingestionMetrics.rehomedNodes ?? 0),
+		quarantinedNodes: Number(ingestionMetrics.quarantinedNodes ?? 0),
+	};
 
-  return defaults;
+	return defaults;
 }
 
 function buildReconciliation(metrics: BackfillMetrics): BackfillReconciliation {
-  const sources = {} as Record<IdentityGraphBackfillSource, SourceReconciliation>;
-  let matches = true;
+	const sources = {} as Record<
+		IdentityGraphBackfillSource,
+		SourceReconciliation
+	>;
+	let matches = true;
 
-  for (const source of IDENTITY_BACKFILL_SOURCES) {
-    const expected = metrics.expectedCounts[source];
-    const processed = metrics.processedCounts[source];
-    const remaining = Math.max(0, expected - processed);
-    const sourceMatches = expected === processed;
-    matches &&= sourceMatches;
+	for (const source of IDENTITY_BACKFILL_SOURCES) {
+		const expected = metrics.expectedCounts[source];
+		const processed = metrics.processedCounts[source];
+		const remaining = Math.max(0, expected - processed);
+		const sourceMatches = expected === processed;
+		matches &&= sourceMatches;
 
-    sources[source] = {
-      expected,
-      processed,
-      remaining,
-      matches: sourceMatches
-    };
-  }
+		sources[source] = {
+			expected,
+			processed,
+			remaining,
+			matches: sourceMatches,
+		};
+	}
 
-  return {
-    matches,
-    sources
-  };
+	return {
+		matches,
+		sources,
+	};
 }
 
 function buildReportFromState(input: {
-  runId: string;
-  status: IdentityGraphBackfillRunStatus;
-  requestedBy: string;
-  workerId: string;
-  scope: BackfillScope;
-  checkpoints: Record<IdentityGraphBackfillSource, SourceCheckpoint>;
-  metrics: BackfillMetrics;
-  startedAt: string;
-  completedAt: string | null;
+	runId: string;
+	status: IdentityGraphBackfillRunStatus;
+	requestedBy: string;
+	workerId: string;
+	scope: BackfillScope;
+	checkpoints: Record<IdentityGraphBackfillSource, SourceCheckpoint>;
+	metrics: BackfillMetrics;
+	startedAt: string;
+	completedAt: string | null;
 }): IdentityGraphBackfillReport {
-  return {
-    runId: input.runId,
-    status: input.status,
-    requestedBy: input.requestedBy,
-    workerId: input.workerId,
-    scope: input.scope,
-    checkpoints: input.checkpoints,
-    metrics: input.metrics,
-    reconciliation: buildReconciliation(input.metrics),
-    startedAt: input.startedAt,
-    completedAt: input.completedAt
-  };
+	return {
+		runId: input.runId,
+		status: input.status,
+		requestedBy: input.requestedBy,
+		workerId: input.workerId,
+		scope: input.scope,
+		checkpoints: input.checkpoints,
+		metrics: input.metrics,
+		reconciliation: buildReconciliation(input.metrics),
+		startedAt: input.startedAt,
+		completedAt: input.completedAt,
+	};
 }
 
 function mapRunRow(row: IdentityGraphBackfillRunRow): {
-  runId: string;
-  status: IdentityGraphBackfillRunStatus;
-  requestedBy: string;
-  workerId: string;
-  scope: BackfillScope;
-  checkpoints: Record<IdentityGraphBackfillSource, SourceCheckpoint>;
-  metrics: BackfillMetrics;
-  report: IdentityGraphBackfillReport | null;
-  startedAt: string;
-  completedAt: string | null;
+	runId: string;
+	status: IdentityGraphBackfillRunStatus;
+	requestedBy: string;
+	workerId: string;
+	scope: BackfillScope;
+	checkpoints: Record<IdentityGraphBackfillSource, SourceCheckpoint>;
+	metrics: BackfillMetrics;
+	report: IdentityGraphBackfillReport | null;
+	startedAt: string;
+	completedAt: string | null;
 } {
-  const optionsRecord = isRecord(row.options) ? row.options : {};
-  const scope = normalizeBackfillScope({
-    requestedBy: row.requested_by,
-    workerId: row.worker_id ?? 'identity-graph-backfill',
-    startAt: typeof optionsRecord.startAt === 'string' ? optionsRecord.startAt : null,
-    endAt: typeof optionsRecord.endAt === 'string' ? optionsRecord.endAt : null,
-    batchSize: Number(optionsRecord.batchSize ?? DEFAULT_IDENTITY_GRAPH_BACKFILL_BATCH_SIZE),
-    sources: Array.isArray(optionsRecord.sources)
-      ? optionsRecord.sources.filter((value): value is IdentityGraphBackfillSource => typeof value === 'string') as IdentityGraphBackfillSource[]
-      : undefined
-  });
-  const checkpoints = parseCheckpoints(row.checkpoints);
-  const metrics = parseMetrics(row.metrics);
+	const optionsRecord = isRecord(row.options) ? row.options : {};
+	const scope = normalizeBackfillScope({
+		requestedBy: row.requested_by,
+		workerId: row.worker_id ?? "identity-graph-backfill",
+		startAt:
+			typeof optionsRecord.startAt === "string" ? optionsRecord.startAt : null,
+		endAt: typeof optionsRecord.endAt === "string" ? optionsRecord.endAt : null,
+		batchSize: Number(
+			optionsRecord.batchSize ?? DEFAULT_IDENTITY_GRAPH_BACKFILL_BATCH_SIZE,
+		),
+		sources: Array.isArray(optionsRecord.sources)
+			? (optionsRecord.sources.filter(
+					(value): value is IdentityGraphBackfillSource =>
+						typeof value === "string",
+				) as IdentityGraphBackfillSource[])
+			: undefined,
+	});
+	const checkpoints = parseCheckpoints(row.checkpoints);
+	const metrics = parseMetrics(row.metrics);
 
-  return {
-    runId: row.id,
-    status: row.status,
-    requestedBy: row.requested_by,
-    workerId: row.worker_id ?? 'identity-graph-backfill',
-    scope,
-    checkpoints,
-    metrics,
-    report: isRecord(row.report) ? (row.report as IdentityGraphBackfillReport) : null,
-    startedAt: row.started_at.toISOString(),
-    completedAt: row.completed_at?.toISOString() ?? null
-  };
+	return {
+		runId: row.id,
+		status: row.status,
+		requestedBy: row.requested_by,
+		workerId: row.worker_id ?? "identity-graph-backfill",
+		scope,
+		checkpoints,
+		metrics,
+		report: isRecord(row.report)
+			? (row.report as IdentityGraphBackfillReport)
+			: null,
+		startedAt: row.started_at.toISOString(),
+		completedAt: row.completed_at?.toISOString() ?? null,
+	};
 }
 
 async function createIdentityGraphBackfillRun(options: {
-  requestedBy: string;
-  workerId: string;
-  scope: BackfillScope;
+	requestedBy: string;
+	workerId: string;
+	scope: BackfillScope;
 }): Promise<string> {
-  const runId = randomUUID();
+	const runId = randomUUID();
 
-  await query(
-    `
+	await query(
+		`
       INSERT INTO identity_graph_backfill_runs (
         id,
         status,
@@ -445,22 +501,24 @@ async function createIdentityGraphBackfillRun(options: {
         now()
       )
     `,
-    [
-      runId,
-      options.requestedBy,
-      options.workerId,
-      JSON.stringify(options.scope),
-      JSON.stringify(buildEmptyCheckpoints()),
-      JSON.stringify(buildEmptyMetrics())
-    ]
-  );
+		[
+			runId,
+			options.requestedBy,
+			options.workerId,
+			JSON.stringify(options.scope),
+			JSON.stringify(buildEmptyCheckpoints()),
+			JSON.stringify(buildEmptyMetrics()),
+		],
+	);
 
-  return runId;
+	return runId;
 }
 
-async function fetchIdentityGraphBackfillRunRow(runId: string): Promise<IdentityGraphBackfillRunRow | null> {
-  const result = await query<IdentityGraphBackfillRunRow>(
-    `
+async function fetchIdentityGraphBackfillRunRow(
+	runId: string,
+): Promise<IdentityGraphBackfillRunRow | null> {
+	const result = await query<IdentityGraphBackfillRunRow>(
+		`
       SELECT
         id::text AS id,
         status,
@@ -479,44 +537,46 @@ async function fetchIdentityGraphBackfillRunRow(runId: string): Promise<Identity
       WHERE id = $1::uuid
       LIMIT 1
     `,
-    [runId]
-  );
+		[runId],
+	);
 
-  return result.rows[0] ?? null;
+	return result.rows[0] ?? null;
 }
 
-export async function getIdentityGraphBackfillRun(runId: string): Promise<IdentityGraphBackfillReport | null> {
-  const row = await fetchIdentityGraphBackfillRunRow(runId);
+export async function getIdentityGraphBackfillRun(
+	runId: string,
+): Promise<IdentityGraphBackfillReport | null> {
+	const row = await fetchIdentityGraphBackfillRunRow(runId);
 
-  if (!row) {
-    return null;
-  }
+	if (!row) {
+		return null;
+	}
 
-  const mapped = mapRunRow(row);
-  return (
-    mapped.report ??
-    buildReportFromState({
-      runId: mapped.runId,
-      status: mapped.status,
-      requestedBy: mapped.requestedBy,
-      workerId: mapped.workerId,
-      scope: mapped.scope,
-      checkpoints: mapped.checkpoints,
-      metrics: mapped.metrics,
-      startedAt: mapped.startedAt,
-      completedAt: mapped.completedAt
-    })
-  );
+	const mapped = mapRunRow(row);
+	return (
+		mapped.report ??
+		buildReportFromState({
+			runId: mapped.runId,
+			status: mapped.status,
+			requestedBy: mapped.requestedBy,
+			workerId: mapped.workerId,
+			scope: mapped.scope,
+			checkpoints: mapped.checkpoints,
+			metrics: mapped.metrics,
+			startedAt: mapped.startedAt,
+			completedAt: mapped.completedAt,
+		})
+	);
 }
 
 async function updateIdentityGraphBackfillRunProgress(input: {
-  runId: string;
-  workerId: string;
-  checkpoints: Record<IdentityGraphBackfillSource, SourceCheckpoint>;
-  metrics: BackfillMetrics;
+	runId: string;
+	workerId: string;
+	checkpoints: Record<IdentityGraphBackfillSource, SourceCheckpoint>;
+	metrics: BackfillMetrics;
 }): Promise<void> {
-  await query(
-    `
+	await query(
+		`
       UPDATE identity_graph_backfill_runs
       SET
         status = 'processing',
@@ -528,23 +588,23 @@ async function updateIdentityGraphBackfillRunProgress(input: {
         updated_at = now()
       WHERE id = $1::uuid
     `,
-    [
-      input.runId,
-      input.workerId,
-      JSON.stringify(input.checkpoints),
-      JSON.stringify(input.metrics),
-      JSON.stringify(buildReconciliation(input.metrics))
-    ]
-  );
+		[
+			input.runId,
+			input.workerId,
+			JSON.stringify(input.checkpoints),
+			JSON.stringify(input.metrics),
+			JSON.stringify(buildReconciliation(input.metrics)),
+		],
+	);
 }
 
 async function completeIdentityGraphBackfillRun(input: {
-  runId: string;
-  workerId: string;
-  report: IdentityGraphBackfillReport;
+	runId: string;
+	workerId: string;
+	report: IdentityGraphBackfillReport;
 }): Promise<void> {
-  await query(
-    `
+	await query(
+		`
       UPDATE identity_graph_backfill_runs
       SET
         status = 'completed',
@@ -560,50 +620,56 @@ async function completeIdentityGraphBackfillRun(input: {
         error_message = NULL
       WHERE id = $1::uuid
     `,
-    [
-      input.runId,
-      input.workerId,
-      JSON.stringify(input.report.checkpoints),
-      JSON.stringify(input.report.metrics),
-      JSON.stringify(input.report.reconciliation),
-      JSON.stringify(input.report)
-    ]
-  );
+		[
+			input.runId,
+			input.workerId,
+			JSON.stringify(input.report.checkpoints),
+			JSON.stringify(input.report.metrics),
+			JSON.stringify(input.report.reconciliation),
+			JSON.stringify(input.report),
+		],
+	);
 }
 
 function normalizeErrorCode(error: unknown): string {
-  if (typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string' && error.code.trim()) {
-    return error.code.trim();
-  }
+	if (
+		typeof error === "object" &&
+		error !== null &&
+		"code" in error &&
+		typeof error.code === "string" &&
+		error.code.trim()
+	) {
+		return error.code.trim();
+	}
 
-  if (error instanceof Error && error.name.trim()) {
-    return error.name.trim();
-  }
+	if (error instanceof Error && error.name.trim()) {
+		return error.name.trim();
+	}
 
-  return 'identity_graph_backfill_failed';
+	return "identity_graph_backfill_failed";
 }
 
 function normalizeErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message.trim()) {
-    return error.message.trim();
-  }
+	if (error instanceof Error && error.message.trim()) {
+		return error.message.trim();
+	}
 
-  if (typeof error === 'string' && error.trim()) {
-    return error.trim();
-  }
+	if (typeof error === "string" && error.trim()) {
+		return error.trim();
+	}
 
-  return 'Identity graph backfill failed';
+	return "Identity graph backfill failed";
 }
 
 async function failIdentityGraphBackfillRun(input: {
-  runId: string;
-  workerId: string;
-  checkpoints: Record<IdentityGraphBackfillSource, SourceCheckpoint>;
-  metrics: BackfillMetrics;
-  error: unknown;
+	runId: string;
+	workerId: string;
+	checkpoints: Record<IdentityGraphBackfillSource, SourceCheckpoint>;
+	metrics: BackfillMetrics;
+	error: unknown;
 }): Promise<void> {
-  await query(
-    `
+	await query(
+		`
       UPDATE identity_graph_backfill_runs
       SET
         status = 'failed',
@@ -618,86 +684,92 @@ async function failIdentityGraphBackfillRun(input: {
         error_message = $7
       WHERE id = $1::uuid
     `,
-    [
-      input.runId,
-      input.workerId,
-      JSON.stringify(input.checkpoints),
-      JSON.stringify(input.metrics),
-      JSON.stringify(buildReconciliation(input.metrics)),
-      normalizeErrorCode(input.error),
-      normalizeErrorMessage(input.error)
-    ]
-  );
+		[
+			input.runId,
+			input.workerId,
+			JSON.stringify(input.checkpoints),
+			JSON.stringify(input.metrics),
+			JSON.stringify(buildReconciliation(input.metrics)),
+			normalizeErrorCode(input.error),
+			normalizeErrorMessage(input.error),
+		],
+	);
 }
 
-async function hydrateExpectedCounts(scope: BackfillScope, metrics: BackfillMetrics): Promise<void> {
-  for (const source of scope.sources) {
-    metrics.expectedCounts[source] = await countSourceRows(source, scope);
-  }
+async function hydrateExpectedCounts(
+	scope: BackfillScope,
+	metrics: BackfillMetrics,
+): Promise<void> {
+	for (const source of scope.sources) {
+		metrics.expectedCounts[source] = await countSourceRows(source, scope);
+	}
 }
 
-async function countSourceRows(source: IdentityGraphBackfillSource, scope: BackfillScope): Promise<number> {
-  switch (source) {
-    case 'tracking_sessions': {
-      const result = await query<{ row_count: string }>(
-        `
+async function countSourceRows(
+	source: IdentityGraphBackfillSource,
+	scope: BackfillScope,
+): Promise<number> {
+	switch (source) {
+		case "tracking_sessions": {
+			const result = await query<{ row_count: string }>(
+				`
           SELECT COUNT(*)::text AS row_count
           FROM tracking_sessions
           WHERE ($1::timestamptz IS NULL OR first_seen_at >= $1::timestamptz)
             AND ($2::timestamptz IS NULL OR first_seen_at <= $2::timestamptz)
         `,
-        [scope.startAt, scope.endAt]
-      );
-      return Number(result.rows[0]?.row_count ?? '0');
-    }
-    case 'tracking_events': {
-      const result = await query<{ row_count: string }>(
-        `
+				[scope.startAt, scope.endAt],
+			);
+			return Number(result.rows[0]?.row_count ?? "0");
+		}
+		case "tracking_events": {
+			const result = await query<{ row_count: string }>(
+				`
           SELECT COUNT(*)::text AS row_count
           FROM tracking_events
           WHERE ($1::timestamptz IS NULL OR occurred_at >= $1::timestamptz)
             AND ($2::timestamptz IS NULL OR occurred_at <= $2::timestamptz)
         `,
-        [scope.startAt, scope.endAt]
-      );
-      return Number(result.rows[0]?.row_count ?? '0');
-    }
-    case 'shopify_customers': {
-      const result = await query<{ row_count: string }>(
-        `
+				[scope.startAt, scope.endAt],
+			);
+			return Number(result.rows[0]?.row_count ?? "0");
+		}
+		case "shopify_customers": {
+			const result = await query<{ row_count: string }>(
+				`
           SELECT COUNT(*)::text AS row_count
           FROM shopify_customers
           WHERE ($1::timestamptz IS NULL OR created_at >= $1::timestamptz)
             AND ($2::timestamptz IS NULL OR created_at <= $2::timestamptz)
         `,
-        [scope.startAt, scope.endAt]
-      );
-      return Number(result.rows[0]?.row_count ?? '0');
-    }
-    case 'shopify_orders': {
-      const result = await query<{ row_count: string }>(
-        `
+				[scope.startAt, scope.endAt],
+			);
+			return Number(result.rows[0]?.row_count ?? "0");
+		}
+		case "shopify_orders": {
+			const result = await query<{ row_count: string }>(
+				`
           SELECT COUNT(*)::text AS row_count
           FROM shopify_orders
           WHERE ($1::timestamptz IS NULL OR COALESCE(processed_at, created_at_shopify, ingested_at) >= $1::timestamptz)
             AND ($2::timestamptz IS NULL OR COALESCE(processed_at, created_at_shopify, ingested_at) <= $2::timestamptz)
         `,
-        [scope.startAt, scope.endAt]
-      );
-      return Number(result.rows[0]?.row_count ?? '0');
-    }
-  }
+				[scope.startAt, scope.endAt],
+			);
+			return Number(result.rows[0]?.row_count ?? "0");
+		}
+	}
 }
 
 async function fetchSourceBatch(
-  source: IdentityGraphBackfillSource,
-  scope: BackfillScope,
-  checkpoint: SourceCheckpoint
+	source: IdentityGraphBackfillSource,
+	scope: BackfillScope,
+	checkpoint: SourceCheckpoint,
 ): Promise<SourceRow[]> {
-  switch (source) {
-    case 'tracking_sessions': {
-      const result = await query<TrackingSessionBackfillRow>(
-        `
+	switch (source) {
+		case "tracking_sessions": {
+			const result = await query<TrackingSessionBackfillRow>(
+				`
           SELECT
             id::text AS session_id,
             first_seen_at AS source_timestamp
@@ -712,18 +784,24 @@ async function fetchSourceBatch(
           ORDER BY first_seen_at ASC, id ASC
           LIMIT $5
         `,
-        [scope.startAt, scope.endAt, checkpoint.lastTimestamp, checkpoint.lastCursor, scope.batchSize]
-      );
+				[
+					scope.startAt,
+					scope.endAt,
+					checkpoint.lastTimestamp,
+					checkpoint.lastCursor,
+					scope.batchSize,
+				],
+			);
 
-      return result.rows.map((row) => ({
-        source,
-        cursorKey: row.session_id,
-        ...row
-      }));
-    }
-    case 'tracking_events': {
-      const result = await query<TrackingEventBackfillRow>(
-        `
+			return result.rows.map((row) => ({
+				source,
+				cursorKey: row.session_id,
+				...row,
+			}));
+		}
+		case "tracking_events": {
+			const result = await query<TrackingEventBackfillRow>(
+				`
           SELECT
             id::text AS event_id,
             session_id::text AS session_id,
@@ -741,18 +819,24 @@ async function fetchSourceBatch(
           ORDER BY occurred_at ASC, id ASC
           LIMIT $5
         `,
-        [scope.startAt, scope.endAt, checkpoint.lastTimestamp, checkpoint.lastCursor, scope.batchSize]
-      );
+				[
+					scope.startAt,
+					scope.endAt,
+					checkpoint.lastTimestamp,
+					checkpoint.lastCursor,
+					scope.batchSize,
+				],
+			);
 
-      return result.rows.map((row) => ({
-        source,
-        cursorKey: row.event_id,
-        ...row
-      }));
-    }
-    case 'shopify_customers': {
-      const result = await query<ShopifyCustomerBackfillRow>(
-        `
+			return result.rows.map((row) => ({
+				source,
+				cursorKey: row.event_id,
+				...row,
+			}));
+		}
+		case "shopify_customers": {
+			const result = await query<ShopifyCustomerBackfillRow>(
+				`
           SELECT
             id::text AS row_id,
             shopify_customer_id,
@@ -770,18 +854,24 @@ async function fetchSourceBatch(
           ORDER BY created_at ASC, id ASC
           LIMIT $5
         `,
-        [scope.startAt, scope.endAt, checkpoint.lastTimestamp, checkpoint.lastCursor ?? '0', scope.batchSize]
-      );
+				[
+					scope.startAt,
+					scope.endAt,
+					checkpoint.lastTimestamp,
+					checkpoint.lastCursor ?? "0",
+					scope.batchSize,
+				],
+			);
 
-      return result.rows.map((row) => ({
-        source,
-        cursorKey: row.row_id,
-        ...row
-      }));
-    }
-    case 'shopify_orders': {
-      const result = await query<ShopifyOrderBackfillRow>(
-        `
+			return result.rows.map((row) => ({
+				source,
+				cursorKey: row.row_id,
+				...row,
+			}));
+		}
+		case "shopify_orders": {
+			const result = await query<ShopifyOrderBackfillRow>(
+				`
           SELECT
             id::text AS row_id,
             shopify_order_id,
@@ -803,277 +893,290 @@ async function fetchSourceBatch(
           ORDER BY COALESCE(processed_at, created_at_shopify, ingested_at) ASC, id ASC
           LIMIT $5
         `,
-        [scope.startAt, scope.endAt, checkpoint.lastTimestamp, checkpoint.lastCursor ?? '0', scope.batchSize]
-      );
+				[
+					scope.startAt,
+					scope.endAt,
+					checkpoint.lastTimestamp,
+					checkpoint.lastCursor ?? "0",
+					scope.batchSize,
+				],
+			);
 
-      return result.rows.map((row) => ({
-        source,
-        cursorKey: row.row_id,
-        ...row
-      }));
-    }
-  }
+			return result.rows.map((row) => ({
+				source,
+				cursorKey: row.row_id,
+				...row,
+			}));
+		}
+	}
 }
 
 async function processSourceRow(row: SourceRow): Promise<{
-  outcome: IdentityGraphBackfillOutcome;
-  deduplicated: boolean;
-  metrics: {
-    processedNodes: number;
-    attachedNodes: number;
-    rehomedNodes: number;
-    quarantinedNodes: number;
-  };
+	outcome: IdentityGraphBackfillOutcome;
+	deduplicated: boolean;
+	metrics: {
+		processedNodes: number;
+		attachedNodes: number;
+		rehomedNodes: number;
+		quarantinedNodes: number;
+	};
 }> {
-  return withTransaction(async (client) => {
-    switch (row.source) {
-      case 'tracking_sessions': {
-        const result = await ingestIdentityEdges(client, {
-          sourceTimestamp: row.source_timestamp,
-          evidenceSource: 'backfill',
-          sourceTable: 'tracking_sessions',
-          sourceRecordId: row.session_id,
-          idempotencyKey: `identity_graph_backfill:tracking_sessions:${row.session_id}`,
-          sessionId: row.session_id
-        });
+	return withTransaction(async (client) => {
+		switch (row.source) {
+			case "tracking_sessions": {
+				const result = await ingestIdentityEdges(client, {
+					sourceTimestamp: row.source_timestamp,
+					evidenceSource: "backfill",
+					sourceTable: "tracking_sessions",
+					sourceRecordId: row.session_id,
+					idempotencyKey: `identity_graph_backfill:tracking_sessions:${row.session_id}`,
+					sessionId: row.session_id,
+				});
 
-        return {
-          outcome: result.outcome,
-          deduplicated: result.deduplicated,
-          metrics: result.metrics
-        };
-      }
-      case 'tracking_events': {
-        const result = await ingestIdentityEdges(client, {
-          sourceTimestamp: row.source_timestamp,
-          evidenceSource: 'backfill',
-          sourceTable: 'tracking_events',
-          sourceRecordId: row.event_id,
-          idempotencyKey: `identity_graph_backfill:tracking_events:${row.event_id}`,
-          sessionId: row.session_id,
-          checkoutToken: row.checkout_token,
-          cartToken: row.cart_token
-        });
+				return {
+					outcome: result.outcome,
+					deduplicated: result.deduplicated,
+					metrics: result.metrics,
+				};
+			}
+			case "tracking_events": {
+				const result = await ingestIdentityEdges(client, {
+					sourceTimestamp: row.source_timestamp,
+					evidenceSource: "backfill",
+					sourceTable: "tracking_events",
+					sourceRecordId: row.event_id,
+					idempotencyKey: `identity_graph_backfill:tracking_events:${row.event_id}`,
+					sessionId: row.session_id,
+					checkoutToken: row.checkout_token,
+					cartToken: row.cart_token,
+				});
 
-        return {
-          outcome: result.outcome,
-          deduplicated: result.deduplicated,
-          metrics: result.metrics
-        };
-      }
-      case 'shopify_customers': {
-        const result = await ingestIdentityEdges(client, {
-          sourceTimestamp: row.source_timestamp,
-          evidenceSource: 'backfill',
-          sourceTable: 'shopify_customers',
-          sourceRecordId: row.shopify_customer_id ?? row.row_id,
-          idempotencyKey: `identity_graph_backfill:shopify_customers:${row.row_id}`,
-          shopifyCustomerId: row.shopify_customer_id,
-          hashedEmail: normalizeNullableString(row.email_hash),
-          phoneHash: normalizeNullableString(row.phone_hash)
-        });
+				return {
+					outcome: result.outcome,
+					deduplicated: result.deduplicated,
+					metrics: result.metrics,
+				};
+			}
+			case "shopify_customers": {
+				const result = await ingestIdentityEdges(client, {
+					sourceTimestamp: row.source_timestamp,
+					evidenceSource: "backfill",
+					sourceTable: "shopify_customers",
+					sourceRecordId: row.shopify_customer_id ?? row.row_id,
+					idempotencyKey: `identity_graph_backfill:shopify_customers:${row.row_id}`,
+					shopifyCustomerId: row.shopify_customer_id,
+					hashedEmail: normalizeNullableString(row.email_hash),
+					phoneHash: normalizeNullableString(row.phone_hash),
+				});
 
-        return {
-          outcome: result.outcome,
-          deduplicated: result.deduplicated,
-          metrics: result.metrics
-        };
-      }
-      case 'shopify_orders': {
-        const result = await ingestIdentityEdges(client, {
-          sourceTimestamp: row.source_timestamp,
-          evidenceSource: 'backfill',
-          sourceTable: 'shopify_orders',
-          sourceRecordId: row.shopify_order_id,
-          idempotencyKey: `identity_graph_backfill:shopify_orders:${row.row_id}`,
-          sessionId: row.landing_session_id,
-          checkoutToken: row.checkout_token,
-          cartToken: row.cart_token,
-          shopifyCustomerId: row.shopify_customer_id,
-          hashedEmail: normalizeNullableString(row.email_hash),
-          phoneHash: normalizeNullableString(row.phone_hash)
-        });
+				return {
+					outcome: result.outcome,
+					deduplicated: result.deduplicated,
+					metrics: result.metrics,
+				};
+			}
+			case "shopify_orders": {
+				const result = await ingestIdentityEdges(client, {
+					sourceTimestamp: row.source_timestamp,
+					evidenceSource: "backfill",
+					sourceTable: "shopify_orders",
+					sourceRecordId: row.shopify_order_id,
+					idempotencyKey: `identity_graph_backfill:shopify_orders:${row.row_id}`,
+					sessionId: row.landing_session_id,
+					checkoutToken: row.checkout_token,
+					cartToken: row.cart_token,
+					shopifyCustomerId: row.shopify_customer_id,
+					hashedEmail: normalizeNullableString(row.email_hash),
+					phoneHash: normalizeNullableString(row.phone_hash),
+				});
 
-        return {
-          outcome: result.outcome,
-          deduplicated: result.deduplicated,
-          metrics: result.metrics
-        };
-      }
-    }
-  });
+				return {
+					outcome: result.outcome,
+					deduplicated: result.deduplicated,
+					metrics: result.metrics,
+				};
+			}
+		}
+	});
 }
 
 function accumulateRowMetrics(
-  metrics: BackfillMetrics,
-  source: IdentityGraphBackfillSource,
-  rowResult: {
-    outcome: IdentityGraphBackfillOutcome;
-    deduplicated: boolean;
-    metrics: {
-      processedNodes: number;
-      attachedNodes: number;
-      rehomedNodes: number;
-      quarantinedNodes: number;
-    };
-  }
+	metrics: BackfillMetrics,
+	source: IdentityGraphBackfillSource,
+	rowResult: {
+		outcome: IdentityGraphBackfillOutcome;
+		deduplicated: boolean;
+		metrics: {
+			processedNodes: number;
+			attachedNodes: number;
+			rehomedNodes: number;
+			quarantinedNodes: number;
+		};
+	},
 ): void {
-  metrics.processedCounts[source] += 1;
-  metrics.outcomeCounts[source][rowResult.outcome] += 1;
+	metrics.processedCounts[source] += 1;
+	metrics.outcomeCounts[source][rowResult.outcome] += 1;
 
-  if (rowResult.deduplicated) {
-    metrics.outcomeCounts[source].deduplicated += 1;
-  }
+	if (rowResult.deduplicated) {
+		metrics.outcomeCounts[source].deduplicated += 1;
+	}
 
-  metrics.ingestionMetrics.processedNodes += rowResult.metrics.processedNodes;
-  metrics.ingestionMetrics.attachedNodes += rowResult.metrics.attachedNodes;
-  metrics.ingestionMetrics.rehomedNodes += rowResult.metrics.rehomedNodes;
-  metrics.ingestionMetrics.quarantinedNodes += rowResult.metrics.quarantinedNodes;
+	metrics.ingestionMetrics.processedNodes += rowResult.metrics.processedNodes;
+	metrics.ingestionMetrics.attachedNodes += rowResult.metrics.attachedNodes;
+	metrics.ingestionMetrics.rehomedNodes += rowResult.metrics.rehomedNodes;
+	metrics.ingestionMetrics.quarantinedNodes +=
+		rowResult.metrics.quarantinedNodes;
 }
 
 export async function backfillHistoricalIdentityGraph(
-  options: IdentityGraphBackfillOptions
+	options: IdentityGraphBackfillOptions,
 ): Promise<IdentityGraphBackfillReport> {
-  const requestedBy = normalizeNullableString(options.requestedBy);
-  const workerId = normalizeNullableString(options.workerId) ?? 'identity-graph-backfill';
+	const requestedBy = normalizeNullableString(options.requestedBy);
+	const workerId =
+		normalizeNullableString(options.workerId) ?? "identity-graph-backfill";
 
-  if (!requestedBy) {
-    throw new Error('Identity graph backfill requestedBy is required');
-  }
+	if (!requestedBy) {
+		throw new Error("Identity graph backfill requestedBy is required");
+	}
 
-  const scope = normalizeBackfillScope(options);
-  const runId = normalizeNullableString(options.runId) ?? (await createIdentityGraphBackfillRun({
-    requestedBy,
-    workerId,
-    scope
-  }));
-  const maxBatches = options.maxBatches == null ? null : Math.max(1, Math.floor(options.maxBatches));
+	const scope = normalizeBackfillScope(options);
+	const runId =
+		normalizeNullableString(options.runId) ??
+		(await createIdentityGraphBackfillRun({
+			requestedBy,
+			workerId,
+			scope,
+		}));
+	const maxBatches =
+		options.maxBatches == null
+			? null
+			: Math.max(1, Math.floor(options.maxBatches));
 
-  const runRow = await fetchIdentityGraphBackfillRunRow(runId);
+	const runRow = await fetchIdentityGraphBackfillRunRow(runId);
 
-  if (!runRow) {
-    throw new Error(`Identity graph backfill run ${runId} was not found`);
-  }
+	if (!runRow) {
+		throw new Error(`Identity graph backfill run ${runId} was not found`);
+	}
 
-  const runState = mapRunRow(runRow);
+	const runState = mapRunRow(runRow);
 
-  if (runState.status === 'completed' && runState.report) {
-    return runState.report;
-  }
+	if (runState.status === "completed" && runState.report) {
+		return runState.report;
+	}
 
-  const checkpoints = runState.checkpoints;
-  const metrics = runState.metrics;
-  let processedBatches = 0;
+	const checkpoints = runState.checkpoints;
+	const metrics = runState.metrics;
+	let processedBatches = 0;
 
-  if (Object.values(metrics.expectedCounts).every((value) => value === 0)) {
-    await hydrateExpectedCounts(runState.scope, metrics);
-    await updateIdentityGraphBackfillRunProgress({
-      runId,
-      workerId,
-      checkpoints,
-      metrics
-    });
-  }
+	if (Object.values(metrics.expectedCounts).every((value) => value === 0)) {
+		await hydrateExpectedCounts(runState.scope, metrics);
+		await updateIdentityGraphBackfillRunProgress({
+			runId,
+			workerId,
+			checkpoints,
+			metrics,
+		});
+	}
 
-  logInfo('identity_graph_backfill_started', {
-    runId,
-    requestedBy,
-    workerId,
-    scope: runState.scope
-  });
+	logInfo("identity_graph_backfill_started", {
+		runId,
+		requestedBy,
+		workerId,
+		scope: runState.scope,
+	});
 
-  try {
-    for (const source of runState.scope.sources) {
-      const checkpoint = checkpoints[source];
+	try {
+		for (const source of runState.scope.sources) {
+			const checkpoint = checkpoints[source];
 
-      while (!checkpoint.completed) {
-        const rows = await fetchSourceBatch(source, runState.scope, checkpoint);
+			while (!checkpoint.completed) {
+				const rows = await fetchSourceBatch(source, runState.scope, checkpoint);
 
-        if (rows.length === 0) {
-          checkpoint.completed = true;
-          await updateIdentityGraphBackfillRunProgress({
-            runId,
-            workerId,
-            checkpoints,
-            metrics
-          });
-          break;
-        }
+				if (rows.length === 0) {
+					checkpoint.completed = true;
+					await updateIdentityGraphBackfillRunProgress({
+						runId,
+						workerId,
+						checkpoints,
+						metrics,
+					});
+					break;
+				}
 
-        for (const row of rows) {
-          const rowResult = await processSourceRow(row);
-          accumulateRowMetrics(metrics, source, rowResult);
-        }
+				for (const row of rows) {
+					const rowResult = await processSourceRow(row);
+					accumulateRowMetrics(metrics, source, rowResult);
+				}
 
-        const lastRow = rows[rows.length - 1];
-        checkpoint.lastTimestamp = lastRow.source_timestamp.toISOString();
-        checkpoint.lastCursor = lastRow.cursorKey;
-        processedBatches += 1;
+				const lastRow = rows[rows.length - 1];
+				checkpoint.lastTimestamp = lastRow.source_timestamp.toISOString();
+				checkpoint.lastCursor = lastRow.cursorKey;
+				processedBatches += 1;
 
-        await updateIdentityGraphBackfillRunProgress({
-          runId,
-          workerId,
-          checkpoints,
-          metrics
-        });
+				await updateIdentityGraphBackfillRunProgress({
+					runId,
+					workerId,
+					checkpoints,
+					metrics,
+				});
 
-        if (maxBatches !== null && processedBatches >= maxBatches) {
-          return buildReportFromState({
-            runId,
-            status: 'processing',
-            requestedBy,
-            workerId,
-            scope: runState.scope,
-            checkpoints,
-            metrics,
-            startedAt: runState.startedAt,
-            completedAt: null
-          });
-        }
-      }
-    }
+				if (maxBatches !== null && processedBatches >= maxBatches) {
+					return buildReportFromState({
+						runId,
+						status: "processing",
+						requestedBy,
+						workerId,
+						scope: runState.scope,
+						checkpoints,
+						metrics,
+						startedAt: runState.startedAt,
+						completedAt: null,
+					});
+				}
+			}
+		}
 
-    const report = buildReportFromState({
-      runId,
-      status: 'completed',
-      requestedBy,
-      workerId,
-      scope: runState.scope,
-      checkpoints,
-      metrics,
-      startedAt: runState.startedAt,
-      completedAt: new Date().toISOString()
-    });
+		const report = buildReportFromState({
+			runId,
+			status: "completed",
+			requestedBy,
+			workerId,
+			scope: runState.scope,
+			checkpoints,
+			metrics,
+			startedAt: runState.startedAt,
+			completedAt: new Date().toISOString(),
+		});
 
-    await completeIdentityGraphBackfillRun({
-      runId,
-      workerId,
-      report
-    });
+		await completeIdentityGraphBackfillRun({
+			runId,
+			workerId,
+			report,
+		});
 
-    logInfo('identity_graph_backfill_completed', {
-      runId,
-      workerId,
-      reconciliationMatches: report.reconciliation.matches,
-      metrics: report.metrics
-    });
+		logInfo("identity_graph_backfill_completed", {
+			runId,
+			workerId,
+			reconciliationMatches: report.reconciliation.matches,
+			metrics: report.metrics,
+		});
 
-    return report;
-  } catch (error) {
-    await failIdentityGraphBackfillRun({
-      runId,
-      workerId,
-      checkpoints,
-      metrics,
-      error
-    });
+		return report;
+	} catch (error) {
+		await failIdentityGraphBackfillRun({
+			runId,
+			workerId,
+			checkpoints,
+			metrics,
+			error,
+		});
 
-    logError('identity_graph_backfill_failed', error, {
-      runId,
-      workerId,
-      checkpoints,
-      metrics
-    });
-    throw error;
-  }
+		logError("identity_graph_backfill_failed", error, {
+			runId,
+			workerId,
+			checkpoints,
+			metrics,
+		});
+		throw error;
+	}
 }

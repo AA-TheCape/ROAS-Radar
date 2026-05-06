@@ -6,6 +6,7 @@ This document is the exhaustive reader-facing contract for the current implement
 
 - canonical schema fields
 - adjacent operational fields that appear in the tracking pipeline
+- attribution outcome provenance fields used by resolver and downstream readers
 - normalization and validation rules
 - consent behavior
 - database and Shopify storage mappings
@@ -105,6 +106,8 @@ These fields are not part of the shared `AttributionCaptureV1` object, but they 
 | `shopify_cart_token` | `string \| null` | `255` | `tracking_events`, `session_attribution_touch_events`, raw payload snapshots | Shopify cart token observed at capture time. Used for deterministic order/session stitching. |
 | `shopify_checkout_token` | `string \| null` | `255` | `tracking_events`, `session_attribution_touch_events`, raw payload snapshots | Shopify checkout token observed at capture time. Used for deterministic order/session stitching. |
 | `ingestion_source` | text | `64` in `session_attribution_touch_events` | `tracking_events`, `session_attribution_touch_events` | How the event entered the system. Current persisted values include `browser`, `server`, and `request_query`. |
+| `match_source` | text enum | implementation-defined | `attribution_results`, `attribution_order_credits`, `shopify_orders.attribution_snapshot` winner and timeline surfaces | Provenance of the winning or credited attribution path. Supported values currently include `landing_session_id`, `checkout_token`, `cart_token`, `customer_identity`, `shopify_hint_fallback`, `ga4_fallback`, and `unattributed`. |
+| `confidence_label` | text enum | implementation-defined | `attribution_results`, `attribution_order_credits`, reporting or API surfaces that expose match strength | Grouped interpretation of `confidence_score`. Supported values are `high`, `medium`, `low`, and `none`. |
 | `raw_payload` | `jsonb` | n/a | `tracking_events`, `session_attribution_touch_events`, `shopify_orders` snapshots, ad raw spend tables | Storage surface for payload snapshots. For Shopify, Meta Ads, and Google Ads external-source raw tables, exact parsed-payload requirements are governed by `docs/raw-payload-persistence-contract.md`. Derived tables may retain normalized snapshots separately. |
 | `retained_until` | timestamptz | n/a | `session_attribution_identities`, `session_attribution_touch_events`, `order_attribution_links` | Retention cutoff used by cleanup jobs. Not a business attribution field. |
 | `first_captured_at` | timestamptz | n/a | `session_attribution_identities` | Earliest capture timestamp retained for the session snapshot lifecycle. |
@@ -365,6 +368,50 @@ Rules:
 - snapshot JSON should align with canonical schema field names and Shopify attribute keys
 - snapshot readers should tolerate legacy prefixed keys during rollout
 - synthetic or fallback attribution logic should not mutate the shared field semantics
+- attribution winner and timeline entries should persist first-class provenance in `match_source`
+- GA4 fallback snapshot winners must keep `session_id = null`, `match_source = 'ga4_fallback'`, and the GA4 candidate identifiers required by `docs/ga4-fallback-attribution-contract-v1.md`
+
+## Attribution Outcome Provenance
+
+Resolver outputs and downstream readers must distinguish capture-field provenance from attribution-result provenance.
+
+### `match_source`
+
+`match_source` answers where the winning or credited attribution match came from. It must not be overloaded onto `ingestion_source` or inferred solely from `attribution_reason`.
+
+Current supported values:
+
+- `landing_session_id`
+- `checkout_token`
+- `cart_token`
+- `customer_identity`
+- `shopify_hint_fallback`
+- `ga4_fallback`
+- `unattributed`
+
+Rules:
+
+- deterministic outcomes keep a resolved `session_id`
+- Shopify hint and GA4 fallback outcomes can keep `session_id = null`
+- `ga4_fallback` is valid only under the contract in `docs/ga4-fallback-attribution-contract-v1.md`
+- `unattributed` is the terminal provenance when no eligible match path wins
+
+### `confidence_label`
+
+`confidence_label` is the grouped interpretation layer for `confidence_score`.
+
+Current mapping:
+
+- `high`: `1.00`, `0.90`
+- `medium`: `0.60`
+- `low`: `0.55`, `0.40`, `0.35`, `0.25`
+- `none`: `0.00`
+
+Rules:
+
+- GA4 fallback always maps to `confidence_label = 'low'`
+- unattributed always maps to `confidence_label = 'none'`
+- readers should prefer the explicit label when available rather than recomputing custom buckets
 
 ## Shopify Attribute Key Conventions
 
@@ -457,3 +504,4 @@ A new schema version is usually not required when:
 - [Shopify App Setup](shopify-app-setup.md)
 - [Visitor Identity Stitching](visitor-identity-stitching.md)
 - [Analytics Playbook](analytics-playbook.md)
+- [GA4 Fallback Attribution Contract v1](ga4-fallback-attribution-contract-v1.md)

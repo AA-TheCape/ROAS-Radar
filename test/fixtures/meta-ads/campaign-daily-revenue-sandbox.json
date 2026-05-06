@@ -1,0 +1,25 @@
+{
+  "data": [
+    {
+      "campaign_id": "cmp_sandbox_1",
+      "campaign_name": "Sandbox Campaign One",
+      "date_start": "2026-04-29",
+      "date_stop": "2026-04-29",
+      "spend": "5.00",
+      "action_type": "onsite_conversion.messaging_purchase",
+      "actions": [],
+      "action_values": [
+        {
+          "action_type": "onsite_conversion.messaging_purchase",
+          "value": "12.00"
+        }
+      ],
+      "purchase_roas": [
+        {
+          "action_type": "onsite_conversion.messaging_purchase",
+          "value": "2.400000"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+New distribution metric extracting `jsonPayload.resolvedRate` from
+`campaign_metadata_resolution_coverage` logs.
+
+Labels:
+- service
+- resolution_scope
+- platform
+- entity_type
+- source

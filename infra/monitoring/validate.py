@@ -50,10 +50,12 @@ def validate_alert(path: pathlib.Path) -> list[str]:
         if kinds[0] == "conditionMatchedLog":
             has_log_match = True
 
+    rate_limit = ((data.get("alertStrategy") or {}).get("notificationRateLimit") or {}).get("period")
     if has_log_match:
-        rate_limit = ((data.get("alertStrategy") or {}).get("notificationRateLimit") or {}).get("period")
         if not rate_limit:
             issues.append(f"{path.name}: log-based alert policies require alertStrategy.notificationRateLimit.period")
+    elif rate_limit:
+        issues.append(f"{path.name}: only log-based alert policies may define alertStrategy.notificationRateLimit.period")
 
     return issues
 

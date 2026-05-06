@@ -44,3 +44,5 @@
 - [Ingestion Failures](runbooks/ingestion-failures.md): failed ingestion triage and remediation.
 - [API Latency](runbooks/api-latency.md): API latency investigation and recovery.
 - [Cloud Run Pipelines](runbooks/cloud-run-pipelines.md): staged deploy verification, scheduler validation, least-privilege IAM, and rollback steps.
+- Use [Meta Order Value Ingestion](runbooks/meta-order-value-ingestion.md) when Meta attributed-revenue syncs fail, flatline, or emit null-spike anomalies.
+- [Meta Order Value Ingestion](runbooks/meta-order-value-ingestion.md): Meta attributed-revenue sync failure, zero-ingestion, and null-spike triage.

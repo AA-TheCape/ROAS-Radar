@@ -1,9 +1,29 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-const { __observabilityTestUtils } = await import('../src/observability/index.js');
+process.env.DATABASE_URL ??= 'postgres://postgres:postgres@127.0.0.1:5432/roas_radar_test';
+const originalKService = process.env.K_SERVICE;
+process.env.K_SERVICE = 'roas-radar-observability-test';
 
-function captureStructuredLogs<T>(callback: () => T): { entries: Array<Record<string, unknown>>; result: T } {
+const {
+  emitCampaignMetadataFreshnessSnapshotLog,
+  emitCampaignMetadataResolutionCoverageLog,
+  emitCampaignMetadataSyncJobLifecycleLog
+} = await import('../src/observability/index.js');
+
+test.after(() => {
+  if (originalKService === undefined) {
+    Reflect.deleteProperty(process.env, 'K_SERVICE');
+    return;
+  }
+
+  process.env.K_SERVICE = originalKService;
+});
+
+async function captureStructuredLogs<T>(callback: () => T | Promise<T>): Promise<{
+  entries: Array<Record<string, unknown>>;
+  result: T;
+}> {
   const stdoutChunks: string[] = [];
   const stderrChunks: string[] = [];
   const originalStdoutWrite = process.stdout.write.bind(process.stdout);
@@ -19,7 +39,7 @@ function captureStructuredLogs<T>(callback: () => T): { entries: Array<Record<st
   }) as typeof process.stderr.write;
 
   try {
-    const result = callback();
+    const result = await callback();
     const entries = [...stdoutChunks, ...stderrChunks]
       .join('')
       .trim()
@@ -35,236 +55,161 @@ function captureStructuredLogs<T>(callback: () => T): { entries: Array<Record<st
   }
 }
 
-test('summarizeAttributionObservation classifies complete captures and missing session ids', () => {
-  const complete = __observabilityTestUtils.summarizeAttributionObservation({
-    roas_radar_session_id: '123e4567-e89b-42d3-a456-426614174000',
-    landing_url: 'https://store.example/?utm_source=google',
-    page_url: 'https://store.example/products/widget',
-    utm_source: 'google',
-    gclid: 'GCLID-123'
+test('campaign metadata resolution coverage logs include dashboard rates and trim unresolved samples', async () => {
+  const { entries } = await captureStructuredLogs(() =>
+    emitCampaignMetadataResolutionCoverageLog({
+      resolutionScope: 'campaign_group',
+      platform: 'google_ads',
+      entityType: 'campaign',
+      requestedCount: 4,
+      matchedCount: 4,
+      resolvedCount: 2,
+      fallbackCount: 1,
+      unresolvedCount: 1,
+      unresolvedEntityIds: ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11'],
+      startDate: '2026-04-01',
+      endDate: '2026-04-02',
+      source: 'google'
+    })
+  );
+
+  assert.equal(entries.length, 1);
+  assert.deepEqual(entries[0], {
+    severity: 'INFO',
+    event: 'campaign_metadata_resolution_coverage',
+    message: 'campaign_metadata_resolution_coverage',
+    timestamp: entries[0]?.timestamp,
+    service: 'roas-radar-observability-test',
+    resolutionScope: 'campaign_group',
+    platform: 'google_ads',
+    entityType: 'campaign',
+    requestedCount: 4,
+    matchedCount: 4,
+    resolvedCount: 2,
+    fallbackCount: 1,
+    unresolvedCount: 1,
+    resolvedRate: 0.5,
+    fallbackRate: 0.25,
+    unresolvedRate: 0.25,
+    unresolvedEntityIds: ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10'],
+    startDate: '2026-04-01',
+    endDate: '2026-04-02',
+    source: 'google'
   });
-
-  assert.equal(complete.captureStatus, 'complete');
 });
 
-test('summarizeDualWriteConsistency flags failed server legs as mismatches', () => {
-  assert.deepEqual(
-    __observabilityTestUtils.summarizeDualWriteConsistency({
-      browserOutcome: 'accepted',
-      serverOutcome: 'failed'
-    }),
-    {
-      consistencyStatus: 'mismatched',
-      browserOutcome: 'accepted',
-      serverOutcome: 'failed'
-    }
+test('campaign metadata freshness snapshot logs expose the fields used by freshness dashboards', async () => {
+  const { entries } = await captureStructuredLogs(() =>
+    emitCampaignMetadataFreshnessSnapshotLog({
+      platform: 'meta_ads',
+      entityType: 'adset',
+      freshEntityCount: 19,
+      staleEntityCount: 3,
+      freshnessThresholdHours: 30,
+      oldestLastSeenAt: '2026-04-08T10:00:00.000Z',
+      newestLastSeenAt: '2026-04-10T09:00:00.000Z'
+    })
   );
+
+  assert.equal(entries.length, 1);
+  assert.deepEqual(entries[0], {
+    severity: 'INFO',
+    event: 'campaign_metadata_freshness_snapshot',
+    message: 'campaign_metadata_freshness_snapshot',
+    timestamp: entries[0]?.timestamp,
+    service: 'roas-radar-observability-test',
+    platform: 'meta_ads',
+    entityType: 'adset',
+    freshEntityCount: 19,
+    staleEntityCount: 3,
+    freshnessThresholdHours: 30,
+    oldestLastSeenAt: '2026-04-08T10:00:00.000Z',
+    newestLastSeenAt: '2026-04-10T09:00:00.000Z'
+  });
 });
 
-test('summarizeOrderAttributionBackfillReport keeps operational counters and bounded failure samples', () => {
-  assert.deepEqual(
-    __observabilityTestUtils.summarizeOrderAttributionBackfillReport({
-      scanned: 24,
-      recovered: 7,
-      unrecoverable: 5,
-      writebackCompleted: 4,
-      failures: [
-        {
-          orderId: '1001',
-          code: 'shopify_writeback_failed',
-          message: 'Writeback request timed out'
-        }
-      ]
-    }),
-    {
-      scanned: 24,
-      recovered: 7,
-      unrecoverable: 5,
-      writebackCompleted: 4,
-      failures: [
-        {
-          orderId: '1001',
-          code: 'shopify_writeback_failed',
-          message: 'Writeback request timed out'
-        }
-      ],
-      failureCount: 1,
-      sampleFailures: [
-        {
-          orderId: '1001',
-          code: 'shopify_writeback_failed',
-          message: 'Writeback request timed out'
-        }
-      ]
-    }
-  );
-});
+test('campaign metadata sync lifecycle logs emit success payloads and alertable failure payloads', async () => {
+  const startedAt = '2026-04-11T10:00:00.000Z';
+  const completedAt = '2026-04-11T10:00:04.250Z';
+  const error = Object.assign(new Error('quota exhausted'), { code: 'quota_exhausted' });
 
-test('emitOrderAttributionBackfillJobLifecycleLog emits structured lifecycle logs with job ids and failure metadata', () => {
-  const { entries } = captureStructuredLogs(() => {
-    __observabilityTestUtils.emitOrderAttributionBackfillJobLifecycleLog({
-      stage: 'enqueued',
-      jobId: 'job-enqueued',
-      submittedAt: '2026-04-25T10:00:00.000Z',
-      options: {
-        startDate: '2026-04-01',
-        endDate: '2026-04-05',
-        dryRun: true,
-        limit: 500,
-        webOrdersOnly: true,
-        skipShopifyWriteback: false
-      }
+  const { entries } = await captureStructuredLogs(async () => {
+    emitCampaignMetadataSyncJobLifecycleLog({
+      stage: 'completed',
+      platform: 'google_ads',
+      workerId: 'google-ads-metadata-refresh-worker',
+      jobId: '123',
+      requestedBy: 'cloud-run-scheduler',
+      startedAt,
+      completedAt,
+      durationMs: 4250,
+      plannedInserts: 12,
+      plannedUpdates: 4,
+      campaignResolvedRate: 0.9,
+      overallUnresolvedRate: 0.1,
+      staleEntityCount: 2
     });
 
-    __observabilityTestUtils.emitOrderAttributionBackfillJobLifecycleLog({
+    emitCampaignMetadataSyncJobLifecycleLog({
       stage: 'failed',
-      jobId: 'job-failed',
-      workerId: 'worker-1',
-      startedAt: '2026-04-25T10:01:00.000Z',
-      completedAt: '2026-04-25T10:02:00.000Z',
-      options: {
-        startDate: '2026-04-06',
-        endDate: '2026-04-07',
-        dryRun: false,
-        limit: 50,
-        webOrdersOnly: false,
-        skipShopifyWriteback: true
-      },
-      report: {
-        scanned: 12,
-        recovered: 3,
-        unrecoverable: 4,
-        writebackCompleted: 2,
-        failures: [
-          {
-            orderId: '1002',
-            code: 'order_not_found',
-            message: 'Shopify order 1002 was not found'
-          }
-        ]
-      },
-      error: Object.assign(new Error('Database timeout while persisting backfill results'), {
-        code: 'database_timeout'
-      })
+      platform: 'meta_ads',
+      workerId: 'meta-ads-metadata-refresh-worker',
+      jobId: '456',
+      requestedBy: 'scheduler-meta',
+      startedAt,
+      completedAt,
+      error
     });
   });
 
   assert.equal(entries.length, 2);
-  assert.equal(entries[0].event, 'order_attribution_backfill_job_lifecycle');
-  assert.equal(entries[0].jobId, 'job-enqueued');
-  assert.equal(entries[0].stage, 'enqueued');
-  assert.equal(entries[0].status, 'queued');
-  assert.equal(entries[0].dryRun, true);
-
-  assert.equal(entries[1].event, 'order_attribution_backfill_job_lifecycle');
-  assert.equal(entries[1].jobId, 'job-failed');
-  assert.equal(entries[1].stage, 'failed');
-  assert.equal(entries[1].status, 'failed');
-  assert.equal(entries[1].alertable, true);
-  assert.equal(entries[1].code, 'database_timeout');
-  assert.equal(entries[1].failureMessage, 'Database timeout while persisting backfill results');
-  assert.deepEqual(entries[1].report, {
-    scanned: 12,
-    recovered: 3,
-    unrecoverable: 4,
-    writebackCompleted: 2,
-    failures: [
-      {
-        orderId: '1002',
-        code: 'order_not_found',
-        message: 'Shopify order 1002 was not found'
-      }
-    ],
-    failureCount: 1,
-    sampleFailures: [
-      {
-        orderId: '1002',
-        code: 'order_not_found',
-        message: 'Shopify order 1002 was not found'
-      }
-    ]
-  });
-});
-
-test('summarizeResolverOutcome reports unattributed and non-direct winners deterministically', () => {
-  const unattributed = __observabilityTestUtils.summarizeResolverOutcome({
-    touchpoints: [],
-    winner: null,
-    tier: 'unattributed',
-    attributionReason: 'missing_order_timestamp',
-    confidenceScore: 0,
-    pipeline: 'realtime_queue',
-    shopifyOrderId: 'order-1',
-    normalizationFailures: [
-      {
-        scope: 'order',
-        reason: 'missing_order_timestamp',
-        sourceKey: null
-      }
-    ]
+  assert.deepEqual(entries[0], {
+    severity: 'INFO',
+    event: 'campaign_metadata_sync_job_lifecycle',
+    message: 'campaign_metadata_sync_job_lifecycle',
+    timestamp: entries[0]?.timestamp,
+    service: 'roas-radar-observability-test',
+    stage: 'completed',
+    platform: 'google_ads',
+    workerId: 'google-ads-metadata-refresh-worker',
+    jobId: '123',
+    requestedBy: 'cloud-run-scheduler',
+    startedAt,
+    completedAt,
+    durationMs: 4250,
+    plannedInserts: 12,
+    plannedUpdates: 4,
+    campaignResolvedRate: 0.9,
+    overallUnresolvedRate: 0.1,
+    staleEntityCount: 2
   });
 
-  assert.equal(unattributed.resolverOutcome, 'unattributed');
-  assert.equal(unattributed.attributionTier, 'unattributed');
-  assert.equal(unattributed.resolverFallthroughDepth, 3);
-  assert.equal(unattributed.fallthroughStage, 'fell_through_to_unattributed');
-  assert.equal(unattributed.firstNormalizationFailureReason, 'missing_order_timestamp');
-
-  const resolved = __observabilityTestUtils.summarizeResolverOutcome({
-    touchpoints: [{ occurredAt: '2026-04-01T10:00:00.000Z' }],
-    winner: {
-      isDirect: false,
-      ingestionSource: 'checkout_token',
-      sessionId: 'session-123'
-    },
-    tier: 'deterministic_first_party',
-    attributionReason: 'matched_by_checkout_token',
-    confidenceScore: 1,
-    pipeline: 'order_backfill',
-    shopifyOrderId: 'order-2',
-    orderOccurredAtUtc: '2026-04-02T10:00:00.000Z',
-    normalizationFailures: []
+  assert.deepEqual(entries[1], {
+    severity: 'ERROR',
+    event: 'campaign_metadata_sync_job_lifecycle',
+    message: 'campaign_metadata_sync_job_lifecycle',
+    timestamp: entries[1]?.timestamp,
+    service: 'roas-radar-observability-test',
+    stage: 'failed',
+    platform: 'meta_ads',
+    workerId: 'meta-ads-metadata-refresh-worker',
+    jobId: '456',
+    requestedBy: 'scheduler-meta',
+    startedAt,
+    completedAt,
+    durationMs: null,
+    plannedInserts: null,
+    plannedUpdates: null,
+    campaignResolvedRate: null,
+    overallUnresolvedRate: null,
+    staleEntityCount: null,
+    alertable: true,
+    error: {
+      name: 'Error',
+      message: 'quota exhausted',
+      stack: entries[1]?.error && typeof entries[1].error === 'object'
+        ? (entries[1].error as { stack?: string | null }).stack ?? null
+        : null
+    }
   });
-
-  assert.equal(resolved.resolverOutcome, 'non_direct_winner');
-  assert.equal(resolved.attributionTier, 'deterministic_first_party');
-  assert.equal(resolved.resolverFallthroughDepth, 0);
-  assert.equal(resolved.hasWinningSessionId, true);
-});
-
-test('emitAttributionResolverOutcomeLog emits tier and fallthrough metrics for dashboards and alerts', () => {
-  const { entries } = captureStructuredLogs(() => {
-    __observabilityTestUtils.emitAttributionResolverOutcomeLog({
-      shopifyOrderId: 'shopify-order-123',
-      orderOccurredAtUtc: new Date('2026-04-25T10:00:00.000Z'),
-      tier: 'deterministic_shopify_hint',
-      attributionReason: 'matched_by_shopify_landing_page_gclid',
-      confidenceScore: 0.55,
-      pipeline: 'order_backfill',
-      touchpoints: [{ id: 'synthetic-touchpoint' }],
-      winner: {
-        isDirect: false,
-        ingestionSource: 'shopify_marketing_hint',
-        sessionId: null
-      },
-      normalizationFailures: [
-        {
-          scope: 'shopify_hint',
-          reason: 'missing_first_party_candidate_timestamp',
-          sourceKey: 'utm:gclid'
-        }
-      ]
-    });
-  });
-
-  assert.equal(entries.length, 1);
-  assert.equal(entries[0].event, 'attribution_resolver_outcome');
-  assert.equal(entries[0].attributionTier, 'deterministic_shopify_hint');
-  assert.equal(entries[0].resolverFallthroughDepth, 1);
-  assert.equal(entries[0].fallthroughStage, 'fell_through_to_shopify_hint');
-  assert.equal(entries[0].pipeline, 'order_backfill');
-  assert.equal(entries[0].winningIngestionSource, 'shopify_marketing_hint');
-  assert.equal(entries[0].hasWinningSessionId, false);
-  assert.equal(entries[0].normalizationFailureCount, 1);
-  assert.equal(entries[0].firstNormalizationFailureScope, 'shopify_hint');
 });

@@ -3,50 +3,50 @@
 @tailwind utilities;
 
 @layer base {
-  :root {
-    color-scheme: light;
-    font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
-    line-height: 1.5;
-    font-weight: 400;
-    color: #17212b;
-    font-synthesis: none;
-    text-rendering: optimizeLegibility;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-  }
+	:root {
+		color-scheme: light;
+		font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+		line-height: 1.5;
+		font-weight: 400;
+		color: #17212b;
+		font-synthesis: none;
+		text-rendering: optimizeLegibility;
+		-webkit-font-smoothing: antialiased;
+		-moz-osx-font-smoothing: grayscale;
+	}
 
-  * {
-    box-sizing: border-box;
-  }
+	* {
+		box-sizing: border-box;
+	}
 
-  html {
-    min-height: 100%;
-  }
+	html {
+		min-height: 100%;
+	}
 
-  body {
-    @apply m-0 min-w-[320px] bg-shell-glow text-body text-ink;
-    min-width: 320px;
-  }
+	body {
+		@apply m-0 min-w-[320px] bg-shell-glow text-body text-ink;
+		min-width: 320px;
+	}
 
-  button,
-  input,
-  select,
-  textarea {
-    font: inherit;
-  }
+	button,
+	input,
+	select,
+	textarea {
+		font: inherit;
+	}
 
-  button,
-  [role='button'] {
-    @apply focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-brand/25 focus-visible:ring-offset-2 focus-visible:ring-offset-canvas;
-  }
+	button,
+	[role="button"] {
+		@apply focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-brand/25 focus-visible:ring-offset-2 focus-visible:ring-offset-canvas;
+	}
 
-  input,
-  select,
-  textarea {
-    @apply focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-teal/25 focus-visible:ring-offset-2 focus-visible:ring-offset-surface;
-  }
+	input,
+	select,
+	textarea {
+		@apply focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-teal/25 focus-visible:ring-offset-2 focus-visible:ring-offset-surface;
+	}
 
-  #root {
-    min-height: 100vh;
-  }
+	#root {
+		min-height: 100vh;
+	}
 }

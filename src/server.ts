@@ -1,40 +1,41 @@
-import { createServer as createHttpServer, type Server } from 'node:http';
+import { type Server, createServer as createHttpServer } from "node:http";
 
-import { env } from './config/env.js';
-import { pool } from './db/pool.js';
-import { createApp } from './app.js';
+import { createApp } from "./app.js";
+import { env } from "./config/env.js";
+import { pool } from "./db/pool.js";
 
 export function createServer(port = 0): Server {
-  const app = createApp();
-  const server = createHttpServer(app);
-  server.listen(port);
-  return server;
+	const app = createApp();
+	const server = createHttpServer(app);
+	server.listen(port);
+	return server;
 }
 
 export async function closeServer(server: Server): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
+	await new Promise<void>((resolve, reject) => {
+		server.close((error) => {
+			if (error) {
+				reject(error);
+				return;
+			}
 
-      resolve();
-    });
-  });
+			resolve();
+		});
+	});
 }
 
-const isEntrypoint = process.argv[1] && import.meta.url.endsWith(process.argv[1]);
+const isEntrypoint =
+	process.argv[1] && import.meta.url.endsWith(process.argv[1]);
 
 if (isEntrypoint) {
-  const server = createServer(env.PORT);
+	const server = createServer(env.PORT);
 
-  const shutdown = async () => {
-    await closeServer(server).catch(() => undefined);
-    await pool.end().catch(() => undefined);
-    process.exit(0);
-  };
+	const shutdown = async () => {
+		await closeServer(server).catch(() => undefined);
+		await pool.end().catch(() => undefined);
+		process.exit(0);
+	};
 
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+	process.on("SIGINT", shutdown);
+	process.on("SIGTERM", shutdown);
 }
