@@ -266,7 +266,7 @@ These are required only if you are running the Shopify OAuth install flow or val
 - npm
 - PostgreSQL
 
-The backend `package.json` declares `node >=22`. The dashboard is a separate npm project in `dashboard/`.
+The backend `package.json` declares `node >=22`. Root `npm install` also runs the dashboard install so the checkout is build-ready without a second manual dependency step.
 
 ### 1. Install dependencies
 
@@ -274,7 +274,6 @@ From the repository root:
 
 ```bash
 npm install
-npm --prefix dashboard install
 ```
 
 ### 2. Create a local database

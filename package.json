@@ -33,6 +33,7 @@
     "identity:backfill-graph": "tsx src/admin/backfill-identity-graph.ts",
     "identity:backfill-graph:start": "node dist/src/identity-graph-backfill-worker.js",
     "dead-letters:replay": "tsx src/admin/replay-dead-letters.ts",
+    "postinstall": "npm --prefix dashboard install --include=dev",
     "test": "node scripts/run-tests.mjs all",
     "test:all": "node scripts/run-tests.mjs all",
     "test:unit": "node scripts/run-tests.mjs unit",
