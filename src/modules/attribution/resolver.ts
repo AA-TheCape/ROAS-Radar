@@ -1,4 +1,10 @@
 import type { AttributionTouchpoint } from './engine.js';
+import {
+  CLICK_LOOKBACK_WINDOW_DAYS,
+  hasClickId,
+  isDirectTouchpoint as isCanonicalDirectTouchpoint,
+  qualifiesSyntheticHintSignal
+} from './rules.js';
 
 export const DETERMINISTIC_INGESTION_SOURCES = [
   'landing_session_id',
@@ -18,7 +24,7 @@ export type ResolvedAttributionTier =
   | 'ga4_fallback'
   | 'unattributed';
 
-export const ATTRIBUTION_TIER_LOOKBACK_WINDOW_DAYS = 7;
+export const ATTRIBUTION_TIER_LOOKBACK_WINDOW_DAYS = CLICK_LOOKBACK_WINDOW_DAYS;
 
 export type ResolvedAttributionTouchpoint = AttributionTouchpoint & {
   sourceTouchEventId: string | null;
@@ -89,10 +95,6 @@ function ingestionSourcePrecedence(source: ResolvedIngestionSource): number {
   return INGESTION_SOURCE_PRECEDENCE[source];
 }
 
-function hasClickId(touchpoint: Pick<ResolvedAttributionTouchpoint, 'clickIdValue'>): boolean {
-  return Boolean(touchpoint.clickIdValue);
-}
-
 function compareDatesDescending(left: Date, right: Date): number {
   return right.getTime() - left.getTime();
 }
@@ -115,12 +117,7 @@ export function isDirectTouchpoint(
     'source' | 'medium' | 'campaign' | 'content' | 'term' | 'clickIdValue'
   >
 ): boolean {
-  return !touchpoint.source &&
-    !touchpoint.medium &&
-    !touchpoint.campaign &&
-    !touchpoint.content &&
-    !touchpoint.term &&
-    !touchpoint.clickIdValue;
+  return isCanonicalDirectTouchpoint(touchpoint);
 }
 
 function compareDedupPriority(left: ResolvedAttributionTouchpoint, right: ResolvedAttributionTouchpoint): number {
@@ -134,7 +131,7 @@ function compareDedupPriority(left: ResolvedAttributionTouchpoint, right: Resolv
     return occurredAtComparison;
   }
 
-  const clickIdComparison = Number(hasClickId(right)) - Number(hasClickId(left));
+  const clickIdComparison = Number(hasClickId(right.clickIdValue)) - Number(hasClickId(left.clickIdValue));
   if (clickIdComparison !== 0) {
     return clickIdComparison;
   }
@@ -153,7 +150,7 @@ function compareWinnerPriority(left: ResolvedAttributionTouchpoint, right: Resol
     return sourceComparison;
   }
 
-  const clickIdComparison = Number(hasClickId(right)) - Number(hasClickId(left));
+  const clickIdComparison = Number(hasClickId(right.clickIdValue)) - Number(hasClickId(left.clickIdValue));
   if (clickIdComparison !== 0) {
     return clickIdComparison;
   }
@@ -172,7 +169,7 @@ function compareTimelineOrder(left: ResolvedAttributionTouchpoint, right: Resolv
     return sourceComparison;
   }
 
-  const clickIdComparison = Number(hasClickId(right)) - Number(hasClickId(left));
+  const clickIdComparison = Number(hasClickId(right.clickIdValue)) - Number(hasClickId(left.clickIdValue));
   if (clickIdComparison !== 0) {
     return clickIdComparison;
   }
@@ -186,13 +183,25 @@ export function dedupeDeterministicCandidates(
   const deduped = new Map<string, ResolvedAttributionTouchpoint>();
 
   for (const candidate of candidates) {
-    if (!candidate.sessionId) {
+    const normalizedCandidate = {
+      ...candidate,
+      isDirect: isCanonicalDirectTouchpoint({
+        source: candidate.source,
+        medium: candidate.medium,
+        campaign: candidate.campaign,
+        content: candidate.content,
+        term: candidate.term,
+        clickIdValue: candidate.clickIdValue
+      })
+    };
+
+    if (!normalizedCandidate.sessionId) {
       continue;
     }
 
-    const existing = deduped.get(candidate.sessionId);
-    if (!existing || compareDedupPriority(candidate, existing) < 0) {
-      deduped.set(candidate.sessionId, candidate);
+    const existing = deduped.get(normalizedCandidate.sessionId);
+    if (!existing || compareDedupPriority(normalizedCandidate, existing) < 0) {
+      deduped.set(normalizedCandidate.sessionId, normalizedCandidate);
     }
   }
 
@@ -248,8 +257,16 @@ function mapCandidateToResolvedTouchpoint(candidate: TieredAttributionCandidate)
     clickIdType: candidate.clickIdType,
     clickIdValue: candidate.clickIdValue,
     attributionReason: candidate.attributionReason,
+    engagementType: 'click',
     ingestionSource: candidate.ingestionSource,
-    isDirect: candidate.isDirect,
+    isDirect: isCanonicalDirectTouchpoint({
+      source: candidate.source,
+      medium: candidate.medium,
+      campaign: candidate.campaign,
+      content: candidate.content,
+      term: candidate.term,
+      clickIdValue: candidate.clickIdValue
+    }),
     isForced: candidate.isSynthetic
   };
 }
@@ -282,6 +299,10 @@ function compareShopifyHintCandidates(left: TieredAttributionCandidate, right: T
   }
 
   return left.sourceKey.localeCompare(right.sourceKey);
+}
+
+function qualifiesSyntheticHintCandidate(candidate: TieredAttributionCandidate): boolean {
+  return qualifiesSyntheticHintSignal(candidate);
 }
 
 function compareGa4FallbackCandidates(left: TieredAttributionCandidate, right: TieredAttributionCandidate): number {
@@ -355,7 +376,11 @@ export function resolveAttributionTier(input: TieredAttributionResolverInput): R
   }
 
   const shopifyHintTouchpoints = dedupeTierCandidatesBySourceKey(
-    input.shopifyHint.filter((candidate) => isWithinLookbackWindow(orderOccurredAtUtc, candidate.occurredAtUtc)),
+    input.shopifyHint.filter(
+      (candidate) =>
+        qualifiesSyntheticHintCandidate(candidate) &&
+        isWithinLookbackWindow(orderOccurredAtUtc, candidate.occurredAtUtc)
+    ),
     compareShopifyHintCandidates
   );
   const shopifyHintWinnerCandidate = shopifyHintTouchpoints[0] ?? null;

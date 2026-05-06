@@ -187,3 +187,51 @@ test('normalizeTimestampToUtc rejects naive timestamp strings and accepts zoned 
     '2026-04-02T19:00:00.000Z'
   );
 });
+
+test('collectDeterministicFirstPartyCandidates preserves identity-journey attribution reasons', async () => {
+  const candidateModule = await import('../src/modules/attribution/candidate-extraction.js');
+
+  const fakeClient = {
+    query: async (_text: string, params: unknown[]) => {
+      assert.equal(params[0], '123e4567-e89b-42d3-a456-426614174900');
+      assert.equal(params[1], null);
+      assert.equal(params[2], 'order-identity-journey');
+
+      return {
+        rows: [
+          {
+            session_id: '123e4567-e89b-42d3-a456-426614174901',
+            source_touch_event_id: 'evt-identity-journey',
+            occurred_at: new Date('2026-04-01T12:00:00.000Z'),
+            attribution_reason: 'matched_by_identity_journey',
+            source: 'meta',
+            medium: 'paid_social',
+            campaign: 'retargeting',
+            content: null,
+            term: null,
+            click_id_type: 'fbclid',
+            click_id_value: 'fbclid-123'
+          }
+        ],
+        rowCount: 1
+      };
+    }
+  } as never;
+
+  const result = await candidateModule.collectDeterministicFirstPartyCandidates(fakeClient, {
+    shopifyOrderId: 'order-identity-journey',
+    processedAt: '2026-04-02T14:00:00.000Z',
+    createdAtShopify: null,
+    ingestedAt: '2026-04-02T14:05:00.000Z',
+    landingSessionId: null,
+    checkoutToken: null,
+    cartToken: null,
+    customerIdentityId: null,
+    identityJourneyId: '123e4567-e89b-42d3-a456-426614174900',
+    rawPayload: null
+  });
+
+  assert.equal(result.length, 1);
+  assert.equal(result[0].ingestionSource, 'customer_identity');
+  assert.equal(result[0].attributionReason, 'matched_by_identity_journey');
+});

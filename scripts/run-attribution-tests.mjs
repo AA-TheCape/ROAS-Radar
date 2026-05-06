@@ -12,6 +12,11 @@ if (!VALID_MODES.has(mode)) {
 }
 
 const CRITICAL_TESTS = [
+  'test/attribution-engine.test.ts',
+  'test/attribution-engine-golden.test.ts',
+  'test/northbeam-benchmark-report.test.ts',
+  'test/northbeam-benchmark-thresholds.test.ts',
+  'test/attribution-preprocessing.test.ts',
   'test/tracking-attribution-ingestion.test.ts',
   'test/tracking-dual-write.test.ts',
   'test/tracking-request-context-fallback.integration.test.ts',

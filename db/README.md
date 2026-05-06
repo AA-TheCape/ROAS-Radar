@@ -33,6 +33,10 @@ The order-attribution tier audit columns added in `0037_add_shopify_order_attrib
 
 - `db/rollbacks/0037_add_shopify_order_attribution_tiers.down.sql`
 
+The attribution-engine v1 tables added in `0040_add_attribution_engine_v1_tables.sql` can be rolled back with:
+
+- `db/rollbacks/0040_add_attribution_engine_v1_tables.down.sql`
+
 The Meta order-value aggregate table added in `0040_add_meta_order_value_aggregates.sql` can be rolled back with:
 
 - `db/rollbacks/0040_add_meta_order_value_aggregates.down.sql`
@@ -57,4 +61,27 @@ To verify the PostgreSQL planner is using those indexes against a real database,
 
 ```sh
 npm run db:verify:session-attribution-plans
+```
+
+## Attribution Engine V1 Storage
+
+Migration `0040_add_attribution_engine_v1_tables.sql` adds run-scoped storage for the new attribution engine:
+
+- `attribution_runs`: run metadata and lookback contract
+- `attribution_order_inputs`: normalized per-run order snapshots
+- `attribution_touchpoint_inputs`: normalized per-run touchpoint candidates
+- `attribution_model_summaries`: one summary row per order and model
+- `attribution_model_credits`: non-zero credit rows per order, model, and touchpoint
+- `attribution_explain_records`: explainability and audit trail rows
+
+The scale policy for these tables is retention-driven rather than partition-driven in v1:
+
+- run and result rows default to `400 days` retention
+- normalized touchpoint and explainability rows default to `180 days` retention
+- every retained table has a `retained_until` index so a pruning job can delete expired batches without scanning the full table
+
+To verify the primary lookup indexes and reporting filters used by the new schema, run:
+
+```sh
+npm run db:verify-attribution-v1-query-plans
 ```

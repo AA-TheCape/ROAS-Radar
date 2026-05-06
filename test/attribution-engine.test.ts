@@ -1,199 +1,382 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import assert from 'node:assert/strict';
+import test from 'node:test';
 
 import {
-	ATTRIBUTION_MODELS,
-	type AttributionTouchpoint,
-	computeAttributionOutputs,
-} from "../src/modules/attribution/engine.js";
+  ATTRIBUTION_MODELS,
+  executeAttributionModels,
+  type AttributionTouchpoint
+} from '../src/modules/attribution/engine.js';
 
 function buildTouchpoint(
-	sessionId: string,
-	occurredAt: string,
-	overrides: Partial<AttributionTouchpoint> = {},
+  sessionId: string,
+  occurredAt: string,
+  overrides: Partial<AttributionTouchpoint> = {}
 ): AttributionTouchpoint {
-	return {
-		sessionId,
-		occurredAt: new Date(occurredAt),
-		source: "google",
-		medium: "cpc",
-		campaign: sessionId,
-		content: null,
-		term: null,
-		clickIdType: null,
-		clickIdValue: null,
-		attributionReason: "matched_by_customer_identity",
-		isDirect: false,
-		isForced: false,
-		...overrides,
-	};
+  return {
+    touchpointId: `tp:${sessionId}:${occurredAt}`,
+    sessionId,
+    occurredAt: new Date(occurredAt),
+    source: 'google',
+    medium: 'cpc',
+    campaign: sessionId,
+    content: null,
+    term: null,
+    clickIdType: 'gclid',
+    clickIdValue: `gclid:${sessionId}`,
+    attributionReason: 'matched_by_customer_identity',
+    evidenceSource: 'customer_identity',
+    engagementType: 'click',
+    isDirect: false,
+    isForced: false,
+    isSynthetic: false,
+    ...overrides
+  };
 }
 
-function revenueCreditsForModel(
-	touchpoints: AttributionTouchpoint[],
-	attributionModel: (typeof ATTRIBUTION_MODELS)[number],
-	orderRevenue: string,
-	orderOccurredAt: string,
-	options: Parameters<typeof computeAttributionOutputs>[1] = {
-		orderRevenue,
-		orderOccurredAt: new Date(orderOccurredAt),
-	},
-): string[] {
-	return computeAttributionOutputs(touchpoints, options)[attributionModel].map(
-		(credit) => credit.revenueCredit,
-	);
+function execute(
+  touchpoints: AttributionTouchpoint[],
+  attributionModels: Array<(typeof ATTRIBUTION_MODELS)[number]> = ATTRIBUTION_MODELS
+) {
+  return executeAttributionModels(touchpoints, {
+    orderRevenue: '100.00',
+    orderOccurredAt: new Date('2026-04-30T00:00:00.000Z'),
+    attributionModels
+  });
 }
 
-test("first touch attributes all revenue to the earliest touchpoint", () => {
-	const touchpoints = [
-		buildTouchpoint("session-a", "2026-04-01T00:00:00.000Z"),
-		buildTouchpoint("session-b", "2026-04-03T00:00:00.000Z"),
-		buildTouchpoint("session-c", "2026-04-05T00:00:00.000Z"),
-	];
+test('first_touch and last_touch keep explicit deterministic winner selection', () => {
+  const result = execute([
+    buildTouchpoint('session-a', '2026-04-10T00:00:00.000Z'),
+    buildTouchpoint('session-b', '2026-04-12T00:00:00.000Z'),
+    buildTouchpoint('session-c', '2026-04-15T00:00:00.000Z')
+  ], ['first_touch', 'last_touch']);
 
-	assert.deepEqual(
-		revenueCreditsForModel(
-			touchpoints,
-			"first_touch",
-			"100.00",
-			"2026-04-06T00:00:00.000Z",
-		),
-		["100.00", "0.00", "0.00"],
-	);
+  assert.deepEqual(
+    result.creditsByModel.first_touch.map((credit) => credit.revenueCredit),
+    ['100.00', '0.00', '0.00']
+  );
+  assert.deepEqual(
+    result.creditsByModel.last_touch.map((credit) => credit.revenueCredit),
+    ['0.00', '0.00', '100.00']
+  );
+  assert.equal(result.summariesByModel.first_touch.winnerSelectionRule, 'first_touch');
+  assert.equal(result.summariesByModel.last_touch.winnerSelectionRule, 'last_touch');
 });
 
-test("last touch attributes all revenue to the most recent touchpoint", () => {
-	const touchpoints = [
-		buildTouchpoint("session-a", "2026-04-01T00:00:00.000Z"),
-		buildTouchpoint("session-b", "2026-04-03T00:00:00.000Z"),
-		buildTouchpoint("session-c", "2026-04-05T00:00:00.000Z"),
-	];
+test('last_non_direct suppresses direct revisits while last_touch does not', () => {
+  const result = execute([
+    buildTouchpoint('session-a', '2026-04-10T00:00:00.000Z'),
+    buildTouchpoint('session-b', '2026-04-20T00:00:00.000Z', {
+      source: null,
+      medium: null,
+      campaign: null,
+      clickIdType: null,
+      clickIdValue: null,
+      isDirect: true
+    })
+  ], ['last_touch', 'last_non_direct']);
 
-	assert.deepEqual(
-		revenueCreditsForModel(
-			touchpoints,
-			"last_touch",
-			"100.00",
-			"2026-04-06T00:00:00.000Z",
-		),
-		["0.00", "0.00", "100.00"],
-	);
+  assert.deepEqual(
+    result.creditsByModel.last_touch.map((credit) => credit.revenueCredit),
+    ['0.00', '100.00']
+  );
+  assert.deepEqual(
+    result.creditsByModel.last_non_direct.map((credit) => credit.revenueCredit),
+    ['100.00', '0.00']
+  );
+  assert.equal(result.summariesByModel.last_non_direct.directSuppressionApplied, true);
 });
 
-test("linear attribution splits revenue evenly and preserves cents deterministically", () => {
-	const touchpoints = [
-		buildTouchpoint("session-a", "2026-04-01T00:00:00.000Z"),
-		buildTouchpoint("session-b", "2026-04-03T00:00:00.000Z"),
-		buildTouchpoint("session-c", "2026-04-05T00:00:00.000Z"),
-	];
+test('linear splits revenue evenly and preserves cents deterministically', () => {
+  const result = execute([
+    buildTouchpoint('session-a', '2026-04-10T00:00:00.000Z'),
+    buildTouchpoint('session-b', '2026-04-12T00:00:00.000Z'),
+    buildTouchpoint('session-c', '2026-04-15T00:00:00.000Z')
+  ], ['linear']);
 
-	assert.deepEqual(
-		revenueCreditsForModel(
-			touchpoints,
-			"linear",
-			"100.00",
-			"2026-04-06T00:00:00.000Z",
-		),
-		["33.34", "33.33", "33.33"],
-	);
+  assert.deepEqual(
+    result.creditsByModel.linear.map((credit) => credit.revenueCredit),
+    ['33.34', '33.33', '33.33']
+  );
+  assert.equal(result.summariesByModel.linear.totalCreditWeight, 1);
 });
 
-test("time decay weighs recent touchpoints more heavily", () => {
-	const touchpoints = [
-		buildTouchpoint("session-a", "2026-04-02T00:00:00.000Z"),
-		buildTouchpoint("session-b", "2026-04-03T00:00:00.000Z"),
-		buildTouchpoint("session-c", "2026-04-04T00:00:00.000Z"),
-	];
+test('clicks_only excludes view-only candidates even when they are newer', () => {
+  const result = execute([
+    buildTouchpoint('session-click', '2026-04-05T00:00:00.000Z'),
+    buildTouchpoint('session-view', '2026-04-29T00:00:00.000Z', {
+      clickIdType: null,
+      clickIdValue: null,
+      engagementType: 'view',
+      evidenceSource: 'customer_identity'
+    })
+  ], ['clicks_only']);
 
-	assert.deepEqual(
-		revenueCreditsForModel(
-			touchpoints,
-			"time_decay",
-			"100.00",
-			"2026-04-04T00:00:00.000Z",
-			{
-				orderRevenue: "100.00",
-				orderOccurredAt: new Date("2026-04-04T00:00:00.000Z"),
-				timeDecayHalfLifeDays: 1,
-			},
-		),
-		["14.29", "28.57", "57.14"],
-	);
+  assert.deepEqual(
+    result.creditsByModel.clicks_only.map((credit) => credit.revenueCredit),
+    ['100.00', '0.00']
+  );
+  assert.equal(result.summariesByModel.clicks_only.lookbackRuleApplied, '28d_click');
 });
 
-test("position based attribution applies a U-shape split", () => {
-	const touchpoints = [
-		buildTouchpoint("session-a", "2026-04-01T00:00:00.000Z"),
-		buildTouchpoint("session-b", "2026-04-02T00:00:00.000Z"),
-		buildTouchpoint("session-c", "2026-04-03T00:00:00.000Z"),
-		buildTouchpoint("session-d", "2026-04-04T00:00:00.000Z"),
-	];
+test('engine keeps 28-day clicks while excluding views outside the 7-day window', () => {
+  const result = execute([
+    buildTouchpoint('session-click', '2026-04-03T00:00:00.000Z'),
+    buildTouchpoint('session-view-old', '2026-04-21T00:00:00.000Z', {
+      clickIdType: null,
+      clickIdValue: null,
+      engagementType: 'view'
+    })
+  ], ['first_touch', 'linear']);
 
-	assert.deepEqual(
-		revenueCreditsForModel(
-			touchpoints,
-			"position_based",
-			"100.00",
-			"2026-04-05T00:00:00.000Z",
-		),
-		["40.00", "10.00", "10.00", "40.00"],
-	);
+  assert.deepEqual(
+    result.creditsByModel.first_touch.map((credit) => credit.revenueCredit),
+    ['100.00']
+  );
+  assert.equal(result.summariesByModel.first_touch.touchpointCountConsidered, 1);
+  assert.equal(result.summariesByModel.first_touch.lookbackRuleApplied, '28d_click');
+  assert.deepEqual(
+    result.creditsByModel.linear.map((credit) => credit.revenueCredit),
+    ['100.00']
+  );
 });
 
-test("rule based weighted attribution applies deterministic custom multipliers", () => {
-	const touchpoints = [
-		buildTouchpoint("session-a", "2026-04-01T00:00:00.000Z"),
-		buildTouchpoint("session-b", "2026-04-02T00:00:00.000Z", {
-			source: null,
-			medium: null,
-			campaign: null,
-			isDirect: true,
-		}),
-		buildTouchpoint("session-c", "2026-04-03T00:00:00.000Z", {
-			clickIdType: "gclid",
-			clickIdValue: "gclid-123",
-		}),
-	];
+test('engine excludes ambiguous touches without explicit click or view evidence', () => {
+  const result = execute([
+    buildTouchpoint('session-ambiguous', '2026-04-29T00:00:00.000Z', {
+      source: 'newsletter',
+      medium: 'email',
+      campaign: 'april-blast',
+      clickIdType: null,
+      clickIdValue: null,
+      engagementType: null
+    })
+  ], ['first_touch', 'linear']);
 
-	assert.deepEqual(
-		revenueCreditsForModel(
-			touchpoints,
-			"rule_based_weighted",
-			"90.00",
-			"2026-04-04T00:00:00.000Z",
-			{
-				orderRevenue: "90.00",
-				orderOccurredAt: new Date("2026-04-04T00:00:00.000Z"),
-				ruleBasedWeightConfig: {
-					firstTouchWeight: 0.2,
-					middleTouchWeight: 0.3,
-					lastTouchWeight: 0.5,
-					clickIdBonusMultiplier: 2,
-					directDiscountMultiplier: 0.5,
-				},
-			},
-		),
-		["13.33", "10.00", "66.67"],
-	);
+  assert.deepEqual(result.creditsByModel.first_touch, []);
+  assert.equal(result.summariesByModel.first_touch.allocationStatus, 'no_eligible_touches');
+  assert.equal(result.summariesByModel.linear.allocationStatus, 'no_eligible_touches');
 });
 
-test("all models conserve exact order revenue including unattributed fallback journeys", () => {
-	const outputs = computeAttributionOutputs([], {
-		orderRevenue: "123.45",
-		orderOccurredAt: new Date("2026-04-04T00:00:00.000Z"),
-	});
+test('engine recomputes click-id-only touches as non-direct before last-non-direct suppression', () => {
+  const result = execute([
+    buildTouchpoint('session-click-id-only', '2026-04-27T00:00:00.000Z', {
+      source: null,
+      medium: null,
+      campaign: null,
+      clickIdType: 'fbclid',
+      clickIdValue: 'fbclid-123',
+      isDirect: true
+    }),
+    buildTouchpoint('session-direct', '2026-04-29T00:00:00.000Z', {
+      source: null,
+      medium: null,
+      campaign: null,
+      clickIdType: null,
+      clickIdValue: null,
+      isDirect: true
+    })
+  ], ['last_non_direct', 'clicks_only']);
 
-	for (const attributionModel of ATTRIBUTION_MODELS) {
-		const total = outputs[attributionModel].reduce(
-			(sum, credit) => sum + Number(credit.revenueCredit),
-			0,
-		);
+  assert.deepEqual(
+    result.creditsByModel.last_non_direct.map((credit) => credit.revenueCredit),
+    ['100.00', '0.00']
+  );
+  assert.equal(result.creditsByModel.last_non_direct[0]?.isDirect, false);
+  assert.equal(result.summariesByModel.last_non_direct.directSuppressionApplied, true);
+  assert.deepEqual(
+    result.creditsByModel.clicks_only.map((credit) => credit.revenueCredit),
+    ['100.00', '0.00']
+  );
+});
 
-		assert.equal(Number(total.toFixed(2)), 123.45);
-		assert.equal(outputs[attributionModel].length, 1);
-		assert.equal(
-			outputs[attributionModel][0].attributionReason,
-			"unattributed",
-		);
-	}
+test('hinted_fallback_only is blocked when deterministic evidence is present', () => {
+  const result = execute([
+    buildTouchpoint('session-deterministic', '2026-04-10T00:00:00.000Z', {
+      evidenceSource: 'landing_session_id'
+    }),
+    buildTouchpoint('session-hint', '2026-04-12T00:00:00.000Z', {
+      touchpointId: 'hint-1',
+      sessionId: null,
+      source: 'meta',
+      medium: 'paid_social',
+      campaign: 'retargeting',
+      clickIdType: null,
+      clickIdValue: null,
+      evidenceSource: 'shopify_marketing_hint',
+      isSynthetic: true,
+      isForced: true
+    })
+  ], ['hinted_fallback_only']);
+
+  assert.deepEqual(
+    result.creditsByModel.hinted_fallback_only.map((credit) => credit.revenueCredit),
+    ['0.00', '0.00']
+  );
+  assert.equal(result.summariesByModel.hinted_fallback_only.allocationStatus, 'blocked_by_deterministic');
+  assert.equal(result.summariesByModel.hinted_fallback_only.deterministicBlockApplied, true);
+});
+
+test('hinted_fallback_only attributes only qualifying synthetic hint rows when deterministic evidence is absent', () => {
+  const result = execute([
+    buildTouchpoint('session-hint-a', '2026-04-11T00:00:00.000Z', {
+      touchpointId: 'hint-a',
+      sessionId: null,
+      source: 'meta',
+      medium: 'paid_social',
+      campaign: 'prospecting',
+      clickIdType: null,
+      clickIdValue: null,
+      evidenceSource: 'shopify_marketing_hint',
+      isSynthetic: true,
+      isForced: true
+    }),
+    buildTouchpoint('session-hint-b', '2026-04-12T00:00:00.000Z', {
+      touchpointId: 'hint-b',
+      sessionId: null,
+      source: 'meta',
+      medium: 'paid_social',
+      campaign: 'retargeting',
+      clickIdType: null,
+      clickIdValue: null,
+      evidenceSource: 'shopify_marketing_hint',
+      isSynthetic: true,
+      isForced: true
+    })
+  ], ['hinted_fallback_only']);
+
+  assert.deepEqual(
+    result.creditsByModel.hinted_fallback_only.map((credit) => credit.revenueCredit),
+    ['0.00', '100.00']
+  );
+  assert.equal(result.summariesByModel.hinted_fallback_only.allocationStatus, 'attributed');
+  assert.equal(result.summariesByModel.hinted_fallback_only.winnerTouchpointId, 'hint-b');
+});
+
+test('hinted_fallback_only ignores ambiguous synthetic hints and ga4 fallback rows when no qualifying hint exists', () => {
+  const result = execute([
+    buildTouchpoint('session-hint-ambiguous', '2026-04-12T00:00:00.000Z', {
+      touchpointId: 'hint-ambiguous',
+      sessionId: null,
+      source: 'meta',
+      medium: null,
+      campaign: null,
+      clickIdType: null,
+      clickIdValue: null,
+      evidenceSource: 'shopify_marketing_hint',
+      isSynthetic: true,
+      isForced: true
+    }),
+    buildTouchpoint('session-hint-direct', '2026-04-13T00:00:00.000Z', {
+      touchpointId: 'hint-direct',
+      sessionId: null,
+      source: null,
+      medium: null,
+      campaign: null,
+      content: null,
+      term: null,
+      clickIdType: null,
+      clickIdValue: null,
+      evidenceSource: 'shopify_marketing_hint',
+      isDirect: true,
+      isSynthetic: true,
+      isForced: true
+    }),
+    buildTouchpoint('session-ga4', '2026-04-14T00:00:00.000Z', {
+      touchpointId: 'ga4-1',
+      sessionId: null,
+      source: 'google',
+      medium: 'cpc',
+      campaign: 'ga4-retargeting',
+      clickIdType: 'gclid',
+      clickIdValue: 'ga4-click',
+      evidenceSource: 'ga4_fallback',
+      attributionReason: 'ga4_fallback_match',
+      isSynthetic: true,
+      isForced: false
+    })
+  ], ['hinted_fallback_only']);
+
+  assert.deepEqual(
+    result.creditsByModel.hinted_fallback_only.map((credit) => credit.revenueCredit),
+    []
+  );
+  assert.equal(result.summariesByModel.hinted_fallback_only.allocationStatus, 'unattributed');
+  assert.equal(result.summariesByModel.hinted_fallback_only.touchpointCountConsidered, 0);
+});
+
+test('core v1 models do not spill fallback evidence into deterministic attribution pools', () => {
+  const result = execute([
+    buildTouchpoint('session-hint', '2026-04-11T00:00:00.000Z', {
+      touchpointId: 'hint-qualifying',
+      sessionId: null,
+      source: 'meta',
+      medium: 'paid_social',
+      campaign: 'prospecting',
+      clickIdType: null,
+      clickIdValue: null,
+      evidenceSource: 'shopify_marketing_hint',
+      isSynthetic: true,
+      isForced: true
+    }),
+    buildTouchpoint('session-ga4', '2026-04-12T00:00:00.000Z', {
+      touchpointId: 'ga4-qualifying',
+      sessionId: null,
+      source: 'google',
+      medium: 'cpc',
+      campaign: 'brand',
+      clickIdType: 'gclid',
+      clickIdValue: 'ga4-click',
+      evidenceSource: 'ga4_fallback',
+      attributionReason: 'ga4_fallback_match',
+      isSynthetic: true,
+      isForced: false
+    })
+  ], ['first_touch', 'last_touch', 'linear', 'clicks_only', 'hinted_fallback_only']);
+
+  assert.equal(result.summariesByModel.first_touch.allocationStatus, 'no_eligible_touches');
+  assert.equal(result.summariesByModel.last_touch.allocationStatus, 'no_eligible_touches');
+  assert.equal(result.summariesByModel.linear.allocationStatus, 'no_eligible_touches');
+  assert.equal(result.summariesByModel.clicks_only.allocationStatus, 'no_eligible_touches');
+  assert.equal(result.summariesByModel.hinted_fallback_only.allocationStatus, 'attributed');
+  assert.equal(result.summariesByModel.hinted_fallback_only.winnerTouchpointId, 'hint-qualifying');
+});
+
+test('model execution can target a single model or multiple models in one batch', () => {
+  const touchpoints = [
+    buildTouchpoint('session-a', '2026-04-10T00:00:00.000Z'),
+    buildTouchpoint('session-b', '2026-04-12T00:00:00.000Z')
+  ];
+
+  const singleModelRun = execute(touchpoints, ['linear']);
+  const multiModelRun = execute(touchpoints, ['first_touch', 'linear', 'last_touch']);
+
+  assert.deepEqual(singleModelRun.models, ['linear']);
+  assert.deepEqual(multiModelRun.models, ['first_touch', 'linear', 'last_touch']);
+  assert.equal(singleModelRun.summariesByModel.linear.allocationStatus, 'attributed');
+  assert.equal(multiModelRun.summariesByModel.first_touch.allocationStatus, 'attributed');
+  assert.equal(multiModelRun.summariesByModel.last_touch.allocationStatus, 'attributed');
+});
+
+test('summaries report no_eligible_touches when nothing qualifies under the shared validation layer', () => {
+  const result = executeAttributionModels([
+    buildTouchpoint('session-old-click', '2026-03-01T00:00:00.000Z'),
+    buildTouchpoint('session-old-view', '2026-04-01T00:00:00.000Z', {
+      clickIdType: null,
+      clickIdValue: null,
+      engagementType: 'view'
+    })
+  ], {
+    orderRevenue: '123.45',
+    orderOccurredAt: new Date('2026-04-30T00:00:00.000Z'),
+    attributionModels: ['first_touch', 'clicks_only', 'hinted_fallback_only']
+  });
+
+  assert.equal(result.summariesByModel.first_touch.allocationStatus, 'no_eligible_touches');
+  assert.equal(result.summariesByModel.clicks_only.allocationStatus, 'no_eligible_touches');
+  assert.equal(result.summariesByModel.hinted_fallback_only.allocationStatus, 'unattributed');
+  assert.deepEqual(
+    result.creditsByModel.first_touch.map((credit) => credit.revenueCredit),
+    []
+  );
 });
