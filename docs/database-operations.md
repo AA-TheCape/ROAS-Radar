@@ -106,6 +106,50 @@ Treat these as the minimum acceptance targets for raw-payload lookups under expe
 
 Use `pg_stat_statements` plus `EXPLAIN (ANALYZE, BUFFERS)` in staging to measure those targets. If a lookup misses its target, fix the query pattern first before adding any new JSONB expression or GIN index.
 
+## Attribution Engine V1 Index Verification
+
+Use the staging-safe plan check before approving changes to the new attribution-engine storage:
+
+```bash
+npm run db:verify-attribution-v1-query-plans
+```
+
+The script seeds representative attribution runs, normalized orders, touchpoints, summaries, credits, and explain rows inside a transaction, runs `EXPLAIN (FORMAT JSON)` against the expected query patterns, asserts that the targeted indexes are used, and then rolls the data back.
+
+Required lookup patterns for the v1 schema:
+
+- touchpoint lookup by `session_id ORDER BY touchpoint_occurred_at_utc DESC`
+- summary lookup by `model_key + order_occurred_at_utc` window
+- reporting lookup by `model_key + source + medium + campaign ORDER BY occurred_at_utc DESC`
+- explainability lookup by `run_id + order_id + explain_stage ORDER BY created_at_utc DESC`
+
+## Attribution Engine V1 Staging Targets
+
+Treat these as the minimum acceptance targets for the new attribution-engine tables under expected staging volume:
+
+- session-based touchpoint lookup: p95 under 150 ms
+- model summary window query over the last 30 days: p95 under 200 ms
+- model credit reporting filter by `model_key + source + medium + campaign`: p95 under 250 ms
+- explainability lookup for one run and order: p95 under 150 ms
+
+Use `pg_stat_statements` plus `EXPLAIN (ANALYZE, BUFFERS)` in staging to measure those targets before widening any index or adding derived reporting tables.
+
+## Attribution Engine V1 Retention
+
+The new run-scoped attribution tables use retention rather than table partitioning in v1:
+
+- `attribution_runs`, `attribution_order_inputs`, `attribution_model_summaries`, and `attribution_model_credits` default to `400 days`
+- `attribution_touchpoint_inputs` and `attribution_explain_records` default to `180 days`
+
+Any pruning job should delete expired rows in child-table order:
+
+1. `attribution_explain_records`
+2. `attribution_model_credits`
+3. `attribution_model_summaries`
+4. `attribution_touchpoint_inputs`
+5. `attribution_order_inputs`
+6. `attribution_runs`
+
 ## Retention Cleanup
 
 Operational pruning runs through the scheduled `session-attribution:retention` Cloud Run job.

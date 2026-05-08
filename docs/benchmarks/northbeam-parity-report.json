@@ -1,0 +1,739 @@
+{
+  "reportVersion": 1,
+  "fixtureSetVersion": "2026-04-30-v1",
+  "orderCount": 7,
+  "thresholds": {
+    "modelRevenueDeltaPercent": {
+      "greenMax": 1,
+      "yellowMax": 3
+    },
+    "channelRevenueDeltaPercent": {
+      "greenMax": 2,
+      "yellowMax": 5
+    },
+    "winnerMismatchRate": {
+      "greenMax": 3,
+      "yellowMax": 8
+    },
+    "unattributedRateDeltaPercentagePoints": {
+      "greenMax": 0.5,
+      "yellowMax": 1.5
+    }
+  },
+  "modelSlices": [
+    {
+      "modelKey": "first_touch",
+      "actualAttributedRevenue": "570.00",
+      "referenceAttributedRevenue": "570.00",
+      "attributedRevenueDelta": "0.00",
+      "attributedRevenueDeltaPercent": 0,
+      "actualUnattributedOrders": 2,
+      "referenceUnattributedOrders": 2,
+      "unattributedOrderCountDelta": 0,
+      "unattributedRateDeltaPercentagePoints": 0,
+      "winnerMismatchRate": 0,
+      "touchpointCountMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "modelKey": "last_touch",
+      "actualAttributedRevenue": "570.00",
+      "referenceAttributedRevenue": "570.00",
+      "attributedRevenueDelta": "0.00",
+      "attributedRevenueDeltaPercent": 0,
+      "actualUnattributedOrders": 2,
+      "referenceUnattributedOrders": 2,
+      "unattributedOrderCountDelta": 0,
+      "unattributedRateDeltaPercentagePoints": 0,
+      "winnerMismatchRate": 0,
+      "touchpointCountMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "modelKey": "last_non_direct",
+      "actualAttributedRevenue": "570.00",
+      "referenceAttributedRevenue": "570.00",
+      "attributedRevenueDelta": "0.00",
+      "attributedRevenueDeltaPercent": 0,
+      "actualUnattributedOrders": 2,
+      "referenceUnattributedOrders": 2,
+      "unattributedOrderCountDelta": 0,
+      "unattributedRateDeltaPercentagePoints": 0,
+      "winnerMismatchRate": 0,
+      "touchpointCountMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "modelKey": "linear",
+      "actualAttributedRevenue": "570.00",
+      "referenceAttributedRevenue": "570.00",
+      "attributedRevenueDelta": "0.00",
+      "attributedRevenueDeltaPercent": 0,
+      "actualUnattributedOrders": 2,
+      "referenceUnattributedOrders": 2,
+      "unattributedOrderCountDelta": 0,
+      "unattributedRateDeltaPercentagePoints": 0,
+      "winnerMismatchRate": 0,
+      "touchpointCountMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "modelKey": "clicks_only",
+      "actualAttributedRevenue": "570.00",
+      "referenceAttributedRevenue": "570.00",
+      "attributedRevenueDelta": "0.00",
+      "attributedRevenueDeltaPercent": 0,
+      "actualUnattributedOrders": 2,
+      "referenceUnattributedOrders": 2,
+      "unattributedOrderCountDelta": 0,
+      "unattributedRateDeltaPercentagePoints": 0,
+      "winnerMismatchRate": 0,
+      "touchpointCountMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "modelKey": "hinted_fallback_only",
+      "actualAttributedRevenue": "80.00",
+      "referenceAttributedRevenue": "80.00",
+      "attributedRevenueDelta": "0.00",
+      "attributedRevenueDeltaPercent": 0,
+      "actualUnattributedOrders": 6,
+      "referenceUnattributedOrders": 6,
+      "unattributedOrderCountDelta": 0,
+      "unattributedRateDeltaPercentagePoints": 0,
+      "winnerMismatchRate": 0,
+      "touchpointCountMismatchRate": 0,
+      "severity": "green"
+    }
+  ],
+  "channelSlices": [
+    {
+      "modelKey": "first_touch",
+      "channelKey": "direct / none",
+      "actualRevenue": "210.00",
+      "referenceRevenue": "210.00",
+      "absoluteRevenueDelta": "0.00",
+      "revenueDeltaPercent": 0,
+      "actualOrderCount": 2,
+      "referenceOrderCount": 2,
+      "orderCountDelta": 0,
+      "severity": "green"
+    },
+    {
+      "modelKey": "last_touch",
+      "channelKey": "direct / none",
+      "actualRevenue": "310.00",
+      "referenceRevenue": "310.00",
+      "absoluteRevenueDelta": "0.00",
+      "revenueDeltaPercent": 0,
+      "actualOrderCount": 3,
+      "referenceOrderCount": 3,
+      "orderCountDelta": 0,
+      "severity": "green"
+    },
+    {
+      "modelKey": "last_non_direct",
+      "channelKey": "direct / none",
+      "actualRevenue": "210.00",
+      "referenceRevenue": "210.00",
+      "absoluteRevenueDelta": "0.00",
+      "revenueDeltaPercent": 0,
+      "actualOrderCount": 2,
+      "referenceOrderCount": 2,
+      "orderCountDelta": 0,
+      "severity": "green"
+    },
+    {
+      "modelKey": "linear",
+      "channelKey": "direct / none",
+      "actualRevenue": "243.33",
+      "referenceRevenue": "243.33",
+      "absoluteRevenueDelta": "0.00",
+      "revenueDeltaPercent": 0,
+      "actualOrderCount": 3,
+      "referenceOrderCount": 3,
+      "orderCountDelta": 0,
+      "severity": "green"
+    },
+    {
+      "modelKey": "clicks_only",
+      "channelKey": "direct / none",
+      "actualRevenue": "210.00",
+      "referenceRevenue": "210.00",
+      "absoluteRevenueDelta": "0.00",
+      "revenueDeltaPercent": 0,
+      "actualOrderCount": 2,
+      "referenceOrderCount": 2,
+      "orderCountDelta": 0,
+      "severity": "green"
+    },
+    {
+      "modelKey": "first_touch",
+      "channelKey": "google / cpc",
+      "actualRevenue": "100.00",
+      "referenceRevenue": "100.00",
+      "absoluteRevenueDelta": "0.00",
+      "revenueDeltaPercent": 0,
+      "actualOrderCount": 1,
+      "referenceOrderCount": 1,
+      "orderCountDelta": 0,
+      "severity": "green"
+    },
+    {
+      "modelKey": "last_non_direct",
+      "channelKey": "google / cpc",
+      "actualRevenue": "100.00",
+      "referenceRevenue": "100.00",
+      "absoluteRevenueDelta": "0.00",
+      "revenueDeltaPercent": 0,
+      "actualOrderCount": 1,
+      "referenceOrderCount": 1,
+      "orderCountDelta": 0,
+      "severity": "green"
+    },
+    {
+      "modelKey": "linear",
+      "channelKey": "google / cpc",
+      "actualRevenue": "121.67",
+      "referenceRevenue": "121.67",
+      "absoluteRevenueDelta": "0.00",
+      "revenueDeltaPercent": 0,
+      "actualOrderCount": 2,
+      "referenceOrderCount": 2,
+      "orderCountDelta": 0,
+      "severity": "green"
+    },
+    {
+      "modelKey": "clicks_only",
+      "channelKey": "google / cpc",
+      "actualRevenue": "100.00",
+      "referenceRevenue": "100.00",
+      "absoluteRevenueDelta": "0.00",
+      "revenueDeltaPercent": 0,
+      "actualOrderCount": 1,
+      "referenceOrderCount": 1,
+      "orderCountDelta": 0,
+      "severity": "green"
+    },
+    {
+      "modelKey": "first_touch",
+      "channelKey": "impact / affiliate",
+      "actualRevenue": "150.00",
+      "referenceRevenue": "150.00",
+      "absoluteRevenueDelta": "0.00",
+      "revenueDeltaPercent": 0,
+      "actualOrderCount": 1,
+      "referenceOrderCount": 1,
+      "orderCountDelta": 0,
+      "severity": "green"
+    },
+    {
+      "modelKey": "linear",
+      "channelKey": "impact / affiliate",
+      "actualRevenue": "75.00",
+      "referenceRevenue": "75.00",
+      "absoluteRevenueDelta": "0.00",
+      "revenueDeltaPercent": 0,
+      "actualOrderCount": 1,
+      "referenceOrderCount": 1,
+      "orderCountDelta": 0,
+      "severity": "green"
+    },
+    {
+      "modelKey": "last_touch",
+      "channelKey": "meta / paid_social",
+      "actualRevenue": "260.00",
+      "referenceRevenue": "260.00",
+      "absoluteRevenueDelta": "0.00",
+      "revenueDeltaPercent": 0,
+      "actualOrderCount": 2,
+      "referenceOrderCount": 2,
+      "orderCountDelta": 0,
+      "severity": "green"
+    },
+    {
+      "modelKey": "last_non_direct",
+      "channelKey": "meta / paid_social",
+      "actualRevenue": "260.00",
+      "referenceRevenue": "260.00",
+      "absoluteRevenueDelta": "0.00",
+      "revenueDeltaPercent": 0,
+      "actualOrderCount": 2,
+      "referenceOrderCount": 2,
+      "orderCountDelta": 0,
+      "severity": "green"
+    },
+    {
+      "modelKey": "linear",
+      "channelKey": "meta / paid_social",
+      "actualRevenue": "130.00",
+      "referenceRevenue": "130.00",
+      "absoluteRevenueDelta": "0.00",
+      "revenueDeltaPercent": 0,
+      "actualOrderCount": 2,
+      "referenceOrderCount": 2,
+      "orderCountDelta": 0,
+      "severity": "green"
+    },
+    {
+      "modelKey": "clicks_only",
+      "channelKey": "meta / paid_social",
+      "actualRevenue": "260.00",
+      "referenceRevenue": "260.00",
+      "absoluteRevenueDelta": "0.00",
+      "revenueDeltaPercent": 0,
+      "actualOrderCount": 2,
+      "referenceOrderCount": 2,
+      "orderCountDelta": 0,
+      "severity": "green"
+    },
+    {
+      "modelKey": "hinted_fallback_only",
+      "channelKey": "meta / paid_social",
+      "actualRevenue": "80.00",
+      "referenceRevenue": "80.00",
+      "absoluteRevenueDelta": "0.00",
+      "revenueDeltaPercent": 0,
+      "actualOrderCount": 1,
+      "referenceOrderCount": 1,
+      "orderCountDelta": 0,
+      "severity": "green"
+    },
+    {
+      "modelKey": "first_touch",
+      "channelKey": "meta / paid_social",
+      "actualRevenue": "110.00",
+      "referenceRevenue": "110.00",
+      "absoluteRevenueDelta": "0.00",
+      "revenueDeltaPercent": 0,
+      "actualOrderCount": 1,
+      "referenceOrderCount": 1,
+      "orderCountDelta": 0,
+      "severity": "green"
+    }
+  ],
+  "cohortSlices": [
+    {
+      "cohort": "direct_only",
+      "modelKey": "first_touch",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "direct_only",
+      "modelKey": "last_touch",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "direct_only",
+      "modelKey": "last_non_direct",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "direct_only",
+      "modelKey": "linear",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "direct_only",
+      "modelKey": "clicks_only",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "direct_only",
+      "modelKey": "hinted_fallback_only",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "mixed_click_view",
+      "modelKey": "first_touch",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "mixed_click_view",
+      "modelKey": "last_touch",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "mixed_click_view",
+      "modelKey": "last_non_direct",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "mixed_click_view",
+      "modelKey": "linear",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "mixed_click_view",
+      "modelKey": "clicks_only",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "mixed_click_view",
+      "modelKey": "hinted_fallback_only",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "click_id_only_missing_utms",
+      "modelKey": "first_touch",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "click_id_only_missing_utms",
+      "modelKey": "last_touch",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "click_id_only_missing_utms",
+      "modelKey": "last_non_direct",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "click_id_only_missing_utms",
+      "modelKey": "linear",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "click_id_only_missing_utms",
+      "modelKey": "clicks_only",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "click_id_only_missing_utms",
+      "modelKey": "hinted_fallback_only",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "identity_journey_fallback",
+      "modelKey": "first_touch",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "identity_journey_fallback",
+      "modelKey": "last_touch",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "identity_journey_fallback",
+      "modelKey": "last_non_direct",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "identity_journey_fallback",
+      "modelKey": "linear",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "identity_journey_fallback",
+      "modelKey": "clicks_only",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "identity_journey_fallback",
+      "modelKey": "hinted_fallback_only",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "shopify_hint_fallback",
+      "modelKey": "first_touch",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "shopify_hint_fallback",
+      "modelKey": "last_touch",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "shopify_hint_fallback",
+      "modelKey": "last_non_direct",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "shopify_hint_fallback",
+      "modelKey": "linear",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "shopify_hint_fallback",
+      "modelKey": "clicks_only",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "shopify_hint_fallback",
+      "modelKey": "hinted_fallback_only",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "same_timestamp_tie",
+      "modelKey": "first_touch",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "same_timestamp_tie",
+      "modelKey": "last_touch",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "same_timestamp_tie",
+      "modelKey": "last_non_direct",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "same_timestamp_tie",
+      "modelKey": "linear",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "same_timestamp_tie",
+      "modelKey": "clicks_only",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "same_timestamp_tie",
+      "modelKey": "hinted_fallback_only",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "no_eligible_touches",
+      "modelKey": "first_touch",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "no_eligible_touches",
+      "modelKey": "last_touch",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "no_eligible_touches",
+      "modelKey": "last_non_direct",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "no_eligible_touches",
+      "modelKey": "linear",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "no_eligible_touches",
+      "modelKey": "clicks_only",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    },
+    {
+      "cohort": "no_eligible_touches",
+      "modelKey": "hinted_fallback_only",
+      "orderCount": 1,
+      "primaryWinnerMismatchRate": 0,
+      "directClassificationMismatchRate": 0,
+      "lookbackEligibilityMismatchRate": 0,
+      "syntheticFallbackUsageMismatchRate": 0,
+      "severity": "green"
+    }
+  ],
+  "orderLevelMismatches": [],
+  "topVarianceDrivers": []
+}

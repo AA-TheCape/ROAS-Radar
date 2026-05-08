@@ -8,6 +8,7 @@ import { env, getApiAllowedOrigins } from './config/env.js';
 import { checkDatabaseHealth } from './db/pool.js';
 import { createAuthRouter, createUserAdminRouter } from './modules/auth/index.js';
 import { createAttributionAdminRouter } from './modules/attribution/admin.js';
+import { createAttributionReadRouter } from './modules/attribution/read-api.js';
 import { assertGa4BigQueryIngestionConfig } from './modules/attribution/ga4-bigquery-config.js';
 import { createGoogleAdsAdminRouter, createGoogleAdsPublicRouter } from './modules/google-ads/index.js';
 import { createMetaAdsAdminRouter, createMetaAdsPublicRouter } from './modules/meta-ads/index.js';
@@ -98,6 +99,7 @@ export function createApp() {
   app.use('/api/settings', createSettingsRouter());
   app.use('/api/reporting/meta-order-value', createMetaOrderValueRouter());
   app.use('/api/reporting', createReportingRouter());
+  app.use('/api/attribution', createAttributionReadRouter());
   app.use('/api/internal/identity', createInternalIdentityRouter());
   app.use('/api/admin/identity', createIdentityAdminRouter());
   app.use('/api/admin/users', createUserAdminRouter());

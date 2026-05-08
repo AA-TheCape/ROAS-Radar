@@ -11,6 +11,7 @@
     "db:migrate:check": "node scripts/check-migrations.mjs",
     "loadtest:large-payloads": "node scripts/load-test-large-payloads.mjs",
     "db:verify-raw-payload-query-plans": "node scripts/verify-raw-payload-query-plans.mjs",
+    "db:verify-attribution-v1-query-plans": "node scripts/verify-attribution-v1-query-plans.mjs",
     "db:verify-identity-graph-query-plans": "node scripts/verify-identity-graph-query-plans.mjs",
     "dev": "tsx watch src/server.ts",
     "lint": "biome lint src scripts test",
@@ -39,6 +40,7 @@
     "identity:backfill-graph": "tsx src/admin/backfill-identity-graph.ts",
     "identity:backfill-graph:start": "node dist/src/identity-graph-backfill-worker.js",
     "dead-letters:replay": "tsx src/admin/replay-dead-letters.ts",
+    "postinstall": "npm --prefix dashboard install --include=dev",
     "ga4:ingest": "tsx src/ga4-session-attribution-worker.ts",
     "ga4:ingest:start": "node dist/src/ga4-session-attribution-worker.js",
     "test": "node scripts/run-tests.mjs all",
@@ -47,6 +49,7 @@
     "test:integration": "node scripts/run-tests.mjs integration",
     "test:attribution": "node scripts/run-attribution-tests.mjs critical",
     "test:attribution:coverage": "node scripts/run-attribution-tests.mjs coverage",
+    "benchmark:northbeam": "tsx scripts/generate-northbeam-benchmark-report.ts",
     "test:dead-letters": "node --import tsx --test test/dead-letter-replay.test.ts"
   },
   "dependencies": {
