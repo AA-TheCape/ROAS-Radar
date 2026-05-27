@@ -15,6 +15,8 @@ import {
   normalizeAttributionResultRecordV1,
   normalizeAttributionTouchpointInputV1,
   normalizeAttributionUtcTimestamp,
+  normalizeMetaDeterministicAttributionAggregateV1,
+  normalizeMetaDeterministicAttributionIdentityTupleV1,
   normalizeOrderAttributionBackfillRequest,
   orderAttributionBackfillEnqueueResponseSchema,
   orderAttributionBackfillJobResponseSchema
@@ -545,17 +547,100 @@ test('attribution v1 schemas reject timestamps without timezone offsets', () => 
   );
 });
 
-test('attribution engine package publishes six JSON schema documents for canonical v1 records', () => {
+test('Meta deterministic attribution schemas enforce identity, verification, and window contracts', () => {
+  const identity = normalizeMetaDeterministicAttributionIdentityTupleV1({
+    organization_id: 1,
+    ad_account_id: 'act_123',
+    report_date: '2026-05-20',
+    attribution_family: 'deterministic_views',
+    attribution_window: '7d_view',
+    campaign_id: 'campaign-1',
+    adset_id: null,
+    ad_id: null
+  });
+
+  const aggregate = normalizeMetaDeterministicAttributionAggregateV1({
+    schema_version: 1,
+    platform: 'meta_ads',
+    organization_id: 1,
+    meta_connection_id: 2,
+    source_id: 3,
+    raw_event_id: 4,
+    fact_id: null,
+    ad_account_id: 'act_123',
+    report_date: '2026-05-20',
+    campaign_id: 'campaign-1',
+    campaign_name: 'Campaign',
+    adset_id: null,
+    adset_name: null,
+    ad_id: null,
+    ad_name: null,
+    event_type: 'view',
+    attribution_family: 'deterministic_views',
+    attribution_window: '7d_view',
+    attribution_window_days: 7,
+    aggregate_count: 42,
+    evidence_origin: 'api',
+    platform_verified: true,
+    verification_status: 'verified',
+    verified_by_source_id: 3,
+    verified_at_utc: '2026-05-21T12:00:00Z',
+    raw_record_metadata: {
+      rawTable: 'raw_deterministic_events',
+      rawEventId: 4
+    }
+  });
+
+  assert.equal(identity.campaign_id, 'campaign-1');
+  assert.equal(aggregate.verified_at_utc, '2026-05-21T12:00:00.000Z');
+  assert.equal(aggregate.attribution_window_days, 7);
+
+  assert.throws(
+    () =>
+      normalizeMetaDeterministicAttributionAggregateV1({
+        ...aggregate,
+        event_type: 'impression'
+      }),
+    /event_type must match attribution_family/
+  );
+
+  assert.throws(
+    () =>
+      normalizeMetaDeterministicAttributionAggregateV1({
+        ...aggregate,
+        verified_by_source_id: null
+      }),
+    /verified Meta aggregate rows require verified status/
+  );
+
+  assert.throws(
+    () =>
+      normalizeMetaDeterministicAttributionIdentityTupleV1({
+        ...identity,
+        campaign_id: null,
+        ad_id: null
+      }),
+    /campaign_id or ad_id is required/
+  );
+});
+
+test('attribution engine package publishes JSON schema documents for canonical v1 records', () => {
   assert.deepEqual(Object.keys(attributionEngineV1JsonSchemas).sort(), [
     'AttributionCreditRecordV1',
     'AttributionExplainRecordV1',
     'AttributionHintInputV1',
     'AttributionOrderInputV1',
     'AttributionResultRecordV1',
-    'AttributionTouchpointInputV1'
+    'AttributionTouchpointInputV1',
+    'MetaDeterministicAttributionAggregateV1',
+    'MetaDeterministicAttributionIdentityTupleV1'
   ]);
 
   assert.equal(attributionEngineV1JsonSchemas.AttributionOrderInputV1.title, 'AttributionOrderInputV1');
   assert.equal(attributionEngineV1JsonSchemas.AttributionTouchpointInputV1.type, 'object');
   assert.equal(attributionEngineV1JsonSchemas.AttributionResultRecordV1.additionalProperties, false);
+  assert.equal(
+    attributionEngineV1JsonSchemas.MetaDeterministicAttributionAggregateV1.title,
+    'MetaDeterministicAttributionAggregateV1'
+  );
 });
