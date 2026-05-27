@@ -35,6 +35,8 @@
     "data-quality:check:start": "node dist/src/data-quality-worker.js",
     "session-attribution:retention": "tsx src/session-attribution-retention-worker.ts",
     "session-attribution:retention:start": "node dist/src/session-attribution-retention-worker.js",
+    "attribution-qa:retention": "tsx src/attribution-qa-retention-worker.ts",
+    "attribution-qa:retention:start": "node dist/src/attribution-qa-retention-worker.js",
     "attribution:backfill-orders": "tsx src/admin/backfill-order-attribution.ts",
     "attribution:materialization:start": "node dist/src/order-attribution-materialization-worker.js",
     "identity:backfill-graph": "tsx src/admin/backfill-identity-graph.ts",

@@ -1,0 +1,154 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import type { PoolClient } from "pg";
+
+import { runAttributionQaRetention } from "../src/modules/attribution/qa-retention.js";
+
+type EvidenceRow = {
+	id: number;
+	retainedUntil: Date;
+};
+
+type OrderRow = {
+	id: number;
+	attributionSnapshotUpdatedAt: Date | null;
+	attributionSnapshot: Record<string, unknown> | null;
+};
+
+function buildFakeClient(input: {
+	evidence: EvidenceRow[];
+	orders: OrderRow[];
+}): PoolClient {
+	return {
+		query: async (text: string, params?: unknown[]) => {
+			const cutoffAt = params?.[0] as Date;
+			const batchSize = params?.[1] as number;
+
+			if (text.includes("DELETE FROM attribution_raw_evidence")) {
+				const expiredIds = input.evidence
+					.filter((row) => row.retainedUntil.getTime() < cutoffAt.getTime())
+					.sort(
+						(left, right) =>
+							left.retainedUntil.getTime() - right.retainedUntil.getTime() ||
+							left.id - right.id,
+					)
+					.slice(0, batchSize)
+					.map((row) => row.id);
+
+				input.evidence.splice(
+					0,
+					input.evidence.length,
+					...input.evidence.filter((row) => !expiredIds.includes(row.id)),
+				);
+
+				return { rows: [], rowCount: expiredIds.length };
+			}
+
+			if (text.includes("UPDATE shopify_orders")) {
+				const expiredOrders = input.orders
+					.filter(
+						(row) =>
+							row.attributionSnapshotUpdatedAt &&
+							row.attributionSnapshotUpdatedAt.getTime() < cutoffAt.getTime() &&
+							row.attributionSnapshot &&
+							Object.hasOwn(row.attributionSnapshot, "qaSnapshot"),
+					)
+					.sort((left, right) => {
+						const leftUpdatedAt =
+							left.attributionSnapshotUpdatedAt?.getTime() ?? 0;
+						const rightUpdatedAt =
+							right.attributionSnapshotUpdatedAt?.getTime() ?? 0;
+						return leftUpdatedAt - rightUpdatedAt || left.id - right.id;
+					})
+					.slice(0, batchSize);
+
+				for (const order of expiredOrders) {
+					const { qaSnapshot: _qaSnapshot, ...operationalSnapshot } =
+						order.attributionSnapshot ?? {};
+					order.attributionSnapshot = operationalSnapshot;
+				}
+
+				return { rows: [], rowCount: expiredOrders.length };
+			}
+
+			throw new Error(`Unexpected query: ${text}`);
+		},
+	} as PoolClient;
+}
+
+test("runAttributionQaRetention deletes only expired raw evidence and prunes expired QA snapshots", async () => {
+	const evidence: EvidenceRow[] = [
+		{ id: 1, retainedUntil: new Date("2026-03-20T00:00:00.000Z") },
+		{ id: 2, retainedUntil: new Date("2026-03-21T00:00:00.000Z") },
+		{ id: 3, retainedUntil: new Date("2026-03-26T12:00:00.000Z") },
+		{ id: 4, retainedUntil: new Date("2026-04-01T00:00:00.000Z") },
+	];
+	const orders: OrderRow[] = [
+		{
+			id: 1,
+			attributionSnapshotUpdatedAt: new Date("2026-03-20T00:00:00.000Z"),
+			attributionSnapshot: {
+				tier: "deterministic_first_party",
+				qaSnapshot: {},
+			},
+		},
+		{
+			id: 2,
+			attributionSnapshotUpdatedAt: new Date("2026-03-26T12:00:00.000Z"),
+			attributionSnapshot: {
+				tier: "deterministic_first_party",
+				qaSnapshot: {},
+			},
+		},
+		{
+			id: 3,
+			attributionSnapshotUpdatedAt: new Date("2026-03-19T00:00:00.000Z"),
+			attributionSnapshot: { tier: "deterministic_first_party" },
+		},
+	];
+	const client = buildFakeClient({ evidence, orders });
+
+	const result = await runAttributionQaRetention({
+		client,
+		asOf: new Date("2026-04-25T12:00:00.000Z"),
+		retentionDays: 30,
+		batchSize: 1,
+		maxBatches: 2,
+		emitLogs: false,
+	});
+
+	assert.deepEqual(result, {
+		cutoffAt: "2026-03-26T12:00:00.000Z",
+		retentionDays: 30,
+		batchSize: 1,
+		maxBatches: 2,
+		batchesRun: 2,
+		deletedRawEvidence: 2,
+		prunedSnapshots: 1,
+	});
+	assert.deepEqual(
+		evidence.map((row) => row.id),
+		[3, 4],
+	);
+	assert.deepEqual(orders[0].attributionSnapshot, {
+		tier: "deterministic_first_party",
+	});
+	assert.deepEqual(orders[1].attributionSnapshot, {
+		tier: "deterministic_first_party",
+		qaSnapshot: {},
+	});
+
+	const secondResult = await runAttributionQaRetention({
+		client,
+		asOf: new Date("2026-04-25T12:00:00.000Z"),
+		retentionDays: 30,
+		batchSize: 10,
+		maxBatches: 5,
+		emitLogs: false,
+	});
+
+	assert.equal(secondResult.deletedRawEvidence, 0);
+	assert.equal(secondResult.prunedSnapshots, 0);
+	assert.equal(secondResult.batchesRun, 0);
+});

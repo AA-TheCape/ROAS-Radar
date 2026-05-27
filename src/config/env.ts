@@ -7,6 +7,9 @@ type Env = {
   API_ALLOWED_ORIGINS: string[];
   APP_SESSION_TTL_HOURS: number;
   ATTRIBUTION_JOB_BATCH_SIZE: number;
+  ATTRIBUTION_QA_RETENTION_BATCH_SIZE: number;
+  ATTRIBUTION_QA_RETENTION_DAYS: number;
+  ATTRIBUTION_QA_RETENTION_MAX_BATCHES: number;
   ATTRIBUTION_STALE_SCAN_BATCH_SIZE: number;
   ATTRIBUTION_WORKER_LOOP: boolean;
   ATTRIBUTION_WORKER_POLL_INTERVAL_MS: number;
@@ -176,6 +179,9 @@ const parsers: { [TKey in keyof Env]: EnvParser<Env[TKey]> } = {
   API_ALLOWED_ORIGINS: (name) => parseStringList(name, []),
   APP_SESSION_TTL_HOURS: (name) => parseInteger(name, 168),
   ATTRIBUTION_JOB_BATCH_SIZE: (name) => parseInteger(name, 50),
+  ATTRIBUTION_QA_RETENTION_BATCH_SIZE: (name) => parseInteger(name, 500),
+  ATTRIBUTION_QA_RETENTION_DAYS: (name) => parseInteger(name, 30),
+  ATTRIBUTION_QA_RETENTION_MAX_BATCHES: (name) => parseInteger(name, 100),
   ATTRIBUTION_STALE_SCAN_BATCH_SIZE: (name) => parseInteger(name, 100),
   ATTRIBUTION_WORKER_LOOP: (name) => parseBoolean(name, true),
   ATTRIBUTION_WORKER_POLL_INTERVAL_MS: (name) => parseInteger(name, 30000),

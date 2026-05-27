@@ -59,6 +59,24 @@ test('cloud run metadata refresh jobs use provider-specific secret bindings', ()
   assert.doesNotMatch(googleAdsSection, /META_ADS_(APP_SECRET|ENCRYPTION_KEY)/);
 });
 
+test('cloud run deploy script manages attribution QA retention job and scheduler', () => {
+  const script = readRepoFile('infra/cloud-run/deploy.sh');
+  const qaRetentionSection = extractSection(
+    script,
+    'echo "Deploying attribution QA retention job $ATTRIBUTION_QA_RETENTION_JOB_NAME"',
+    'echo "Deploying data quality job $DATA_QUALITY_JOB_NAME"'
+  );
+
+  assert.match(qaRetentionSection, /--args=run,attribution-qa:retention:start/);
+  assert.match(qaRetentionSection, /ATTRIBUTION_QA_RETENTION_DAYS=\$ATTRIBUTION_QA_RETENTION_DAYS/);
+  assert.match(qaRetentionSection, /ATTRIBUTION_QA_RETENTION_BATCH_SIZE=\$ATTRIBUTION_QA_RETENTION_BATCH_SIZE/);
+  assert.match(qaRetentionSection, /DATABASE_URL=DATABASE_URL:latest/);
+  assert.match(
+    script,
+    /upsert_scheduler_job "\$ATTRIBUTION_QA_RETENTION_SCHEDULER_JOB_NAME" "\$ATTRIBUTION_QA_RETENTION_JOB_NAME" "\$ATTRIBUTION_QA_RETENTION_SCHEDULE"/
+  );
+});
+
 test('cloud run environment templates declare per-platform metadata scheduler controls', () => {
   for (const file of [
     'infra/cloud-run/environments/ENVIRONMENT.env',
@@ -76,6 +94,10 @@ test('cloud run environment templates declare per-platform metadata scheduler co
     assert.match(text, /GOOGLE_ADS_METADATA_SCHEDULE=/);
     assert.match(text, /GOOGLE_ADS_METADATA_SCHEDULER_ENABLED=/);
     assert.match(text, /GOOGLE_ADS_METADATA_REFRESH_REQUESTED_BY=/);
+    assert.match(text, /ATTRIBUTION_QA_RETENTION_JOB_NAME=/);
+    assert.match(text, /ATTRIBUTION_QA_RETENTION_SCHEDULER_JOB_NAME=/);
+    assert.match(text, /ATTRIBUTION_QA_RETENTION_SCHEDULE=/);
+    assert.match(text, /ATTRIBUTION_QA_RETENTION_DAYS="30"/);
   }
 });
 

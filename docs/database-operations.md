@@ -174,3 +174,12 @@ node scripts/verify-ga4-fallback-query-plans.mjs
 ```
 
 `order_attribution_links` rows are not pruned by the 30-day session cleanup job.
+
+Attribution QA raw evidence and embedded QA snapshots are pruned by the scheduled `attribution-qa:retention` Cloud Run job. Its default window is 30 days and can be changed with `ATTRIBUTION_QA_RETENTION_DAYS`; batch controls are `ATTRIBUTION_QA_RETENTION_BATCH_SIZE` and `ATTRIBUTION_QA_RETENTION_MAX_BATCHES`.
+
+The cleanup contract is:
+
+1. delete expired `attribution_raw_evidence` rows in batches using `retained_until`
+2. remove only the expired `qaSnapshot` key from `shopify_orders.attribution_snapshot` when `attribution_snapshot_updated_at` is outside the retention window
+3. leave the operational attribution summary fields in `shopify_orders.attribution_snapshot` intact
+4. emit `attribution_qa_retention_batch_completed` and `attribution_qa_retention_completed` structured logs with deleted/pruned counts
