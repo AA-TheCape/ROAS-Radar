@@ -38,7 +38,7 @@ import {
 	type AttributionChannelTotalsResponse,
 	type AttributionExplainabilityResponse,
 	type AttributionFilters,
-	type AttributionQaPayloadResponse,
+	type AttributionQaDebugResponse,
 	type AttributionResultRow,
 	type AuthUser,
 	type CampaignRow,
@@ -718,7 +718,7 @@ function App() {
     error: null
   });
   const [attributionQaPayloadSection, setAttributionQaPayloadSection] = useState<
-    AsyncSection<AttributionQaPayloadResponse>
+    AsyncSection<AttributionQaDebugResponse>
   >({
     data: null,
     loading: false,
@@ -1207,14 +1207,19 @@ function App() {
   }, []);
 
   const openOrderDetails = useCallback(async (shopifyOrderId: string) => {
+    const canLoadAdminQa = authState.user?.isAdmin === true;
     setCurrentPage('order-details');
     setSelectedOrderId(shopifyOrderId);
     setOrderDetailsSection(createLoadingSection());
-    setAttributionQaPayloadSection(createLoadingSection());
+    setAttributionQaPayloadSection(canLoadAdminQa ? createLoadingSection() : {
+      data: null,
+      loading: false,
+      error: null
+    });
 
     const [orderDetailsResult, qaPayloadResult] = await Promise.allSettled([
       fetchOrderDetails(shopifyOrderId),
-      fetchAttributionQaPayload(shopifyOrderId)
+      canLoadAdminQa ? fetchAttributionQaPayload(shopifyOrderId) : Promise.resolve(null)
     ]);
 
     if (orderDetailsResult.status === 'fulfilled') {
@@ -1229,9 +1234,15 @@ function App() {
       );
     }
 
-    if (qaPayloadResult.status === 'fulfilled') {
+    if (!canLoadAdminQa) {
+      setAttributionQaPayloadSection({
+        data: null,
+        loading: false,
+        error: null
+      });
+    } else if (qaPayloadResult.status === 'fulfilled' && qaPayloadResult.value) {
       setAttributionQaPayloadSection(createResolvedSection(qaPayloadResult.value));
-    } else {
+    } else if (qaPayloadResult.status === 'rejected') {
       setAttributionQaPayloadSection(
         createErroredSection(
           qaPayloadResult.reason instanceof Error
@@ -1239,8 +1250,10 @@ function App() {
             : 'Failed to load attribution QA payload'
         )
       );
+    } else {
+      setAttributionQaPayloadSection(createErroredSection('Failed to load attribution QA payload'));
     }
-  }, []);
+  }, [authState.user?.isAdmin]);
 
   const closeOrderDetails = useCallback(() => {
     setCurrentPage('dashboard');
@@ -2232,25 +2245,28 @@ function App() {
               />
             </Suspense>
           </Panel>
-          <Panel
-            title="Attribution QA tooling"
-            description="Per-order QA payload view for candidate matching, winner rationale, diagnostics, redacted identifiers, and GA4 fallback details."
-            wide
-          >
-            <Suspense
-              fallback={
-                <SectionState loading empty={false} error={null} emptyLabel="">
-                  <div />
-                </SectionState>
-              }
+          {isAdmin ? (
+            <Panel
+              title="Attribution QA tooling"
+              description="Per-order QA payload view for candidate matching, winner rationale, diagnostics, raw evidence, and GA4 fallback details."
+              wide
             >
-              <AttributionQaToolingView
-                selectedOrderId={selectedOrderId}
-                reportingTimezone={reportingTimezone}
-                qaPayloadSection={attributionQaPayloadSection}
-              />
-            </Suspense>
-          </Panel>
+              <Suspense
+                fallback={
+                  <SectionState loading empty={false} error={null} emptyLabel="">
+                    <div />
+                  </SectionState>
+                }
+              >
+                <AttributionQaToolingView
+                  selectedOrderId={selectedOrderId}
+                  reportingTimezone={reportingTimezone}
+                  qaPayloadSection={attributionQaPayloadSection}
+                  onLookupOrder={(shopifyOrderId) => void openOrderDetails(shopifyOrderId)}
+                />
+              </Suspense>
+            </Panel>
+          ) : null}
         </section>
       ) : null}
 

@@ -1,13 +1,19 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, type FormEvent } from "react";
 
 import type {
 	AttributionQaCandidateV1,
 	AttributionQaPayloadV1,
 } from "../../../packages/attribution-schema/index.js";
-import type { AttributionQaPayloadResponse } from "../lib/api";
+import type {
+	AttributionQaDebugResponse,
+	AttributionQaEvidenceState,
+	AttributionQaRawEvidenceRecord,
+} from "../lib/api";
 import { formatCurrency, formatDateTimeLabel, formatNumber } from "../lib/format";
 import {
 	Badge,
+	Button,
+	ButtonRow,
 	Card,
 	CardDescription,
 	CardHeader,
@@ -16,6 +22,9 @@ import {
 	DetailList,
 	EmptyState,
 	Eyebrow,
+	Field,
+	Form,
+	Input,
 	MetricCopy,
 	MetricValue,
 	PrimaryCell,
@@ -41,7 +50,8 @@ type AsyncSection<T> = {
 type AttributionQaToolingViewProps = {
 	selectedOrderId: string | null;
 	reportingTimezone: string;
-	qaPayloadSection: AsyncSection<AttributionQaPayloadResponse>;
+	qaPayloadSection: AsyncSection<AttributionQaDebugResponse>;
+	onLookupOrder: (shopifyOrderId: string) => void;
 };
 
 const CANDIDATE_GROUP_LABELS: Record<
@@ -144,8 +154,24 @@ function sanitizeUnknownForDisplay(value: unknown): unknown {
 	return Object.fromEntries(
 		Object.entries(value).map(([key, item]) => [
 			key,
-			sanitizeUnknownForDisplay(item),
+			isSensitiveObjectKey(key) ? redacted(String(item ?? "")) : sanitizeUnknownForDisplay(item),
 		]),
+	);
+}
+
+function isSensitiveObjectKey(key: string): boolean {
+	const normalized = key.toLowerCase();
+	return (
+		normalized.includes("token") ||
+		normalized.includes("email") ||
+		normalized.includes("password") ||
+		normalized.includes("secret") ||
+		normalized.includes("click_id") ||
+		normalized === "gclid" ||
+		normalized === "fbclid" ||
+		normalized === "gbraid" ||
+		normalized === "wbraid" ||
+		normalized === "msclkid"
 	);
 }
 
@@ -289,6 +315,93 @@ function QaCard({
 	);
 }
 
+function evidenceStateTone(state: AttributionQaEvidenceState) {
+	if (state === "available") {
+		return "success" as const;
+	}
+
+	if (state === "expired_or_pruned") {
+		return "warning" as const;
+	}
+
+	return "neutral" as const;
+}
+
+function formatEvidenceState(state: AttributionQaEvidenceState): string {
+	return state.replace(/_/g, " ");
+}
+
+function JsonViewer({ value }: { value: unknown }) {
+	return (
+		<pre className="max-h-[32rem] overflow-auto rounded-card border border-white/8 bg-[#132130] p-4 font-mono text-[0.78rem] leading-6 text-slate-200 shadow-inset-soft">
+			{JSON.stringify(sanitizeUnknownForDisplay(value), null, 2)}
+		</pre>
+	);
+}
+
+function RawEvidenceViewer({
+	title,
+	description,
+	records,
+	reportingTimezone,
+}: {
+	title: string;
+	description: string;
+	records: AttributionQaRawEvidenceRecord[];
+	reportingTimezone: string;
+}) {
+	return (
+		<QaCard title={title} description={description}>
+			{records.length === 0 ? (
+				<EmptyState
+					title="No raw evidence retained"
+					description="No retained raw records were returned for the selected attribution run."
+					compact
+					tone="muted"
+				/>
+			) : (
+				<div className="grid gap-4">
+					{records.map((record) => (
+						<div
+							key={record.id}
+							className="grid gap-3 rounded-card border border-line/60 bg-canvas-tint/70 p-4"
+						>
+							<div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+								<PrimaryCell>
+									<strong>{record.sourceTable}</strong>
+									<span className="break-all">{record.sourceRecordId}</span>
+									<span>
+										{record.occurredAtUtc
+											? formatDateTimeLabel(record.occurredAtUtc, reportingTimezone)
+											: "No event timestamp"}
+									</span>
+								</PrimaryCell>
+								<div className="flex flex-wrap gap-2">
+									<Badge tone={record.evidenceStatus === "valid" ? "success" : "danger"}>
+										{formatContractValue(record.evidenceStatus)}
+									</Badge>
+									<Badge tone="neutral">{formatNumber(record.payloadSizeBytes)} bytes</Badge>
+									<Badge tone="neutral">Session {redacted(record.sessionId)}</Badge>
+								</div>
+							</div>
+							<JsonViewer
+								value={{
+									metadata: record.normalizedMetadata,
+									rawPayload: record.rawPayload,
+									errorCode: record.errorCode,
+									errorMessage: record.errorMessage,
+									payloadHash: record.payloadHash,
+									retainedUntil: record.retainedUntil,
+								}}
+							/>
+						</div>
+					))}
+				</div>
+			)}
+		</QaCard>
+	);
+}
+
 function CandidateTable({
 	title,
 	description,
@@ -388,12 +501,74 @@ function CandidateTable({
 	);
 }
 
+function WinnerRationaleTimeline({
+	payload,
+	reportingTimezone,
+}: {
+	payload: AttributionQaPayloadV1;
+	reportingTimezone: string;
+}) {
+	const records = [...payload.explainability].sort((left, right) => {
+		const leftTime = new Date(left.created_at_utc).getTime();
+		const rightTime = new Date(right.created_at_utc).getTime();
+		return leftTime - rightTime;
+	});
+
+	return (
+		<QaCard
+			title="Winner rationale timeline"
+			description="Explainability decisions in evaluation order, ending with the selected outcome when one exists."
+		>
+			{records.length === 0 ? (
+				<EmptyState
+					title="No rationale events"
+					description="The QA payload did not include explainability records for this order."
+					compact
+					tone="muted"
+				/>
+			) : (
+				<ol className="grid gap-3">
+					{records.map((record, index) => (
+						<li
+							key={`${record.run_id}-${record.model_key ?? "none"}-${record.touchpoint_id ?? "none"}-${index}`}
+							className="rounded-card border border-line/60 bg-canvas-tint/70 px-4 py-3"
+						>
+							<div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+								<PrimaryCell>
+									<strong>{formatContractValue(record.explain_stage)}</strong>
+									<span>{formatContractValue(record.decision_reason)}</span>
+									<span>
+										{formatDateTimeLabel(record.created_at_utc, reportingTimezone)}
+									</span>
+								</PrimaryCell>
+								<div className="flex flex-wrap gap-2">
+									<Badge tone={record.decision === "winner" ? "success" : "neutral"}>
+										{formatContractValue(record.decision)}
+									</Badge>
+									<Badge tone="brand">
+										{formatContractValue(record.model_key)}
+									</Badge>
+									{record.touchpoint_id ? (
+										<Badge tone="teal">{record.touchpoint_id}</Badge>
+									) : null}
+								</div>
+							</div>
+						</li>
+					))}
+				</ol>
+			)}
+		</QaCard>
+	);
+}
+
 export default function AttributionQaToolingView({
 	selectedOrderId,
 	reportingTimezone,
 	qaPayloadSection,
+	onLookupOrder,
 }: AttributionQaToolingViewProps) {
 	const [showRawPayload, setShowRawPayload] = useState(false);
+	const [lookupOrderId, setLookupOrderId] = useState(selectedOrderId ?? "");
 	const response = qaPayloadSection.data;
 	const payload = useMemo(
 		() => (response?.payload ? sanitizeQaPayloadForDisplay(response.payload) : null),
@@ -419,20 +594,55 @@ export default function AttributionQaToolingView({
 		payload?.diagnostics.normalization_failures.filter(
 			(failure) => failure.scope !== "order",
 		) ?? [];
+	const evidenceState = response?.evidenceState;
+
+	useEffect(() => {
+		setLookupOrderId(selectedOrderId ?? "");
+	}, [selectedOrderId]);
+
+	function handleLookupSubmit(event: FormEvent<HTMLFormElement>) {
+		event.preventDefault();
+		const trimmedOrderId = lookupOrderId.trim();
+		if (trimmedOrderId) {
+			onLookupOrder(trimmedOrderId);
+		}
+	}
 
 	return (
-		<SectionState
-			loading={qaPayloadSection.loading}
-			error={qaPayloadSection.error}
-			empty={!payload}
-			emptyLabel={
-				selectedOrderId
-					? `No attribution QA payload was loaded for order ${selectedOrderId}.`
-					: "No order selected."
-			}
-		>
-			<React.Fragment>
-				{payload ? (
+		<div className="grid gap-5">
+			<Form onSubmit={handleLookupSubmit} className="rounded-card border border-line/60 bg-surface/80 p-4">
+				<Field
+					label="Shopify order ID"
+					htmlFor="attribution-qa-order-lookup"
+					description="Load the admin QA payload and retained raw evidence for a specific Shopify order."
+				>
+					<Input
+						id="attribution-qa-order-lookup"
+						value={lookupOrderId}
+						onChange={(event) => setLookupOrderId(event.target.value)}
+						placeholder="Enter Shopify order ID"
+						autoComplete="off"
+					/>
+				</Field>
+				<ButtonRow>
+					<Button type="submit" disabled={qaPayloadSection.loading || !lookupOrderId.trim()}>
+						{qaPayloadSection.loading ? "Loading QA payload..." : "Load QA payload"}
+					</Button>
+				</ButtonRow>
+			</Form>
+
+			<SectionState
+				loading={qaPayloadSection.loading}
+				error={qaPayloadSection.error}
+				empty={!payload}
+				emptyLabel={
+					selectedOrderId
+						? `No attribution QA payload was loaded for order ${selectedOrderId}.`
+						: "Enter an order ID to load attribution QA."
+				}
+			>
+				<>
+					{payload ? (
 					<div className="grid gap-section">
 					<div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
 						<QaMetricCard
@@ -461,6 +671,42 @@ export default function AttributionQaToolingView({
 							detail={`${formatNumber(payload.candidates.ga4_fallback.filter((candidate) => candidate.selected).length)} selected`}
 						/>
 					</div>
+
+					{evidenceState ? (
+						<QaCard
+							title="Evidence retention"
+							description="Availability of raw retained attribution inputs for this order and selected run."
+						>
+							<div className="flex flex-wrap gap-2">
+								<Badge tone={evidenceStateTone(evidenceState.attributionRun)}>
+									Run {formatEvidenceState(evidenceState.attributionRun)}
+								</Badge>
+								<Badge tone={evidenceStateTone(evidenceState.rawShopifyHints)}>
+									Shopify hints {formatEvidenceState(evidenceState.rawShopifyHints)}
+								</Badge>
+								<Badge tone={evidenceStateTone(evidenceState.rawTouchpoints)}>
+									Touchpoints {formatEvidenceState(evidenceState.rawTouchpoints)}
+								</Badge>
+								<Badge tone={evidenceStateTone(evidenceState.ga4FallbackCandidate)}>
+									GA4 candidate {formatEvidenceState(evidenceState.ga4FallbackCandidate)}
+								</Badge>
+							</div>
+							<DetailList className="mt-4 xl:grid-cols-3">
+								<div>
+									<dt>Selected run</dt>
+									<dd>{response?.selectedRunId ?? "Not available"}</dd>
+								</div>
+								<div>
+									<dt>Run selection</dt>
+									<dd>{formatContractValue(response?.selectedRunReason)}</dd>
+								</div>
+								<div>
+									<dt>Debug generated</dt>
+									<dd>{formatDateTimeLabel(response?.generatedAtUtc ?? null, reportingTimezone)}</dd>
+								</div>
+							</DetailList>
+						</QaCard>
+					) : null}
 
 					<div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
 						<QaCard
@@ -555,6 +801,11 @@ export default function AttributionQaToolingView({
 						</QaCard>
 					</div>
 
+					<WinnerRationaleTimeline
+						payload={payload}
+						reportingTimezone={reportingTimezone}
+					/>
+
 					<div className="grid gap-4 xl:grid-cols-2">
 						<QaCard
 							title="Missing fields"
@@ -633,6 +884,59 @@ export default function AttributionQaToolingView({
 							</div>
 						</QaCard>
 					</div>
+
+					<QaCard
+						title="GA4 fallback card"
+						description="Persisted fallback candidate lookup used to explain whether GA4 evidence was available, missing, or past retention."
+					>
+						{response?.ga4FallbackCandidate ? (
+							<DetailList className="xl:grid-cols-3">
+								<div>
+									<dt>Candidate</dt>
+									<dd className="break-all">{response.ga4FallbackCandidate.candidateKey}</dd>
+								</div>
+								<div>
+									<dt>Matched on</dt>
+									<dd>{formatContractValue(response.ga4FallbackCandidate.matchedOn)}</dd>
+								</div>
+								<div>
+									<dt>Occurred</dt>
+									<dd>{formatDateTimeLabel(response.ga4FallbackCandidate.occurredAt, reportingTimezone)}</dd>
+								</div>
+								<div>
+									<dt>Channel</dt>
+									<dd>{`${response.ga4FallbackCandidate.source ?? "unknown"} / ${response.ga4FallbackCandidate.medium ?? "unknown"}`}</dd>
+								</div>
+								<div>
+									<dt>Campaign</dt>
+									<dd>{response.ga4FallbackCandidate.campaign ?? "No campaign"}</dd>
+								</div>
+								<div>
+									<dt>Required fields</dt>
+									<dd>{response.ga4FallbackCandidate.sessionHasRequiredFields ? "Present" : "Missing"}</dd>
+								</div>
+								<div>
+									<dt>Export hour</dt>
+									<dd>{formatDateTimeLabel(response.ga4FallbackCandidate.sourceExportHour, reportingTimezone)}</dd>
+								</div>
+								<div>
+									<dt>Dataset</dt>
+									<dd>{response.ga4FallbackCandidate.sourceDataset}</dd>
+								</div>
+								<div>
+									<dt>Retained until</dt>
+									<dd>{formatDateTimeLabel(response.ga4FallbackCandidate.retainedUntil, reportingTimezone)}</dd>
+								</div>
+							</DetailList>
+						) : (
+							<EmptyState
+								title="No GA4 fallback candidate"
+								description="The admin QA endpoint did not return a retained GA4 fallback candidate for this order."
+								compact
+								tone="muted"
+							/>
+						)}
+					</QaCard>
 
 					<div className="grid gap-4">
 						<CandidateTable
@@ -724,14 +1028,32 @@ export default function AttributionQaToolingView({
 							{showRawPayload ? "Hide raw payload" : "Show raw payload"}
 						</button>
 							{showRawPayload ? (
-								<pre className="mt-4 max-h-[32rem] overflow-auto rounded-card border border-white/8 bg-[#132130] p-4 font-mono text-[0.78rem] leading-6 text-slate-200 shadow-inset-soft">
-									{JSON.stringify(payload, null, 2)}
-								</pre>
+								<div className="mt-4">
+									<JsonViewer value={payload} />
+								</div>
 							) : null}
 						</QaCard>
+
+						<div className="grid gap-4 xl:grid-cols-2">
+							<RawEvidenceViewer
+								title="Raw Shopify hints JSON"
+								description="Retained raw Shopify hint evidence for this attribution run."
+								records={response?.rawShopifyHints ?? []}
+								reportingTimezone={reportingTimezone}
+							/>
+							<RawEvidenceViewer
+								title="Raw touchpoints JSON"
+								description="Retained raw tracking touchpoint evidence for this attribution run."
+								records={response?.rawTouchpoints ?? []}
+								reportingTimezone={reportingTimezone}
+							/>
+						</div>
 					</div>
-				) : null}
-			</React.Fragment>
-		</SectionState>
+					) : (
+						<div />
+					)}
+				</>
+			</SectionState>
+		</div>
 	);
 }
