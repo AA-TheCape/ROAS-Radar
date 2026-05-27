@@ -79,11 +79,12 @@ async function loadDeterministicCounts(): Promise<{
 	jobs: string;
 	rawRows: string;
 	facts: string;
+	aggregates: string;
 	verifications: string;
 	quarantine: string;
 	checkpoints: string;
 }> {
-	const [jobs, rawRows, facts, verifications, quarantine, checkpoints] =
+	const [jobs, rawRows, facts, aggregates, verifications, quarantine, checkpoints] =
 		await Promise.all([
 		pool.query<{ count: string }>(
 			"SELECT count(*)::text AS count FROM meta_ads_deterministic_sync_jobs",
@@ -93,6 +94,9 @@ async function loadDeterministicCounts(): Promise<{
 		),
 		pool.query<{ count: string }>(
 			"SELECT count(*)::text AS count FROM deterministic_event_facts",
+		),
+		pool.query<{ count: string }>(
+			"SELECT count(*)::text AS count FROM meta_ads_deterministic_attribution_aggregates",
 		),
 		pool.query<{ count: string }>(
 			"SELECT count(*)::text AS count FROM deterministic_event_verification_statuses",
@@ -109,6 +113,7 @@ async function loadDeterministicCounts(): Promise<{
 		jobs: jobs.rows[0].count,
 		rawRows: rawRows.rows[0].count,
 		facts: facts.rows[0].count,
+		aggregates: aggregates.rows[0].count,
 		verifications: verifications.rows[0].count,
 		quarantine: quarantine.rows[0].count,
 		checkpoints: checkpoints.rows[0].count,
@@ -181,7 +186,8 @@ test(
 			assert.equal(firstRun.succeededJobs, 1);
 			assert.equal(firstRun.failedJobs, 0);
 			assert.equal(firstRun.recordsReceived, 2);
-			assert.equal(firstRun.rawRowsFetched, 1);
+			assert.equal(firstRun.rawRowsFetched, 2);
+			assert.equal(firstRun.aggregateRowsUpserted, 2);
 			assert.equal(firstRun.apiRequestCount, 2);
 			assert.equal(requestedUrls.length, 2);
 			assert.match(requestedUrls[1], /act_123456789\/insights/);
@@ -191,6 +197,7 @@ test(
 				jobs: "1",
 				rawRows: "2",
 				facts: "2",
+				aggregates: "2",
 				verifications: "2",
 				quarantine: "1",
 				checkpoints: "1",
@@ -214,6 +221,41 @@ test(
 					platform_verified: true,
 				},
 				{ event_type: "view", event_count: "3", platform_verified: true },
+			]);
+
+			const aggregates = await pool.query<{
+				attribution_family: string;
+				event_type: string;
+				aggregate_count: string;
+				platform_verified: boolean;
+				verification_status: string;
+			}>(
+				`
+        SELECT
+          attribution_family,
+          event_type,
+          aggregate_count::text,
+          platform_verified,
+          verification_status
+        FROM meta_ads_deterministic_attribution_aggregates
+        ORDER BY attribution_family ASC
+      `,
+			);
+			assert.deepEqual(aggregates.rows, [
+				{
+					attribution_family: "deterministic_impressions",
+					event_type: "impression",
+					aggregate_count: "12",
+					platform_verified: true,
+					verification_status: "verified",
+				},
+				{
+					attribution_family: "deterministic_views",
+					event_type: "view",
+					aggregate_count: "3",
+					platform_verified: true,
+					verification_status: "verified",
+				},
 			]);
 
 			const source = await pool.query<{
@@ -264,6 +306,7 @@ test(
 				jobs: "1",
 				rawRows: "2",
 				facts: "2",
+				aggregates: "2",
 				verifications: "2",
 				quarantine: "2",
 				checkpoints: "1",

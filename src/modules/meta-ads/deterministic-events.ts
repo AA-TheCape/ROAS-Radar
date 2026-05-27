@@ -129,6 +129,7 @@ export type MetaDeterministicSyncResult = {
 	rawRowsFetched: number;
 	rawRowsUpserted: number;
 	factRowsUpserted: number;
+	aggregateRowsUpserted: number;
 	apiRequestCount: number;
 };
 
@@ -828,12 +829,18 @@ async function upsertDeterministicRows(
 	client: PoolClient,
 	params: {
 		sourceId: number;
+		connectionId: number;
 		rows: NormalizedDeterministicEventRow[];
 		provenance: MetaApiEvidenceProvenance;
 	},
-): Promise<{ rawRowsUpserted: number; factRowsUpserted: number }> {
+): Promise<{
+	rawRowsUpserted: number;
+	factRowsUpserted: number;
+	aggregateRowsUpserted: number;
+}> {
 	let rawRowsUpserted = 0;
 	let factRowsUpserted = 0;
+	let aggregateRowsUpserted = 0;
 	const evidenceValidation = validateMetaApiEvidence(params.provenance);
 
 	if (!evidenceValidation.verified) {
@@ -858,7 +865,7 @@ async function upsertDeterministicRows(
 			rowCount: params.rows.length,
 		});
 
-		return { rawRowsUpserted, factRowsUpserted };
+		return { rawRowsUpserted, factRowsUpserted, aggregateRowsUpserted };
 	}
 
 	for (const row of params.rows) {
@@ -1037,9 +1044,128 @@ async function upsertDeterministicRows(
 				}),
 			],
 		);
+
+		const attributionFamily =
+			row.eventType === "view"
+				? "deterministic_views"
+				: "deterministic_impressions";
+		await client.query(
+			`
+        INSERT INTO meta_ads_deterministic_attribution_aggregates (
+          organization_id,
+          meta_connection_id,
+          source_id,
+          raw_event_id,
+          fact_id,
+          platform,
+          ad_account_id,
+          report_date,
+          campaign_id,
+          campaign_name,
+          adset_id,
+          adset_name,
+          ad_id,
+          ad_name,
+          event_type,
+          attribution_family,
+          attribution_window,
+          attribution_window_days,
+          aggregate_count,
+          evidence_origin,
+          platform_verified,
+          verification_status,
+          verified_by_source_id,
+          verified_at_utc,
+          raw_record_metadata,
+          updated_at
+        )
+        VALUES (
+          $1,
+          $2,
+          $3,
+          $4,
+          $5,
+          'meta_ads',
+          $6,
+          $7::date,
+          $8,
+          $9,
+          $10,
+          $11,
+          $12,
+          $13,
+          $14,
+          $15,
+          '7d_view',
+          7,
+          $16,
+          'api',
+          true,
+          'verified',
+          $3,
+          now(),
+          $17::jsonb,
+          now()
+        )
+        ON CONFLICT (
+          organization_id,
+          ad_account_id,
+          report_date,
+          attribution_family,
+          attribution_window,
+          COALESCE(campaign_id, ''),
+          COALESCE(adset_id, ''),
+          COALESCE(ad_id, '')
+        )
+        DO UPDATE SET
+          meta_connection_id = EXCLUDED.meta_connection_id,
+          source_id = EXCLUDED.source_id,
+          raw_event_id = EXCLUDED.raw_event_id,
+          fact_id = EXCLUDED.fact_id,
+          campaign_name = EXCLUDED.campaign_name,
+          adset_name = EXCLUDED.adset_name,
+          ad_name = EXCLUDED.ad_name,
+          aggregate_count = EXCLUDED.aggregate_count,
+          platform_verified = true,
+          verification_status = 'verified',
+          verified_by_source_id = EXCLUDED.verified_by_source_id,
+          verified_at_utc = EXCLUDED.verified_at_utc,
+          raw_record_metadata = EXCLUDED.raw_record_metadata,
+          updated_at = now()
+      `,
+			[
+				env.DEFAULT_ORGANIZATION_ID,
+				params.connectionId,
+				params.sourceId,
+				rawEventId,
+				factResult.rows[0].id,
+				row.accountId,
+				row.eventDate,
+				row.campaignId,
+				row.campaignName,
+				row.adsetId,
+				row.adsetName,
+				row.adId,
+				row.adName,
+				row.eventType,
+				attributionFamily,
+				row.eventCount,
+				JSON.stringify({
+					contract: "meta-deterministic-view-attribution-contract-v1",
+					rawDedupeKey: row.dedupeKey,
+					sourceId: params.sourceId,
+					rawEventId,
+					factId: factResult.rows[0].id,
+					apiVersion: params.provenance.apiVersion,
+					requestId: params.provenance.requestId,
+					attributionWindowDays: 7,
+				}),
+			],
+		);
+		aggregateRowsUpserted += 1;
 	}
 
-	return { rawRowsUpserted, factRowsUpserted };
+	return { rawRowsUpserted, factRowsUpserted, aggregateRowsUpserted };
 }
 
 async function markSyncJobSucceeded(
@@ -1130,6 +1256,7 @@ async function processSyncJob(
 	rawRowsFetched: number;
 	rawRowsUpserted: number;
 	factRowsUpserted: number;
+	aggregateRowsUpserted: number;
 	apiRequestCount: number;
 }> {
 	const connection = await getConnectionSecret(job.connection_id);
@@ -1196,6 +1323,7 @@ async function processSyncJob(
 
 			const upsertResult = await upsertDeterministicRows(client, {
 				sourceId,
+				connectionId: job.connection_id,
 				rows: normalizedRows,
 				provenance,
 			});
@@ -1214,9 +1342,15 @@ async function processSyncJob(
 			recordsReceived: normalizedRows.length,
 			rawRowsUpserted: persistence.rawRowsUpserted,
 			factRowsUpserted: persistence.factRowsUpserted,
+			aggregateRowsUpserted: persistence.aggregateRowsUpserted,
 			apiRequestCount: apiMetrics.requestCount,
 			apiRequestRetryCount: apiMetrics.retryCount,
+			apiLatencyMsTotal: apiMetrics.latencyMsTotal,
 			apiLatencyMsMax: apiMetrics.latencyMsMax,
+			apiLatencyMsAvg:
+				apiMetrics.requestCount > 0
+					? Number((apiMetrics.latencyMsTotal / apiMetrics.requestCount).toFixed(2))
+					: 0,
 		});
 
 		return {
@@ -1225,6 +1359,7 @@ async function processSyncJob(
 			rawRowsFetched: rawRows.length,
 			rawRowsUpserted: persistence.rawRowsUpserted,
 			factRowsUpserted: persistence.factRowsUpserted,
+			aggregateRowsUpserted: persistence.aggregateRowsUpserted,
 			apiRequestCount: apiMetrics.requestCount,
 		};
 	} catch (error) {
@@ -1246,6 +1381,7 @@ async function processSyncJob(
 			rawRowsFetched: 0,
 			rawRowsUpserted: 0,
 			factRowsUpserted: 0,
+			aggregateRowsUpserted: 0,
 			apiRequestCount: apiMetrics.requestCount,
 		};
 	}
@@ -1321,6 +1457,7 @@ export async function runMetaDeterministicSync(
 		rawRowsFetched: 0,
 		rawRowsUpserted: 0,
 		factRowsUpserted: 0,
+		aggregateRowsUpserted: 0,
 		apiRequestCount: 0,
 	};
 
@@ -1349,6 +1486,7 @@ export async function runMetaDeterministicSync(
 			summary.rawRowsFetched += result.rawRowsFetched;
 			summary.rawRowsUpserted += result.rawRowsUpserted;
 			summary.factRowsUpserted += result.factRowsUpserted;
+			summary.aggregateRowsUpserted += result.aggregateRowsUpserted;
 			summary.apiRequestCount += result.apiRequestCount;
 		}
 	}
