@@ -569,16 +569,32 @@ test('attribution engine package publishes JSON schema documents for canonical v
 test('attribution QA payload fixtures validate success and no-match outcomes', () => {
   const success = normalizeAttributionQaPayloadV1(attributionQaPayloadV1SuccessFixture);
   const noMatch = normalizeAttributionQaPayloadV1(attributionQaPayloadV1NoMatchFixture);
+  const selectedSuccessCandidates = [
+    ...success.candidates.deterministic_first_party,
+    ...success.candidates.shopify_hint,
+    ...success.candidates.ga4_fallback
+  ].filter((candidate) => candidate.selected);
+  const selectedNoMatchCandidates = [
+    ...noMatch.candidates.deterministic_first_party,
+    ...noMatch.candidates.shopify_hint,
+    ...noMatch.candidates.ga4_fallback
+  ].filter((candidate) => candidate.selected);
 
   assert.equal(success.outcome.status, 'success');
   assert.equal(success.outcome.attribution_tier, 'deterministic_first_party');
   assert.equal(success.order.currency_code, 'USD');
   assert.equal(success.candidates.deterministic_first_party[0]?.source, 'google');
   assert.equal(success.generated_at_utc, '2026-04-30T12:30:00.000Z');
+  assert.equal(selectedSuccessCandidates.length, 1);
+  assert.ok(success.outcome.winner_touchpoint_id || success.outcome.winner_session_id);
 
   assert.equal(noMatch.outcome.status, 'no_match');
   assert.equal(noMatch.outcome.attribution_tier, 'unattributed');
   assert.equal(noMatch.outcome.winner_touchpoint_id, null);
+  assert.equal(noMatch.outcome.winner_session_id, null);
+  assert.equal(noMatch.outcome.confidence_score, 0);
+  assert.equal(noMatch.outcome.confidence_label, 'none');
+  assert.equal(selectedNoMatchCandidates.length, 0);
   assert.equal(noMatch.credits.length, 0);
 });
 

@@ -28,8 +28,135 @@ type QaOrderRow = AttributionQaSnapshotOrder & {
   attribution_snapshot: unknown;
 };
 
+const SENSITIVE_URL_QUERY_KEYS = new Set([
+  'access_token',
+  'auth_token',
+  'cart_token',
+  'checkout_token',
+  'client_id',
+  'client_secret',
+  'code',
+  'email',
+  'email_hash',
+  'fbclid',
+  'gclid',
+  'gbraid',
+  'id_token',
+  'msclkid',
+  'password',
+  'refresh_token',
+  'token',
+  'ttclid',
+  'wbraid'
+]);
+
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function redactSensitiveUrlQueryValues(value: string): string {
+  try {
+    const url = new URL(value);
+    let changed = false;
+    for (const key of Array.from(url.searchParams.keys())) {
+      if (SENSITIVE_URL_QUERY_KEYS.has(key.toLowerCase())) {
+        url.searchParams.set(key, '[REDACTED]');
+        changed = true;
+      }
+    }
+    return changed ? url.toString() : value;
+  } catch {
+    return value.replace(
+      /([?&](?:access_token|auth_token|cart_token|checkout_token|client_id|client_secret|code|email|email_hash|fbclid|gclid|gbraid|id_token|msclkid|password|refresh_token|token|ttclid|wbraid)=)[^&#\s]+/gi,
+      '$1[REDACTED]'
+    );
+  }
+}
+
+function redactSensitiveJson(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return redactSensitiveUrlQueryValues(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => redactSensitiveJson(item));
+  }
+
+  const record = asObjectRecord(value);
+  if (!record) {
+    return value;
+  }
+
+  return Object.fromEntries(Object.entries(record).map(([key, item]) => [key, redactSensitiveJson(item)]));
+}
+
+export function sanitizeAttributionQaPayload(payload: AttributionQaPayloadV1): AttributionQaPayloadV1 {
+  const ga4TouchpointIds = new Map<string, string>();
+  const sanitizedGa4Candidates = payload.candidates.ga4_fallback.map((candidate, index) => {
+    const redactedId = `ga4_fallback_candidate_${index + 1}`;
+    ga4TouchpointIds.set(candidate.source_key, redactedId);
+    if (candidate.touchpoint_id) {
+      ga4TouchpointIds.set(candidate.touchpoint_id, redactedId);
+    }
+
+    return {
+      ...candidate,
+      source_key: redactedId,
+      touchpoint_id: redactedId,
+      session_id: null,
+      source_touch_event_id: null,
+      click_id_value: null
+    };
+  });
+
+  return normalizeAttributionQaPayloadV1({
+    ...payload,
+    order: {
+      ...payload.order,
+      identifiers: {
+        ...payload.order.identifiers,
+        checkout_token: null,
+        cart_token: null,
+        email_hash: null
+      }
+    },
+    outcome: {
+      ...payload.outcome,
+      winner_session_id: null
+    },
+    candidates: {
+      deterministic_first_party: payload.candidates.deterministic_first_party.map((candidate) => ({
+        ...candidate,
+        click_id_value: null
+      })),
+      shopify_hint: payload.candidates.shopify_hint.map((candidate) => ({
+        ...candidate,
+        click_id_value: null
+      })),
+      ga4_fallback: sanitizedGa4Candidates
+    },
+    model_summaries: payload.model_summaries.map((summary) => ({
+      ...summary,
+      winner_session_id: null
+    })),
+    credits: payload.credits.map((credit) => ({
+      ...credit,
+      session_id: null,
+      click_id_value: null
+    })),
+    explainability: payload.explainability.map((record) => ({
+      ...record,
+      touchpoint_id: record.touchpoint_id ? ga4TouchpointIds.get(record.touchpoint_id) ?? record.touchpoint_id : null,
+      details_json: redactSensitiveJson(record.details_json) as Record<string, unknown>
+    })),
+    diagnostics: {
+      normalization_failures: payload.diagnostics.normalization_failures.map((failure) => ({
+        ...failure,
+        source_key: failure.source_key ? ga4TouchpointIds.get(failure.source_key) ?? failure.source_key : null
+      })),
+      notes: payload.diagnostics.notes.map((note) => redactSensitiveUrlQueryValues(note))
+    }
+  });
 }
 
 function readPersistedQaSnapshot(row: QaOrderRow): AttributionQaPayloadV1 | null {
@@ -156,13 +283,13 @@ export async function getAttributionQaPayloadForOrder(orderId: string): Promise<
     return {
       orderId,
       source: 'persisted_snapshot',
-      payload: persistedPayload
+      payload: sanitizeAttributionQaPayload(persistedPayload)
     };
   }
 
   return {
     orderId,
     source: 'generated_on_read',
-    payload: await buildQaPayloadFromOrder(row)
+    payload: sanitizeAttributionQaPayload(await buildQaPayloadFromOrder(row))
   };
 }

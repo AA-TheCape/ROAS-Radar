@@ -1,5 +1,4 @@
-import type React from "react";
-import { useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 
 import type {
 	AttributionQaCandidateV1,
@@ -54,6 +53,28 @@ const CANDIDATE_GROUP_LABELS: Record<
 	ga4_fallback: "GA4 fallback",
 };
 
+const SENSITIVE_URL_QUERY_KEYS = new Set([
+	"access_token",
+	"auth_token",
+	"cart_token",
+	"checkout_token",
+	"client_id",
+	"client_secret",
+	"code",
+	"email",
+	"email_hash",
+	"fbclid",
+	"gclid",
+	"gbraid",
+	"id_token",
+	"msclkid",
+	"password",
+	"refresh_token",
+	"token",
+	"ttclid",
+	"wbraid",
+]);
+
 function formatContractValue(value: string | null | undefined): string {
 	if (!value) {
 		return "Not available";
@@ -86,6 +107,131 @@ function redacted(value: string | null | undefined): string {
 	}
 
 	return `${normalized.slice(0, 4)}...${normalized.slice(-4)}`;
+}
+
+function redactSensitiveUrlQueryValues(value: string): string {
+	try {
+		const url = new URL(value);
+		let changed = false;
+		for (const key of Array.from(url.searchParams.keys())) {
+			if (SENSITIVE_URL_QUERY_KEYS.has(key.toLowerCase())) {
+				url.searchParams.set(key, "[REDACTED]");
+				changed = true;
+			}
+		}
+		return changed ? url.toString() : value;
+	} catch {
+		return value.replace(
+			/([?&](?:access_token|auth_token|cart_token|checkout_token|client_id|client_secret|code|email|email_hash|fbclid|gclid|gbraid|id_token|msclkid|password|refresh_token|token|ttclid|wbraid)=)[^&#\s]+/gi,
+			"$1[REDACTED]",
+		);
+	}
+}
+
+function sanitizeUnknownForDisplay(value: unknown): unknown {
+	if (typeof value === "string") {
+		return redactSensitiveUrlQueryValues(value);
+	}
+
+	if (Array.isArray(value)) {
+		return value.map((item) => sanitizeUnknownForDisplay(item));
+	}
+
+	if (!value || typeof value !== "object") {
+		return value;
+	}
+
+	return Object.fromEntries(
+		Object.entries(value).map(([key, item]) => [
+			key,
+			sanitizeUnknownForDisplay(item),
+		]),
+	);
+}
+
+function sanitizeQaPayloadForDisplay(
+	payload: AttributionQaPayloadV1,
+): AttributionQaPayloadV1 {
+	const ga4TouchpointIds = new Map<string, string>();
+	const sanitizedGa4Candidates = payload.candidates.ga4_fallback.map(
+		(candidate, index) => {
+			const redactedId = `ga4_fallback_candidate_${index + 1}`;
+			ga4TouchpointIds.set(candidate.source_key, redactedId);
+			if (candidate.touchpoint_id) {
+				ga4TouchpointIds.set(candidate.touchpoint_id, redactedId);
+			}
+
+			return {
+				...candidate,
+				source_key: redactedId,
+				touchpoint_id: redactedId,
+				session_id: null,
+				source_touch_event_id: null,
+				click_id_value: null,
+			};
+		},
+	);
+
+	return {
+		...payload,
+		order: {
+			...payload.order,
+			identifiers: {
+				...payload.order.identifiers,
+				checkout_token: null,
+				cart_token: null,
+				email_hash: null,
+			},
+		},
+		outcome: {
+			...payload.outcome,
+			winner_session_id: null,
+		},
+		candidates: {
+			deterministic_first_party:
+				payload.candidates.deterministic_first_party.map((candidate) => ({
+					...candidate,
+					click_id_value: null,
+				})),
+			shopify_hint: payload.candidates.shopify_hint.map((candidate) => ({
+				...candidate,
+				click_id_value: null,
+			})),
+			ga4_fallback: sanitizedGa4Candidates,
+		},
+		model_summaries: payload.model_summaries.map((summary) => ({
+			...summary,
+			winner_session_id: null,
+		})),
+		credits: payload.credits.map((credit) => ({
+			...credit,
+			session_id: null,
+			click_id_value: null,
+		})),
+		explainability: payload.explainability.map((record) => ({
+			...record,
+			touchpoint_id: record.touchpoint_id
+				? ga4TouchpointIds.get(record.touchpoint_id) ?? record.touchpoint_id
+				: null,
+			details_json: sanitizeUnknownForDisplay(record.details_json) as Record<
+				string,
+				unknown
+			>,
+		})),
+		diagnostics: {
+			normalization_failures: payload.diagnostics.normalization_failures.map(
+				(failure) => ({
+					...failure,
+					source_key: failure.source_key
+						? ga4TouchpointIds.get(failure.source_key) ?? failure.source_key
+						: null,
+				}),
+			),
+			notes: payload.diagnostics.notes.map((note) =>
+				redactSensitiveUrlQueryValues(note),
+			),
+		},
+	};
 }
 
 function candidateKey(
@@ -249,7 +395,10 @@ export default function AttributionQaToolingView({
 }: AttributionQaToolingViewProps) {
 	const [showRawPayload, setShowRawPayload] = useState(false);
 	const response = qaPayloadSection.data;
-	const payload = response?.payload;
+	const payload = useMemo(
+		() => (response?.payload ? sanitizeQaPayloadForDisplay(response.payload) : null),
+		[response?.payload],
+	);
 	const allCandidates = useMemo(
 		() =>
 			payload
@@ -282,7 +431,7 @@ export default function AttributionQaToolingView({
 					: "No order selected."
 			}
 		>
-			<div>
+			<React.Fragment>
 				{payload ? (
 					<div className="grid gap-section">
 					<div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
@@ -582,7 +731,7 @@ export default function AttributionQaToolingView({
 						</QaCard>
 					</div>
 				) : null}
-			</div>
+			</React.Fragment>
 		</SectionState>
 	);
 }
