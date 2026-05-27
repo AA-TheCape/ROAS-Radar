@@ -80,9 +80,11 @@ async function loadDeterministicCounts(): Promise<{
 	rawRows: string;
 	facts: string;
 	verifications: string;
+	quarantine: string;
 	checkpoints: string;
 }> {
-	const [jobs, rawRows, facts, verifications, checkpoints] = await Promise.all([
+	const [jobs, rawRows, facts, verifications, quarantine, checkpoints] =
+		await Promise.all([
 		pool.query<{ count: string }>(
 			"SELECT count(*)::text AS count FROM meta_ads_deterministic_sync_jobs",
 		),
@@ -96,15 +98,19 @@ async function loadDeterministicCounts(): Promise<{
 			"SELECT count(*)::text AS count FROM deterministic_event_verification_statuses",
 		),
 		pool.query<{ count: string }>(
+			"SELECT count(*)::text AS count FROM deterministic_event_evidence_quarantine",
+		),
+		pool.query<{ count: string }>(
 			"SELECT count(*)::text AS count FROM meta_ads_deterministic_sync_checkpoints",
 		),
-	]);
+		]);
 
 	return {
 		jobs: jobs.rows[0].count,
 		rawRows: rawRows.rows[0].count,
 		facts: facts.rows[0].count,
 		verifications: verifications.rows[0].count,
+		quarantine: quarantine.rows[0].count,
 		checkpoints: checkpoints.rows[0].count,
 	};
 }
@@ -149,11 +155,20 @@ test(
 							impressions: "12",
 							video_play_actions: [{ action_type: "video_view", value: "3" }],
 						},
+						{
+							account_id: "123456789",
+							date_start: "2026-05-26",
+							date_stop: "2026-05-26",
+							impressions: "99",
+						},
 					],
 				}),
 				{
 					status: 200,
-					headers: { "content-type": "application/json" },
+					headers: {
+						"content-type": "application/json",
+						"x-fb-trace-id": "trace-123",
+					},
 				},
 			);
 		};
@@ -177,6 +192,7 @@ test(
 				rawRows: "2",
 				facts: "2",
 				verifications: "2",
+				quarantine: "1",
 				checkpoints: "1",
 			});
 
@@ -200,6 +216,44 @@ test(
 				{ event_type: "view", event_count: "3", platform_verified: true },
 			]);
 
+			const source = await pool.query<{
+				api_endpoint: string | null;
+				api_request_timestamp_utc: Date | null;
+				api_account_id: string | null;
+				api_request_id: string | null;
+			}>(
+				`
+        SELECT
+          api_endpoint,
+          api_request_timestamp_utc,
+          api_account_id,
+          api_request_id
+        FROM deterministic_event_sources
+      `,
+			);
+			assert.equal(source.rows[0].api_endpoint, "insights");
+			assert.ok(source.rows[0].api_request_timestamp_utc);
+			assert.equal(source.rows[0].api_account_id, "123456789");
+			assert.equal(source.rows[0].api_request_id, "trace-123");
+
+			const quarantine = await pool.query<{
+				reason_code: string;
+				platform: string;
+				evidence_origin: string | null;
+			}>(
+				`
+        SELECT reason_code, platform, evidence_origin
+        FROM deterministic_event_evidence_quarantine
+      `,
+			);
+			assert.deepEqual(quarantine.rows, [
+				{
+					reason_code: "missing_platform_entity",
+					platform: "meta_ads",
+					evidence_origin: "api",
+				},
+			]);
+
 			const secondRun = await runMetaDeterministicSync({
 				now: new Date("2026-05-27T12:00:00Z"),
 				triggerSource: "test",
@@ -211,11 +265,57 @@ test(
 				rawRows: "2",
 				facts: "2",
 				verifications: "2",
+				quarantine: "2",
 				checkpoints: "1",
 			});
 		} finally {
 			globalThis.fetch = originalFetch;
 		}
+	},
+);
+
+test(
+	"platform verification constraints reject non-Meta API evidence",
+	{ concurrency: false },
+	async () => {
+		await resetE2EDatabase();
+
+		const source = await pool.query<{ id: number }>(
+			`
+      INSERT INTO deterministic_event_sources (
+        source_key,
+        platform,
+        account_id,
+        evidence_origin,
+        source_type
+      )
+      VALUES ('manual-source', 'meta_ads', '123456789', 'manual_import', 'platform_export')
+      RETURNING id
+    `,
+		);
+
+		await assert.rejects(
+			pool.query(
+				`
+        INSERT INTO raw_deterministic_events (
+          source_id,
+          platform,
+          account_id,
+          campaign_id,
+          event_type,
+          event_date,
+          event_count,
+          evidence_origin,
+          platform_verified,
+          dedupe_key,
+          raw_payload
+        )
+        VALUES ($1, 'meta_ads', '123456789', 'campaign-1', 'impression', '2026-05-26', 1, 'manual_import', true, 'manual-bad', '{}'::jsonb)
+      `,
+				[source.rows[0].id],
+			),
+			/raw_deterministic_events_api_verified_chk/,
+		);
 	},
 );
 

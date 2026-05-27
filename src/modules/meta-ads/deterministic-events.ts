@@ -112,6 +112,16 @@ type MetaDeterministicApiMetrics = {
 	latencyMsMax: number;
 };
 
+type MetaApiEvidenceProvenance = {
+	platform: "meta_ads";
+	evidenceOrigin: "api";
+	endpoint: string | null;
+	requestTimestampUtc: Date | null;
+	accountId: string | null;
+	requestId: string | null;
+	apiVersion: string;
+};
+
 export type MetaDeterministicSyncResult = {
 	succeededJobs: number;
 	failedJobs: number;
@@ -173,6 +183,10 @@ function parseDateOnly(value: string): Date {
 
 function normalizeAdAccountId(value: string): string {
 	return value.startsWith("act_") ? value.slice(4) : value;
+}
+
+function nonEmptyString(value: string | null | undefined): boolean {
+	return typeof value === "string" && value.trim().length > 0;
 }
 
 function parseNonNegativeInteger(
@@ -285,6 +299,46 @@ function normalizeInsightsRows(
 	}
 
 	return normalized;
+}
+
+function getRawInsightsRejectionReason(
+	row: MetaDeterministicInsightsRow,
+): string | null {
+	if (!nonEmptyString(row.date_start)) {
+		return "missing_event_date";
+	}
+
+	if (!nonEmptyString(row.campaign_id) && !nonEmptyString(row.ad_id)) {
+		return "missing_platform_entity";
+	}
+
+	return null;
+}
+
+function validateMetaApiEvidence(
+	provenance: MetaApiEvidenceProvenance,
+): { verified: true } | { verified: false; reasonCode: string } {
+	if (provenance.platform !== "meta_ads" || provenance.evidenceOrigin !== "api") {
+		return { verified: false, reasonCode: "non_meta_api_evidence" };
+	}
+
+	if (!nonEmptyString(provenance.endpoint)) {
+		return { verified: false, reasonCode: "missing_api_endpoint" };
+	}
+
+	if (!provenance.requestTimestampUtc) {
+		return { verified: false, reasonCode: "missing_api_timestamp" };
+	}
+
+	if (!nonEmptyString(provenance.accountId)) {
+		return { verified: false, reasonCode: "missing_api_account" };
+	}
+
+	if (!nonEmptyString(provenance.requestId)) {
+		return { verified: false, reasonCode: "missing_api_request_id" };
+	}
+
+	return { verified: true };
 }
 
 function buildMetaInsightsUrl(
@@ -503,7 +557,7 @@ async function performMetaApiRequest(params: {
 	url: URL;
 	apiMetrics: MetaDeterministicApiMetrics;
 	triggerSource: string;
-}): Promise<MetaInsightsApiResponse> {
+}): Promise<{ payload: MetaInsightsApiResponse; requestId: string | null }> {
 	const requestStartedAt = new Date();
 	const response = await fetch(params.url, {
 		method: "GET",
@@ -551,7 +605,13 @@ async function performMetaApiRequest(params: {
 		);
 	}
 
-	return payload as MetaInsightsApiResponse;
+	return {
+		payload: payload as MetaInsightsApiResponse,
+		requestId:
+			response.headers.get("x-fb-trace-id") ??
+			response.headers.get("x-fb-request-id") ??
+			null,
+	};
 }
 
 async function fetchAllDeterministicRows(params: {
@@ -562,8 +622,10 @@ async function fetchAllDeterministicRows(params: {
 }): Promise<{
 	rows: MetaDeterministicInsightsRow[];
 	finalCursor: string | null;
+	requestIds: string[];
 }> {
 	const rows: MetaDeterministicInsightsRow[] = [];
+	const requestIds: string[] = [];
 	let nextUrl: URL | null = buildMetaInsightsUrl(
 		params.connection.ad_account_id,
 		params.job.sync_date,
@@ -574,12 +636,15 @@ async function fetchAllDeterministicRows(params: {
 	while (nextUrl) {
 		const requestUrl = nextUrl;
 		let payload: MetaInsightsApiResponse;
+		let requestId: string | null;
 
 		try {
-			payload = await performMetaApiRequest({
+			const response = await performMetaApiRequest({
 				...params,
 				url: requestUrl,
 			});
+			payload = response.payload;
+			requestId = response.requestId;
 		} catch (error) {
 			if (
 				!(error instanceof MetaDeterministicApiError) ||
@@ -590,10 +655,16 @@ async function fetchAllDeterministicRows(params: {
 
 			params.apiMetrics.retryCount += 1;
 			await delay(Math.min(2000, 250 * params.apiMetrics.retryCount));
-			payload = await performMetaApiRequest({
+			const response = await performMetaApiRequest({
 				...params,
 				url: requestUrl,
 			});
+			payload = response.payload;
+			requestId = response.requestId;
+		}
+
+		if (requestId) {
+			requestIds.push(requestId);
 		}
 
 		rows.push(...(Array.isArray(payload.data) ? payload.data : []));
@@ -604,7 +675,7 @@ async function fetchAllDeterministicRows(params: {
 				: null;
 	}
 
-	return { rows, finalCursor };
+	return { rows, finalCursor, requestIds };
 }
 
 async function upsertSource(
@@ -613,8 +684,9 @@ async function upsertSource(
 		job: MetaDeterministicSyncJobRow;
 		apiRequestCount: number;
 		finalCursor: string | null;
+		requestIds: string[];
 	},
-): Promise<number> {
+): Promise<{ sourceId: number; provenance: MetaApiEvidenceProvenance }> {
 	const sourceKey = createHash("sha256")
 		.update(
 			[
@@ -636,6 +708,10 @@ async function upsertSource(
         sync_job_id,
         external_request_id,
         api_version,
+        api_endpoint,
+        api_request_timestamp_utc,
+        api_account_id,
+        api_request_id,
         requested_range_start,
         requested_range_end,
         source_metadata
@@ -649,6 +725,10 @@ async function upsertSource(
         $3,
         $1,
         $4,
+        'insights',
+        now(),
+        $2,
+        COALESCE($7, $1),
         $5::date,
         $5::date,
         $6::jsonb
@@ -657,6 +737,10 @@ async function upsertSource(
       DO UPDATE SET
         sync_job_id = EXCLUDED.sync_job_id,
         received_at_utc = now(),
+        api_endpoint = EXCLUDED.api_endpoint,
+        api_request_timestamp_utc = EXCLUDED.api_request_timestamp_utc,
+        api_account_id = EXCLUDED.api_account_id,
+        api_request_id = EXCLUDED.api_request_id,
         source_metadata = EXCLUDED.source_metadata
       RETURNING id
     `,
@@ -671,11 +755,73 @@ async function upsertSource(
 				level: "ad",
 				apiRequestCount: params.apiRequestCount,
 				finalCursor: params.finalCursor,
+				requestIds: params.requestIds,
 			}),
+			params.requestIds[0] ?? null,
 		],
 	);
 
-	return result.rows[0].id;
+	return {
+		sourceId: result.rows[0].id,
+		provenance: {
+			platform: "meta_ads",
+			evidenceOrigin: "api",
+			endpoint: "insights",
+			requestTimestampUtc: new Date(),
+			accountId: normalizeAdAccountId(params.job.ad_account_id),
+			requestId: params.requestIds[0] ?? sourceKey,
+			apiVersion: env.META_ADS_API_VERSION,
+		},
+	};
+}
+
+async function quarantineDeterministicEvidence(
+	client: PoolClient,
+	params: {
+		sourceId: number | null;
+		platform?: "meta_ads" | "google_ads";
+		accountId: string | null;
+		evidenceOrigin: "api" | "pixel" | "server" | "manual_import" | "derived" | null;
+		eventType?: MetaDeterministicEventType | null;
+		eventDate?: string | null;
+		dedupeKey?: string | null;
+		reasonCode: string;
+		reasonDetail?: string | null;
+		sourceMetadata?: Record<string, unknown>;
+		rawPayload?: unknown;
+	},
+): Promise<void> {
+	await client.query(
+		`
+      INSERT INTO deterministic_event_evidence_quarantine (
+        source_id,
+        platform,
+        account_id,
+        evidence_origin,
+        event_type,
+        event_date,
+        dedupe_key,
+        reason_code,
+        reason_detail,
+        source_metadata,
+        raw_payload
+      )
+      VALUES ($1, $2, $3, $4, $5, $6::date, $7, $8, $9, $10::jsonb, $11::jsonb)
+    `,
+		[
+			params.sourceId,
+			params.platform ?? "meta_ads",
+			params.accountId,
+			params.evidenceOrigin,
+			params.eventType ?? null,
+			params.eventDate ?? null,
+			params.dedupeKey ?? null,
+			params.reasonCode,
+			params.reasonDetail ?? null,
+			JSON.stringify(params.sourceMetadata ?? {}),
+			JSON.stringify(params.rawPayload ?? {}),
+		],
+	);
 }
 
 async function upsertDeterministicRows(
@@ -683,10 +829,37 @@ async function upsertDeterministicRows(
 	params: {
 		sourceId: number;
 		rows: NormalizedDeterministicEventRow[];
+		provenance: MetaApiEvidenceProvenance;
 	},
 ): Promise<{ rawRowsUpserted: number; factRowsUpserted: number }> {
 	let rawRowsUpserted = 0;
 	let factRowsUpserted = 0;
+	const evidenceValidation = validateMetaApiEvidence(params.provenance);
+
+	if (!evidenceValidation.verified) {
+		for (const row of params.rows) {
+			await quarantineDeterministicEvidence(client, {
+				sourceId: params.sourceId,
+				accountId: row.accountId,
+				evidenceOrigin: params.provenance.evidenceOrigin,
+				eventType: row.eventType,
+				eventDate: row.eventDate,
+				dedupeKey: row.dedupeKey,
+				reasonCode: evidenceValidation.reasonCode,
+				sourceMetadata: params.provenance,
+				rawPayload: row.rawPayload,
+			});
+		}
+
+		logInfo("meta_ads_deterministic_evidence_quarantined", {
+			service: process.env.K_SERVICE ?? "roas-radar",
+			sourceId: params.sourceId,
+			reasonCode: evidenceValidation.reasonCode,
+			rowCount: params.rows.length,
+		});
+
+		return { rawRowsUpserted, factRowsUpserted };
+	}
 
 	for (const row of params.rows) {
 		const rawResult = await client.query<{ id: number }>(
@@ -831,6 +1004,7 @@ async function upsertDeterministicRows(
 			`
         INSERT INTO deterministic_event_verification_statuses (
           fact_id,
+          platform,
           verification_status,
           evidence_origin,
           platform_verified,
@@ -838,9 +1012,10 @@ async function upsertDeterministicRows(
           verified_at_utc,
           verification_metadata
         )
-        VALUES ($1, 'verified', 'api', true, $2, now(), $3::jsonb)
+        VALUES ($1, 'meta_ads', 'verified', 'api', true, $2, now(), $3::jsonb)
         ON CONFLICT (fact_id)
         DO UPDATE SET
+          platform = 'meta_ads',
           verification_status = 'verified',
           evidence_origin = 'api',
           platform_verified = true,
@@ -855,6 +1030,10 @@ async function upsertDeterministicRows(
 				JSON.stringify({
 					platform: "meta_ads",
 					source: "ads_insights",
+					endpoint: params.provenance.endpoint,
+					requestTimestampUtc: params.provenance.requestTimestampUtc?.toISOString(),
+					accountId: params.provenance.accountId,
+					requestId: params.provenance.requestId,
 				}),
 			],
 		);
@@ -957,26 +1136,68 @@ async function processSyncJob(
 	const apiMetrics = buildMetrics();
 
 	try {
-		const { rows: rawRows, finalCursor } = await fetchAllDeterministicRows({
+		const {
+			rows: rawRows,
+			finalCursor,
+			requestIds,
+		} = await fetchAllDeterministicRows({
 			job,
 			connection,
 			apiMetrics,
 			triggerSource,
 		});
+		const rejectedRawRows = rawRows
+			.map((row) => ({
+				row,
+				reasonCode: getRawInsightsRejectionReason(row),
+			}))
+			.filter(
+				(rejection): rejection is {
+					row: MetaDeterministicInsightsRow;
+					reasonCode: string;
+				} => rejection.reasonCode !== null,
+			);
 		const normalizedRows = normalizeInsightsRows(
 			rawRows,
 			normalizeAdAccountId(connection.ad_account_id),
 		);
 
 		const persistence = await withTransaction(async (client) => {
-			const sourceId = await upsertSource(client, {
+			const { sourceId, provenance } = await upsertSource(client, {
 				job,
 				apiRequestCount: apiMetrics.requestCount,
 				finalCursor,
+				requestIds,
 			});
+
+			for (const rejected of rejectedRawRows) {
+				await quarantineDeterministicEvidence(client, {
+					sourceId,
+					accountId:
+						typeof rejected.row.account_id === "string" &&
+						rejected.row.account_id.trim()
+							? normalizeAdAccountId(rejected.row.account_id)
+							: normalizeAdAccountId(connection.ad_account_id),
+					evidenceOrigin: "api",
+					eventDate:
+						typeof rejected.row.date_start === "string"
+							? rejected.row.date_start
+							: null,
+					reasonCode: rejected.reasonCode,
+					reasonDetail: "Meta Insights row cannot be promoted to verified evidence",
+					sourceMetadata: {
+						endpoint: provenance.endpoint,
+						requestId: provenance.requestId,
+						syncJobId: job.id,
+					},
+					rawPayload: rejected.row,
+				});
+			}
+
 			const upsertResult = await upsertDeterministicRows(client, {
 				sourceId,
 				rows: normalizedRows,
+				provenance,
 			});
 			await markSyncJobSucceeded(job, finalCursor, client);
 			return upsertResult;
