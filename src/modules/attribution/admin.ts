@@ -6,7 +6,10 @@ import {
   type OrderAttributionBackfillRequest
 } from '../../../packages/attribution-schema/index.js';
 import { query } from '../../db/pool.js';
-import { emitOrderAttributionBackfillJobLifecycleLog } from '../../observability/index.js';
+import {
+  emitAttributionQaPayloadFetchLog,
+  emitOrderAttributionBackfillJobLifecycleLog
+} from '../../observability/index.js';
 import { attachAuthContext, requireAdmin, type AuthContext } from '../auth/index.js';
 import { enqueueOrderAttributionBackfillRun, getOrderAttributionBackfillRun } from './backfill-run-store.js';
 import { getAttributionQaPayloadForOrder } from './qa-payload-service.js';
@@ -377,20 +380,40 @@ export function createAttributionAdminRouter(): Router {
   });
 
   router.get('/orders/:orderId/qa-debug', async (req, res, next) => {
+    const startedAt = process.hrtime.bigint();
+    let parsedOrderId: string | null = null;
+
     try {
       const auth = res.locals.auth as AuthContext | null | undefined;
       requireInternalAdminUser(auth);
 
       const { orderId } = parseInput(orderQaDebugParamsSchema, req.params, 'Invalid attribution QA debug request');
+      parsedOrderId = orderId;
       const input = parseInput(orderQaDebugQuerySchema, req.query, 'Invalid attribution QA debug request');
       const result = await getAttributionQaPayloadForOrder(orderId, { sanitize: false });
 
       if (!result) {
+        emitAttributionQaPayloadFetchLog({
+          endpoint: 'admin_qa_debug',
+          orderId,
+          status: 'not_found',
+          statusCode: 404,
+          durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000
+        });
         throw new AttributionAdminHttpError(404, 'shopify_order_not_found', `No Shopify order was found for ${orderId}`);
       }
 
       const run = await resolveQaDebugRun(orderId, input.runId);
       if (input.runId && !run) {
+        emitAttributionQaPayloadFetchLog({
+          endpoint: 'admin_qa_debug',
+          orderId,
+          status: 'not_found',
+          statusCode: 404,
+          durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
+          source: result.source,
+          payload: result.payload
+        });
         throw new AttributionAdminHttpError(
           404,
           'attribution_run_not_found',
@@ -408,7 +431,19 @@ export function createAttributionAdminRouter(): Router {
       });
       const rawShopifyHints = rawEvidence.filter((record) => record.evidence_type === 'shopify_hint');
       const rawTouchpoints = rawEvidence.filter((record) => record.evidence_type === 'tracking_touchpoint');
+      const rawEvidenceSizeBytes = rawEvidence.reduce((total, record) => total + record.payload_size_bytes, 0);
 
+      emitAttributionQaPayloadFetchLog({
+        endpoint: 'admin_qa_debug',
+        orderId,
+        status: 'success',
+        statusCode: 200,
+        durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
+        source: result.source,
+        payload: result.payload,
+        rawEvidenceCount: rawEvidence.length,
+        rawEvidenceSizeBytes
+      });
       res.json({
         orderId,
         source: result.source,
@@ -428,6 +463,17 @@ export function createAttributionAdminRouter(): Router {
         ga4FallbackCandidate: mapGa4FallbackDebugCandidate(ga4FallbackCandidate)
       });
     } catch (error) {
+      const statusCode = error instanceof AttributionAdminHttpError ? error.statusCode : 500;
+      if (parsedOrderId && statusCode !== 404) {
+        emitAttributionQaPayloadFetchLog({
+          endpoint: 'admin_qa_debug',
+          orderId: parsedOrderId,
+          status: 'failure',
+          statusCode,
+          durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
+          error
+        });
+      }
       next(error);
     }
   });

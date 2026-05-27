@@ -1,7 +1,11 @@
 import type { PoolClient } from 'pg';
 
 import { withTransaction } from '../../db/pool.js';
-import { emitAttributionResolverOutcomeLog, logError } from '../../observability/index.js';
+import {
+  emitAttributionQaSnapshotWriteLog,
+  emitAttributionResolverOutcomeLog,
+  logError
+} from '../../observability/index.js';
 import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
 import { formatDateInTimezone, getReportingTimezone } from '../settings/index.js';
 import {
@@ -433,6 +437,16 @@ async function persistAttribution(
     execution,
     generatedAt: matchedAt
   });
+  const attributionSnapshot = {
+    tier: journey.tier,
+    attributionReason: journey.attributionReason,
+    orderOccurredAtUtc: journey.orderOccurredAtUtc?.toISOString() ?? null,
+    normalizationFailures: journey.normalizationFailures,
+    confidenceScore: journey.confidenceScore,
+    winner: journey.winner ? serializeResolvedTouchpoint(journey.winner) : null,
+    timeline: journey.touchpoints.map(serializeResolvedTouchpoint),
+    qaSnapshot
+  };
 
   await client.query('DELETE FROM attribution_order_credits WHERE shopify_order_id = $1', [order.shopify_order_id]);
 
@@ -587,36 +601,48 @@ async function persistAttribution(
     ]
   );
 
-  await client.query(
-    `
-      UPDATE shopify_orders
-      SET
-        attribution_tier = $2,
-        attribution_source = $3,
-        attribution_matched_at = $4,
-        attribution_reason = $5,
-        attribution_snapshot = $6::jsonb,
-        attribution_snapshot_updated_at = $4
-      WHERE shopify_order_id = $1
-    `,
-    [
-      order.shopify_order_id,
-      orderAttributionAudit.tier,
-      orderAttributionAudit.source,
-      orderAttributionAudit.matchedAt,
-      orderAttributionAudit.reason,
-      JSON.stringify({
-        tier: journey.tier,
-        attributionReason: journey.attributionReason,
-        orderOccurredAtUtc: journey.orderOccurredAtUtc?.toISOString() ?? null,
-        normalizationFailures: journey.normalizationFailures,
-        confidenceScore: journey.confidenceScore,
-        winner: journey.winner ? serializeResolvedTouchpoint(journey.winner) : null,
-        timeline: journey.touchpoints.map(serializeResolvedTouchpoint),
-        qaSnapshot
-      })
-    ]
-  );
+  try {
+    await client.query(
+      `
+        UPDATE shopify_orders
+        SET
+          attribution_tier = $2,
+          attribution_source = $3,
+          attribution_matched_at = $4,
+          attribution_reason = $5,
+          attribution_snapshot = $6::jsonb,
+          attribution_snapshot_updated_at = $4
+        WHERE shopify_order_id = $1
+      `,
+      [
+        order.shopify_order_id,
+        orderAttributionAudit.tier,
+        orderAttributionAudit.source,
+        orderAttributionAudit.matchedAt,
+        orderAttributionAudit.reason,
+        JSON.stringify(attributionSnapshot)
+      ]
+    );
+    emitAttributionQaSnapshotWriteLog({
+      orderId: order.shopify_order_id,
+      pipeline: 'realtime_queue',
+      status: 'success',
+      attributionTier: journey.tier,
+      matchSource,
+      payload: qaSnapshot
+    });
+  } catch (error) {
+    emitAttributionQaSnapshotWriteLog({
+      orderId: order.shopify_order_id,
+      pipeline: 'realtime_queue',
+      status: 'failure',
+      attributionTier: journey.tier,
+      matchSource,
+      payload: qaSnapshot,
+      error
+    });
+    throw error;
+  }
 
   emitAttributionResolverOutcomeLog({
     shopifyOrderId: order.shopify_order_id,

@@ -3,8 +3,10 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { ATTRIBUTION_MODEL_KEYS, normalizeAttributionCreditRecordV1, normalizeAttributionExplainRecordV1, normalizeAttributionResultRecordV1 } from '../../../packages/attribution-schema/index.js';
 import { query } from '../../db/pool.js';
+import { emitAttributionQaPayloadFetchLog } from '../../observability/index.js';
 import { attachAuthContext, requireAuthenticated } from '../auth/index.js';
 import { getReportingTimezone } from '../settings/index.js';
+import { getAttributionQaPayloadForOrder } from './qa-payload-service.js';
 class AttributionReadHttpError extends Error {
     statusCode;
     code;
@@ -758,6 +760,50 @@ export function createAttributionReadRouter() {
             });
         }
         catch (error) {
+            next(error);
+        }
+    });
+    router.get('/orders/:orderId/qa-payload', async (req, res, next) => {
+        const startedAt = process.hrtime.bigint();
+        let parsedOrderId = null;
+        try {
+            const { orderId } = parseInput(explainabilityParamsSchema, req.params);
+            parsedOrderId = orderId;
+            const result = await getAttributionQaPayloadForOrder(orderId);
+            const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+            if (!result) {
+                emitAttributionQaPayloadFetchLog({
+                    endpoint: 'public_qa_payload',
+                    orderId,
+                    status: 'not_found',
+                    statusCode: 404,
+                    durationMs
+                });
+                throw new AttributionReadHttpError(404, 'attribution_order_not_found', `No Shopify order was found for ${orderId}`);
+            }
+            emitAttributionQaPayloadFetchLog({
+                endpoint: 'public_qa_payload',
+                orderId,
+                status: 'success',
+                statusCode: 200,
+                durationMs,
+                source: result.source,
+                payload: result.payload
+            });
+            res.json(result);
+        }
+        catch (error) {
+            const statusCode = error instanceof AttributionReadHttpError ? error.statusCode : 500;
+            if (parsedOrderId && statusCode !== 404) {
+                emitAttributionQaPayloadFetchLog({
+                    endpoint: 'public_qa_payload',
+                    orderId: parsedOrderId,
+                    status: 'failure',
+                    statusCode,
+                    durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
+                    error
+                });
+            }
             next(error);
         }
     });

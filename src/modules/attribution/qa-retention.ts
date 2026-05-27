@@ -151,12 +151,16 @@ export async function runAttributionQaRetention(
 
 		if (emitLogs) {
 			logInfo("attribution_qa_retention_batch_completed", {
+				service: process.env.K_SERVICE ?? "roas-radar-attribution-qa-retention",
 				batchNumber,
 				cutoffAt: cutoffAt.toISOString(),
 				retentionDays,
 				batchSize,
 				deletedRawEvidenceInBatch: batchResult.deletedRawEvidenceInBatch,
 				prunedSnapshotsInBatch: batchResult.prunedSnapshotsInBatch,
+				cleanupDeletionCount:
+					batchResult.deletedRawEvidenceInBatch +
+					batchResult.prunedSnapshotsInBatch,
 			});
 		}
 	}
@@ -172,7 +176,11 @@ export async function runAttributionQaRetention(
 	};
 
 	if (emitLogs) {
-		logInfo("attribution_qa_retention_completed", result);
+		logInfo("attribution_qa_retention_completed", {
+			service: process.env.K_SERVICE ?? "roas-radar-attribution-qa-retention",
+			...result,
+			cleanupDeletionCount: deletedRawEvidence + prunedSnapshots,
+		});
 	}
 
 	return result;

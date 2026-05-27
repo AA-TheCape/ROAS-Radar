@@ -1,0 +1,31 @@
+{
+  "displayName": "ROAS Radar __ENVIRONMENT__ Attribution QA Snapshot Write Failures",
+  "documentation": {
+    "content": "Attribution QA snapshot writes are repeatedly failing. Inspect `attribution_qa_snapshot_write` logs by `jsonPayload.order_id` and pipeline. Runbook: __RUNBOOK_URL_ATTRIBUTION__",
+    "mimeType": "text/markdown"
+  },
+  "combiner": "OR",
+  "enabled": true,
+  "severity": "WARNING",
+  "notificationChannels": "__ALERT_NOTIFICATION_CHANNELS__",
+  "conditions": [
+    {
+      "displayName": "Attribution QA snapshot write failures exceed 3 in 15 minutes",
+      "conditionThreshold": {
+        "filter": "metric.type=\"logging.googleapis.com/user/roas_attribution_qa_snapshot_writes\" resource.type=\"cloud_run_revision\" metric.labels.status=\"failure\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 3,
+        "duration": "900s",
+        "aggregations": [
+          {
+            "alignmentPeriod": "900s",
+            "perSeriesAligner": "ALIGN_SUM"
+          }
+        ],
+        "trigger": {
+          "count": 1
+        }
+      }
+    }
+  ]
+}
