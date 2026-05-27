@@ -54,6 +54,7 @@ import {
 	type OrderDetailsResponse,
 	type OrderRow,
 	type ReportingFilters,
+	type SummaryResponse,
 	type ShopifyAttributionRecoveryResponse,
 	type ShopifyBackfillResponse,
 	type ShopifyConnectionResponse,
@@ -121,7 +122,7 @@ type AsyncSection<T> = {
 };
 
 type DashboardState = {
-	summary: AsyncSection<SummaryTotals>;
+	summary: AsyncSection<SummaryResponse>;
 	campaigns: AsyncSection<CampaignRow[]>;
 	timeseries: AsyncSection<TimeseriesPoint[]>;
 	orders: AsyncSection<OrderRow[]>;
@@ -337,8 +338,13 @@ function normalizeReportingFilters(
 	return filters;
 }
 
-const DASHBOARD_QUERY_PARAM_KEYS = ['startDate', 'endDate', 'source', 'campaign', 'attributionModel', 'attributionTier', 'groupBy'] as const;
+const DASHBOARD_QUERY_PARAM_KEYS = ['startDate', 'endDate', 'source', 'campaign', 'attributionModel', 'reportingMode', 'attributionTier', 'groupBy'] as const;
 const REPORTING_FILTER_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const REPORTING_MODES = new Set<NonNullable<ReportingFilters['reportingMode']>>([
+  'combined',
+  'clicks',
+  'deterministic_views'
+]);
 const ATTRIBUTION_MODELS = new Set<
 	NonNullable<ReportingFilters["attributionModel"]>
 >([
@@ -353,6 +359,7 @@ const ATTRIBUTION_MODELS = new Set<
 export function createDefaultReportingFilters(reportingTimezone = DEFAULT_REPORTING_TIMEZONE): ReportingFilters {
   return {
     ...buildRange(30, reportingTimezone),
+    reportingMode: 'combined',
     source: '',
     campaign: '',
     attributionTier: ''
@@ -388,6 +395,17 @@ function isAttributionModel(
 	);
 }
 
+function isReportingMode(
+	value: string | null,
+): value is NonNullable<ReportingFilters["reportingMode"]> {
+	return Boolean(
+		value &&
+			REPORTING_MODES.has(
+				value as NonNullable<ReportingFilters["reportingMode"]>,
+			),
+	);
+}
+
 export function readDashboardStateFromSearch(
 	search: string,
 	reportingTimezone = DEFAULT_REPORTING_TIMEZONE,
@@ -402,6 +420,7 @@ export function readDashboardStateFromSearch(
   const source = params.get('source');
   const campaign = params.get('campaign');
   const attributionModel = params.get('attributionModel');
+  const reportingMode = params.get('reportingMode');
   const attributionTier = params.get('attributionTier');
   const groupBy = params.get('groupBy');
 
@@ -412,6 +431,7 @@ export function readDashboardStateFromSearch(
       source: source ?? '',
       campaign: campaign ?? '',
       attributionModel: isAttributionModel(attributionModel) ? attributionModel : undefined,
+      reportingMode: isReportingMode(reportingMode) ? reportingMode : defaults.reportingMode,
       attributionTier: isAttributionTier(attributionTier) ? attributionTier : ''
     }),
     groupBy: isTimeseriesGroupBy(groupBy) ? groupBy : DEFAULT_GROUP_BY
@@ -442,6 +462,10 @@ export function applyDashboardStateToSearch(
 
 	if (filters.attributionModel?.trim()) {
 		params.set("attributionModel", filters.attributionModel.trim());
+	}
+
+	if (filters.reportingMode?.trim() && filters.reportingMode !== 'combined') {
+		params.set("reportingMode", filters.reportingMode.trim());
 	}
 
   if (filters.attributionTier?.trim()) {
@@ -561,7 +585,7 @@ function useDashboardData(
 				if (!cancelled) {
 					setState((current) => ({
 						...current,
-						summary: createResolvedSection(response.totals),
+						summary: createResolvedSection(response),
 					}));
 				}
 			})
@@ -1281,31 +1305,31 @@ function App() {
     return [
       {
         label: 'Visits',
-        value: formatNumber(totals?.visits),
+        value: formatNumber(totals?.totals.visits),
         detail: rangeLabel
       },
       {
         label: 'Orders',
-        value: formatNumber(totals?.orders),
-        detail: `${formatPercent(totals?.conversionRate)} conversion`
+        value: formatNumber(totals?.totals.orders),
+        detail: `${formatPercent(totals?.totals.conversionRate)} conversion`
       },
       {
         label: 'Revenue',
-        value: formatCurrency(totals?.revenue),
-        detail: totals?.roas == null ? 'ROAS pending spend data' : `${formatNumber(totals.roas)} ROAS`
+        value: formatCurrency(totals?.totals.revenue),
+        detail: totals?.totals.roas == null ? 'ROAS pending spend data' : `${formatNumber(totals.totals.roas)} ROAS`
       },
       {
         label: 'Spend',
-        value: formatCurrency(totals?.spend),
+        value: formatCurrency(totals?.totals.spend),
         detail: rangeLabel
       },
       {
         label: 'AOV',
         value:
-          totals && totals.orders > 0
-            ? formatCurrency(totals.revenue / totals.orders)
+          totals && totals.totals.orders > 0
+            ? formatCurrency(totals.totals.revenue / totals.totals.orders)
             : formatCurrency(null),
-        detail: `${formatNumber(totals?.orders)} attributed orders`
+        detail: `${formatNumber(totals?.totals.orders)} attributed orders`
       }
     ];
   }, [dashboard.summary.data, filters.endDate, filters.startDate, reportingTimezone]);

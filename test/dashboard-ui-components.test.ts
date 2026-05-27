@@ -466,3 +466,55 @@ test("reporting dashboard keeps the top controls compact and applies quick date 
 		mounted.cleanup();
 	}
 });
+
+test("reporting dashboard exposes Meta-verified summary layer controls and breakdown", async () => {
+	const { default: ReportingDashboard } = await loadDashboardModule<
+		typeof import("../dashboard/src/components/ReportingDashboard")
+	>("dashboard/src/components/ReportingDashboard.tsx");
+
+	let latestFilters = createReportingDashboardProps().filters;
+
+	function ReportingDashboardHarness() {
+		const [filters, setFilters] = React.useState(latestFilters);
+
+		return h(
+			ReportingDashboard,
+			createReportingDashboardProps({
+				filters,
+				onFiltersChange: (nextFilters) => {
+					latestFilters = nextFilters;
+					setFilters(nextFilters);
+				},
+			}),
+		);
+	}
+
+	const mounted = await mountUi(h(ReportingDashboardHarness));
+
+	try {
+		const text = mounted.container.textContent ?? "";
+		assert.match(text, /Summary layer/);
+		assert.match(text, /Combined is the default report total/);
+		assert.match(text, /Meta views are API-verified deterministic signals for Meta v1/);
+		assert.match(text, /Layer breakdown/);
+		assert.match(text, /Combined total/);
+		assert.match(text, /Click layer/);
+		assert.match(text, /Deterministic view layer/);
+		assert.match(text, /Meta API-verified deterministic view\/impression inputs, scope Meta v1/);
+
+		const metaViewsButton = Array.from(
+			mounted.container.querySelectorAll<HTMLButtonElement>("button"),
+		).find((element) => element.textContent?.trim() === "Meta views");
+
+		assert.ok(metaViewsButton);
+		assert.equal(metaViewsButton.getAttribute("title"), "Deterministic view/impression signals verified by Meta API v1.");
+
+		click(metaViewsButton);
+		await tick();
+
+		assert.equal(latestFilters.reportingMode, "deterministic_views");
+		assert.equal(metaViewsButton.getAttribute("aria-pressed"), "true");
+	} finally {
+		mounted.cleanup();
+	}
+});

@@ -32,6 +32,7 @@ export type AttributionTier =
 export type ReportingFilters = {
   startDate: string;
   endDate: string;
+  reportingMode?: ReportingMode;
   attributionTier?: AttributionTier | '';
   attributionModel?:
     | 'first_touch'
@@ -43,6 +44,8 @@ export type ReportingFilters = {
   source?: string;
   campaign?: string;
 };
+
+export type ReportingMode = 'combined' | 'clicks' | 'deterministic_views';
 
 export type AttributionFilters = {
   startDate: string;
@@ -67,7 +70,13 @@ export type SummaryResponse = {
 		startDate: string;
 		endDate: string;
 	};
+	reportingMode: ReportingMode;
 	totals: SummaryTotals;
+	combinedTotals: SummaryTotals;
+	layers: {
+		clicks: SummaryTotals;
+		deterministicViews: SummaryTotals;
+	};
 };
 
 export type CampaignRow = {
@@ -799,6 +808,10 @@ function buildSearchParams(
 
 	if (filters.attributionModel?.trim()) {
 		params.set("attributionModel", filters.attributionModel.trim());
+	}
+
+	if (filters.reportingMode?.trim()) {
+		params.set("reportingMode", filters.reportingMode.trim());
 	}
 
   if (filters.attributionTier?.trim()) {

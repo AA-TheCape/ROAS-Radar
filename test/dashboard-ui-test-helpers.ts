@@ -356,6 +356,7 @@ export function createReportingDashboardProps(
     filters: {
       startDate: '2026-04-01',
       endDate: '2026-04-20',
+      reportingMode: 'combined',
       source: '',
       campaign: '',
       attributionTier: ''
@@ -380,16 +381,49 @@ export function createReportingDashboardProps(
     ],
     summarySection: {
       data: {
-        visits: 12480,
-        orders: 324,
-        revenue: 48920,
-        spend: 11376,
-        conversionRate: 0.02596,
-        roas: 4.3
+        range: {
+          startDate: '2026-04-01',
+          endDate: '2026-04-20'
+        },
+        reportingMode: 'combined',
+        totals: {
+          visits: 12480,
+          orders: 344,
+          revenue: 51920,
+          spend: 11376,
+          conversionRate: 344 / 12480,
+          roas: 4.56
+        },
+        combinedTotals: {
+          visits: 12480,
+          orders: 344,
+          revenue: 51920,
+          spend: 11376,
+          conversionRate: 344 / 12480,
+          roas: 4.56
+        },
+        layers: {
+          clicks: {
+            visits: 12480,
+            orders: 324,
+            revenue: 48920,
+            spend: 11376,
+            conversionRate: 0.02596,
+            roas: 4.3
+          },
+          deterministicViews: {
+            visits: 0,
+            orders: 20,
+            revenue: 3000,
+            spend: 0,
+            conversionRate: 0,
+            roas: null
+          }
+        }
       },
       loading: false,
       error: null
-    } satisfies AsyncSection<import('../dashboard/src/lib/api').SummaryTotals>,
+    } satisfies AsyncSection<import('../dashboard/src/lib/api').SummaryResponse>,
     campaignsSection: {
       data: [
         {
