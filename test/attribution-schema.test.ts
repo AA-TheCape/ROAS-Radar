@@ -586,8 +586,15 @@ test('Meta deterministic attribution schemas enforce identity, verification, and
     verified_by_source_id: 3,
     verified_at_utc: '2026-05-21T12:00:00Z',
     raw_record_metadata: {
+      sourceId: 3,
+      sourceTable: 'deterministic_event_sources',
       rawTable: 'raw_deterministic_events',
-      rawEventId: 4
+      rawEventId: 4,
+      apiVersion: 'v20.0',
+      apiEndpoint: 'insights',
+      apiAccountId: 'act_123',
+      apiRequestTimestampUtc: '2026-05-21T11:59:59Z',
+      requestId: 'trace-123'
     }
   });
 
@@ -611,6 +618,18 @@ test('Meta deterministic attribution schemas enforce identity, verification, and
         verified_by_source_id: null
       }),
     /verified Meta aggregate rows require verified status/
+  );
+
+  assert.throws(
+    () =>
+      normalizeMetaDeterministicAttributionAggregateV1({
+        ...aggregate,
+        raw_record_metadata: {
+          ...aggregate.raw_record_metadata,
+          requestId: null
+        }
+      }),
+    /verified Meta aggregate rows require raw payload and Meta API provenance metadata/
   );
 
   assert.throws(

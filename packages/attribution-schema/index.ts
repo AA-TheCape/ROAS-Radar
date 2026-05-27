@@ -544,6 +544,36 @@ export const metaDeterministicAttributionAggregateV1Schema = z.object({
       message: 'verified Meta aggregate rows require verified status, source, and timestamp'
     });
   }
+
+  if (value.platform_verified) {
+    const requiredMetadataFields = [
+      'sourceId',
+      'rawEventId',
+      'rawTable',
+      'apiVersion',
+      'apiEndpoint',
+      'apiAccountId',
+      'apiRequestTimestampUtc',
+      'requestId'
+    ];
+
+    for (const field of requiredMetadataFields) {
+      const metadataValue = value.raw_record_metadata[field];
+      if (typeof metadataValue === 'string' && metadataValue.trim().length > 0) {
+        continue;
+      }
+
+      if (typeof metadataValue === 'number' && Number.isFinite(metadataValue) && metadataValue > 0) {
+        continue;
+      }
+
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'verified Meta aggregate rows require raw payload and Meta API provenance metadata',
+        path: ['raw_record_metadata', field]
+      });
+    }
+  }
 });
 
 const jsonSchemaNullableString = (maxLength = MAX_ATTRIBUTION_TEXT_LENGTH): JsonSchemaDocument => ({

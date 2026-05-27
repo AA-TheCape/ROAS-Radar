@@ -278,6 +278,71 @@ test(
 			assert.equal(source.rows[0].api_account_id, "123456789");
 			assert.equal(source.rows[0].api_request_id, "trace-123");
 
+			const rawPayload = await pool.query<{
+				raw_payload: {
+					impressions: string;
+					video_play_actions: Array<{ action_type: string; value: string }>;
+				};
+			}>(
+				`
+        SELECT raw_payload
+        FROM raw_deterministic_events
+        WHERE event_type = 'view'
+      `,
+			);
+			assert.deepEqual(rawPayload.rows[0].raw_payload, {
+				account_id: "123456789",
+				account_name: "Meta Account",
+				campaign_id: "campaign-1",
+				campaign_name: "Campaign 1",
+				adset_id: "adset-1",
+				adset_name: "Ad Set 1",
+				ad_id: "ad-1",
+				ad_name: "Ad 1",
+				date_start: "2026-05-26",
+				date_stop: "2026-05-26",
+				impressions: "12",
+				video_play_actions: [{ action_type: "video_view", value: "3" }],
+			});
+
+			const aggregateMetadata = await pool.query<{
+				raw_record_metadata: {
+					rawTable: string;
+					rawEventId: number;
+					apiVersion: string;
+					apiEndpoint: string;
+					apiAccountId: string;
+					apiRequestTimestampUtc: string;
+					requestId: string;
+				};
+			}>(
+				`
+        SELECT raw_record_metadata
+        FROM meta_ads_deterministic_attribution_aggregates
+        WHERE event_type = 'view'
+      `,
+			);
+			assert.equal(
+				aggregateMetadata.rows[0].raw_record_metadata.rawTable,
+				"raw_deterministic_events",
+			);
+			assert.equal(
+				aggregateMetadata.rows[0].raw_record_metadata.apiEndpoint,
+				"insights",
+			);
+			assert.equal(
+				aggregateMetadata.rows[0].raw_record_metadata.apiAccountId,
+				"123456789",
+			);
+			assert.equal(
+				aggregateMetadata.rows[0].raw_record_metadata.requestId,
+				"trace-123",
+			);
+			assert.ok(aggregateMetadata.rows[0].raw_record_metadata.rawEventId);
+			assert.ok(
+				aggregateMetadata.rows[0].raw_record_metadata.apiRequestTimestampUtc,
+			);
+
 			const quarantine = await pool.query<{
 				reason_code: string;
 				platform: string;
@@ -311,6 +376,109 @@ test(
 				quarantine: "2",
 				checkpoints: "1",
 			});
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	},
+);
+
+test(
+	"Meta deterministic sync quarantines rows when API provenance is incomplete",
+	{ concurrency: false },
+	async () => {
+		await resetE2EDatabase();
+		await seedMetaConnection({ adAccountId: "123456789", enabled: true });
+
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = async () =>
+			new Response(
+				JSON.stringify({
+					data: [
+						{
+							account_id: "123456789",
+							campaign_id: "campaign-1",
+							ad_id: "ad-1",
+							date_start: "2026-05-26",
+							date_stop: "2026-05-26",
+							impressions: "8",
+							video_play_actions: [{ action_type: "video_view", value: "5" }],
+							video_thruplay_watched_actions: [
+								{ action_type: "video_thruplay_watched", value: "2" },
+							],
+						},
+					],
+				}),
+				{
+					status: 200,
+					headers: { "content-type": "application/json" },
+				},
+			);
+
+		try {
+			const result = await runMetaDeterministicSync({
+				now: new Date("2026-05-27T12:00:00Z"),
+				triggerSource: "test",
+			});
+
+			assert.equal(result.succeededJobs, 1);
+			assert.equal(result.failedJobs, 0);
+			assert.equal(result.recordsReceived, 2);
+			assert.equal(result.rawRowsFetched, 1);
+			assert.equal(result.rawRowsUpserted, 0);
+			assert.equal(result.aggregateRowsUpserted, 0);
+			assert.deepEqual(await loadDeterministicCounts(), {
+				jobs: "1",
+				rawRows: "0",
+				facts: "0",
+				aggregates: "0",
+				verifications: "0",
+				quarantine: "2",
+				checkpoints: "1",
+			});
+
+			const quarantine = await pool.query<{
+				event_type: string;
+				reason_code: string;
+				source_id: number | null;
+				source_metadata: { requestId: string | null };
+				raw_payload: { impressions: string };
+			}>(
+				`
+        SELECT event_type, reason_code, source_id, source_metadata, raw_payload
+        FROM deterministic_event_evidence_quarantine
+        ORDER BY event_type ASC
+      `,
+			);
+			assert.deepEqual(
+				quarantine.rows.map((row) => ({
+					event_type: row.event_type,
+					reason_code: row.reason_code,
+					source_id: row.source_id,
+					requestId: row.source_metadata.requestId,
+					impressions: row.raw_payload.impressions,
+				})),
+				[
+					{
+						event_type: "impression",
+						reason_code: "missing_api_request_id",
+						source_id: null,
+						requestId: null,
+						impressions: "8",
+					},
+					{
+						event_type: "view",
+						reason_code: "missing_api_request_id",
+						source_id: null,
+						requestId: null,
+						impressions: "8",
+					},
+				],
+			);
+
+			const sourceCount = await pool.query<{ count: string }>(
+				"SELECT count(*)::text AS count FROM deterministic_event_sources",
+			);
+			assert.equal(sourceCount.rows[0].count, "0");
 		} finally {
 			globalThis.fetch = originalFetch;
 		}
