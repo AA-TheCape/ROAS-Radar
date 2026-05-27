@@ -3,6 +3,7 @@ import type {
 	AttributionExplainRecordV1,
 	AttributionLookbackRule,
 	AttributionModelKey,
+	AttributionQaPayloadV1,
 	AttributionResultRecordV1,
 	AttributionTouchpointInputV1,
 	OrderAttributionBackfillEnqueueResponse,
@@ -346,6 +347,16 @@ export type OrderDetailsResponse = {
 	order: OrderDetail;
 	lineItems: OrderDetailLineItem[];
 	attributionCredits: OrderDetailAttributionCredit[];
+};
+
+export type AttributionQaPayloadSource =
+  | 'persisted_snapshot'
+  | 'generated_on_read';
+
+export type AttributionQaPayloadResponse = {
+  orderId: string;
+  source: AttributionQaPayloadSource;
+  payload: AttributionQaPayloadV1;
 };
 
 export type AttributionResultRow = {
@@ -1023,6 +1034,12 @@ export function fetchOrderDetails(shopifyOrderId: string) {
 	return requestJson<OrderDetailsResponse>(
 		`/api/reporting/orders/${encodeURIComponent(shopifyOrderId)}`,
 	);
+}
+
+export function fetchAttributionQaPayload(shopifyOrderId: string) {
+  return requestJson<AttributionQaPayloadResponse>(
+    `/api/attribution/orders/${encodeURIComponent(shopifyOrderId)}/qa-payload`
+  );
 }
 
 export function fetchAttributionResults(

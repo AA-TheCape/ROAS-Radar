@@ -38,6 +38,7 @@ import {
 	type AttributionChannelTotalsResponse,
 	type AttributionExplainabilityResponse,
 	type AttributionFilters,
+	type AttributionQaPayloadResponse,
 	type AttributionResultRow,
 	type AuthUser,
 	type CampaignRow,
@@ -69,6 +70,7 @@ import {
 	fetchAppSettings,
 	fetchAttributionChannelTotals,
 	fetchAttributionExplainability,
+	fetchAttributionQaPayload,
 	fetchCampaigns,
 	fetchCurrentUser,
 	fetchGoogleAdsStatus,
@@ -109,6 +111,7 @@ import { isAttributionTier } from "./lib/attributionTier";
 
 const ReportingDashboard = lazy(() => import('./components/ReportingDashboard'));
 const AttributionDashboard = lazy(() => import('./components/AttributionDashboard'));
+const AttributionQaToolingView = lazy(() => import('./components/AttributionQaToolingView'));
 const MetaOrderValueView = lazy(() => import('./components/MetaOrderValueView'));
 const OrderDetailsView = lazy(() => import('./components/OrderDetailsView'));
 const SettingsAdminView = lazy(() => import('./components/SettingsAdminView'));
@@ -714,6 +717,13 @@ function App() {
     loading: false,
     error: null
   });
+  const [attributionQaPayloadSection, setAttributionQaPayloadSection] = useState<
+    AsyncSection<AttributionQaPayloadResponse>
+  >({
+    data: null,
+    loading: false,
+    error: null
+  });
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [newUserForm, setNewUserForm] = useState<CreateUserPayload>({
     email: '',
@@ -1169,6 +1179,11 @@ function App() {
           loading: false,
           error: null
         });
+        setAttributionQaPayloadSection({
+          data: null,
+          loading: false,
+          error: null
+        });
         setSelectedOrderId(null);
         setAttributionState({
           results: {
@@ -1195,13 +1210,34 @@ function App() {
     setCurrentPage('order-details');
     setSelectedOrderId(shopifyOrderId);
     setOrderDetailsSection(createLoadingSection());
+    setAttributionQaPayloadSection(createLoadingSection());
 
-    try {
-      const response = await fetchOrderDetails(shopifyOrderId);
-      setOrderDetailsSection(createResolvedSection(response));
-    } catch (error) {
+    const [orderDetailsResult, qaPayloadResult] = await Promise.allSettled([
+      fetchOrderDetails(shopifyOrderId),
+      fetchAttributionQaPayload(shopifyOrderId)
+    ]);
+
+    if (orderDetailsResult.status === 'fulfilled') {
+      setOrderDetailsSection(createResolvedSection(orderDetailsResult.value));
+    } else {
       setOrderDetailsSection(
-        createErroredSection(error instanceof Error ? error.message : 'Failed to load order details')
+        createErroredSection(
+          orderDetailsResult.reason instanceof Error
+            ? orderDetailsResult.reason.message
+            : 'Failed to load order details'
+        )
+      );
+    }
+
+    if (qaPayloadResult.status === 'fulfilled') {
+      setAttributionQaPayloadSection(createResolvedSection(qaPayloadResult.value));
+    } else {
+      setAttributionQaPayloadSection(
+        createErroredSection(
+          qaPayloadResult.reason instanceof Error
+            ? qaPayloadResult.reason.message
+            : 'Failed to load attribution QA payload'
+        )
       );
     }
   }, []);
@@ -1210,6 +1246,11 @@ function App() {
     setCurrentPage('dashboard');
     setSelectedOrderId(null);
     setOrderDetailsSection({
+      data: null,
+      loading: false,
+      error: null
+    });
+    setAttributionQaPayloadSection({
       data: null,
       loading: false,
       error: null
@@ -2174,7 +2215,7 @@ function App() {
         <section className="grid gap-section">
           <Panel
             title="Order details"
-            description="Everything currently stored for this Shopify order, including line items, attribution credits, and raw payload."
+            description="Everything currently stored for this Shopify order, including line items, attribution QA, attribution credits, and raw payload."
             wide
           >
             <Suspense
@@ -2188,6 +2229,25 @@ function App() {
                 selectedOrderId={selectedOrderId}
                 reportingTimezone={reportingTimezone}
                 orderDetailsSection={orderDetailsSection}
+              />
+            </Suspense>
+          </Panel>
+          <Panel
+            title="Attribution QA tooling"
+            description="Per-order QA payload view for candidate matching, winner rationale, diagnostics, redacted identifiers, and GA4 fallback details."
+            wide
+          >
+            <Suspense
+              fallback={
+                <SectionState loading empty={false} error={null} emptyLabel="">
+                  <div />
+                </SectionState>
+              }
+            >
+              <AttributionQaToolingView
+                selectedOrderId={selectedOrderId}
+                reportingTimezone={reportingTimezone}
+                qaPayloadSection={attributionQaPayloadSection}
               />
             </Suspense>
           </Panel>
