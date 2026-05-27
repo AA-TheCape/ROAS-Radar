@@ -12,6 +12,7 @@ import {
 import { query } from '../../db/pool.js';
 import { attachAuthContext, requireAuthenticated } from '../auth/index.js';
 import { getReportingTimezone } from '../settings/index.js';
+import { getAttributionQaPayloadForOrder } from './qa-payload-service.js';
 
 class AttributionReadHttpError extends Error {
   statusCode: number;
@@ -1021,6 +1022,21 @@ export function createAttributionReadRouter(): Router {
           createdAtUtc: row.created_at_utc.toISOString()
         }))
       });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/orders/:orderId/qa-payload', async (req, res, next) => {
+    try {
+      const { orderId } = parseInput(explainabilityParamsSchema, req.params);
+      const result = await getAttributionQaPayloadForOrder(orderId);
+
+      if (!result) {
+        throw new AttributionReadHttpError(404, 'attribution_order_not_found', `No Shopify order was found for ${orderId}`);
+      }
+
+      res.json(result);
     } catch (error) {
       next(error);
     }

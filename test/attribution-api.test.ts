@@ -7,9 +7,11 @@ process.env.REPORTING_API_TOKEN = 'test-reporting-token';
 
 const poolModule = await import('../src/db/pool.js');
 const serverModule = await import('../src/server.js');
+const schemaModule = await import('../packages/attribution-schema/index.js');
 
 const { pool } = poolModule;
 const { closeServer, createServer } = serverModule;
+const { attributionQaPayloadV1SuccessFixture } = schemaModule;
 const originalPoolQuery = pool.query.bind(pool);
 
 async function requestJson(
@@ -43,6 +45,124 @@ test('attribution read routes require authentication', async () => {
       error: 'unauthorized',
       message: 'Authentication required'
     });
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
+test('attribution order QA payload returns the persisted schema-validated snapshot', async () => {
+  pool.query = (async (text: string, params?: unknown[]) => {
+    if (text.includes('SELECT') && text.includes('FROM shopify_orders')) {
+      assert.equal(params?.[0], 'order-qa-1');
+      return {
+        rows: [
+          {
+            shopify_order_id: 'order-qa-1',
+            name: '#QA1',
+            currency_code: 'USD',
+            subtotal_price: '90.00',
+            total_price: '100.00',
+            processed_at: new Date('2026-04-10T12:00:00.000Z'),
+            created_at_shopify: null,
+            ingested_at: new Date('2026-04-10T12:01:00.000Z'),
+            landing_session_id: '123e4567-e89b-42d3-a456-426614174000',
+            checkout_token: null,
+            cart_token: null,
+            shopify_customer_id: null,
+            email_hash: null,
+            customer_identity_id: null,
+            identity_journey_id: null,
+            source_name: 'web',
+            raw_payload: { name: '#QA1' },
+            attribution_snapshot: {
+              qaSnapshot: {
+                ...attributionQaPayloadV1SuccessFixture,
+                order: {
+                  ...attributionQaPayloadV1SuccessFixture.order,
+                  order_id: 'order-qa-1',
+                  order_name: '#QA1'
+                }
+              }
+            }
+          }
+        ]
+      };
+    }
+
+    return { rows: [] };
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(server, '/api/attribution/orders/order-qa-1/qa-payload');
+
+    assert.equal(response.status, 200);
+    assert.equal(body.orderId, 'order-qa-1');
+    assert.equal(body.source, 'persisted_snapshot');
+    assert.equal(body.payload.schema_version, 1);
+    assert.equal(body.payload.order.order_id, 'order-qa-1');
+    assert.equal(body.payload.outcome.status, 'success');
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
+test('attribution order QA payload can be generated on read from order candidates', async () => {
+  pool.query = (async (text: string, params?: unknown[]) => {
+    if (text.includes('SELECT') && text.includes('FROM shopify_orders')) {
+      assert.equal(params?.[0], 'order-qa-generated');
+      return {
+        rows: [
+          {
+            shopify_order_id: 'order-qa-generated',
+            name: '#QA2',
+            currency_code: 'USD',
+            subtotal_price: '60.00',
+            total_price: '75.00',
+            processed_at: new Date('2026-04-10T12:00:00.000Z'),
+            created_at_shopify: null,
+            ingested_at: new Date('2026-04-10T12:01:00.000Z'),
+            landing_session_id: null,
+            checkout_token: null,
+            cart_token: null,
+            shopify_customer_id: null,
+            email_hash: null,
+            customer_identity_id: null,
+            identity_journey_id: null,
+            source_name: 'web',
+            raw_payload: {
+              name: '#QA2',
+              landing_site: 'https://store.example/products/widget?utm_source=facebook&utm_medium=paid_social&utm_campaign=spring&fbclid=FB123'
+            },
+            attribution_snapshot: null
+          }
+        ]
+      };
+    }
+
+    if (text.includes('FROM ga4_fallback_candidates')) {
+      return { rows: [] };
+    }
+
+    return { rows: [] };
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(server, '/api/attribution/orders/order-qa-generated/qa-payload');
+
+    assert.equal(response.status, 200);
+    assert.equal(body.orderId, 'order-qa-generated');
+    assert.equal(body.source, 'generated_on_read');
+    assert.equal(body.payload.order.order_id, 'order-qa-generated');
+    assert.equal(body.payload.outcome.status, 'success');
+    assert.equal(body.payload.outcome.attribution_tier, 'deterministic_shopify_hint');
+    assert.equal(body.payload.candidates.shopify_hint.length, 1);
+    assert.equal(body.payload.candidates.shopify_hint[0].selected, true);
   } finally {
     pool.query = originalPoolQuery as typeof pool.query;
     await closeServer(server);

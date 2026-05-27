@@ -142,6 +142,25 @@ paths:
           description: Authentication required
         "404":
           description: Attribution result not found
+  /api/attribution/orders/{orderId}/qa-payload:
+    get:
+      summary: Fetch per-order attribution QA payload
+      operationId: getAttributionQaPayload
+      parameters:
+        - in: path
+          name: orderId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Schema-validated attribution QA payload for one Shopify order
+        "400":
+          description: Invalid request
+        "401":
+          description: Authentication required
+        "404":
+          description: Shopify order not found
 components:
   securitySchemes:
     bearerAuth:
