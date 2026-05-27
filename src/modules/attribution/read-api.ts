@@ -216,6 +216,29 @@ type ExplainRow = {
   created_at_utc: Date;
 };
 
+type RawEvidenceRow = {
+  id: string;
+  run_id: string;
+  order_id: string;
+  evidence_type: 'shopify_hint' | 'tracking_touchpoint';
+  source_table: string;
+  source_record_id: string;
+  touchpoint_id: string | null;
+  session_id: string | null;
+  ingestion_source: string | null;
+  event_type: string | null;
+  occurred_at_utc: Date | null;
+  captured_at_utc: Date | null;
+  evidence_status: 'valid' | 'malformed';
+  error_code: string | null;
+  error_message: string | null;
+  normalized_metadata: unknown;
+  raw_payload: unknown;
+  payload_size_bytes: number;
+  payload_hash: string;
+  created_at_utc: Date;
+};
+
 type ChannelTotalsRow = {
   model_key: z.infer<typeof modelKeySchema>;
   source: string | null;
@@ -672,7 +695,7 @@ export function createAttributionReadRouter(): Router {
       const modelFilterSql = input.modelKey ? 'AND model_key = $3' : '';
       const modelFilterParams = input.modelKey ? [runId, orderId, input.modelKey] : [runId, orderId];
 
-      const [summaryResult, touchpointResult, creditResult, explainResult] = await Promise.all([
+      const [summaryResult, touchpointResult, creditResult, explainResult, rawEvidenceResult] = await Promise.all([
         query<ResultsSummaryRow>(
           `
             SELECT
@@ -827,6 +850,36 @@ export function createAttributionReadRouter(): Router {
             ORDER BY created_at_utc ASC, model_key ASC NULLS FIRST, touchpoint_id ASC NULLS FIRST
           `,
           modelFilterParams
+        ),
+        query<RawEvidenceRow>(
+          `
+            SELECT
+              id::text,
+              run_id::text AS run_id,
+              order_id,
+              evidence_type,
+              source_table,
+              source_record_id,
+              touchpoint_id,
+              session_id::text AS session_id,
+              ingestion_source,
+              event_type,
+              occurred_at_utc,
+              captured_at_utc,
+              evidence_status,
+              error_code,
+              error_message,
+              normalized_metadata,
+              raw_payload,
+              payload_size_bytes,
+              payload_hash,
+              created_at_utc
+            FROM attribution_raw_evidence
+            WHERE run_id = $1::uuid
+              AND order_id = $2
+            ORDER BY evidence_type ASC, occurred_at_utc ASC NULLS LAST, source_record_id ASC, id ASC
+          `,
+          [runId, orderId]
         )
       ]);
 
@@ -944,7 +997,29 @@ export function createAttributionReadRouter(): Router {
             order_occurred_at_utc: row.order_occurred_at_utc?.toISOString() ?? null,
             created_at_utc: row.created_at_utc.toISOString()
           })
-        )
+        ),
+        rawEvidence: rawEvidenceResult.rows.map((row) => ({
+          id: row.id,
+          runId: row.run_id,
+          orderId: row.order_id,
+          evidenceType: row.evidence_type,
+          sourceTable: row.source_table,
+          sourceRecordId: row.source_record_id,
+          touchpointId: row.touchpoint_id,
+          sessionId: row.session_id,
+          ingestionSource: row.ingestion_source,
+          eventType: row.event_type,
+          occurredAtUtc: row.occurred_at_utc?.toISOString() ?? null,
+          capturedAtUtc: row.captured_at_utc?.toISOString() ?? null,
+          evidenceStatus: row.evidence_status,
+          errorCode: row.error_code,
+          errorMessage: row.error_message,
+          normalizedMetadata: asObjectRecord(row.normalized_metadata),
+          rawPayload: row.raw_payload,
+          payloadSizeBytes: row.payload_size_bytes,
+          payloadHash: row.payload_hash,
+          createdAtUtc: row.created_at_utc.toISOString()
+        }))
       });
     } catch (error) {
       next(error);
