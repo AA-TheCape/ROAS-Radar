@@ -1,0 +1,224 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import test from "node:test";
+
+process.env.DATABASE_URL ??=
+	"postgres://postgres:postgres@127.0.0.1:5432/roas_radar_test";
+process.env.META_ADS_ENCRYPTION_KEY ??= "meta-encryption-key";
+process.env.META_ADS_DETERMINISTIC_SYNC_INITIAL_LOOKBACK_DAYS = "1";
+process.env.META_ADS_DETERMINISTIC_SYNC_LOOKBACK_DAYS = "1";
+
+const { pool } = await import("../src/db/pool.js");
+const { runMetaDeterministicSync } = await import(
+	"../src/modules/meta-ads/deterministic-events.js"
+);
+const { resetE2EDatabase } = await import("./e2e-harness.js");
+
+async function seedMetaConnection(input: {
+	adAccountId: string;
+	enabled: boolean;
+}): Promise<number> {
+	const rawAccount = {
+		id: input.adAccountId,
+		name: `Meta Account ${input.adAccountId}`,
+		currency: "USD",
+	};
+	const rawAccountJson = JSON.stringify(rawAccount);
+	const result = await pool.query<{ id: number | string }>(
+		`
+      INSERT INTO meta_ads_connections (
+        ad_account_id,
+        access_token_encrypted,
+        token_type,
+        granted_scopes,
+        status,
+        account_name,
+        account_currency,
+        raw_account_data,
+        raw_account_source,
+        raw_account_received_at,
+        raw_account_external_id,
+        raw_account_payload_size_bytes,
+        raw_account_payload_hash,
+        deterministic_view_impression_sync_enabled
+      )
+      VALUES (
+        $1,
+        pgp_sym_encrypt($2, $3, 'cipher-algo=aes256, compress-algo=0'),
+        'Bearer',
+        ARRAY['ads_read']::text[],
+        'active',
+        $4,
+        'USD',
+        $5::jsonb,
+        'meta_ads_account',
+        now(),
+        $1,
+        $6,
+        $7,
+        $8
+      )
+      RETURNING id
+    `,
+		[
+			input.adAccountId,
+			`token-${input.adAccountId}`,
+			process.env.META_ADS_ENCRYPTION_KEY,
+			rawAccount.name,
+			rawAccountJson,
+			Buffer.byteLength(rawAccountJson, "utf8"),
+			createHash("sha256").update(rawAccountJson).digest("hex"),
+			input.enabled,
+		],
+	);
+
+	return Number(result.rows[0].id);
+}
+
+async function loadDeterministicCounts(): Promise<{
+	jobs: string;
+	rawRows: string;
+	facts: string;
+	verifications: string;
+	checkpoints: string;
+}> {
+	const [jobs, rawRows, facts, verifications, checkpoints] = await Promise.all([
+		pool.query<{ count: string }>(
+			"SELECT count(*)::text AS count FROM meta_ads_deterministic_sync_jobs",
+		),
+		pool.query<{ count: string }>(
+			"SELECT count(*)::text AS count FROM raw_deterministic_events",
+		),
+		pool.query<{ count: string }>(
+			"SELECT count(*)::text AS count FROM deterministic_event_facts",
+		),
+		pool.query<{ count: string }>(
+			"SELECT count(*)::text AS count FROM deterministic_event_verification_statuses",
+		),
+		pool.query<{ count: string }>(
+			"SELECT count(*)::text AS count FROM meta_ads_deterministic_sync_checkpoints",
+		),
+	]);
+
+	return {
+		jobs: jobs.rows[0].count,
+		rawRows: rawRows.rows[0].count,
+		facts: facts.rows[0].count,
+		verifications: verifications.rows[0].count,
+		checkpoints: checkpoints.rows[0].count,
+	};
+}
+
+test(
+	"Meta deterministic sync fetches enabled accounts and duplicate-safe upserts events",
+	{ concurrency: false },
+	async () => {
+		await resetE2EDatabase();
+		await seedMetaConnection({ adAccountId: "123456789", enabled: true });
+		await seedMetaConnection({ adAccountId: "987654321", enabled: false });
+
+		const originalFetch = globalThis.fetch;
+		const requestedUrls: string[] = [];
+		let transientFailuresRemaining = 1;
+		globalThis.fetch = async (input: string | URL | Request) => {
+			const url = input instanceof Request ? input.url : input.toString();
+			requestedUrls.push(url);
+
+			if (transientFailuresRemaining > 0) {
+				transientFailuresRemaining -= 1;
+				return new Response(JSON.stringify({ error: { message: "rate limited" } }), {
+					status: 500,
+					headers: { "content-type": "application/json" },
+				});
+			}
+
+			return new Response(
+				JSON.stringify({
+					data: [
+						{
+							account_id: "123456789",
+							account_name: "Meta Account",
+							campaign_id: "campaign-1",
+							campaign_name: "Campaign 1",
+							adset_id: "adset-1",
+							adset_name: "Ad Set 1",
+							ad_id: "ad-1",
+							ad_name: "Ad 1",
+							date_start: "2026-05-26",
+							date_stop: "2026-05-26",
+							impressions: "12",
+							video_play_actions: [{ action_type: "video_view", value: "3" }],
+						},
+					],
+				}),
+				{
+					status: 200,
+					headers: { "content-type": "application/json" },
+				},
+			);
+		};
+
+		try {
+			const firstRun = await runMetaDeterministicSync({
+				now: new Date("2026-05-27T12:00:00Z"),
+				triggerSource: "test",
+			});
+			assert.equal(firstRun.succeededJobs, 1);
+			assert.equal(firstRun.failedJobs, 0);
+			assert.equal(firstRun.recordsReceived, 2);
+			assert.equal(firstRun.rawRowsFetched, 1);
+			assert.equal(firstRun.apiRequestCount, 2);
+			assert.equal(requestedUrls.length, 2);
+			assert.match(requestedUrls[1], /act_123456789\/insights/);
+			assert.doesNotMatch(requestedUrls[0], /987654321/);
+
+			assert.deepEqual(await loadDeterministicCounts(), {
+				jobs: "1",
+				rawRows: "2",
+				facts: "2",
+				verifications: "2",
+				checkpoints: "1",
+			});
+
+			const facts = await pool.query<{
+				event_type: string;
+				event_count: string;
+				platform_verified: boolean;
+			}>(
+				`
+        SELECT event_type, event_count::text, platform_verified
+        FROM deterministic_event_facts
+        ORDER BY event_type ASC
+      `,
+			);
+			assert.deepEqual(facts.rows, [
+				{
+					event_type: "impression",
+					event_count: "12",
+					platform_verified: true,
+				},
+				{ event_type: "view", event_count: "3", platform_verified: true },
+			]);
+
+			const secondRun = await runMetaDeterministicSync({
+				now: new Date("2026-05-27T12:00:00Z"),
+				triggerSource: "test",
+			});
+			assert.equal(secondRun.succeededJobs, 1);
+			assert.equal(secondRun.recordsReceived, 2);
+			assert.deepEqual(await loadDeterministicCounts(), {
+				jobs: "1",
+				rawRows: "2",
+				facts: "2",
+				verifications: "2",
+				checkpoints: "1",
+			});
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	},
+);
+
+test.after(async () => {
+	await pool.end();
+});

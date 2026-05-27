@@ -20,6 +20,7 @@ import {
   __metaAdsTestUtils as __metaOrderValueTestUtils,
   runMetaAdsOrderValueSync
 } from './order-value.js';
+export { runMetaDeterministicSync, processMetaDeterministicSyncQueue } from './deterministic-events.js';
 
 export { runMetaAdsOrderValueSync };
 
