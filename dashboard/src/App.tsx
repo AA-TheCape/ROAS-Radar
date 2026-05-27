@@ -359,7 +359,7 @@ const ATTRIBUTION_MODELS = new Set<
 export function createDefaultReportingFilters(reportingTimezone = DEFAULT_REPORTING_TIMEZONE): ReportingFilters {
   return {
     ...buildRange(30, reportingTimezone),
-    reportingMode: 'combined',
+    reportingMode: 'clicks',
     source: '',
     campaign: '',
     attributionTier: ''
@@ -464,7 +464,7 @@ export function applyDashboardStateToSearch(
 		params.set("attributionModel", filters.attributionModel.trim());
 	}
 
-	if (filters.reportingMode?.trim() && filters.reportingMode !== 'combined') {
+	if (filters.reportingMode?.trim() && filters.reportingMode !== 'clicks') {
 		params.set("reportingMode", filters.reportingMode.trim());
 	}
 

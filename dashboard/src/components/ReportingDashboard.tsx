@@ -131,8 +131,8 @@ const REPORTING_LAYER_OPTIONS: Array<{
 }> = [
 	{
 		value: "combined",
-		label: "Combined",
-		description: "Click attribution plus Meta API-verified deterministic view totals.",
+		label: "Comparison",
+		description: "Non-canonical comparison sum of clicks plus Meta API-verified deterministic view totals.",
 	},
 	{
 		value: "clicks",
@@ -327,30 +327,29 @@ const LayerBreakdownPanel = memo(function LayerBreakdownPanel({
 	}> = [
 		{
 			key: "combined",
-			label: "Combined total",
-			totals: summary.combinedTotals,
+			label: summary.comparisonTotals.combined.label,
+			totals: summary.comparisonTotals.combined.totals,
 			scope:
-				"Default report view: clicks plus Meta API-verified deterministic views.",
+				summary.comparisonTotals.combined.description,
 		},
 		{
 			key: "clicks",
-			label: "Click layer",
-			totals: summary.layers.clicks,
-			scope: "Click-attributed orders from reporting aggregates.",
+			label: summary.layers.clicks.label,
+			totals: summary.layers.clicks.totals,
+			scope: summary.layers.clicks.description,
 		},
 		{
 			key: "deterministic_views",
-			label: "Deterministic view layer",
-			totals: summary.layers.deterministicViews,
-			scope:
-				"Meta API-verified deterministic view/impression inputs, scope Meta v1.",
+			label: summary.layers.deterministicViews.label,
+			totals: summary.layers.deterministicViews.totals,
+			scope: summary.layers.deterministicViews.description,
 		},
 	];
 
 	return (
 		<Panel
 			title="Layer breakdown"
-			description="Default totals stay combined. Use the layer control to inspect clicks, Meta API-verified deterministic views, or the combined report total."
+			description="Default totals stay click-only. Use the layer control to inspect clicks, Meta API-verified deterministic views, or the non-canonical comparison total."
 		>
 			<div className="grid gap-4 lg:grid-cols-3">
 				{layerCards.map((card) => (
@@ -678,7 +677,7 @@ const DashboardControlPanel = memo(function DashboardControlPanel({
     () => `${formatDateLabel(filters.startDate, reportingTimezone)} to ${formatDateLabel(filters.endDate, reportingTimezone)}`,
     [filters.endDate, filters.startDate, reportingTimezone]
   );
-  const activeReportingMode = filters.reportingMode ?? 'combined';
+  const activeReportingMode = filters.reportingMode ?? 'clicks';
 
 	useEffect(() => {
 		if (previousDateRangeKeyRef.current === dateRangeKey) {
@@ -842,7 +841,7 @@ const DashboardControlPanel = memo(function DashboardControlPanel({
                 <div>
                   <p className="text-label uppercase text-ink-muted">Summary layer</p>
                   <p className="mt-1 text-[0.86rem] text-ink-soft">
-                    Combined is the default report total. Meta views are API-verified deterministic signals for Meta v1.
+                    Click attribution is the canonical default. Meta views are API-verified deterministic signals for Meta v1; comparison is non-canonical.
                   </p>
                 </div>
                 <Badge tone={activeReportingMode === 'deterministic_views' ? 'teal' : 'brand'}>

@@ -356,7 +356,7 @@ export function createReportingDashboardProps(
     filters: {
       startDate: '2026-04-01',
       endDate: '2026-04-20',
-      reportingMode: 'combined',
+      reportingMode: 'clicks',
       source: '',
       campaign: '',
       attributionTier: ''
@@ -385,39 +385,60 @@ export function createReportingDashboardProps(
           startDate: '2026-04-01',
           endDate: '2026-04-20'
         },
-        reportingMode: 'combined',
+        reportingMode: 'clicks',
+        reportingModeLabel: 'Click attribution',
+        totalsLabel: 'Click attribution',
+        totalsCanonical: true,
+        totalsDescription: 'Canonical reporting totals from click-attributed order credits.',
         totals: {
           visits: 12480,
-          orders: 344,
-          revenue: 51920,
+          orders: 324,
+          revenue: 48920,
           spend: 11376,
-          conversionRate: 344 / 12480,
-          roas: 4.56
+          conversionRate: 0.02596,
+          roas: 4.3
         },
-        combinedTotals: {
-          visits: 12480,
-          orders: 344,
-          revenue: 51920,
-          spend: 11376,
-          conversionRate: 344 / 12480,
-          roas: 4.56
+        comparisonTotals: {
+          combined: {
+            label: 'Non-canonical comparison total',
+            canonical: false,
+            description: 'Comparison-only sum of click attribution and deterministic view attribution; do not treat as canonical revenue.',
+            totals: {
+              visits: 12480,
+              orders: 344,
+              revenue: 51920,
+              spend: 11376,
+              conversionRate: 344 / 12480,
+              roas: 4.56
+            }
+          }
         },
         layers: {
           clicks: {
-            visits: 12480,
-            orders: 324,
-            revenue: 48920,
-            spend: 11376,
-            conversionRate: 0.02596,
-            roas: 4.3
+            label: 'Click attribution',
+            canonical: true,
+            description: 'Canonical reporting totals from click-attributed order credits.',
+            totals: {
+              visits: 12480,
+              orders: 324,
+              revenue: 48920,
+              spend: 11376,
+              conversionRate: 0.02596,
+              roas: 4.3
+            }
           },
           deterministicViews: {
-            visits: 0,
-            orders: 20,
-            revenue: 3000,
-            spend: 0,
-            conversionRate: 0,
-            roas: null
+            label: 'Deterministic view layer',
+            canonical: false,
+            description: 'Layer-only Meta API-verified deterministic view/impression attribution.',
+            totals: {
+              visits: 0,
+              orders: 20,
+              revenue: 3000,
+              spend: 0,
+              conversionRate: 0,
+              roas: null
+            }
           }
         }
       },

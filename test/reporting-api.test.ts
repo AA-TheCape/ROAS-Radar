@@ -11,7 +11,7 @@ const serverModule = await import('../src/server.js');
 const { pool } = poolModule;
 const { closeServer, createServer } = serverModule;
 const originalPoolQuery = pool.query.bind(pool);
-const REPORTING_SCHEMA_VERSION = '2026-05-02';
+const REPORTING_SCHEMA_VERSION = '2026-05-27';
 
 function buildHeaders(): Record<string, string> {
   return {
@@ -119,31 +119,52 @@ test('reporting summary returns headline metrics from daily campaign aggregates'
         conversionRate: 48 / 1240,
         roas: null
       },
-      reportingMode: 'combined',
-      combinedTotals: {
-        visits: 1240,
-        orders: 48,
-        revenue: 5210.5,
-        spend: 0,
-        conversionRate: 48 / 1240,
-        roas: null
+      reportingMode: 'clicks',
+      reportingModeLabel: 'Click attribution',
+      totalsLabel: 'Click attribution',
+      totalsCanonical: true,
+      totalsDescription: 'Canonical reporting totals from click-attributed order credits.',
+      comparisonTotals: {
+        combined: {
+          label: 'Non-canonical comparison total',
+          canonical: false,
+          description: 'Comparison-only sum of click attribution and deterministic view attribution; do not treat as canonical revenue.',
+          totals: {
+            visits: 1240,
+            orders: 48,
+            revenue: 5210.5,
+            spend: 0,
+            conversionRate: 48 / 1240,
+            roas: null
+          }
+        }
       },
       layers: {
         clicks: {
-          visits: 1240,
-          orders: 48,
-          revenue: 5210.5,
-          spend: 0,
-          conversionRate: 48 / 1240,
-          roas: null
+          label: 'Click attribution',
+          canonical: true,
+          description: 'Canonical reporting totals from click-attributed order credits.',
+          totals: {
+            visits: 1240,
+            orders: 48,
+            revenue: 5210.5,
+            spend: 0,
+            conversionRate: 48 / 1240,
+            roas: null
+          }
         },
         deterministicViews: {
-          visits: 0,
-          orders: 0,
-          revenue: 0,
-          spend: 0,
-          conversionRate: 0,
-          roas: null
+          label: 'Deterministic view layer',
+          canonical: false,
+          description: 'Layer-only Meta API-verified deterministic view/impression attribution.',
+          totals: {
+            visits: 0,
+            orders: 0,
+            revenue: 0,
+            spend: 0,
+            conversionRate: 0,
+            roas: null
+          }
         }
       }
     });
@@ -153,7 +174,7 @@ test('reporting summary returns headline metrics from daily campaign aggregates'
   }
 });
 
-test('reporting summary defaults to clicks plus deterministic views and supports layer-only mode', async () => {
+test('reporting summary defaults to click-only canonical totals and exposes non-canonical comparison labels', async () => {
   pool.query = (async (text: string) => {
     if (text.includes('FROM daily_reporting_metrics')) {
       return {
@@ -184,7 +205,7 @@ test('reporting summary defaults to clicks plus deterministic views and supports
   const server = createServer();
 
   try {
-    const combined = await requestJson(
+    const canonical = await requestJson(
       server,
       '/api/reporting/summary?startDate=2026-04-01&endDate=2026-04-10'
     );
@@ -192,10 +213,24 @@ test('reporting summary defaults to clicks plus deterministic views and supports
       server,
       '/api/reporting/summary?startDate=2026-04-01&endDate=2026-04-10&reportingMode=deterministic_views'
     );
+    const comparison = await requestJson(
+      server,
+      '/api/reporting/summary?startDate=2026-04-01&endDate=2026-04-10&reportingMode=combined'
+    );
 
-    assert.equal(combined.response.status, 200);
-    assert.equal(combined.body.reportingMode, 'combined');
-    assert.deepEqual(combined.body.totals, {
+    assert.equal(canonical.response.status, 200);
+    assert.equal(canonical.body.reportingMode, 'clicks');
+    assert.equal(canonical.body.reportingModeLabel, 'Click attribution');
+    assert.equal(canonical.body.totalsCanonical, true);
+    assert.deepEqual(canonical.body.totals, {
+      visits: 100,
+      orders: 4,
+      revenue: 400,
+      spend: 100,
+      conversionRate: 4 / 100,
+      roas: 4
+    });
+    assert.deepEqual(canonical.body.comparisonTotals.combined.totals, {
       visits: 100,
       orders: 5.5,
       revenue: 550,
@@ -203,7 +238,9 @@ test('reporting summary defaults to clicks plus deterministic views and supports
       conversionRate: 5.5 / 100,
       roas: 5.5
     });
-    assert.deepEqual(combined.body.layers.deterministicViews, {
+    assert.equal(canonical.body.comparisonTotals.combined.canonical, false);
+    assert.equal(canonical.body.comparisonTotals.combined.label, 'Non-canonical comparison total');
+    assert.deepEqual(canonical.body.layers.deterministicViews.totals, {
       visits: 0,
       orders: 1.5,
       revenue: 150,
@@ -214,7 +251,64 @@ test('reporting summary defaults to clicks plus deterministic views and supports
 
     assert.equal(deterministicViews.response.status, 200);
     assert.equal(deterministicViews.body.reportingMode, 'deterministic_views');
-    assert.deepEqual(deterministicViews.body.totals, deterministicViews.body.layers.deterministicViews);
+    assert.equal(deterministicViews.body.reportingModeLabel, 'Deterministic view layer');
+    assert.equal(deterministicViews.body.totalsCanonical, false);
+    assert.deepEqual(deterministicViews.body.totals, deterministicViews.body.layers.deterministicViews.totals);
+
+    assert.equal(comparison.response.status, 200);
+    assert.equal(comparison.body.reportingMode, 'combined');
+    assert.equal(comparison.body.reportingModeLabel, 'Non-canonical comparison total');
+    assert.equal(comparison.body.totalsCanonical, false);
+    assert.deepEqual(comparison.body.totals, comparison.body.comparisonTotals.combined.totals);
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
+test('reporting summary supports click and deterministic-view layer-only responses', async () => {
+  pool.query = (async (text: string) => {
+    if (text.includes('FROM daily_reporting_metrics')) {
+      return {
+        rows: [
+          {
+            visits: '20',
+            orders: '2',
+            revenue: '80.00',
+            spend: '40.00'
+          }
+        ]
+      };
+    }
+
+    return {
+      rows: [
+        {
+          visits: '0',
+          orders: '0.5',
+          revenue: '25.00',
+          spend: '0.00'
+        }
+      ]
+    };
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const clicks = await requestJson(
+      server,
+      '/api/reporting/summary?startDate=2026-04-01&endDate=2026-04-10&reportingMode=clicks'
+    );
+    const deterministicViews = await requestJson(
+      server,
+      '/api/reporting/summary?startDate=2026-04-01&endDate=2026-04-10&reportingMode=deterministic_views'
+    );
+
+    assert.deepEqual(clicks.body.totals, clicks.body.layers.clicks.totals);
+    assert.deepEqual(deterministicViews.body.totals, deterministicViews.body.layers.deterministicViews.totals);
+    assert.notDeepEqual(clicks.body.totals, clicks.body.comparisonTotals.combined.totals);
+    assert.notDeepEqual(deterministicViews.body.totals, deterministicViews.body.comparisonTotals.combined.totals);
   } finally {
     pool.query = originalPoolQuery as typeof pool.query;
     await closeServer(server);

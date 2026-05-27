@@ -66,7 +66,7 @@ const baseFiltersObjectSchema = z.object({
   startDate: dateStringSchema,
   endDate: dateStringSchema,
   attributionModel: z.enum(ATTRIBUTION_MODELS).optional().default('last_touch'),
-  reportingMode: z.enum(['combined', 'clicks', 'deterministic_views']).optional().default('combined'),
+  reportingMode: z.enum(['combined', 'clicks', 'deterministic_views']).optional().default('clicks'),
   attributionTier: attributionTierSchema.optional(),
   source: z.string().trim().min(1).optional(),
   campaign: z.string().trim().min(1).optional()
@@ -127,6 +127,24 @@ type ReportingMetricTotals = {
   conversionRate: number;
   roas: number | null;
 };
+
+const REPORTING_MODE_METADATA = {
+  clicks: {
+    label: 'Click attribution',
+    canonical: true,
+    description: 'Canonical reporting totals from click-attributed order credits.'
+  },
+  deterministic_views: {
+    label: 'Deterministic view layer',
+    canonical: false,
+    description: 'Layer-only Meta API-verified deterministic view/impression attribution.'
+  },
+  combined: {
+    label: 'Non-canonical comparison total',
+    canonical: false,
+    description: 'Comparison-only sum of click attribution and deterministic view attribution; do not treat as canonical revenue.'
+  }
+} as const;
 
 type CampaignRow = {
 	source: string;
@@ -484,7 +502,7 @@ function countDaysInRange(startDate: string, endDate: string): number {
 	return Math.floor((end - start) / 86_400_000) + 1;
 }
 
-const REPORTING_SCHEMA_VERSION = "2026-05-02";
+const REPORTING_SCHEMA_VERSION = "2026-05-27";
 
 export function createReportingRouter(): Router {
 	const router = Router();
@@ -553,6 +571,7 @@ export function createReportingRouter(): Router {
 					: input.reportingMode === "deterministic_views"
 						? deterministicViewTotals
 						: combinedTotals;
+      const modeMetadata = REPORTING_MODE_METADATA[input.reportingMode];
 
 			res.json({
 				range: {
@@ -560,11 +579,26 @@ export function createReportingRouter(): Router {
 					endDate: input.endDate,
 				},
 				reportingMode: input.reportingMode,
+        reportingModeLabel: modeMetadata.label,
+        totalsLabel: modeMetadata.label,
+        totalsCanonical: modeMetadata.canonical,
+        totalsDescription: modeMetadata.description,
 				totals: selectedTotals,
-				combinedTotals,
+        comparisonTotals: {
+          combined: {
+            ...REPORTING_MODE_METADATA.combined,
+            totals: combinedTotals
+          }
+        },
 				layers: {
-					clicks: clickTotals,
-					deterministicViews: deterministicViewTotals,
+          clicks: {
+            ...REPORTING_MODE_METADATA.clicks,
+            totals: clickTotals
+          },
+          deterministicViews: {
+            ...REPORTING_MODE_METADATA.deterministic_views,
+            totals: deterministicViewTotals
+          },
 				},
 			});
 		} catch (error) {

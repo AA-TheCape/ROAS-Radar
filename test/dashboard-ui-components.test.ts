@@ -494,13 +494,14 @@ test("reporting dashboard exposes Meta-verified summary layer controls and break
 	try {
 		const text = mounted.container.textContent ?? "";
 		assert.match(text, /Summary layer/);
-		assert.match(text, /Combined is the default report total/);
+		assert.match(text, /Click attribution is the canonical default/);
 		assert.match(text, /Meta views are API-verified deterministic signals for Meta v1/);
+		assert.match(text, /comparison is non-canonical/);
 		assert.match(text, /Layer breakdown/);
-		assert.match(text, /Combined total/);
-		assert.match(text, /Click layer/);
+		assert.match(text, /Non-canonical comparison total/);
+		assert.match(text, /Click attribution/);
 		assert.match(text, /Deterministic view layer/);
-		assert.match(text, /Meta API-verified deterministic view\/impression inputs, scope Meta v1/);
+		assert.match(text, /Layer-only Meta API-verified deterministic view\/impression attribution/);
 
 		const metaViewsButton = Array.from(
 			mounted.container.querySelectorAll<HTMLButtonElement>("button"),

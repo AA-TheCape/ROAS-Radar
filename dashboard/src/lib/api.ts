@@ -65,17 +65,30 @@ export type SummaryTotals = {
 	roas: number | null;
 };
 
+export type SummaryLayer<TTotals = SummaryTotals> = {
+	label: string;
+	canonical: boolean;
+	description: string;
+	totals: TTotals;
+};
+
 export type SummaryResponse = {
 	range: {
 		startDate: string;
 		endDate: string;
 	};
 	reportingMode: ReportingMode;
+	reportingModeLabel: string;
+	totalsLabel: string;
+	totalsCanonical: boolean;
+	totalsDescription: string;
 	totals: SummaryTotals;
-	combinedTotals: SummaryTotals;
+	comparisonTotals: {
+		combined: SummaryLayer;
+	};
 	layers: {
-		clicks: SummaryTotals;
-		deterministicViews: SummaryTotals;
+		clicks: SummaryLayer;
+		deterministicViews: SummaryLayer;
 	};
 };
 
