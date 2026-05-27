@@ -67,15 +67,29 @@ test('reporting routes require the configured bearer token', async () => {
 
 test('reporting summary returns headline metrics from daily campaign aggregates', async () => {
   pool.query = (async (text: string, params?: unknown[]) => {
-    assert.match(text, /FROM daily_reporting_metrics/);
-    assert.deepEqual(params, ['2026-04-01', '2026-04-10', 'last_touch', 'google', 'spring-sale']);
+    if (text.includes('FROM daily_reporting_metrics')) {
+      assert.deepEqual(params, ['2026-04-01', '2026-04-10', 'last_touch', 'google', 'spring-sale']);
 
+      return {
+        rows: [
+          {
+            visits: '1240',
+            orders: '48',
+            revenue: '5210.50',
+            spend: '0.00'
+          }
+        ]
+      };
+    }
+
+    assert.match(text, /FROM deterministic_model_outputs/);
+    assert.deepEqual(params, ['2026-04-01', '2026-04-10', 'google', 'spring-sale']);
     return {
       rows: [
         {
-          visits: '1240',
-          orders: '48',
-          revenue: '5210.50',
+          visits: '0',
+          orders: '0',
+          revenue: '0.00',
           spend: '0.00'
         }
       ]
@@ -104,8 +118,103 @@ test('reporting summary returns headline metrics from daily campaign aggregates'
         spend: 0,
         conversionRate: 48 / 1240,
         roas: null
+      },
+      reportingMode: 'combined',
+      combinedTotals: {
+        visits: 1240,
+        orders: 48,
+        revenue: 5210.5,
+        spend: 0,
+        conversionRate: 48 / 1240,
+        roas: null
+      },
+      layers: {
+        clicks: {
+          visits: 1240,
+          orders: 48,
+          revenue: 5210.5,
+          spend: 0,
+          conversionRate: 48 / 1240,
+          roas: null
+        },
+        deterministicViews: {
+          visits: 0,
+          orders: 0,
+          revenue: 0,
+          spend: 0,
+          conversionRate: 0,
+          roas: null
+        }
       }
     });
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
+test('reporting summary defaults to clicks plus deterministic views and supports layer-only mode', async () => {
+  pool.query = (async (text: string) => {
+    if (text.includes('FROM daily_reporting_metrics')) {
+      return {
+        rows: [
+          {
+            visits: '100',
+            orders: '4',
+            revenue: '400.00',
+            spend: '100.00'
+          }
+        ]
+      };
+    }
+
+    assert.match(text, /dmo\.model_key = 'deterministic_views'/);
+    return {
+      rows: [
+        {
+          visits: '0',
+          orders: '1.5',
+          revenue: '150.00',
+          spend: '0.00'
+        }
+      ]
+    };
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const combined = await requestJson(
+      server,
+      '/api/reporting/summary?startDate=2026-04-01&endDate=2026-04-10'
+    );
+    const deterministicViews = await requestJson(
+      server,
+      '/api/reporting/summary?startDate=2026-04-01&endDate=2026-04-10&reportingMode=deterministic_views'
+    );
+
+    assert.equal(combined.response.status, 200);
+    assert.equal(combined.body.reportingMode, 'combined');
+    assert.deepEqual(combined.body.totals, {
+      visits: 100,
+      orders: 5.5,
+      revenue: 550,
+      spend: 100,
+      conversionRate: 5.5 / 100,
+      roas: 5.5
+    });
+    assert.deepEqual(combined.body.layers.deterministicViews, {
+      visits: 0,
+      orders: 1.5,
+      revenue: 150,
+      spend: 0,
+      conversionRate: 0,
+      roas: null
+    });
+
+    assert.equal(deterministicViews.response.status, 200);
+    assert.equal(deterministicViews.body.reportingMode, 'deterministic_views');
+    assert.deepEqual(deterministicViews.body.totals, deterministicViews.body.layers.deterministicViews);
   } finally {
     pool.query = originalPoolQuery as typeof pool.query;
     await closeServer(server);

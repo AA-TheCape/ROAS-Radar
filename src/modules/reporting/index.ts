@@ -66,6 +66,7 @@ const baseFiltersObjectSchema = z.object({
   startDate: dateStringSchema,
   endDate: dateStringSchema,
   attributionModel: z.enum(ATTRIBUTION_MODELS).optional().default('last_touch'),
+  reportingMode: z.enum(['combined', 'clicks', 'deterministic_views']).optional().default('combined'),
   attributionTier: attributionTierSchema.optional(),
   source: z.string().trim().min(1).optional(),
   campaign: z.string().trim().min(1).optional()
@@ -116,6 +117,15 @@ type SummaryRow = {
 	orders: string | number;
 	revenue: string | number;
 	spend: string | number;
+};
+
+type ReportingMetricTotals = {
+  visits: number;
+  orders: number;
+  revenue: number;
+  spend: number;
+  conversionRate: number;
+  roas: number | null;
 };
 
 type CampaignRow = {
@@ -287,6 +297,71 @@ function buildMetricDimensionFilters(
 	};
 }
 
+function buildDeterministicViewFilters(
+	source: string | undefined,
+	campaign: string | undefined,
+): { sql: string; params: string[] } {
+	const params: string[] = [];
+	const filters = [
+		"dmo.model_key = 'deterministic_views'",
+		"dmo.output_type = 'credited_input'",
+		"dmo.platform_verified = true",
+	];
+
+	if (source) {
+		params.push(source);
+		filters.push(`
+      CASE dmo.platform
+        WHEN 'google_ads' THEN 'google'
+        WHEN 'meta_ads' THEN 'meta'
+        ELSE dmo.platform
+      END = $${params.length + 2}
+    `);
+	}
+
+	if (campaign) {
+		params.push(campaign);
+		filters.push(`
+      COALESCE(NULLIF(dmo.campaign_id, ''), NULLIF(dmo.adset_id, ''), NULLIF(dmo.ad_id, ''), 'unknown') = $${params.length + 2}
+    `);
+	}
+
+	return {
+		sql: ` AND ${filters.join(" AND ")}`,
+		params,
+	};
+}
+
+function toReportingTotals(row: SummaryRow | undefined): ReportingMetricTotals {
+	const metrics = calculatePerformanceMetrics({
+		visits: row?.visits ?? 0,
+		orders: row?.orders ?? 0,
+		attributedRevenue: row?.revenue ?? 0,
+		spend: row?.spend ?? 0,
+	});
+
+	return {
+		visits: metrics.visits,
+		orders: metrics.orders,
+		revenue: metrics.attributedRevenue,
+		spend: metrics.spend,
+		conversionRate: metrics.conversionRate,
+		roas: metrics.roas,
+	};
+}
+
+function combineReportingTotals(
+	clicks: ReportingMetricTotals,
+	deterministicViews: ReportingMetricTotals,
+): ReportingMetricTotals {
+	return toReportingTotals({
+		visits: clicks.visits,
+		orders: clicks.orders + deterministicViews.orders,
+		revenue: clicks.revenue + deterministicViews.revenue,
+		spend: clicks.spend,
+	});
+}
+
 function buildOrderAttributionFilters(
   attributionModel: string,
   source: string | undefined,
@@ -424,12 +499,12 @@ export function createReportingRouter(): Router {
 	router.get("/summary", async (req, res, next) => {
 		try {
 			const input = parseInput(baseFiltersSchema, req.query);
-			const filters = buildMetricDimensionFilters(
+			const clickFilters = buildMetricDimensionFilters(
 				input.attributionModel,
 				input.source,
 				input.campaign,
 			);
-			const result = await query<SummaryRow>(
+			const clickResult = await query<SummaryRow>(
 				`
           SELECT
             COALESCE(SUM(visits), 0) AS visits,
@@ -438,31 +513,58 @@ export function createReportingRouter(): Router {
             COALESCE(SUM(spend), 0) AS spend
           FROM daily_reporting_metrics
           WHERE metric_date BETWEEN $1::date AND $2::date
-          ${filters.sql}
+          ${clickFilters.sql}
         `,
-				[input.startDate, input.endDate, ...filters.params],
+				[input.startDate, input.endDate, ...clickFilters.params],
+			);
+			const deterministicViewFilters = buildDeterministicViewFilters(
+				input.source,
+				input.campaign,
+			);
+			const deterministicViewResult = await query<SummaryRow>(
+				`
+          SELECT
+            0 AS visits,
+            COALESCE(SUM(dmo.contribution_weight), 0) AS orders,
+            COALESCE(SUM(inputs.total_amount * dmo.contribution_weight), 0) AS revenue,
+            0 AS spend
+          FROM deterministic_model_outputs dmo
+          INNER JOIN attribution_order_inputs inputs
+            ON inputs.run_id = dmo.run_id
+           AND inputs.order_id = dmo.order_id
+          WHERE inputs.order_occurred_at_utc >= $1::date
+            AND inputs.order_occurred_at_utc < ($2::date + interval '1 day')
+            ${deterministicViewFilters.sql}
+        `,
+				[input.startDate, input.endDate, ...deterministicViewFilters.params],
 			);
 
-			const row = result.rows[0];
-			const metrics = calculatePerformanceMetrics({
-				visits: row?.visits ?? 0,
-				orders: row?.orders ?? 0,
-				attributedRevenue: row?.revenue ?? 0,
-				spend: row?.spend ?? 0,
-			});
+			const clickTotals = toReportingTotals(clickResult.rows[0]);
+			const deterministicViewTotals = toReportingTotals(
+				deterministicViewResult.rows[0],
+			);
+			const combinedTotals = combineReportingTotals(
+				clickTotals,
+				deterministicViewTotals,
+			);
+			const selectedTotals =
+				input.reportingMode === "clicks"
+					? clickTotals
+					: input.reportingMode === "deterministic_views"
+						? deterministicViewTotals
+						: combinedTotals;
 
 			res.json({
 				range: {
 					startDate: input.startDate,
 					endDate: input.endDate,
 				},
-				totals: {
-					visits: metrics.visits,
-					orders: metrics.orders,
-					revenue: metrics.attributedRevenue,
-					spend: metrics.spend,
-					conversionRate: metrics.conversionRate,
-					roas: metrics.roas,
+				reportingMode: input.reportingMode,
+				totals: selectedTotals,
+				combinedTotals,
+				layers: {
+					clicks: clickTotals,
+					deterministicViews: deterministicViewTotals,
 				},
 			});
 		} catch (error) {

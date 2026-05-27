@@ -94,6 +94,7 @@ test("reporting summary reads persisted daily aggregates from PostgreSQL", async
 				startDate: "2026-04-10",
 				endDate: "2026-04-10",
 			},
+			reportingMode: "combined",
 			totals: {
 				visits: 42,
 				orders: 3,
@@ -101,6 +102,32 @@ test("reporting summary reads persisted daily aggregates from PostgreSQL", async
 				spend: 0,
 				conversionRate: 3 / 42,
 				roas: null,
+			},
+			combinedTotals: {
+				visits: 42,
+				orders: 3,
+				revenue: 390,
+				spend: 0,
+				conversionRate: 3 / 42,
+				roas: null,
+			},
+			layers: {
+				clicks: {
+					visits: 42,
+					orders: 3,
+					revenue: 390,
+					spend: 0,
+					conversionRate: 3 / 42,
+					roas: null,
+				},
+				deterministicViews: {
+					visits: 0,
+					orders: 0,
+					revenue: 0,
+					spend: 0,
+					conversionRate: 0,
+					roas: null,
+				},
 			},
 		});
 	} finally {
