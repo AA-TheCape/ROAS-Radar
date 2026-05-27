@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
 	attributionQaPayloadV1SuccessFixture,
+	attributionQaPayloadV1NoMatchFixture,
 	normalizeAttributionQaPayloadV1,
 	type AttributionQaPayloadV1,
 } from "../packages/attribution-schema/index.js";
@@ -28,6 +29,7 @@ test("attribution QA tooling renders sanitized candidate and raw payload details
 				loading: boolean;
 				error: string | null;
 			};
+			onLookupOrder: (shopifyOrderId: string) => void;
 		}) => unknown;
 	}>("dashboard/src/components/AttributionQaToolingView.tsx");
 
@@ -114,6 +116,7 @@ test("attribution QA tooling renders sanitized candidate and raw payload details
 				loading: false,
 				error: null,
 			},
+			onLookupOrder: () => {},
 		}),
 	);
 
@@ -142,6 +145,156 @@ test("attribution QA tooling renders sanitized candidate and raw payload details
 		assert.doesNotMatch(rendered, /ga4-client-999-session-888/);
 		assert.doesNotMatch(rendered, /ga4-event-secret/);
 		assert.doesNotMatch(rendered, /url-secret/);
+	} finally {
+		mounted.cleanup();
+	}
+});
+
+test("attribution QA tooling renders all required QA sections for a populated payload", async () => {
+	const { default: AttributionQaToolingView } = await loadDashboardModule<{
+		default: (props: {
+			selectedOrderId: string | null;
+			reportingTimezone: string;
+			qaPayloadSection: {
+				data: {
+					orderId: string;
+					source: "persisted_snapshot" | "generated_on_read";
+					payload: AttributionQaPayloadV1;
+					selectedRunId: string | null;
+					selectedRunReason: string;
+					generatedAtUtc: string;
+					evidenceState: {
+						attributionRun: "available" | "missing" | "expired_or_pruned";
+						rawEvidence: "available" | "missing" | "expired_or_pruned";
+						rawShopifyHints: "available" | "missing" | "expired_or_pruned";
+						rawTouchpoints: "available" | "missing" | "expired_or_pruned";
+						ga4FallbackCandidate: "available" | "missing" | "expired_or_pruned";
+					};
+					rawShopifyHints: [];
+					rawTouchpoints: [];
+					ga4FallbackCandidate: null;
+				} | null;
+				loading: boolean;
+				error: string | null;
+			};
+			onLookupOrder: (shopifyOrderId: string) => void;
+		}) => unknown;
+	}>("dashboard/src/components/AttributionQaToolingView.tsx");
+
+	const mounted = await mountUi(
+		h(AttributionQaToolingView, {
+			selectedOrderId: "shopify-order-1105",
+			reportingTimezone: "UTC",
+			qaPayloadSection: {
+				data: {
+					orderId: "shopify-order-1105",
+					source: "persisted_snapshot",
+					selectedRunId: "323e4567-e89b-42d3-a456-426614174222",
+					selectedRunReason: "latest_run_for_order",
+					generatedAtUtc: "2026-04-30T12:31:00Z",
+					evidenceState: {
+						attributionRun: "available",
+						rawEvidence: "missing",
+						rawShopifyHints: "missing",
+						rawTouchpoints: "missing",
+						ga4FallbackCandidate: "missing",
+					},
+					payload: attributionQaPayloadV1SuccessFixture,
+					rawShopifyHints: [],
+					rawTouchpoints: [],
+					ga4FallbackCandidate: null,
+				},
+				loading: false,
+				error: null,
+			},
+			onLookupOrder: () => {},
+		}),
+	);
+
+	try {
+		const rendered = mounted.container.textContent ?? "";
+		for (const section of [
+			"Evidence retention",
+			"Winner rationale",
+			"Redacted Shopify hints",
+			"Winner rationale timeline",
+			"Missing fields",
+			"Redacted tracking touchpoints",
+			"GA4 fallback card",
+			"Candidate matches",
+			"GA4 fallback details",
+			"Model summaries",
+			"QA payload",
+			"Raw Shopify hints JSON",
+			"Raw touchpoints JSON",
+		]) {
+			assert.match(rendered, new RegExp(section));
+		}
+	} finally {
+		mounted.cleanup();
+	}
+});
+
+test("attribution QA tooling renders fallback and empty states for no-match payloads", async () => {
+	const { default: AttributionQaToolingView } = await loadDashboardModule<{
+		default: (props: {
+			selectedOrderId: string | null;
+			reportingTimezone: string;
+			qaPayloadSection: {
+				data: {
+					orderId: string;
+					source: "persisted_snapshot" | "generated_on_read";
+					payload: AttributionQaPayloadV1;
+					rawShopifyHints: [];
+					rawTouchpoints: [];
+					ga4FallbackCandidate: null;
+				} | null;
+				loading: boolean;
+				error: string | null;
+			};
+			onLookupOrder: (shopifyOrderId: string) => void;
+		}) => unknown;
+	}>("dashboard/src/components/AttributionQaToolingView.tsx");
+
+	const payload = normalizeAttributionQaPayloadV1({
+		...attributionQaPayloadV1NoMatchFixture,
+		model_summaries: [],
+		explainability: [],
+		diagnostics: {
+			normalization_failures: [],
+			notes: [],
+		},
+	});
+
+	const mounted = await mountUi(
+		h(AttributionQaToolingView, {
+			selectedOrderId: "shopify-order-1106",
+			reportingTimezone: "UTC",
+			qaPayloadSection: {
+				data: {
+					orderId: "shopify-order-1106",
+					source: "generated_on_read",
+					payload,
+					rawShopifyHints: [],
+					rawTouchpoints: [],
+					ga4FallbackCandidate: null,
+				},
+				loading: false,
+				error: null,
+			},
+			onLookupOrder: () => {},
+		}),
+	);
+
+	try {
+		const rendered = mounted.container.textContent ?? "";
+		assert.match(rendered, /No missing order fields/);
+		assert.match(rendered, /No tracking touchpoints/);
+		assert.match(rendered, /No GA4 fallback candidate/);
+		assert.match(rendered, /No candidates found/);
+		assert.match(rendered, /No model summaries found/);
+		assert.match(rendered, /No rationale events/);
+		assert.match(rendered, /No raw evidence retained/);
 	} finally {
 		mounted.cleanup();
 	}

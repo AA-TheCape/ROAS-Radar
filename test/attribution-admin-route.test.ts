@@ -135,6 +135,72 @@ test('order attribution QA debug route rejects internal service tokens because r
   }
 });
 
+test('order attribution QA debug route rejects unauthenticated requests before querying QA data', async () => {
+  let queryCalls = 0;
+  pool.query = (async () => {
+    queryCalls += 1;
+    return { rows: [] };
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(server, '/api/admin/attribution/orders/order-qa/qa-debug');
+
+    assert.equal(response.status, 401);
+    assert.deepEqual(body, {
+      error: 'unauthorized',
+      message: 'Authentication required'
+    });
+    assert.equal(queryCalls, 0);
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
+test('order attribution QA debug route rejects authenticated non-admin users before loading raw evidence', async () => {
+  let queryCalls = 0;
+  pool.query = (async () => {
+    queryCalls += 1;
+    return {
+      rows: [
+        {
+          session_id: 7,
+          user_id: 42,
+          email: 'analyst@example.com',
+          display_name: 'Analyst',
+          is_admin: false,
+          status: 'active',
+          last_login_at: new Date('2026-04-25T10:00:00.000Z'),
+          created_at: new Date('2026-04-01T00:00:00.000Z'),
+          expires_at: new Date('2026-05-01T00:00:00.000Z')
+        }
+      ]
+    };
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(server, '/api/admin/attribution/orders/order-qa/qa-debug', {
+      headers: {
+        authorization: 'Bearer user-session-token'
+      }
+    });
+
+    assert.equal(response.status, 403);
+    assert.deepEqual(body, {
+      error: 'forbidden',
+      message: 'Admin access required'
+    });
+    assert.equal(queryCalls, 1);
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
 test('order attribution QA debug route returns full schema payload and grouped raw evidence for admin users', async () => {
   const capturedQueries: Array<{ text: string; params?: unknown[] }> = [];
   const fullPayload = {

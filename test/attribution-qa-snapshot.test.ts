@@ -26,6 +26,52 @@ const order = {
   raw_payload: { name: '#1001' }
 };
 
+function deterministicCandidate(overrides: Partial<AttributionCandidateExtractionResult['deterministicFirstParty'][number]> = {}) {
+  return {
+    sourceClass: 'deterministic_first_party' as const,
+    sourceKey: order.landing_session_id,
+    sessionId: order.landing_session_id,
+    sourceTouchEventId: 'event-landing-1',
+    ingestionSource: 'landing_session_id' as const,
+    occurredAtUtc: new Date('2026-04-10T10:00:00.000Z'),
+    source: 'google',
+    medium: 'cpc',
+    campaign: 'brand',
+    content: null,
+    term: null,
+    clickIdType: 'gclid',
+    clickIdValue: 'GCLID-1',
+    attributionReason: 'matched_by_landing_session',
+    confidenceScore: 1,
+    isDirect: false,
+    isSynthetic: false,
+    ...overrides
+  };
+}
+
+function ga4Candidate(overrides: Partial<AttributionCandidateExtractionResult['ga4Fallback'][number]> = {}) {
+  return {
+    sourceClass: 'ga4_fallback' as const,
+    sourceKey: 'ga4:transaction:qa-order-1',
+    sessionId: null,
+    sourceTouchEventId: null,
+    ingestionSource: 'ga4_fallback' as const,
+    occurredAtUtc: new Date('2026-04-10T11:00:00.000Z'),
+    source: 'google',
+    medium: 'cpc',
+    campaign: 'ga4-brand',
+    content: null,
+    term: null,
+    clickIdType: 'gclid',
+    clickIdValue: 'GCLID-GA4',
+    attributionReason: 'ga4_fallback_match',
+    confidenceScore: 0.35,
+    isDirect: false,
+    isSynthetic: true,
+    ...overrides
+  };
+}
+
 function executeFor(candidates: AttributionCandidateExtractionResult) {
   const journey = resolveAttributionTier(candidates);
   const execution = executeAttributionModels(journey.touchpoints, {
@@ -42,49 +88,9 @@ test('attribution QA snapshot preserves all candidates and explains why GA4 lost
   const candidates: AttributionCandidateExtractionResult = {
     orderOccurredAtUtc: order.processed_at,
     orderTimestampSource: 'processed_at',
-    deterministicFirstParty: [
-      {
-        sourceClass: 'deterministic_first_party',
-        sourceKey: order.landing_session_id,
-        sessionId: order.landing_session_id,
-        sourceTouchEventId: 'event-landing-1',
-        ingestionSource: 'landing_session_id',
-        occurredAtUtc: new Date('2026-04-10T10:00:00.000Z'),
-        source: 'google',
-        medium: 'cpc',
-        campaign: 'brand',
-        content: null,
-        term: null,
-        clickIdType: 'gclid',
-        clickIdValue: 'GCLID-1',
-        attributionReason: 'matched_by_landing_session',
-        confidenceScore: 1,
-        isDirect: false,
-        isSynthetic: false
-      }
-    ],
+    deterministicFirstParty: [deterministicCandidate()],
     shopifyHint: [],
-    ga4Fallback: [
-      {
-        sourceClass: 'ga4_fallback',
-        sourceKey: 'ga4:transaction:qa-order-1',
-        sessionId: null,
-        sourceTouchEventId: null,
-        ingestionSource: 'ga4_fallback',
-        occurredAtUtc: new Date('2026-04-10T11:00:00.000Z'),
-        source: 'google',
-        medium: 'cpc',
-        campaign: 'ga4-brand',
-        content: null,
-        term: null,
-        clickIdType: 'gclid',
-        clickIdValue: 'GCLID-GA4',
-        attributionReason: 'ga4_fallback_match',
-        confidenceScore: 0.35,
-        isDirect: false,
-        isSynthetic: true
-      }
-    ],
+    ga4Fallback: [ga4Candidate()],
     normalizationFailures: []
   };
   const { journey, execution } = executeFor(candidates);
@@ -110,6 +116,48 @@ test('attribution QA snapshot preserves all candidates and explains why GA4 lost
       (record) =>
         record.touchpoint_id === 'ga4:transaction:qa-order-1' &&
         record.decision_reason === 'blocked_by_deterministic_first_party_winner'
+    )
+  );
+});
+
+test('attribution QA snapshot records winner reason and selected model for GA4 fallback winners', () => {
+  const candidates: AttributionCandidateExtractionResult = {
+    orderOccurredAtUtc: order.processed_at,
+    orderTimestampSource: 'processed_at',
+    deterministicFirstParty: [],
+    shopifyHint: [],
+    ga4Fallback: [ga4Candidate()],
+    normalizationFailures: []
+  };
+  const { journey, execution } = executeFor(candidates);
+
+  const snapshot = buildAttributionQaSnapshot({
+    order,
+    candidates,
+    journey,
+    execution,
+    generatedAt: new Date('2026-04-10T12:05:00.000Z')
+  });
+
+  assert.equal(snapshot.outcome.status, 'success');
+  assert.equal(snapshot.outcome.attribution_tier, 'ga4_fallback');
+  assert.equal(snapshot.outcome.attribution_reason, 'ga4_fallback_match');
+  assert.equal(snapshot.outcome.selected_model_key, 'hinted_fallback_only');
+  assert.equal(snapshot.candidates.ga4_fallback[0].selected, true);
+  assert.ok(
+    snapshot.explainability.some(
+      (record) =>
+        record.decision === 'winner' &&
+        record.decision_reason === 'selected_ga4_fallback' &&
+        record.details_json.winner_reason === 'ga4_fallback_match'
+    )
+  );
+  assert.ok(
+    snapshot.explainability.some(
+      (record) =>
+        record.explain_stage === 'fallback' &&
+        record.decision === 'fallback_used' &&
+        record.decision_reason === 'ga4_fallback_selected_after_no_higher_tier_winner'
     )
   );
 });
@@ -144,6 +192,53 @@ test('attribution QA snapshot records no-match diagnostics including missing ord
   assert.ok(
     snapshot.explainability.some(
       (record) => record.explain_stage === 'fallback' && record.decision_reason === 'ga4_fallback_no_eligible_candidate'
+    )
+  );
+});
+
+test('attribution QA snapshot carries extractor failures and future-candidate exclusion reasons', () => {
+  const candidates: AttributionCandidateExtractionResult = {
+    orderOccurredAtUtc: order.processed_at,
+    orderTimestampSource: 'processed_at',
+    deterministicFirstParty: [
+      deterministicCandidate({
+        sourceKey: 'landing_session_id:future',
+        sourceTouchEventId: 'event-after-order',
+        occurredAtUtc: new Date('2026-04-10T12:30:00.000Z')
+      })
+    ],
+    shopifyHint: [],
+    ga4Fallback: [],
+    normalizationFailures: [
+      {
+        scope: 'ga4_fallback',
+        reason: 'missing_session_identity',
+        sourceKey: 'ga4:transaction:qa-order-1'
+      }
+    ]
+  };
+  const { journey, execution } = executeFor(candidates);
+
+  const snapshot = buildAttributionQaSnapshot({
+    order,
+    candidates,
+    journey,
+    execution,
+    generatedAt: new Date('2026-04-10T12:05:00.000Z')
+  });
+
+  assert.equal(snapshot.outcome.status, 'no_match');
+  assert.ok(
+    snapshot.diagnostics.normalization_failures.some(
+      (failure) =>
+        failure.scope === 'ga4_fallback' &&
+        failure.reason === 'missing_session_identity' &&
+        failure.source_key === 'ga4:transaction:qa-order-1'
+    )
+  );
+  assert.ok(
+    snapshot.explainability.some(
+      (record) => record.touchpoint_id === 'event-after-order' && record.decision_reason === 'no_winner_selected'
     )
   );
 });

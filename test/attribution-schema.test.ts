@@ -598,6 +598,53 @@ test('attribution QA payload fixtures validate success and no-match outcomes', (
   assert.equal(noMatch.credits.length, 0);
 });
 
+test('attribution QA payload serialization round-trips normalized schema fields', () => {
+  const payload = normalizeAttributionQaPayloadV1({
+    ...attributionQaPayloadV1SuccessFixture,
+    generated_at_utc: '2026-04-30T12:30:00-05:00',
+    order: {
+      ...attributionQaPayloadV1SuccessFixture.order,
+      currency_code: 'usd',
+      subtotal_amount: 180,
+      total_amount: 195,
+      identifiers: {
+        ...attributionQaPayloadV1SuccessFixture.order.identifiers,
+        checkout_token: undefined,
+        cart_token: '   ',
+        email_hash: undefined
+      }
+    },
+    candidates: {
+      ...attributionQaPayloadV1SuccessFixture.candidates,
+      deterministic_first_party: attributionQaPayloadV1SuccessFixture.candidates.deterministic_first_party.map(
+        (candidate) => ({
+          ...candidate,
+          occurred_at_utc: '2026-04-30T11:15:00-05:00',
+          source: ' Google ',
+          medium: ' CPC ',
+          content: undefined,
+          click_id_type: undefined
+        })
+      )
+    }
+  });
+  const serialized = JSON.parse(JSON.stringify(payload));
+  const reparsed = normalizeAttributionQaPayloadV1(serialized);
+
+  assert.deepEqual(reparsed, serialized);
+  assert.equal(reparsed.generated_at_utc, '2026-04-30T17:30:00.000Z');
+  assert.equal(reparsed.order.currency_code, 'USD');
+  assert.equal(reparsed.order.subtotal_amount, '180.00');
+  assert.equal(reparsed.order.identifiers.checkout_token, null);
+  assert.equal(reparsed.order.identifiers.cart_token, null);
+  assert.equal(reparsed.order.identifiers.email_hash, null);
+  assert.equal(reparsed.candidates.deterministic_first_party[0]?.source, 'google');
+  assert.equal(reparsed.candidates.deterministic_first_party[0]?.medium, 'cpc');
+  assert.equal(reparsed.candidates.deterministic_first_party[0]?.content, null);
+  assert.equal(reparsed.candidates.deterministic_first_party[0]?.click_id_type, null);
+  assert.equal(reparsed.candidates.deterministic_first_party[0]?.occurred_at_utc, '2026-04-30T16:15:00.000Z');
+});
+
 test('attribution QA payload enforces success and no-match invariants', () => {
   assert.throws(
     () =>
