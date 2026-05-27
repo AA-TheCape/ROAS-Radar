@@ -1,6 +1,10 @@
 import type { PoolClient } from 'pg';
 
 import { withTransaction } from '../../db/pool.js';
+import {
+  isDeterministicViewImpressionAttributionEnabled,
+  persistDeterministicViewImpressionModelOutputs
+} from './deterministic-view-impression-model.js';
 import { ATTRIBUTION_MODELS, executeAttributionModels, type AttributionTouchpoint } from './engine.js';
 import { preprocessAttributionOrders, type AttributionPreprocessingDataset } from './preprocessing.js';
 import { parseAttributionRunProgress, type AttributionRunProgress } from './run-progress.js';
@@ -127,6 +131,7 @@ async function persistBatch(
 ): Promise<{ succeededOrderIds: string[]; failedOrderIds: string[] }> {
   const succeededOrderIds: string[] = [];
   const failedOrderIds: string[] = [];
+  const deterministicViewImpressionEnabled = isDeterministicViewImpressionAttributionEnabled(run.runMetadata);
 
   for (const orderId of orderIds) {
     const dataset = await preprocessAttributionOrders(client, [orderId]);
@@ -535,6 +540,13 @@ async function persistBatch(
         });
       }
     }
+
+    await persistDeterministicViewImpressionModelOutputs(client, {
+      runId: run.id,
+      orderId,
+      orderOccurredAtUtc: order.order_occurred_at_utc,
+      enabled: deterministicViewImpressionEnabled
+    });
 
     succeededOrderIds.push(orderId);
   }
