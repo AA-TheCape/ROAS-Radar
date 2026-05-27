@@ -4,6 +4,8 @@ import test from 'node:test';
 import type { PoolClient } from 'pg';
 
 import {
+  assertNoDeterministicViewImpressionOrderAttribution,
+  isDeterministicViewImpressionOrderAttributionValue,
   isDeterministicViewImpressionAttributionEnabled,
   persistDeterministicViewImpressionModelOutputs
 } from '../src/modules/attribution/deterministic-view-impression-model.js';
@@ -68,4 +70,37 @@ test('deterministic view/impression model writes separate outputs without click 
   assert.match(queries[1].text, /deterministic_impressions/);
   assert.doesNotMatch(queries.map((query) => query.text).join('\n'), /attribution_model_credits/);
   assert.doesNotMatch(queries.map((query) => query.text).join('\n'), /attribution_model_summaries/);
+});
+
+test('deterministic view/impression keys are blocked from order-level attribution surfaces', () => {
+  assert.equal(isDeterministicViewImpressionOrderAttributionValue('deterministic_views'), true);
+  assert.equal(isDeterministicViewImpressionOrderAttributionValue(' deterministic_impressions '), true);
+  assert.equal(isDeterministicViewImpressionOrderAttributionValue('last_non_direct'), false);
+  assert.equal(isDeterministicViewImpressionOrderAttributionValue('landing_session_id'), false);
+
+  for (const surface of ['attribution_touchpoint_inputs', 'attribution_model_summaries', 'attribution_model_credits']) {
+    assert.throws(
+      () =>
+        assertNoDeterministicViewImpressionOrderAttribution({
+          surface,
+          values: {
+            model_key: 'deterministic_views'
+          }
+        }),
+      {
+        name: 'DeterministicViewImpressionOrderAttributionError',
+        code: 'deterministic_view_impression_order_attribution_blocked'
+      }
+    );
+  }
+
+  assert.doesNotThrow(() =>
+    assertNoDeterministicViewImpressionOrderAttribution({
+      surface: 'attribution_model_credits',
+      values: {
+        evidence_source: 'landing_session_id',
+        model_key: 'last_non_direct'
+      }
+    })
+  );
 });

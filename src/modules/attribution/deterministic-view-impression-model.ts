@@ -4,13 +4,39 @@ export const DETERMINISTIC_VIEW_IMPRESSION_MODELS = ['deterministic_views', 'det
 
 export type DeterministicViewImpressionModel = (typeof DETERMINISTIC_VIEW_IMPRESSION_MODELS)[number];
 
+const DETERMINISTIC_VIEW_IMPRESSION_MODEL_SET = new Set<string>(DETERMINISTIC_VIEW_IMPRESSION_MODELS);
+
 type DeterministicViewImpressionModelPersistResult = {
   enabled: boolean;
   insertedRows: number;
 };
 
+export class DeterministicViewImpressionOrderAttributionError extends Error {
+  code = 'deterministic_view_impression_order_attribution_blocked';
+
+  constructor(surface: string, field: string, value: string) {
+    super(`${surface} cannot use ${field}=${value} for order-level attribution outputs`);
+    this.name = 'DeterministicViewImpressionOrderAttributionError';
+  }
+}
+
 export function isDeterministicViewImpressionAttributionEnabled(metadata: Record<string, unknown>): boolean {
   return metadata.deterministicViewImpressionAttributionEnabled === true;
+}
+
+export function isDeterministicViewImpressionOrderAttributionValue(value: unknown): value is DeterministicViewImpressionModel {
+  return typeof value === 'string' && DETERMINISTIC_VIEW_IMPRESSION_MODEL_SET.has(value.trim().toLowerCase());
+}
+
+export function assertNoDeterministicViewImpressionOrderAttribution(input: {
+  surface: string;
+  values: Record<string, unknown>;
+}): void {
+  for (const [field, value] of Object.entries(input.values)) {
+    if (isDeterministicViewImpressionOrderAttributionValue(value)) {
+      throw new DeterministicViewImpressionOrderAttributionError(input.surface, field, String(value));
+    }
+  }
 }
 
 export async function persistDeterministicViewImpressionModelOutputs(
