@@ -23,6 +23,10 @@ export type AttributionQaPayloadResult = {
   payload: AttributionQaPayloadV1;
 };
 
+type AttributionQaPayloadReadOptions = {
+  sanitize?: boolean;
+};
+
 type QaOrderRow = AttributionQaSnapshotOrder & {
   customer_identity_id: string | null;
   attribution_snapshot: unknown;
@@ -244,7 +248,11 @@ async function buildQaPayloadFromOrder(row: QaOrderRow): Promise<AttributionQaPa
   });
 }
 
-export async function getAttributionQaPayloadForOrder(orderId: string): Promise<AttributionQaPayloadResult | null> {
+export async function getAttributionQaPayloadForOrder(
+  orderId: string,
+  options: AttributionQaPayloadReadOptions = {}
+): Promise<AttributionQaPayloadResult | null> {
+  const sanitize = options.sanitize ?? true;
   const result = await query<QaOrderRow>(
     `
       SELECT
@@ -283,13 +291,15 @@ export async function getAttributionQaPayloadForOrder(orderId: string): Promise<
     return {
       orderId,
       source: 'persisted_snapshot',
-      payload: sanitizeAttributionQaPayload(persistedPayload)
+      payload: sanitize ? sanitizeAttributionQaPayload(persistedPayload) : persistedPayload
     };
   }
+
+  const generatedPayload = await buildQaPayloadFromOrder(row);
 
   return {
     orderId,
     source: 'generated_on_read',
-    payload: sanitizeAttributionQaPayload(await buildQaPayloadFromOrder(row))
+    payload: sanitize ? sanitizeAttributionQaPayload(generatedPayload) : generatedPayload
   };
 }

@@ -122,3 +122,18 @@ The package exports two validated fixture examples:
 - `attributionQaPayloadV1NoMatchFixture`: unattributed no-match with no selected candidates and no credits
 
 Use these fixtures in downstream QA tooling tests instead of constructing ad hoc payloads.
+
+## Admin Debug Endpoint
+
+`GET /api/admin/attribution/orders/{orderId}/qa-debug` returns the full internal QA debug response for one Shopify order. It is restricted to authenticated app users with admin access and does not accept internal service tokens, because the response includes unredacted order identifiers, raw Shopify hint payloads, raw tracking touchpoint payloads, and optional GA4 fallback candidate identifiers.
+
+The `payload` field is an `AttributionQaPayloadV1` object and is validated by the same runtime schema described above. The surrounding debug envelope includes:
+
+- `source`: `persisted_snapshot` or `generated_on_read`
+- `selectedRunId` and `selectedRunReason`: the persisted attribution run used for raw evidence, or a clear no-run reason
+- `evidenceState`: `available`, `missing`, or `expired_or_pruned` states for the attribution run, raw evidence, Shopify hints, touchpoints, and GA4 fallback candidate
+- `rawShopifyHints`: raw `attribution_raw_evidence` rows where `evidence_type = shopify_hint`
+- `rawTouchpoints`: raw `attribution_raw_evidence` rows where `evidence_type = tracking_touchpoint`
+- `ga4FallbackCandidate`: the matching GA4 fallback candidate when one can still be loaded
+
+When the Shopify order is absent the endpoint returns `404 shopify_order_not_found`. When a requested `runId` is absent for that order it returns `404 attribution_run_not_found`. If the long-retention order input exists but raw evidence rows have already been pruned, the response stays `200` and reports `expired_or_pruned` with empty raw evidence arrays.

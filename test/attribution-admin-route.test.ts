@@ -7,9 +7,11 @@ process.env.REPORTING_API_TOKEN = 'test-reporting-token';
 
 const poolModule = await import('../src/db/pool.js');
 const serverModule = await import('../src/server.js');
+const schemaModule = await import('../packages/attribution-schema/index.js');
 
 const { pool } = poolModule;
 const { closeServer, createServer } = serverModule;
+const { attributionQaPayloadV1SuccessFixture } = schemaModule;
 const originalPoolQuery = pool.query.bind(pool);
 
 async function requestJson(
@@ -99,6 +101,391 @@ test('order attribution backfill admin route rejects authenticated non-admin use
       message: 'Admin access required'
     });
     assert.equal(queryCalls, 1);
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
+test('order attribution QA debug route rejects internal service tokens because raw evidence requires an admin user', async () => {
+  let queryCalls = 0;
+  pool.query = (async () => {
+    queryCalls += 1;
+    return { rows: [] };
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(server, '/api/admin/attribution/orders/order-qa/qa-debug', {
+      headers: {
+        authorization: 'Bearer test-reporting-token'
+      }
+    });
+
+    assert.equal(response.status, 403);
+    assert.deepEqual(body, {
+      error: 'forbidden',
+      message: 'Internal admin user access required'
+    });
+    assert.equal(queryCalls, 0);
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
+test('order attribution QA debug route returns full schema payload and grouped raw evidence for admin users', async () => {
+  const capturedQueries: Array<{ text: string; params?: unknown[] }> = [];
+  const fullPayload = {
+    ...attributionQaPayloadV1SuccessFixture,
+    order: {
+      ...attributionQaPayloadV1SuccessFixture.order,
+      order_id: 'order-qa-debug',
+      identifiers: {
+        ...attributionQaPayloadV1SuccessFixture.order.identifiers,
+        checkout_token: 'checkout-token-secret',
+        cart_token: 'cart-token-secret',
+        email_hash: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+      }
+    },
+    candidates: {
+      ...attributionQaPayloadV1SuccessFixture.candidates,
+      ga4_fallback: [
+        {
+          candidate_group: 'ga4_fallback',
+          source_key: 'ga4-candidate-key',
+          touchpoint_id: 'ga4-candidate-key',
+          session_id: null,
+          source_touch_event_id: null,
+          occurred_at_utc: '2026-04-10T11:00:00.000Z',
+          source: 'google',
+          medium: 'cpc',
+          campaign: 'ga4-brand',
+          content: null,
+          term: null,
+          click_id_type: 'gclid',
+          click_id_value: 'GA4-GCLID-SECRET',
+          match_source: 'ga4_fallback',
+          attribution_reason: 'ga4_fallback_match',
+          confidence_score: 0.5,
+          confidence_label: 'low',
+          is_direct: false,
+          is_synthetic: true,
+          selected: false
+        }
+      ]
+    }
+  };
+
+  pool.query = (async (text: string, params?: unknown[]) => {
+    capturedQueries.push({ text, params });
+
+    if (text.includes('FROM app_sessions')) {
+      return {
+        rows: [
+          {
+            session_id: 7,
+            user_id: 42,
+            email: 'admin@example.com',
+            display_name: 'Admin',
+            is_admin: true,
+            status: 'active',
+            last_login_at: new Date('2026-04-25T10:00:00.000Z'),
+            created_at: new Date('2026-04-01T00:00:00.000Z'),
+            expires_at: new Date('2026-05-01T00:00:00.000Z')
+          }
+        ]
+      };
+    }
+
+    if (text.includes('FROM shopify_orders')) {
+      assert.equal(params?.[0], 'order-qa-debug');
+      return {
+        rows: [
+          {
+            shopify_order_id: 'order-qa-debug',
+            name: '#QA-DEBUG',
+            currency_code: 'USD',
+            subtotal_price: '90.00',
+            total_price: '100.00',
+            processed_at: new Date('2026-04-10T12:00:00.000Z'),
+            created_at_shopify: null,
+            ingested_at: new Date('2026-04-10T12:01:00.000Z'),
+            landing_session_id: '123e4567-e89b-42d3-a456-426614174000',
+            checkout_token: 'checkout-token-secret',
+            cart_token: 'cart-token-secret',
+            shopify_customer_id: null,
+            email_hash: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            customer_identity_id: null,
+            identity_journey_id: null,
+            source_name: 'web',
+            raw_payload: { name: '#QA-DEBUG' },
+            attribution_snapshot: {
+              qaSnapshot: fullPayload
+            }
+          }
+        ]
+      };
+    }
+
+    if (text.includes('FROM attribution_order_inputs')) {
+      return {
+        rows: [
+          {
+            run_id: '11111111-1111-4111-8111-111111111111',
+            normalized_at_utc: new Date('2026-04-10T12:04:00.000Z'),
+            retained_until: new Date('2027-04-10T12:04:00.000Z')
+          }
+        ]
+      };
+    }
+
+    if (text.includes('FROM attribution_raw_evidence')) {
+      return {
+        rows: [
+          {
+            id: '1',
+            run_id: '11111111-1111-4111-8111-111111111111',
+            order_id: 'order-qa-debug',
+            evidence_type: 'shopify_hint',
+            source_table: 'shopify_orders',
+            source_record_id: 'order-qa-debug',
+            touchpoint_id: 'shopify:order-qa-debug',
+            session_id: null,
+            ingestion_source: 'shopify_marketing_hint',
+            event_type: null,
+            occurred_at_utc: new Date('2026-04-10T12:00:00.000Z'),
+            captured_at_utc: null,
+            evidence_status: 'valid',
+            error_code: null,
+            error_message: null,
+            normalized_metadata: { hint: 'landing_site' },
+            raw_payload: { landing_site: 'https://store.example/?gclid=RAW-GCLID' },
+            payload_size_bytes: 64,
+            payload_hash: 'a'.repeat(64),
+            created_at_utc: new Date('2026-04-10T12:05:00.000Z'),
+            retained_until: new Date('2026-10-10T12:05:00.000Z')
+          },
+          {
+            id: '2',
+            run_id: '11111111-1111-4111-8111-111111111111',
+            order_id: 'order-qa-debug',
+            evidence_type: 'tracking_touchpoint',
+            source_table: 'session_attribution_touch_events',
+            source_record_id: 'touch-1',
+            touchpoint_id: 'touch-1',
+            session_id: '123e4567-e89b-42d3-a456-426614174000',
+            ingestion_source: 'browser',
+            event_type: 'page_view',
+            occurred_at_utc: new Date('2026-04-09T11:00:00.000Z'),
+            captured_at_utc: new Date('2026-04-09T11:00:01.000Z'),
+            evidence_status: 'valid',
+            error_code: null,
+            error_message: null,
+            normalized_metadata: {},
+            raw_payload: { gclid: 'RAW-TOUCH-GCLID' },
+            payload_size_bytes: 32,
+            payload_hash: 'b'.repeat(64),
+            created_at_utc: new Date('2026-04-10T12:05:00.000Z'),
+            retained_until: new Date('2026-10-10T12:05:00.000Z')
+          }
+        ]
+      };
+    }
+
+    if (text.includes('FROM ga4_fallback_candidates')) {
+      assert.deepEqual(params?.[0], ['ga4-candidate-key']);
+      assert.equal(params?.[1], 'order-qa-debug');
+      assert.equal(params?.[2], 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
+      return {
+        rows: [
+          {
+            candidate_key: 'ga4-candidate-key',
+            occurred_at: new Date('2026-04-10T11:00:00.000Z'),
+            ga4_user_key: 'ga4-user-secret',
+            ga4_client_id: 'ga4-client-secret',
+            ga4_session_id: 'ga4-session-secret',
+            transaction_id: 'order-qa-debug',
+            email_hash: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            customer_identity_id: null,
+            source: 'google',
+            medium: 'cpc',
+            campaign: 'ga4-brand',
+            content: null,
+            term: null,
+            click_id_type: 'gclid',
+            click_id_value: 'GA4-GCLID-SECRET',
+            session_has_required_fields: true,
+            source_export_hour: new Date('2026-04-10T11:00:00.000Z'),
+            source_dataset: 'analytics_123',
+            source_table_type: 'events',
+            retained_until: new Date('2026-07-10T11:00:00.000Z'),
+            created_at: new Date('2026-04-10T12:00:00.000Z'),
+            updated_at: new Date('2026-04-10T12:00:00.000Z'),
+            matched_on: 'qa_candidate_key'
+          }
+        ]
+      };
+    }
+
+    return { rows: [] };
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(server, '/api/admin/attribution/orders/order-qa-debug/qa-debug', {
+      headers: {
+        authorization: 'Bearer admin-session-token'
+      }
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(body.orderId, 'order-qa-debug');
+    assert.equal(body.source, 'persisted_snapshot');
+    assert.equal(body.selectedRunId, '11111111-1111-4111-8111-111111111111');
+    assert.equal(body.evidenceState.rawEvidence, 'available');
+    assert.equal(body.evidenceState.rawShopifyHints, 'available');
+    assert.equal(body.evidenceState.rawTouchpoints, 'available');
+    assert.equal(body.evidenceState.ga4FallbackCandidate, 'available');
+    assert.equal(body.payload.order.identifiers.checkout_token, 'checkout-token-secret');
+    assert.equal(body.payload.candidates.ga4_fallback[0].click_id_value, 'GA4-GCLID-SECRET');
+    assert.equal(body.rawShopifyHints[0].rawPayload.landing_site, 'https://store.example/?gclid=RAW-GCLID');
+    assert.equal(body.rawTouchpoints[0].rawPayload.gclid, 'RAW-TOUCH-GCLID');
+    assert.equal(body.ga4FallbackCandidate.ga4ClientId, 'ga4-client-secret');
+    assert.equal(capturedQueries.some((entry) => entry.text.includes('FROM attribution_raw_evidence')), true);
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
+test('order attribution QA debug route reports expired raw evidence when only retained order inputs remain', async () => {
+  pool.query = (async (text: string) => {
+    if (text.includes('FROM app_sessions')) {
+      return {
+        rows: [
+          {
+            session_id: 7,
+            user_id: 42,
+            email: 'admin@example.com',
+            display_name: 'Admin',
+            is_admin: true,
+            status: 'active',
+            last_login_at: new Date('2026-04-25T10:00:00.000Z'),
+            created_at: new Date('2026-04-01T00:00:00.000Z'),
+            expires_at: new Date('2026-05-01T00:00:00.000Z')
+          }
+        ]
+      };
+    }
+
+    if (text.includes('FROM shopify_orders')) {
+      return {
+        rows: [
+          {
+            shopify_order_id: 'order-qa-expired',
+            name: '#QA-EXPIRED',
+            currency_code: 'USD',
+            subtotal_price: '90.00',
+            total_price: '100.00',
+            processed_at: new Date('2026-04-10T12:00:00.000Z'),
+            created_at_shopify: null,
+            ingested_at: new Date('2026-04-10T12:01:00.000Z'),
+            landing_session_id: '123e4567-e89b-42d3-a456-426614174000',
+            checkout_token: null,
+            cart_token: null,
+            shopify_customer_id: null,
+            email_hash: null,
+            customer_identity_id: null,
+            identity_journey_id: null,
+            source_name: 'web',
+            raw_payload: { name: '#QA-EXPIRED' },
+            attribution_snapshot: {
+              qaSnapshot: {
+                ...attributionQaPayloadV1SuccessFixture,
+                order: {
+                  ...attributionQaPayloadV1SuccessFixture.order,
+                  order_id: 'order-qa-expired'
+                }
+              }
+            }
+          }
+        ]
+      };
+    }
+
+    if (text.includes('FROM attribution_order_inputs')) {
+      return {
+        rows: [
+          {
+            run_id: '11111111-1111-4111-8111-111111111111',
+            normalized_at_utc: new Date('2026-04-10T12:04:00.000Z'),
+            retained_until: new Date('2027-04-10T12:04:00.000Z')
+          }
+        ]
+      };
+    }
+
+    return { rows: [] };
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(server, '/api/admin/attribution/orders/order-qa-expired/qa-debug', {
+      headers: {
+        authorization: 'Bearer admin-session-token'
+      }
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(body.evidenceState.attributionRun, 'available');
+    assert.equal(body.evidenceState.rawEvidence, 'expired_or_pruned');
+    assert.deepEqual(body.rawShopifyHints, []);
+    assert.deepEqual(body.rawTouchpoints, []);
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
+test('order attribution QA debug route returns a clean not-found response for missing Shopify orders', async () => {
+  pool.query = (async (text: string) => {
+    if (text.includes('FROM app_sessions')) {
+      return {
+        rows: [
+          {
+            session_id: 7,
+            user_id: 42,
+            email: 'admin@example.com',
+            display_name: 'Admin',
+            is_admin: true,
+            status: 'active',
+            last_login_at: new Date('2026-04-25T10:00:00.000Z'),
+            created_at: new Date('2026-04-01T00:00:00.000Z'),
+            expires_at: new Date('2026-05-01T00:00:00.000Z')
+          }
+        ]
+      };
+    }
+
+    return { rows: [] };
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(server, '/api/admin/attribution/orders/missing-order/qa-debug', {
+      headers: {
+        authorization: 'Bearer admin-session-token'
+      }
+    });
+
+    assert.equal(response.status, 404);
+    assert.equal(body.error, 'shopify_order_not_found');
+    assert.equal(body.message, 'No Shopify order was found for missing-order');
   } finally {
     pool.query = originalPoolQuery as typeof pool.query;
     await closeServer(server);
