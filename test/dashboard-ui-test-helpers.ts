@@ -439,6 +439,19 @@ export function createReportingDashboardProps(
               conversionRate: 0,
               roas: null
             }
+          },
+          metaViewThrough: {
+            label: 'Meta API view-through',
+            canonical: false,
+            description: 'Meta API-reported view-through purchase revenue, purchases, and ROAS from impression-time reporting.',
+            totals: {
+              visits: 0,
+              orders: 14,
+              revenue: 2100,
+              spend: 760,
+              conversionRate: 0,
+              roas: 2100 / 760
+            }
           }
         }
       },

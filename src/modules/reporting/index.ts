@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 
+import { env } from "../../config/env.js";
 import { query } from "../../db/pool.js";
 import { calculatePerformanceMetrics } from "../../shared/metrics.js";
 import { ATTRIBUTION_MODELS } from "../attribution/engine.js";
@@ -66,7 +67,7 @@ const baseFiltersObjectSchema = z.object({
   startDate: dateStringSchema,
   endDate: dateStringSchema,
   attributionModel: z.enum(ATTRIBUTION_MODELS).optional().default('last_touch'),
-  reportingMode: z.enum(['combined', 'clicks', 'deterministic_views']).optional().default('clicks'),
+  reportingMode: z.enum(['combined', 'clicks', 'deterministic_views', 'meta_view_through']).optional().default('clicks'),
   attributionTier: attributionTierSchema.optional(),
   source: z.string().trim().min(1).optional(),
   campaign: z.string().trim().min(1).optional()
@@ -138,6 +139,11 @@ const REPORTING_MODE_METADATA = {
     label: 'Deterministic view layer',
     canonical: false,
     description: 'Layer-only Meta API-verified deterministic view/impression attribution.'
+  },
+  meta_view_through: {
+    label: 'Meta API view-through',
+    canonical: false,
+    description: 'Meta API-reported view-through purchase revenue, purchases, and ROAS from impression-time reporting.'
   },
   combined: {
     label: 'Non-canonical comparison total',
@@ -342,6 +348,36 @@ function buildDeterministicViewFilters(
 		filters.push(`
       COALESCE(NULLIF(dmo.campaign_id, ''), NULLIF(dmo.adset_id, ''), NULLIF(dmo.ad_id, ''), 'unknown') = $${params.length + 2}
     `);
+	}
+
+	return {
+		sql: ` AND ${filters.join(" AND ")}`,
+		params,
+	};
+}
+
+function buildMetaViewThroughFilters(
+	source: string | undefined,
+	campaign: string | undefined,
+): { sql: string; params: string[] } {
+	const params: string[] = [];
+	const filters = [
+		"organization_id = $3",
+		"action_report_time = 'impression'",
+		"use_account_attribution_setting = true",
+	];
+
+	if (source) {
+		params.push(source);
+		filters.push(`'meta' = $${params.length + 3}`);
+	}
+
+	if (campaign) {
+		params.push(campaign);
+		filters.push(`(
+      campaign_id = $${params.length + 3}
+      OR campaign_name = $${params.length + 3}
+    )`);
 	}
 
 	return {
@@ -556,10 +592,35 @@ export function createReportingRouter(): Router {
         `,
 				[input.startDate, input.endDate, ...deterministicViewFilters.params],
 			);
+			const metaViewThroughFilters = buildMetaViewThroughFilters(
+				input.source,
+				input.campaign,
+			);
+			const metaViewThroughResult = await query<SummaryRow>(
+				`
+          SELECT
+            0 AS visits,
+            COALESCE(SUM(COALESCE(purchase_count, 0)), 0) AS orders,
+            COALESCE(SUM(COALESCE(attributed_revenue, 0)), 0) AS revenue,
+            COALESCE(SUM(spend), 0) AS spend
+          FROM meta_ads_order_value_aggregates
+          WHERE report_date BETWEEN $1::date AND $2::date
+            ${metaViewThroughFilters.sql}
+        `,
+				[
+					input.startDate,
+					input.endDate,
+					env.DEFAULT_ORGANIZATION_ID,
+					...metaViewThroughFilters.params,
+				],
+			);
 
 			const clickTotals = toReportingTotals(clickResult.rows[0]);
 			const deterministicViewTotals = toReportingTotals(
 				deterministicViewResult.rows[0],
+			);
+			const metaViewThroughTotals = toReportingTotals(
+				metaViewThroughResult.rows[0],
 			);
 			const combinedTotals = combineReportingTotals(
 				clickTotals,
@@ -570,6 +631,8 @@ export function createReportingRouter(): Router {
 					? clickTotals
 					: input.reportingMode === "deterministic_views"
 						? deterministicViewTotals
+						: input.reportingMode === "meta_view_through"
+							? metaViewThroughTotals
 						: combinedTotals;
       const modeMetadata = REPORTING_MODE_METADATA[input.reportingMode];
 
@@ -598,6 +661,10 @@ export function createReportingRouter(): Router {
           deterministicViews: {
             ...REPORTING_MODE_METADATA.deterministic_views,
             totals: deterministicViewTotals
+          },
+          metaViewThrough: {
+            ...REPORTING_MODE_METADATA.meta_view_through,
+            totals: metaViewThroughTotals
           },
 				},
 			});

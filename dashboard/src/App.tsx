@@ -343,7 +343,8 @@ const REPORTING_FILTER_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const REPORTING_MODES = new Set<NonNullable<ReportingFilters['reportingMode']>>([
   'combined',
   'clicks',
-  'deterministic_views'
+  'deterministic_views',
+  'meta_view_through'
 ]);
 const ATTRIBUTION_MODELS = new Set<
 	NonNullable<ReportingFilters["attributionModel"]>
@@ -1301,6 +1302,11 @@ function App() {
   const summaryCards = useMemo(() => {
     const totals = dashboard.summary.data;
     const rangeLabel = `${formatDateLabel(filters.startDate, reportingTimezone)} to ${formatDateLabel(filters.endDate, reportingTimezone)}`;
+    const countLabel = totals?.reportingMode === 'meta_view_through' ? 'Purchases' : 'Orders';
+    const countDetail =
+      totals?.reportingMode === 'meta_view_through'
+        ? 'Meta API view-through'
+        : `${formatPercent(totals?.totals.conversionRate)} conversion`;
 
     return [
       {
@@ -1309,9 +1315,9 @@ function App() {
         detail: rangeLabel
       },
       {
-        label: 'Orders',
+        label: countLabel,
         value: formatNumber(totals?.totals.orders),
-        detail: `${formatPercent(totals?.totals.conversionRate)} conversion`
+        detail: countDetail
       },
       {
         label: 'Revenue',

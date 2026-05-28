@@ -45,7 +45,7 @@ export type ReportingFilters = {
   campaign?: string;
 };
 
-export type ReportingMode = 'combined' | 'clicks' | 'deterministic_views';
+export type ReportingMode = 'combined' | 'clicks' | 'deterministic_views' | 'meta_view_through';
 
 export type AttributionFilters = {
   startDate: string;
@@ -89,6 +89,7 @@ export type SummaryResponse = {
 	layers: {
 		clicks: SummaryLayer;
 		deterministicViews: SummaryLayer;
+		metaViewThrough: SummaryLayer;
 	};
 };
 

@@ -82,8 +82,22 @@ test('reporting summary returns headline metrics from daily campaign aggregates'
       };
     }
 
-    assert.match(text, /FROM deterministic_model_outputs/);
-    assert.deepEqual(params, ['2026-04-01', '2026-04-10', 'google', 'spring-sale']);
+    if (text.includes('FROM deterministic_model_outputs')) {
+      assert.deepEqual(params, ['2026-04-01', '2026-04-10', 'google', 'spring-sale']);
+      return {
+        rows: [
+          {
+            visits: '0',
+            orders: '0',
+            revenue: '0.00',
+            spend: '0.00'
+          }
+        ]
+      };
+    }
+
+    assert.match(text, /FROM meta_ads_order_value_aggregates/);
+    assert.deepEqual(params, ['2026-04-01', '2026-04-10', 1, 'google', 'spring-sale']);
     return {
       rows: [
         {
@@ -165,6 +179,19 @@ test('reporting summary returns headline metrics from daily campaign aggregates'
             conversionRate: 0,
             roas: null
           }
+        },
+        metaViewThrough: {
+          label: 'Meta API view-through',
+          canonical: false,
+          description: 'Meta API-reported view-through purchase revenue, purchases, and ROAS from impression-time reporting.',
+          totals: {
+            visits: 0,
+            orders: 0,
+            revenue: 0,
+            spend: 0,
+            conversionRate: 0,
+            roas: null
+          }
         }
       }
     });
@@ -189,14 +216,27 @@ test('reporting summary defaults to click-only canonical totals and exposes non-
       };
     }
 
-    assert.match(text, /dmo\.model_key = 'deterministic_views'/);
+    if (text.includes('FROM deterministic_model_outputs')) {
+      assert.match(text, /dmo\.model_key = 'deterministic_views'/);
+      return {
+        rows: [
+          {
+            visits: '0',
+            orders: '1.5',
+            revenue: '150.00',
+            spend: '0.00'
+          }
+        ]
+      };
+    }
+
     return {
       rows: [
         {
           visits: '0',
-          orders: '1.5',
-          revenue: '150.00',
-          spend: '0.00'
+          orders: '3',
+          revenue: '225.00',
+          spend: '75.00'
         }
       ]
     };
@@ -212,6 +252,10 @@ test('reporting summary defaults to click-only canonical totals and exposes non-
     const deterministicViews = await requestJson(
       server,
       '/api/reporting/summary?startDate=2026-04-01&endDate=2026-04-10&reportingMode=deterministic_views'
+    );
+    const metaViewThrough = await requestJson(
+      server,
+      '/api/reporting/summary?startDate=2026-04-01&endDate=2026-04-10&reportingMode=meta_view_through'
     );
     const comparison = await requestJson(
       server,
@@ -248,12 +292,26 @@ test('reporting summary defaults to click-only canonical totals and exposes non-
       conversionRate: 0,
       roas: null
     });
+    assert.deepEqual(canonical.body.layers.metaViewThrough.totals, {
+      visits: 0,
+      orders: 3,
+      revenue: 225,
+      spend: 75,
+      conversionRate: 0,
+      roas: 3
+    });
 
     assert.equal(deterministicViews.response.status, 200);
     assert.equal(deterministicViews.body.reportingMode, 'deterministic_views');
     assert.equal(deterministicViews.body.reportingModeLabel, 'Deterministic view layer');
     assert.equal(deterministicViews.body.totalsCanonical, false);
     assert.deepEqual(deterministicViews.body.totals, deterministicViews.body.layers.deterministicViews.totals);
+
+    assert.equal(metaViewThrough.response.status, 200);
+    assert.equal(metaViewThrough.body.reportingMode, 'meta_view_through');
+    assert.equal(metaViewThrough.body.reportingModeLabel, 'Meta API view-through');
+    assert.equal(metaViewThrough.body.totalsCanonical, false);
+    assert.deepEqual(metaViewThrough.body.totals, metaViewThrough.body.layers.metaViewThrough.totals);
 
     assert.equal(comparison.response.status, 200);
     assert.equal(comparison.body.reportingMode, 'combined');

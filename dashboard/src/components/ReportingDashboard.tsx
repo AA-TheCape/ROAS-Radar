@@ -144,6 +144,11 @@ const REPORTING_LAYER_OPTIONS: Array<{
 		label: "Meta views",
 		description: "Deterministic view/impression signals verified by Meta API v1.",
 	},
+	{
+		value: "meta_view_through",
+		label: "View-through",
+		description: "Meta API impression-time purchase revenue, purchases, and ROAS.",
+	},
 ];
 
 type CampaignSortKey =
@@ -307,10 +312,10 @@ function formatReportingModeLabel(mode: ReportingMode | undefined) {
 	);
 }
 
-function formatLayerDetail(totals: SummaryTotals) {
+function formatLayerDetail(totals: SummaryTotals, countLabel = "orders") {
 	const roasLabel =
 		totals.roas == null ? "ROAS pending spend" : `${formatNumber(totals.roas)} ROAS`;
-	return `${formatNumber(totals.orders)} orders, ${formatCurrency(totals.revenue)}, ${roasLabel}`;
+	return `${formatNumber(totals.orders)} ${countLabel}, ${formatCurrency(totals.revenue)}, ${roasLabel}`;
 }
 
 const LayerBreakdownPanel = memo(function LayerBreakdownPanel({
@@ -324,6 +329,7 @@ const LayerBreakdownPanel = memo(function LayerBreakdownPanel({
 		label: string;
 		totals: SummaryTotals;
 		scope: string;
+		countLabel?: string;
 	}> = [
 		{
 			key: "combined",
@@ -344,14 +350,21 @@ const LayerBreakdownPanel = memo(function LayerBreakdownPanel({
 			totals: summary.layers.deterministicViews.totals,
 			scope: summary.layers.deterministicViews.description,
 		},
+		{
+			key: "meta_view_through",
+			label: summary.layers.metaViewThrough.label,
+			totals: summary.layers.metaViewThrough.totals,
+			scope: summary.layers.metaViewThrough.description,
+			countLabel: "purchases",
+		},
 	];
 
 	return (
 		<Panel
 			title="Layer breakdown"
-			description="Default totals stay click-only. Use the layer control to inspect clicks, Meta API-verified deterministic views, or the non-canonical comparison total."
+			description="Default totals stay click-only. Use the layer control to inspect clicks, deterministic views, Meta API view-through, or the non-canonical comparison total."
 		>
-			<div className="grid gap-4 lg:grid-cols-3">
+			<div className="grid gap-4 lg:grid-cols-4">
 				{layerCards.map((card) => (
 						<Card
 							key={card.key}
@@ -369,7 +382,7 @@ const LayerBreakdownPanel = memo(function LayerBreakdownPanel({
 							</div>
 							<Badge
 								tone={
-									card.key === "deterministic_views"
+									card.key === "deterministic_views" || card.key === "meta_view_through"
 										? "teal"
 										: card.key === "combined"
 											? "brand"
@@ -378,6 +391,8 @@ const LayerBreakdownPanel = memo(function LayerBreakdownPanel({
 							>
 								{card.key === "deterministic_views"
 									? "Meta v1"
+									: card.key === "meta_view_through"
+										? "Meta API"
 									: formatReportingModeLabel(card.key)}
 							</Badge>
 						</div>
@@ -385,7 +400,7 @@ const LayerBreakdownPanel = memo(function LayerBreakdownPanel({
 							{formatCurrency(card.totals.revenue)}
 						</p>
 						<p className="mt-2 text-body text-ink-muted">
-							{formatLayerDetail(card.totals)}
+							{formatLayerDetail(card.totals, card.countLabel)}
 						</p>
 						<p className="mt-3 text-caption text-ink-soft">{card.scope}</p>
 					</Card>
