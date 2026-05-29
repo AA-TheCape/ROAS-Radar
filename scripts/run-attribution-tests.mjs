@@ -14,6 +14,10 @@ if (!VALID_MODES.has(mode)) {
 const CRITICAL_TESTS = [
   'test/attribution-engine.test.ts',
   'test/attribution-engine-golden.test.ts',
+  'test/deterministic-view-impression-model.test.ts',
+  'test/deterministic-view-impression-model.integration.test.ts',
+  'test/meta-deterministic-sync.integration.test.ts',
+  'test/reporting-api.test.ts',
   'test/northbeam-benchmark-report.test.ts',
   'test/northbeam-benchmark-thresholds.test.ts',
   'test/attribution-preprocessing.test.ts',
@@ -37,6 +41,7 @@ const COVERAGE_TESTS = CRITICAL_TESTS.filter(
 
 const COVERAGE_TARGETS = [
 	"packages/attribution-schema/index.ts",
+	"src/modules/attribution/deterministic-view-impression-model.ts",
 	"src/modules/attribution/engine.ts",
 	"src/modules/attribution/index.ts",
 	"src/modules/attribution/resolver.ts",

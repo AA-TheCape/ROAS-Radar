@@ -248,19 +248,36 @@ test('paid capture survives attribution, Shopify writeback, and reporting end to
     );
 
     assert.equal(reportingSummary.response.status, 200);
-    assert.deepEqual(reportingSummary.body, {
-      range: {
-        startDate: reportingDate,
-        endDate: reportingDate
-      },
-      totals: {
-        visits: 0,
-        orders: 1,
-        revenue: 120,
-        spend: 0,
-        conversionRate: 0,
-        roas: null
-      }
+    assert.equal(reportingSummary.body.reportingMode, 'clicks');
+    assert.equal(reportingSummary.body.totalsCanonical, true);
+    assert.deepEqual(reportingSummary.body.range, {
+      startDate: reportingDate,
+      endDate: reportingDate
+    });
+    assert.deepEqual(reportingSummary.body.totals, {
+      visits: 0,
+      orders: 1,
+      revenue: 120,
+      spend: 0,
+      conversionRate: 0,
+      roas: null
+    });
+    assert.deepEqual((reportingSummary.body.layers as Record<string, { totals: unknown }>).clicks.totals, reportingSummary.body.totals);
+    assert.deepEqual((reportingSummary.body.layers as Record<string, { totals: unknown }>).deterministicViews.totals, {
+      visits: 0,
+      orders: 0,
+      revenue: 0,
+      spend: 0,
+      conversionRate: 0,
+      roas: null
+    });
+    assert.deepEqual((reportingSummary.body.comparisonTotals as Record<string, { totals: unknown }>).combined.totals, {
+      visits: 0,
+      orders: 1,
+      revenue: 120,
+      spend: 0,
+      conversionRate: 0,
+      roas: null
     });
   } finally {
     await closeServer(server);

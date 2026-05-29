@@ -37,6 +37,7 @@ export async function resetE2EDatabase(): Promise<void> {
     'meta_ads_order_value_aggregates',
     'meta_ads_deterministic_sync_jobs',
     'meta_ads_deterministic_sync_checkpoints',
+    'deterministic_event_evidence_quarantine',
     'deterministic_event_verification_statuses',
     'deterministic_model_outputs',
     'deterministic_event_facts',

@@ -604,6 +604,63 @@ test('Meta deterministic attribution schemas enforce identity, verification, and
 
   assert.throws(
     () =>
+      normalizeAttributionResultRecordV1({
+        run_id: '11111111-1111-4111-8111-111111111111',
+        attribution_spec_version: 'v1',
+        order_id: 'order-1',
+        model_key: 'deterministic_views',
+        allocation_status: 'attributed',
+        winner_touchpoint_id: 'touch-1',
+        winner_session_id: null,
+        winner_evidence_source: 'landing_session_id',
+        winner_attribution_reason: 'matched_by_landing_session',
+        total_credit_weight: '1.00',
+        total_revenue_credited: '200.00',
+        touchpoint_count_considered: 1,
+        eligible_click_count: 1,
+        eligible_view_count: 0,
+        lookback_rule_applied: '28d_click',
+        winner_selection_rule: 'last_touch',
+        direct_suppression_applied: false,
+        deterministic_block_applied: false,
+        normalization_failures_count: 0,
+        generated_at_utc: '2026-05-21T12:00:00Z'
+      }),
+    /Invalid enum value/
+  );
+
+  assert.throws(
+    () =>
+      normalizeAttributionCreditRecordV1({
+        run_id: '11111111-1111-4111-8111-111111111111',
+        attribution_spec_version: 'v1',
+        order_id: 'order-1',
+        model_key: 'last_touch',
+        touchpoint_id: 'touch-1',
+        session_id: null,
+        touchpoint_position: 1,
+        occurred_at_utc: '2026-05-21T12:00:00Z',
+        source: 'meta',
+        medium: 'paid_social',
+        campaign: 'campaign-1',
+        content: null,
+        term: null,
+        click_id_type: null,
+        click_id_value: null,
+        touch_type: 'view',
+        is_direct: false,
+        evidence_source: 'deterministic_views',
+        is_synthetic: false,
+        attribution_reason: 'deterministic_views',
+        credit_weight: '1.00',
+        revenue_credit: '200.00',
+        is_primary: true
+      }),
+    /Invalid enum value/
+  );
+
+  assert.throws(
+    () =>
       normalizeMetaDeterministicAttributionAggregateV1({
         ...aggregate,
         event_type: 'impression'

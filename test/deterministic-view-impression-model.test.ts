@@ -68,6 +68,9 @@ test('deterministic view/impression model writes separate outputs without click 
   assert.match(queries[1].text, /INSERT INTO deterministic_model_outputs/);
   assert.match(queries[1].text, /deterministic_views/);
   assert.match(queries[1].text, /deterministic_impressions/);
+  assert.doesNotMatch(queries[1].text, /model_key IN \([^)]*first_touch/);
+  assert.doesNotMatch(queries[1].text, /model_key IN \([^)]*last_touch/);
+  assert.doesNotMatch(queries[1].text, /model_key IN \([^)]*clicks_only/);
   assert.doesNotMatch(queries.map((query) => query.text).join('\n'), /attribution_model_credits/);
   assert.doesNotMatch(queries.map((query) => query.text).join('\n'), /attribution_model_summaries/);
 });
