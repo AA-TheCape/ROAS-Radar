@@ -37,6 +37,8 @@ function normalizePositiveInteger(
 }
 
 function resolveCutoffAt(asOf: Date | undefined): Date {
+	// The stored timestamps already include the retention window. Cleanup uses
+	// the job's as-of time directly so the window is not subtracted twice.
 	return asOf ? new Date(asOf) : new Date();
 }
 
