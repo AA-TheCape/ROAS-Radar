@@ -120,8 +120,8 @@ test('paid capture survives attribution, Shopify writeback, and reporting end to
   try {
     const bootstrap = await bootstrapSession(server);
     assert.equal(bootstrap.isNewSession, true);
-    const reportingDate = new Date().toISOString().slice(0, 10);
-    const orderProcessedAt = new Date(`${reportingDate}T12:15:00.000Z`);
+    const orderProcessedAt = new Date(Date.now() + 60_000);
+    const reportingDate = orderProcessedAt.toISOString().slice(0, 10);
     const orderFixture = buildRawPayloadFixture(
       {
         id: 'e2e-order-1',

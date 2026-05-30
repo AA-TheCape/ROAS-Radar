@@ -158,8 +158,8 @@ test("request-context bootstrap fallback preserves attributable revenue when the
       referrerUrl: 'https://www.google.com/search?q=widget',
       referer: 'https://store.example/products/widget?utm_source=google&utm_medium=cpc&utm_campaign=spring-sale'
     });
-    const reportingDate = new Date().toISOString().slice(0, 10);
-    const orderProcessedAt = `${reportingDate}T12:15:00.000Z`;
+    const orderProcessedAt = new Date(Date.now() + 60_000).toISOString();
+    const reportingDate = orderProcessedAt.slice(0, 10);
 
     const orderFixture = buildRawPayloadFixture(
       {
