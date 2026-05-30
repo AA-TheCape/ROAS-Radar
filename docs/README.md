@@ -20,6 +20,7 @@
 - Start with [Implementation Guide](implementation-guide.md#troubleshooting) for local setup and validation issues.
 - Use [Operational Attribution Contracts](operational-attribution-contracts.md) when you need resolver, writeback, retention, or dead-letter behavior.
 - Use [Attribution Completeness](runbooks/attribution-completeness.md), [Ingestion Failures](runbooks/ingestion-failures.md), and [Attribution Worker Backlog](runbooks/attribution-worker-backlog.md) for incident response.
+- Use [Deterministic Attribution Behavior](deterministic-attribution-behavior.md) when Clicks, Deterministic Views, Meta view-through, or combined comparison totals need explanation.
 - Use [Cloud Run Pipelines](runbooks/cloud-run-pipelines.md) for Cloud Run deploy, scheduler, IAM, and rollback operations.
 
 ## Core References
@@ -28,6 +29,7 @@
 - [Attribution Schema V1](attribution-schema-v1.md): shared attribution contract, normalization rules, DB mappings, Shopify keys, rollout expectations, and how canonical attribution fields relate to raw-source storage.
 - [Raw Payload Persistence Contract](raw-payload-persistence-contract.md): exact-as-received JSONB contract for Shopify, Meta Ads, and Google Ads raw-source ingestion surfaces.
 - [Operational Attribution Contracts](operational-attribution-contracts.md): resolver precedence, Shopify writeback lifecycle, retention rules, and incident-routing links.
+- [Deterministic Attribution Behavior](deterministic-attribution-behavior.md): Meta-only deterministic attribution behavior, API-only verification, reporting modes, known limitations, and support guidance.
 - [Meta Deterministic View Attribution Contract V1](meta-deterministic-view-attribution-contract-v1.md): approved aggregate-only Meta API deterministic view/impression attribution design, 7-day window, quarantine rules, and non-mixing requirements.
 - [Shopify App Setup](shopify-app-setup.md): Shopify app install flow, OAuth, and webhook provisioning.
 - [Visitor Identity Stitching](visitor-identity-stitching.md): deterministic identity-linking behavior for Shopify customers, orders, and tracked sessions.
