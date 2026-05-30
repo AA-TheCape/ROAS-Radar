@@ -260,15 +260,14 @@ CREATE TABLE deterministic_model_outputs (
   UNIQUE (run_id, order_id, fact_id, model_key, output_type),
   CONSTRAINT deterministic_model_outputs_model_key_chk
     CHECK (model_key IN (
-      'first_touch',
-      'last_touch',
-      'last_non_direct',
-      'linear',
-      'clicks_only',
-      'hinted_fallback_only',
       'deterministic_views',
       'deterministic_impressions'
     )),
+  CONSTRAINT deterministic_model_outputs_model_event_type_chk
+    CHECK (
+      (model_key = 'deterministic_views' AND event_type = 'view')
+      OR (model_key = 'deterministic_impressions' AND event_type = 'impression')
+    ),
   CONSTRAINT deterministic_model_outputs_output_type_chk
     CHECK (output_type IN ('candidate', 'eligible_input', 'credited_input', 'suppressed_input')),
   CONSTRAINT deterministic_model_outputs_platform_chk

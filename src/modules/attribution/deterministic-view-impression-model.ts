@@ -1,72 +1,92 @@
-import type { PoolClient } from 'pg';
+import type { PoolClient } from "pg";
 
-export const DETERMINISTIC_VIEW_IMPRESSION_MODELS = ['deterministic_views', 'deterministic_impressions'] as const;
+export const DETERMINISTIC_VIEW_IMPRESSION_MODELS = [
+	"deterministic_views",
+	"deterministic_impressions",
+] as const;
+export const DETERMINISTIC_VIEW_IMPRESSION_LOOKBACK_DAYS = 7;
 
-export type DeterministicViewImpressionModel = (typeof DETERMINISTIC_VIEW_IMPRESSION_MODELS)[number];
+export type DeterministicViewImpressionModel =
+	(typeof DETERMINISTIC_VIEW_IMPRESSION_MODELS)[number];
 
-const DETERMINISTIC_VIEW_IMPRESSION_MODEL_SET = new Set<string>(DETERMINISTIC_VIEW_IMPRESSION_MODELS);
+const DETERMINISTIC_VIEW_IMPRESSION_MODEL_SET = new Set<string>(
+	DETERMINISTIC_VIEW_IMPRESSION_MODELS,
+);
 
 type DeterministicViewImpressionModelPersistResult = {
-  enabled: boolean;
-  insertedRows: number;
+	enabled: boolean;
+	insertedRows: number;
 };
 
 export class DeterministicViewImpressionOrderAttributionError extends Error {
-  code = 'deterministic_view_impression_order_attribution_blocked';
+	code = "deterministic_view_impression_order_attribution_blocked";
 
-  constructor(surface: string, field: string, value: string) {
-    super(`${surface} cannot use ${field}=${value} for order-level attribution outputs`);
-    this.name = 'DeterministicViewImpressionOrderAttributionError';
-  }
+	constructor(surface: string, field: string, value: string) {
+		super(
+			`${surface} cannot use ${field}=${value} for order-level attribution outputs`,
+		);
+		this.name = "DeterministicViewImpressionOrderAttributionError";
+	}
 }
 
-export function isDeterministicViewImpressionAttributionEnabled(metadata: Record<string, unknown>): boolean {
-  return metadata.deterministicViewImpressionAttributionEnabled === true;
+export function isDeterministicViewImpressionAttributionEnabled(
+	metadata: Record<string, unknown>,
+): boolean {
+	return metadata.deterministicViewImpressionAttributionEnabled === true;
 }
 
-export function isDeterministicViewImpressionOrderAttributionValue(value: unknown): value is DeterministicViewImpressionModel {
-  return typeof value === 'string' && DETERMINISTIC_VIEW_IMPRESSION_MODEL_SET.has(value.trim().toLowerCase());
+export function isDeterministicViewImpressionOrderAttributionValue(
+	value: unknown,
+): value is DeterministicViewImpressionModel {
+	return (
+		typeof value === "string" &&
+		DETERMINISTIC_VIEW_IMPRESSION_MODEL_SET.has(value.trim().toLowerCase())
+	);
 }
 
 export function assertNoDeterministicViewImpressionOrderAttribution(input: {
-  surface: string;
-  values: Record<string, unknown>;
+	surface: string;
+	values: Record<string, unknown>;
 }): void {
-  for (const [field, value] of Object.entries(input.values)) {
-    if (isDeterministicViewImpressionOrderAttributionValue(value)) {
-      throw new DeterministicViewImpressionOrderAttributionError(input.surface, field, String(value));
-    }
-  }
+	for (const [field, value] of Object.entries(input.values)) {
+		if (isDeterministicViewImpressionOrderAttributionValue(value)) {
+			throw new DeterministicViewImpressionOrderAttributionError(
+				input.surface,
+				field,
+				String(value),
+			);
+		}
+	}
 }
 
 export async function persistDeterministicViewImpressionModelOutputs(
-  client: PoolClient,
-  input: {
-    runId: string;
-    orderId: string;
-    orderOccurredAtUtc: string;
-    enabled: boolean;
-  }
+	client: PoolClient,
+	input: {
+		runId: string;
+		orderId: string;
+		orderOccurredAtUtc: string;
+		enabled: boolean;
+	},
 ): Promise<DeterministicViewImpressionModelPersistResult> {
-  if (!input.enabled) {
-    return {
-      enabled: false,
-      insertedRows: 0
-    };
-  }
+	if (!input.enabled) {
+		return {
+			enabled: false,
+			insertedRows: 0,
+		};
+	}
 
-  await client.query(
-    `
+	await client.query(
+		`
       DELETE FROM deterministic_model_outputs
       WHERE run_id = $1::uuid
         AND order_id = $2
         AND model_key IN ('deterministic_views', 'deterministic_impressions')
     `,
-    [input.runId, input.orderId]
-  );
+		[input.runId, input.orderId],
+	);
 
-  const result = await client.query(
-    `
+	const result = await client.query(
+		`
       WITH candidate_facts AS (
         SELECT
           facts.*,
@@ -78,7 +98,7 @@ export async function persistDeterministicViewImpressionModelOutputs(
         WHERE facts.event_type IN ('view', 'impression')
           AND facts.platform_verified = true
           AND facts.normalization_status IN ('normalized', 'partial')
-          AND facts.fact_date >= ($3::timestamptz - interval '7 days')::date
+          AND facts.fact_date >= ($3::date - ($4::integer - 1))
           AND facts.fact_date <= $3::date
           AND EXISTS (
             SELECT 1
@@ -163,7 +183,7 @@ export async function persistDeterministicViewImpressionModelOutputs(
         jsonb_build_object(
           'modelPath', 'deterministic_view_impression',
           'orderOccurredAtUtc', $3::text,
-          'windowDays', 7,
+          'windowDays', $4::integer,
           'creditSource', 'platform_verified_event_fact'
         )
       FROM weighted_facts
@@ -174,11 +194,16 @@ export async function persistDeterministicViewImpressionModelOutputs(
         output_metadata = EXCLUDED.output_metadata,
         generated_at_utc = now()
     `,
-    [input.runId, input.orderId, input.orderOccurredAtUtc]
-  );
+		[
+			input.runId,
+			input.orderId,
+			input.orderOccurredAtUtc,
+			DETERMINISTIC_VIEW_IMPRESSION_LOOKBACK_DAYS,
+		],
+	);
 
-  return {
-    enabled: true,
-    insertedRows: result.rowCount ?? 0
-  };
+	return {
+		enabled: true,
+		insertedRows: result.rowCount ?? 0,
+	};
 }

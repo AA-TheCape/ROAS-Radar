@@ -193,6 +193,7 @@ async function seedDeterministicFacts(): Promise<void> {
       VALUES
         ($1::bigint, 'meta_ads', 'act_123', 'campaign-1', 'adset-1', 'ad-1', 'view', '2026-05-25', 6, 'api', true, 'normalized'),
         ($1::bigint, 'meta_ads', 'act_123', 'campaign-1', 'adset-1', 'ad-1', 'impression', '2026-05-25', 12, 'api', true, 'normalized'),
+        ($1::bigint, 'meta_ads', 'act_123', 'campaign-1', 'adset-1', 'ad-1', 'view', '2026-05-19', 50, 'api', true, 'normalized'),
         ($1::bigint, 'meta_ads', 'act_123', 'campaign-1', 'adset-1', 'ad-1', 'view', '2026-05-25', 4, 'api', false, 'normalized'),
         ($1::bigint, 'meta_ads', 'act_123', 'campaign-other', NULL, NULL, 'view', '2026-05-25', 99, 'api', true, 'normalized')
     `,
@@ -208,18 +209,24 @@ test(
 		const { runId, orderId } = await seedOrderAndRun();
 		await seedDeterministicFacts();
 
-		const first = await persistDeterministicViewImpressionModelOutputs(pool as unknown as PoolClient, {
-			runId,
-			orderId,
-			orderOccurredAtUtc: "2026-05-26T12:00:00.000Z",
-			enabled: true,
-		});
-		const second = await persistDeterministicViewImpressionModelOutputs(pool as unknown as PoolClient, {
-			runId,
-			orderId,
-			orderOccurredAtUtc: "2026-05-26T12:00:00.000Z",
-			enabled: true,
-		});
+		const first = await persistDeterministicViewImpressionModelOutputs(
+			pool as unknown as PoolClient,
+			{
+				runId,
+				orderId,
+				orderOccurredAtUtc: "2026-05-26T12:00:00.000Z",
+				enabled: true,
+			},
+		);
+		const second = await persistDeterministicViewImpressionModelOutputs(
+			pool as unknown as PoolClient,
+			{
+				runId,
+				orderId,
+				orderOccurredAtUtc: "2026-05-26T12:00:00.000Z",
+				enabled: true,
+			},
+		);
 
 		assert.deepEqual(first, { enabled: true, insertedRows: 2 });
 		assert.deepEqual(second, { enabled: true, insertedRows: 2 });
@@ -287,12 +294,15 @@ test(
 		await resetE2EDatabase();
 		const { runId, orderId } = await seedOrderAndRun();
 
-		const result = await persistDeterministicViewImpressionModelOutputs(pool as unknown as PoolClient, {
-			runId,
-			orderId,
-			orderOccurredAtUtc: "2026-05-26T12:00:00.000Z",
-			enabled: true,
-		});
+		const result = await persistDeterministicViewImpressionModelOutputs(
+			pool as unknown as PoolClient,
+			{
+				runId,
+				orderId,
+				orderOccurredAtUtc: "2026-05-26T12:00:00.000Z",
+				enabled: true,
+			},
+		);
 
 		assert.deepEqual(result, { enabled: true, insertedRows: 0 });
 
