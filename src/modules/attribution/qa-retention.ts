@@ -36,10 +36,8 @@ function normalizePositiveInteger(
 	return Math.max(Math.trunc(value ?? fallback), 1);
 }
 
-function resolveCutoffAt(asOf: Date | undefined, retentionDays: number): Date {
-	const referenceTime = asOf ? new Date(asOf) : new Date();
-	referenceTime.setUTCDate(referenceTime.getUTCDate() - retentionDays);
-	return referenceTime;
+function resolveCutoffAt(asOf: Date | undefined): Date {
+	return asOf ? new Date(asOf) : new Date();
 }
 
 async function deleteExpiredRawEvidence(
@@ -111,7 +109,7 @@ export async function runAttributionQaRetention(
 		options.maxBatches,
 		env.ATTRIBUTION_QA_RETENTION_MAX_BATCHES,
 	);
-	const cutoffAt = resolveCutoffAt(options.asOf, retentionDays);
+	const cutoffAt = resolveCutoffAt(options.asOf);
 	const emitLogs = options.emitLogs ?? true;
 
 	let batchesRun = 0;

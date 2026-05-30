@@ -19,11 +19,13 @@ type OrderRow = {
 function buildFakeClient(input: {
 	evidence: EvidenceRow[];
 	orders: OrderRow[];
+	cutoffTimes?: string[];
 }): PoolClient {
 	return {
 		query: async (text: string, params?: unknown[]) => {
 			const cutoffAt = params?.[0] as Date;
 			const batchSize = params?.[1] as number;
+			input.cutoffTimes?.push(cutoffAt.toISOString());
 
 			if (text.includes("DELETE FROM attribution_raw_evidence")) {
 				const expiredIds = input.evidence
@@ -78,16 +80,17 @@ function buildFakeClient(input: {
 }
 
 test("runAttributionQaRetention deletes only expired raw evidence and prunes expired QA snapshots", async () => {
+	const asOf = new Date("2026-04-25T12:00:00.000Z");
+	const cutoffTimes: string[] = [];
 	const evidence: EvidenceRow[] = [
-		{ id: 1, retainedUntil: new Date("2026-03-20T00:00:00.000Z") },
-		{ id: 2, retainedUntil: new Date("2026-03-21T00:00:00.000Z") },
-		{ id: 3, retainedUntil: new Date("2026-03-26T12:00:00.000Z") },
-		{ id: 4, retainedUntil: new Date("2026-04-01T00:00:00.000Z") },
+		{ id: 1, retainedUntil: new Date("2026-04-25T11:59:59.999Z") },
+		{ id: 2, retainedUntil: new Date("2026-04-25T12:00:00.000Z") },
+		{ id: 3, retainedUntil: new Date("2026-04-25T12:00:00.001Z") },
 	];
 	const orders: OrderRow[] = [
 		{
 			id: 1,
-			attributionSnapshotUpdatedAt: new Date("2026-03-20T00:00:00.000Z"),
+			attributionSnapshotUpdatedAt: new Date("2026-04-25T11:59:59.999Z"),
 			attributionSnapshot: {
 				tier: "deterministic_first_party",
 				qaSnapshot: {},
@@ -95,7 +98,7 @@ test("runAttributionQaRetention deletes only expired raw evidence and prunes exp
 		},
 		{
 			id: 2,
-			attributionSnapshotUpdatedAt: new Date("2026-03-26T12:00:00.000Z"),
+			attributionSnapshotUpdatedAt: new Date("2026-04-25T12:00:00.000Z"),
 			attributionSnapshot: {
 				tier: "deterministic_first_party",
 				qaSnapshot: {},
@@ -103,15 +106,18 @@ test("runAttributionQaRetention deletes only expired raw evidence and prunes exp
 		},
 		{
 			id: 3,
-			attributionSnapshotUpdatedAt: new Date("2026-03-19T00:00:00.000Z"),
-			attributionSnapshot: { tier: "deterministic_first_party" },
+			attributionSnapshotUpdatedAt: new Date("2026-04-25T12:00:00.001Z"),
+			attributionSnapshot: {
+				tier: "deterministic_first_party",
+				qaSnapshot: {},
+			},
 		},
 	];
-	const client = buildFakeClient({ evidence, orders });
+	const client = buildFakeClient({ evidence, orders, cutoffTimes });
 
 	const result = await runAttributionQaRetention({
 		client,
-		asOf: new Date("2026-04-25T12:00:00.000Z"),
+		asOf,
 		retentionDays: 30,
 		batchSize: 1,
 		maxBatches: 2,
@@ -119,17 +125,18 @@ test("runAttributionQaRetention deletes only expired raw evidence and prunes exp
 	});
 
 	assert.deepEqual(result, {
-		cutoffAt: "2026-03-26T12:00:00.000Z",
+		cutoffAt: "2026-04-25T12:00:00.000Z",
 		retentionDays: 30,
 		batchSize: 1,
 		maxBatches: 2,
-		batchesRun: 2,
-		deletedRawEvidence: 2,
+		batchesRun: 1,
+		deletedRawEvidence: 1,
 		prunedSnapshots: 1,
 	});
+	assert.deepEqual([...new Set(cutoffTimes)], [asOf.toISOString()]);
 	assert.deepEqual(
 		evidence.map((row) => row.id),
-		[3, 4],
+		[2, 3],
 	);
 	assert.deepEqual(orders[0].attributionSnapshot, {
 		tier: "deterministic_first_party",
@@ -141,7 +148,7 @@ test("runAttributionQaRetention deletes only expired raw evidence and prunes exp
 
 	const secondResult = await runAttributionQaRetention({
 		client,
-		asOf: new Date("2026-04-25T12:00:00.000Z"),
+		asOf,
 		retentionDays: 30,
 		batchSize: 10,
 		maxBatches: 5,
@@ -151,4 +158,61 @@ test("runAttributionQaRetention deletes only expired raw evidence and prunes exp
 	assert.equal(secondResult.deletedRawEvidence, 0);
 	assert.equal(secondResult.prunedSnapshots, 0);
 	assert.equal(secondResult.batchesRun, 0);
+});
+
+test("runAttributionQaRetention logs cleanup deletion counts for completed batches and runs", async () => {
+	const evidence: EvidenceRow[] = [
+		{ id: 1, retainedUntil: new Date("2026-04-25T11:59:59.999Z") },
+	];
+	const orders: OrderRow[] = [
+		{
+			id: 1,
+			attributionSnapshotUpdatedAt: new Date("2026-04-25T11:59:59.999Z"),
+			attributionSnapshot: {
+				tier: "deterministic_first_party",
+				qaSnapshot: {},
+			},
+		},
+	];
+	const client = buildFakeClient({ evidence, orders });
+	const writes: string[] = [];
+	const originalWrite = process.stdout.write;
+
+	process.stdout.write = ((chunk: string | Uint8Array) => {
+		writes.push(String(chunk));
+		return true;
+	}) as typeof process.stdout.write;
+
+	try {
+		await runAttributionQaRetention({
+			client,
+			asOf: new Date("2026-04-25T12:00:00.000Z"),
+			retentionDays: 30,
+			batchSize: 10,
+			maxBatches: 5,
+		});
+	} finally {
+		process.stdout.write = originalWrite;
+	}
+
+	const logs = writes
+		.join("")
+		.trim()
+		.split("\n")
+		.filter(Boolean)
+		.map((line) => JSON.parse(line) as Record<string, unknown>);
+
+	assert.deepEqual(
+		logs.map((log) => log.event),
+		[
+			"attribution_qa_retention_batch_completed",
+			"attribution_qa_retention_completed",
+		],
+	);
+	assert.equal(logs[0]?.cleanupDeletionCount, 2);
+	assert.equal(logs[0]?.deletedRawEvidenceInBatch, 1);
+	assert.equal(logs[0]?.prunedSnapshotsInBatch, 1);
+	assert.equal(logs[1]?.cleanupDeletionCount, 2);
+	assert.equal(logs[1]?.deletedRawEvidence, 1);
+	assert.equal(logs[1]?.prunedSnapshots, 1);
 });
