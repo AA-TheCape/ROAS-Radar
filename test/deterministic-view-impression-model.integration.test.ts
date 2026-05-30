@@ -22,12 +22,18 @@ async function seedOrderAndRun(): Promise<{ runId: string; orderId: string }> {
         run_status,
         trigger_source,
         idempotency_key,
+        submitted_by,
+        input_snapshot_hash,
+        run_config_hash,
         run_metadata
       )
       VALUES (
         'running',
         'deterministic_test',
         'deterministic-view-impression-model-test',
+        'deterministic_test',
+        repeat('a', 64),
+        repeat('b', 64),
         '{"deterministicViewImpressionAttributionEnabled":true}'::jsonb
       )
       RETURNING id::text
