@@ -90,6 +90,7 @@ The retention job deletes expired rows from `attribution_raw_evidence` and remov
 Before publishing or enabling a release that changes Attribution QA support:
 
 - Confirm `ATTRIBUTION_QA_RETENTION_DAYS`, `ATTRIBUTION_QA_RETENTION_BATCH_SIZE`, and `ATTRIBUTION_QA_RETENTION_MAX_BATCHES` match the deployed environment files.
+- Confirm backend and dashboard production dependency audits remain clean with `npm audit --omit=dev` in the repository root and `dashboard/`.
 - Confirm there is no documented QA feature flag beyond the implemented retention controls.
 - Confirm rollback steps name `attribution-qa-retention`, not the broader session retention job.
 - Confirm the alert template links to this runbook.

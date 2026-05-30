@@ -22,3 +22,7 @@ Attribution QA support tooling is ready for operator use. The release adds docum
 ### Feature Flag Check
 
 No separate Attribution QA feature flag exists in the implemented code. The documented operational controls match the code and deployment scripts: the `attribution-qa-retention` scheduler plus `ATTRIBUTION_QA_RETENTION_DAYS`, `ATTRIBUTION_QA_RETENTION_BATCH_SIZE`, and `ATTRIBUTION_QA_RETENTION_MAX_BATCHES`.
+
+### Dependency Audit
+
+Production dependency audit findings were remediated before release. The backend audit findings were in existing runtime dependency chains, not new Attribution QA-specific package dependencies: Express/body-parser/qs came from the API framework path, and the uuid finding came through `@google-cloud/bigquery`/Google transport packages used by GA4 BigQuery ingestion. The release updates Express to `4.22.2` and `@google-cloud/bigquery` to `8.3.1`, which resolves the qs DoS advisory, the transitive uuid advisory, and the related `@tootallnate/once` finding. No production audit risk is accepted as of the final check: `npm audit --omit=dev` is clean for the backend and dashboard package roots.

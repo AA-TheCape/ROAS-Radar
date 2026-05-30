@@ -1,3 +1,4 @@
+import { env } from '../../config/env.js';
 import { withTransaction } from '../../db/pool.js';
 import { buildRawPayloadStorageMetadata } from '../../shared/raw-payload-storage.js';
 import { ATTRIBUTION_MODELS, executeAttributionModels } from './engine.js';
@@ -75,6 +76,7 @@ async function insertExplainRecord(client, input) {
     ]);
 }
 async function insertRawEvidenceRecords(client, runId, orderId, rawEvidence) {
+    const retentionDays = Math.max(Math.trunc(env.ATTRIBUTION_QA_RETENTION_DAYS), 1);
     await client.query('DELETE FROM attribution_raw_evidence WHERE run_id = $1::uuid AND order_id = $2', [runId, orderId]);
     for (const evidence of rawEvidence.filter((record) => record.orderId === orderId)) {
         const payloadMetadata = buildRawPayloadStorageMetadata(evidence.rawPayload);
@@ -97,7 +99,8 @@ async function insertRawEvidenceRecords(client, runId, orderId, rawEvidence) {
           normalized_metadata,
           raw_payload,
           payload_size_bytes,
-          payload_hash
+          payload_hash,
+          retained_until
         )
         VALUES (
           $1::uuid,
@@ -117,7 +120,8 @@ async function insertRawEvidenceRecords(client, runId, orderId, rawEvidence) {
           $15::jsonb,
           $16::jsonb,
           $17,
-          $18
+          $18,
+          $19::timestamptz
         )
       `, [
             runId,
@@ -137,7 +141,8 @@ async function insertRawEvidenceRecords(client, runId, orderId, rawEvidence) {
             JSON.stringify(evidence.normalizedMetadata),
             payloadMetadata.rawPayloadJson,
             payloadMetadata.payloadSizeBytes,
-            payloadMetadata.payloadHash
+            payloadMetadata.payloadHash,
+            new Date(Date.now() + retentionDays * 24 * 60 * 60 * 1000)
         ]);
     }
 }
