@@ -21,9 +21,15 @@ async function seedOrderAndRun(): Promise<{ runId: string; orderId: string }> {
       INSERT INTO attribution_runs (
         run_status,
         trigger_source,
+        idempotency_key,
         run_metadata
       )
-      VALUES ('running', 'deterministic_test', '{"deterministicViewImpressionAttributionEnabled":true}'::jsonb)
+      VALUES (
+        'running',
+        'deterministic_test',
+        'deterministic-view-impression-model-test',
+        '{"deterministicViewImpressionAttributionEnabled":true}'::jsonb
+      )
       RETURNING id::text
     `,
 	);
