@@ -1,5 +1,5 @@
-import type React from "react";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import type { FormEvent, ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import type {
 	AttributionQaCandidateV1,
@@ -301,7 +301,7 @@ function QaCard({
 }: {
 	title: string;
 	description?: string;
-	children: React.ReactNode;
+	children: ReactNode;
 }) {
 	return (
 		<Card className="bg-surface/88">
@@ -1050,7 +1050,7 @@ export default function AttributionQaToolingView({
 						</div>
 					</div>
 					) : (
-						<div />
+						<div className="hidden" aria-hidden="true" />
 					)}
 			</SectionState>
 		</div>
