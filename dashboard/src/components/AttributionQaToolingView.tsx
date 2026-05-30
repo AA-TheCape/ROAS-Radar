@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState, type FormEvent } from "react";
+import type React from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 
 import type {
 	AttributionQaCandidateV1,
@@ -641,8 +642,7 @@ export default function AttributionQaToolingView({
 						: "Enter an order ID to load attribution QA."
 				}
 			>
-				<>
-					{payload ? (
+				{payload ? (
 					<div className="grid gap-section">
 					<div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
 						<QaMetricCard
@@ -1052,7 +1052,6 @@ export default function AttributionQaToolingView({
 					) : (
 						<div />
 					)}
-				</>
 			</SectionState>
 		</div>
 	);
