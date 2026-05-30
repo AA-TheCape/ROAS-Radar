@@ -151,6 +151,32 @@ export type MetaDeterministicQueueProcessResult = {
 	durationMs: number;
 };
 
+export type MetaDeterministicHistoricalBackfillOptions = {
+	connectionId?: number;
+	adAccountId?: string;
+	startDate: string;
+	endDate: string;
+	dryRun?: boolean;
+	requestedBy: string;
+	workerId: string;
+	force?: boolean;
+};
+
+export type MetaDeterministicHistoricalBackfillReport = {
+	status: "dry_run" | "enqueued";
+	connectionId: number;
+	adAccountId: string;
+	startDate: string;
+	endDate: string;
+	requestedBy: string;
+	workerId: string;
+	force: boolean;
+	dryRun: boolean;
+	plannedJobs: number;
+	existingJobs: number;
+	insertedJobs: number;
+};
+
 class MetaDeterministicApiError extends Error {
 	statusCode: number;
 	details: unknown;
@@ -180,6 +206,20 @@ function parseDateOnly(value: string): Date {
 		.split("-")
 		.map((part) => Number.parseInt(part, 10));
 	return new Date(Date.UTC(year, month - 1, day));
+}
+
+function parseStrictDateOnly(name: string, value: string): Date {
+	if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+		throw new Error(`Invalid ${name} value: ${value}`);
+	}
+
+	const parsed = parseDateOnly(value);
+
+	if (formatDateOnly(parsed) !== value) {
+		throw new Error(`Invalid ${name} value: ${value}`);
+	}
+
+	return parsed;
 }
 
 function normalizeAdAccountId(value: string): string {
@@ -497,6 +537,166 @@ async function enqueueSyncJobsForWindow(now: Date): Promise<number> {
 	}
 
 	return enqueuedJobs;
+}
+
+export async function enqueueMetaDeterministicHistoricalBackfill(
+	options: MetaDeterministicHistoricalBackfillOptions,
+): Promise<MetaDeterministicHistoricalBackfillReport> {
+	const requestedBy = options.requestedBy.trim();
+	const workerId = options.workerId.trim();
+	const connectionId = options.connectionId;
+	const scopedByConnection = typeof options.connectionId === "number";
+	const scopedByAdAccount = nonEmptyString(options.adAccountId);
+
+	if (scopedByConnection === scopedByAdAccount) {
+		throw new Error("Provide exactly one of connectionId or adAccountId");
+	}
+
+	if (connectionId !== undefined) {
+		if (!Number.isInteger(connectionId) || connectionId <= 0) {
+			throw new Error(`Invalid connectionId value: ${connectionId}`);
+		}
+	}
+
+	if (!requestedBy) {
+		throw new Error("requestedBy is required");
+	}
+
+	if (!workerId) {
+		throw new Error("workerId is required");
+	}
+
+	const start = parseStrictDateOnly("startDate", options.startDate);
+	const end = parseStrictDateOnly("endDate", options.endDate);
+
+	if (start > end) {
+		throw new Error("startDate must be on or before endDate");
+	}
+
+	const scopeAdAccountId = scopedByAdAccount
+		? normalizeAdAccountId(options.adAccountId?.trim() ?? "")
+		: null;
+	const connectionResult = await query<{
+		id: number;
+		ad_account_id: string;
+		status: string;
+		deterministic_view_impression_sync_enabled: boolean;
+	}>(
+		`
+      SELECT
+        id,
+        ad_account_id,
+        status,
+        deterministic_view_impression_sync_enabled
+      FROM meta_ads_connections
+      WHERE ($1::bigint IS NOT NULL AND id = $1::bigint)
+         OR ($2::text IS NOT NULL AND ad_account_id = $2::text)
+      ORDER BY id ASC
+    `,
+		[options.connectionId ?? null, scopeAdAccountId],
+	);
+	const connection = connectionResult.rows[0];
+
+	if (!connection) {
+		throw new Error("No Meta Ads connection matched the requested scope");
+	}
+
+	const force = options.force === true;
+
+	if (
+		!force &&
+		(connection.status !== "active" ||
+			!connection.deterministic_view_impression_sync_enabled)
+	) {
+		const reasons = [
+			connection.status !== "active"
+				? `status is ${connection.status}`
+				: null,
+			!connection.deterministic_view_impression_sync_enabled
+				? "deterministic view/impression sync is disabled"
+				: null,
+		].filter(Boolean);
+
+		throw new Error(
+			`Refusing deterministic backfill for Meta connection ${connection.id}: ${reasons.join(", ")}. Pass force to override.`,
+		);
+	}
+
+	const syncDates: string[] = [];
+
+	for (
+		let cursorDate = start;
+		cursorDate <= end;
+		cursorDate = addUtcDays(cursorDate, 1)
+	) {
+		syncDates.push(formatDateOnly(cursorDate));
+	}
+
+	const existingResult = await query<{ count: string }>(
+		`
+      SELECT count(*)::text AS count
+      FROM meta_ads_deterministic_sync_jobs
+      WHERE connection_id = $1
+        AND sync_date = ANY($2::date[])
+    `,
+		[connection.id, syncDates],
+	);
+	const existingJobs = Number(existingResult.rows[0]?.count ?? "0");
+	let insertedJobs = 0;
+
+	if (!options.dryRun) {
+		const insertResult = await query<{ id: number }>(
+			`
+        INSERT INTO meta_ads_deterministic_sync_jobs (
+          connection_id,
+          sync_date,
+          status,
+          attempts,
+          available_at,
+          locked_at,
+          locked_by,
+          last_error,
+          completed_at,
+          requested_by,
+          enqueue_worker_id,
+          updated_at
+        )
+        SELECT
+          $1,
+          sync_date,
+          'pending',
+          0,
+          now(),
+          NULL,
+          NULL,
+          NULL,
+          NULL,
+          $3,
+          $4,
+          now()
+        FROM unnest($2::date[]) AS selected_dates(sync_date)
+        ON CONFLICT (connection_id, sync_date) DO NOTHING
+        RETURNING id
+      `,
+			[connection.id, syncDates, requestedBy, workerId],
+		);
+		insertedJobs = insertResult.rowCount ?? insertResult.rows.length;
+	}
+
+	return {
+		status: options.dryRun ? "dry_run" : "enqueued",
+		connectionId: connection.id,
+		adAccountId: connection.ad_account_id,
+		startDate: options.startDate,
+		endDate: options.endDate,
+		requestedBy,
+		workerId,
+		force,
+		dryRun: options.dryRun === true,
+		plannedJobs: syncDates.length,
+		existingJobs,
+		insertedJobs,
+	};
 }
 
 async function claimSyncJobs(

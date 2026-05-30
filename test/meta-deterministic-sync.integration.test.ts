@@ -12,6 +12,9 @@ const { pool } = await import("../src/db/pool.js");
 const { runMetaDeterministicSync } = await import(
 	"../src/modules/meta-ads/deterministic-events.js"
 );
+const { enqueueMetaDeterministicHistoricalBackfill } = await import(
+	"../src/modules/meta-ads/deterministic-events.js"
+);
 const { resetE2EDatabase } = await import("./e2e-harness.js");
 
 async function seedMetaConnection(input: {
@@ -490,6 +493,209 @@ test(
 		} finally {
 			globalThis.fetch = originalFetch;
 		}
+	},
+);
+
+test(
+	"Meta deterministic historical backfill validates scope and enqueues idempotent jobs without checkpoint mutation",
+	{ concurrency: false },
+	async () => {
+		await resetE2EDatabase();
+		const connectionId = await seedMetaConnection({
+			adAccountId: "123456789",
+			enabled: true,
+		});
+
+		await assert.rejects(
+			enqueueMetaDeterministicHistoricalBackfill({
+				connectionId,
+				adAccountId: "123456789",
+				startDate: "2026-05-24",
+				endDate: "2026-05-26",
+				requestedBy: "ops@example.com",
+				workerId: "manual-backfill",
+			}),
+			/Provide exactly one of connectionId or adAccountId/,
+		);
+		await assert.rejects(
+			enqueueMetaDeterministicHistoricalBackfill({
+				connectionId,
+				startDate: "2026-05-27",
+				endDate: "2026-05-26",
+				requestedBy: "ops@example.com",
+				workerId: "manual-backfill",
+			}),
+			/startDate must be on or before endDate/,
+		);
+
+		const dryRun = await enqueueMetaDeterministicHistoricalBackfill({
+			adAccountId: "act_123456789",
+			startDate: "2026-05-24",
+			endDate: "2026-05-26",
+			dryRun: true,
+			requestedBy: "ops@example.com",
+			workerId: "manual-backfill",
+		});
+
+		assert.deepEqual(
+			{
+				status: dryRun.status,
+				connectionId: dryRun.connectionId,
+				plannedJobs: dryRun.plannedJobs,
+				existingJobs: dryRun.existingJobs,
+				insertedJobs: dryRun.insertedJobs,
+			},
+			{
+				status: "dry_run",
+				connectionId,
+				plannedJobs: 3,
+				existingJobs: 0,
+				insertedJobs: 0,
+			},
+		);
+
+		const afterDryRun = await pool.query<{ count: string }>(
+			"SELECT count(*)::text AS count FROM meta_ads_deterministic_sync_jobs",
+		);
+		assert.equal(afterDryRun.rows[0].count, "0");
+
+		const firstEnqueue = await enqueueMetaDeterministicHistoricalBackfill({
+			connectionId,
+			startDate: "2026-05-24",
+			endDate: "2026-05-26",
+			requestedBy: "ops@example.com",
+			workerId: "manual-backfill",
+		});
+		assert.equal(firstEnqueue.status, "enqueued");
+		assert.equal(firstEnqueue.plannedJobs, 3);
+		assert.equal(firstEnqueue.existingJobs, 0);
+		assert.equal(firstEnqueue.insertedJobs, 3);
+
+		const secondEnqueue = await enqueueMetaDeterministicHistoricalBackfill({
+			connectionId,
+			startDate: "2026-05-24",
+			endDate: "2026-05-26",
+			requestedBy: "ops@example.com",
+			workerId: "manual-backfill",
+		});
+		assert.equal(secondEnqueue.plannedJobs, 3);
+		assert.equal(secondEnqueue.existingJobs, 3);
+		assert.equal(secondEnqueue.insertedJobs, 0);
+
+		const jobs = await pool.query<{
+			sync_date: string;
+			status: string;
+			requested_by: string | null;
+			enqueue_worker_id: string | null;
+		}>(
+			`
+        SELECT sync_date::text, status, requested_by, enqueue_worker_id
+        FROM meta_ads_deterministic_sync_jobs
+        WHERE connection_id = $1
+        ORDER BY sync_date ASC
+      `,
+			[connectionId],
+		);
+		assert.deepEqual(jobs.rows, [
+			{
+				sync_date: "2026-05-24",
+				status: "pending",
+				requested_by: "ops@example.com",
+				enqueue_worker_id: "manual-backfill",
+			},
+			{
+				sync_date: "2026-05-25",
+				status: "pending",
+				requested_by: "ops@example.com",
+				enqueue_worker_id: "manual-backfill",
+			},
+			{
+				sync_date: "2026-05-26",
+				status: "pending",
+				requested_by: "ops@example.com",
+				enqueue_worker_id: "manual-backfill",
+			},
+		]);
+
+		const [checkpointCount, plannedFor] = await Promise.all([
+			pool.query<{ count: string }>(
+				"SELECT count(*)::text AS count FROM meta_ads_deterministic_sync_checkpoints",
+			),
+			pool.query<{
+				deterministic_view_impression_last_planned_for: string | null;
+			}>(
+				`
+          SELECT deterministic_view_impression_last_planned_for::text
+          FROM meta_ads_connections
+          WHERE id = $1
+        `,
+				[connectionId],
+			),
+		]);
+		assert.equal(checkpointCount.rows[0].count, "0");
+		assert.equal(
+			plannedFor.rows[0].deterministic_view_impression_last_planned_for,
+			null,
+		);
+	},
+);
+
+test(
+	"Meta deterministic historical backfill refuses disabled and inactive connections unless forced",
+	{ concurrency: false },
+	async () => {
+		await resetE2EDatabase();
+		const disabledConnectionId = await seedMetaConnection({
+			adAccountId: "222222222",
+			enabled: false,
+		});
+		const revokedConnectionId = await seedMetaConnection({
+			adAccountId: "333333333",
+			enabled: true,
+			status: "revoked",
+		});
+
+		await assert.rejects(
+			enqueueMetaDeterministicHistoricalBackfill({
+				connectionId: disabledConnectionId,
+				startDate: "2026-05-24",
+				endDate: "2026-05-24",
+				requestedBy: "ops@example.com",
+				workerId: "manual-backfill",
+			}),
+			/deterministic view\/impression sync is disabled/,
+		);
+		await assert.rejects(
+			enqueueMetaDeterministicHistoricalBackfill({
+				connectionId: revokedConnectionId,
+				startDate: "2026-05-24",
+				endDate: "2026-05-24",
+				requestedBy: "ops@example.com",
+				workerId: "manual-backfill",
+			}),
+			/status is revoked/,
+		);
+
+		const forced = await enqueueMetaDeterministicHistoricalBackfill({
+			connectionId: disabledConnectionId,
+			startDate: "2026-05-24",
+			endDate: "2026-05-24",
+			requestedBy: "ops@example.com",
+			workerId: "manual-backfill",
+			force: true,
+		});
+
+		assert.equal(forced.force, true);
+		assert.equal(forced.insertedJobs, 1);
+		const jobs = await pool.query<{ count: string }>(
+			`
+        SELECT count(*)::text AS count
+        FROM meta_ads_deterministic_sync_jobs
+        WHERE connection_id = $1
+      `,
+			[disabledConnectionId],
+		);
+		assert.equal(jobs.rows[0].count, "1");
 	},
 );
 
