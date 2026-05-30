@@ -5,8 +5,12 @@
 - `tracking_dual_write_consistency`
 - `shopify_writeback_observed`
 - `attribution_resolver_outcome`
+- `attribution_qa_snapshot_write`
+- `attribution_qa_payload_fetch`
+- `attribution_qa_retention_batch_completed`
 
 | `ROAS Radar * Attribution Capture Rate` | Capture completeness rate below 95% for 15 minutes | `docs/runbooks/attribution-completeness.md` |
+| `ROAS Radar * Attribution QA Snapshot Write Failures` | QA snapshot write failures above 3 for 15 minutes | `docs/runbooks/attribution-qa-tooling.md` |
 | `ROAS Radar * Missing Session ID Rate` | Missing session id rate above 2% for 15 minutes | `docs/runbooks/attribution-completeness.md` |
 | `ROAS Radar * Client Server Event Mismatch` | Dual-write mismatch rate above 5% for 10 minutes | `docs/runbooks/attribution-completeness.md` |
 | `ROAS Radar * Shopify Writeback Success` | Writeback success rate below 90% for 15 minutes | `docs/runbooks/attribution-completeness.md` |

@@ -20,7 +20,7 @@
 
 - Start with [Implementation Guide](implementation-guide.md#troubleshooting) for local setup and validation issues.
 - Use [Operational Attribution Contracts](operational-attribution-contracts.md) when you need resolver, writeback, retention, or dead-letter behavior.
-- Use [Attribution Completeness](runbooks/attribution-completeness.md), [Ingestion Failures](runbooks/ingestion-failures.md), and [Attribution Worker Backlog](runbooks/attribution-worker-backlog.md) for incident response.
+- Use [Attribution Completeness](runbooks/attribution-completeness.md), [Attribution QA Tooling](runbooks/attribution-qa-tooling.md), [Ingestion Failures](runbooks/ingestion-failures.md), and [Attribution Worker Backlog](runbooks/attribution-worker-backlog.md) for incident response.
 - Use [Cloud Run Pipelines](runbooks/cloud-run-pipelines.md) for Cloud Run deploy, scheduler, IAM, and rollback operations.
 
 ## Core References
@@ -38,10 +38,12 @@
 - [Reporting Metrics](reporting-metrics.md): dashboard and reporting metric definitions.
 - [Attribution Read API OpenAPI](openapi/attribution-api.yaml): authenticated contract for attribution result summaries and per-order explainability.
 - [Database Operations](database-operations.md): migration, backup, and operational DB guidance.
+- [Internal Release Notes](internal-release-notes.md): operator-facing release notes for internal support handoff.
 
 ## Runbooks
 
 - [Attribution Completeness](runbooks/attribution-completeness.md): capture-rate, session-id, dual-write, writeback, and resolver incident response.
+- [Attribution QA Tooling](runbooks/attribution-qa-tooling.md): QA payload, admin debug, raw evidence retention, and snapshot write alert response.
 - [Attribution Worker Backlog](runbooks/attribution-worker-backlog.md): worker lag investigation and recovery steps.
 - [Ingestion Failures](runbooks/ingestion-failures.md): failed ingestion triage and remediation.
 - [API Latency](runbooks/api-latency.md): API latency investigation and recovery.

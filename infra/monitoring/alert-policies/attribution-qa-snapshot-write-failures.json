@@ -1,7 +1,7 @@
 {
   "displayName": "ROAS Radar __ENVIRONMENT__ Attribution QA Snapshot Write Failures",
   "documentation": {
-    "content": "Attribution QA snapshot writes are repeatedly failing. Inspect `attribution_qa_snapshot_write` logs by `jsonPayload.order_id` and pipeline. Runbook: __RUNBOOK_URL_ATTRIBUTION__",
+    "content": "Attribution QA snapshot writes are repeatedly failing. Inspect `attribution_qa_snapshot_write` logs by `jsonPayload.order_id` and pipeline. Runbook: __RUNBOOK_URL_ATTRIBUTION_QA__",
     "mimeType": "text/markdown"
   },
   "combiner": "OR",
