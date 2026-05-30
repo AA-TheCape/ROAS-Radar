@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { env } from "../../config/env.js";
 import { query } from "../../db/pool.js";
+import { logError, logInfo } from "../../observability/index.js";
 import { calculatePerformanceMetrics } from "../../shared/metrics.js";
 import { ATTRIBUTION_MODELS } from "../attribution/engine.js";
 import { attachAuthContext, requireAuthenticated } from "../auth/index.js";
@@ -118,6 +119,11 @@ type SummaryRow = {
 	orders: string | number;
 	revenue: string | number;
 	spend: string | number;
+};
+
+type ModelFreshnessRow = {
+	latest_model_output_at: Date | string | null;
+	model_output_count: string | number;
 };
 
 type ReportingMetricTotals = {
@@ -551,6 +557,7 @@ export function createReportingRouter(): Router {
 	});
 
 	router.get("/summary", async (req, res, next) => {
+		const requestStartedAt = Date.now();
 		try {
 			const input = parseInput(baseFiltersSchema, req.query);
 			const clickFilters = buildMetricDimensionFilters(
@@ -614,6 +621,21 @@ export function createReportingRouter(): Router {
 					...metaViewThroughFilters.params,
 				],
 			);
+			const modelFreshnessResult = await query<ModelFreshnessRow>(
+				`
+          SELECT
+            MAX(dmo.generated_at_utc) AS latest_model_output_at,
+            COUNT(*) AS model_output_count
+          FROM deterministic_model_outputs dmo
+          INNER JOIN attribution_order_inputs inputs
+            ON inputs.run_id = dmo.run_id
+           AND inputs.order_id = dmo.order_id
+          WHERE inputs.order_occurred_at_utc >= $1::date
+            AND inputs.order_occurred_at_utc < ($2::date + interval '1 day')
+            ${deterministicViewFilters.sql}
+        `,
+				[input.startDate, input.endDate, ...deterministicViewFilters.params],
+			);
 
 			const clickTotals = toReportingTotals(clickResult.rows[0]);
 			const deterministicViewTotals = toReportingTotals(
@@ -635,6 +657,37 @@ export function createReportingRouter(): Router {
 							? metaViewThroughTotals
 						: combinedTotals;
       const modeMetadata = REPORTING_MODE_METADATA[input.reportingMode];
+			const modelFreshness = modelFreshnessResult.rows[0];
+			const latestModelOutputAt =
+				modelFreshness?.latest_model_output_at instanceof Date
+					? modelFreshness.latest_model_output_at.toISOString()
+					: modelFreshness?.latest_model_output_at ?? null;
+			const modelOutputFreshnessHours = latestModelOutputAt
+				? Number(
+						((Date.now() - new Date(latestModelOutputAt).getTime()) / 3_600_000).toFixed(2),
+					)
+				: 9999;
+
+			logInfo("combined_report_api_health", {
+				service: process.env.K_SERVICE ?? "roas-radar",
+				path: "/api/reporting/summary",
+				reportingMode: input.reportingMode,
+				startDate: input.startDate,
+				endDate: input.endDate,
+				source: input.source ?? null,
+				campaign: input.campaign ?? null,
+				durationMs: Date.now() - requestStartedAt,
+				status: "success",
+				statusClass: "2xx",
+				combinedOrders: combinedTotals.orders,
+				combinedRevenue: combinedTotals.revenue,
+				deterministicViewOrders: deterministicViewTotals.orders,
+				modelOutputCount: Number(modelFreshness?.model_output_count ?? 0),
+				latestModelOutputAt,
+				modelOutputFreshnessHours,
+				modelOutputFreshnessStatus:
+					modelOutputFreshnessHours >= 24 ? "stale" : "healthy",
+			});
 
 			res.json({
 				range: {
@@ -669,6 +722,16 @@ export function createReportingRouter(): Router {
 				},
 			});
 		} catch (error) {
+			const statusCode =
+				error instanceof ReportingHttpError ? error.statusCode : 500;
+			logError("combined_report_api_health", error, {
+				service: process.env.K_SERVICE ?? "roas-radar",
+				path: "/api/reporting/summary",
+				durationMs: Date.now() - requestStartedAt,
+				status: statusCode >= 500 ? "error" : "client_error",
+				statusCode,
+				statusClass: `${Math.floor(statusCode / 100)}xx`,
+			});
 			next(error);
 		}
 	});

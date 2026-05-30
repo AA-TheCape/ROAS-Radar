@@ -574,6 +574,7 @@ async function performMetaApiRequest(params: {
 	url: URL;
 	apiMetrics: MetaDeterministicApiMetrics;
 	triggerSource: string;
+	batchId: string;
 }): Promise<{ payload: MetaInsightsApiResponse; requestId: string | null }> {
 	const requestStartedAt = new Date();
 	const response = await fetch(params.url, {
@@ -615,6 +616,31 @@ async function performMetaApiRequest(params: {
 
 	if (!response.ok) {
 		params.apiMetrics.errorCount += 1;
+		logError(
+			"meta_ads_api_request_failed",
+			new MetaDeterministicApiError(
+				response.status,
+				"Meta deterministic Insights API request failed",
+				payload,
+			),
+			{
+				service: process.env.K_SERVICE ?? "roas-radar",
+				transactionSource: "meta_ads_deterministic_insights",
+				outcome: "error",
+				statusClass: `${Math.floor(response.status / 100)}xx`,
+				connectionId: params.job.connection_id,
+				syncJobId: params.job.id,
+				jobId: params.job.id,
+				batchId: params.batchId,
+				adAccountId: params.connection.ad_account_id,
+				accountId: normalizeAdAccountId(params.connection.ad_account_id),
+				syncDate: params.job.sync_date,
+				triggerSource: params.triggerSource,
+				requestUrl: params.url.toString(),
+				responseStatus: response.status,
+				latencyMs,
+			},
+		);
 		throw new MetaDeterministicApiError(
 			response.status,
 			`Meta deterministic Insights request failed with status ${response.status}`,
@@ -622,8 +648,30 @@ async function performMetaApiRequest(params: {
 		);
 	}
 
+	const parsed = payload as MetaInsightsApiResponse;
+
+	logInfo("meta_ads_api_request_completed", {
+		service: process.env.K_SERVICE ?? "roas-radar",
+		transactionSource: "meta_ads_deterministic_insights",
+		outcome: "success",
+		statusClass: `${Math.floor(response.status / 100)}xx`,
+		connectionId: params.job.connection_id,
+		syncJobId: params.job.id,
+		jobId: params.job.id,
+		batchId: params.batchId,
+		adAccountId: params.connection.ad_account_id,
+		accountId: normalizeAdAccountId(params.connection.ad_account_id),
+		syncDate: params.job.sync_date,
+		triggerSource: params.triggerSource,
+		requestUrl: params.url.toString(),
+		requestNumber: params.apiMetrics.requestCount,
+		rowCount: Array.isArray(parsed.data) ? parsed.data.length : 0,
+		latencyMs,
+		hasNextPage: typeof parsed.paging?.next === "string",
+	});
+
 	return {
-		payload: payload as MetaInsightsApiResponse,
+		payload: parsed,
 		requestId:
 			response.headers.get("x-fb-trace-id") ??
 			response.headers.get("x-fb-request-id") ??
@@ -636,6 +684,7 @@ async function fetchAllDeterministicRows(params: {
 	connection: MetaDeterministicConnectionSecretRow;
 	apiMetrics: MetaDeterministicApiMetrics;
 	triggerSource: string;
+	batchId: string;
 }): Promise<{
 	rows: MetaDeterministicInsightsRow[];
 	finalCursor: string | null;
@@ -1272,6 +1321,7 @@ async function markSyncJobFailed(
 async function processSyncJob(
 	job: MetaDeterministicSyncJobRow,
 	triggerSource: string,
+	batchId: string,
 ): Promise<{
 	outcome: "succeeded" | "failed";
 	recordsReceived: number;
@@ -1281,6 +1331,7 @@ async function processSyncJob(
 	aggregateRowsUpserted: number;
 	apiRequestCount: number;
 }> {
+	const startedAt = Date.now();
 	const connection = await getConnectionSecret(job.connection_id);
 	const apiMetrics = buildMetrics();
 
@@ -1294,6 +1345,7 @@ async function processSyncJob(
 			connection,
 			apiMetrics,
 			triggerSource,
+			batchId,
 		});
 		const rejectedRawRows = rawRows
 			.map((row) => ({
@@ -1315,6 +1367,13 @@ async function processSyncJob(
 			requestIds,
 		});
 		const evidenceValidation = validateMetaApiEvidence(provenance);
+		const rejectedReasonCounts = rejectedRawRows.reduce<Record<string, number>>(
+			(counts, rejection) => {
+				counts[rejection.reasonCode] = (counts[rejection.reasonCode] ?? 0) + 1;
+				return counts;
+			},
+			{},
+		);
 
 		const persistence = await withTransaction(async (client) => {
 			if (!evidenceValidation.verified) {
@@ -1364,6 +1423,12 @@ async function processSyncJob(
 					sourceId: null,
 					reasonCode: evidenceValidation.reasonCode,
 					rowCount: normalizedRows.length,
+					connectionId: job.connection_id,
+					jobId: job.id,
+					batchId,
+					adAccountId: connection.ad_account_id,
+					accountId: normalizeAdAccountId(connection.ad_account_id),
+					syncDate: job.sync_date,
 				});
 
 				await markSyncJobSucceeded(job, finalCursor, client);
@@ -1415,16 +1480,46 @@ async function processSyncJob(
 			await markSyncJobSucceeded(job, finalCursor, client);
 			return upsertResult;
 		});
+		const rejectedRowCount =
+			rejectedRawRows.length +
+			(evidenceValidation.verified ? 0 : normalizedRows.length);
+		const verificationRejectionRate =
+			rawRows.length > 0 ? Number((rejectedRowCount / rawRows.length).toFixed(6)) : 0;
+
+		logInfo("meta_ads_deterministic_verification_summary", {
+			service: process.env.K_SERVICE ?? "roas-radar",
+			connectionId: job.connection_id,
+			jobId: job.id,
+			batchId,
+			adAccountId: connection.ad_account_id,
+			accountId: normalizeAdAccountId(connection.ad_account_id),
+			syncDate: job.sync_date,
+			triggerSource,
+			rawRowsFetched: rawRows.length,
+			normalizedRows: normalizedRows.length,
+			rejectedRowCount,
+			verificationRejectionRate,
+			evidenceVerified: evidenceValidation.verified,
+			evidenceRejectionReason: evidenceValidation.verified
+				? null
+				: evidenceValidation.reasonCode,
+			rawRejectionReasonCounts: rejectedReasonCounts,
+		});
 
 		logInfo("meta_ads_deterministic_sync_job_completed", {
 			service: process.env.K_SERVICE ?? "roas-radar",
 			jobId: job.id,
+			batchId,
 			connectionId: job.connection_id,
 			adAccountId: connection.ad_account_id,
+			accountId: normalizeAdAccountId(connection.ad_account_id),
 			syncDate: job.sync_date,
 			triggerSource,
+			durationMs: Date.now() - startedAt,
 			rawRowsFetched: rawRows.length,
 			recordsReceived: normalizedRows.length,
+			rejectedRowCount,
+			verificationRejectionRate,
 			rawRowsUpserted: persistence.rawRowsUpserted,
 			factRowsUpserted: persistence.factRowsUpserted,
 			aggregateRowsUpserted: persistence.aggregateRowsUpserted,
@@ -1452,12 +1547,15 @@ async function processSyncJob(
 		logError("meta_ads_deterministic_sync_job_failed", error, {
 			service: process.env.K_SERVICE ?? "roas-radar",
 			jobId: job.id,
+			batchId,
 			connectionId: job.connection_id,
 			adAccountId: connection.ad_account_id,
+			accountId: normalizeAdAccountId(connection.ad_account_id),
 			syncDate: job.sync_date,
 			triggerSource,
 			attempts: job.attempts,
 			apiRequestCount: apiMetrics.requestCount,
+			durationMs: Date.now() - startedAt,
 		});
 
 		return {
@@ -1498,7 +1596,11 @@ export async function processMetaDeterministicSyncQueue(
 	let failedJobs = 0;
 
 	for (const job of jobs) {
-		const result = await processSyncJob(job, options.triggerSource ?? "worker");
+		const result = await processSyncJob(
+			job,
+			options.triggerSource ?? "worker",
+			workerId,
+		);
 
 		if (result.outcome === "succeeded") {
 			succeededJobs += 1;
@@ -1519,6 +1621,7 @@ export async function processMetaDeterministicSyncQueue(
 	if (options.emitMetrics) {
 		logInfo("meta_ads_deterministic_sync_run", {
 			service: process.env.K_SERVICE ?? "roas-radar",
+			batchId: workerId,
 			...result,
 		});
 	}
@@ -1559,7 +1662,7 @@ export async function runMetaDeterministicSync(
 		}
 
 		for (const job of jobs) {
-			const result = await processSyncJob(job, triggerSource);
+			const result = await processSyncJob(job, triggerSource, workerId);
 
 			if (result.outcome === "succeeded") {
 				summary.succeededJobs += 1;
@@ -1578,6 +1681,7 @@ export async function runMetaDeterministicSync(
 
 	logInfo("meta_ads_deterministic_sync_completed", {
 		service: process.env.K_SERVICE ?? "roas-radar",
+		batchId: workerId,
 		triggerSource,
 		...summary,
 	});

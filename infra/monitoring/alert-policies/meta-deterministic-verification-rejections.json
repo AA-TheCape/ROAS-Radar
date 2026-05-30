@@ -1,0 +1,32 @@
+{
+  "displayName": "ROAS Radar __ENVIRONMENT__ Meta Deterministic Verification Rejections",
+  "documentation": {
+    "content": "The deterministic verification rejection rate is elevated. Inspect `meta_ads_deterministic_verification_summary` logs by `adAccountId`, `batchId`, and rejection reason. Runbook: __RUNBOOK_URL_INGESTION__",
+    "mimeType": "text/markdown"
+  },
+  "combiner": "OR",
+  "enabled": true,
+  "severity": "WARNING",
+  "notificationChannels": __ALERT_NOTIFICATION_CHANNELS__,
+  "conditions": [
+    {
+      "displayName": "P95 verification rejection rate exceeds 25% for 30 minutes",
+      "conditionThreshold": {
+        "filter": "metric.type=\"logging.googleapis.com/user/roas_meta_deterministic_verification_rejection_rate\" resource.type=\"cloud_run_revision\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 0.25,
+        "duration": "1800s",
+        "aggregations": [
+          {
+            "alignmentPeriod": "1800s",
+            "perSeriesAligner": "ALIGN_PERCENTILE_95",
+            "crossSeriesReducer": "REDUCE_MAX"
+          }
+        ],
+        "trigger": {
+          "count": 1
+        }
+      }
+    }
+  ]
+}
