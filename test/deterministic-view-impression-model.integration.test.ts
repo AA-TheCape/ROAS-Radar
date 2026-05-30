@@ -195,6 +195,7 @@ async function seedDeterministicFacts(): Promise<void> {
         campaign_id,
         adset_id,
         ad_id,
+        creative_id,
         event_type,
         fact_date,
         event_count,
@@ -203,11 +204,11 @@ async function seedDeterministicFacts(): Promise<void> {
         normalization_status
       )
       VALUES
-        ($1::bigint, 'meta_ads', 'act_123', 'campaign-1', 'adset-1', 'ad-1', 'view', '2026-05-25', 6, 'api', true, 'normalized'),
-        ($1::bigint, 'meta_ads', 'act_123', 'campaign-1', 'adset-1', 'ad-1', 'impression', '2026-05-25', 12, 'api', true, 'normalized'),
-        ($1::bigint, 'meta_ads', 'act_123', 'campaign-1', 'adset-1', 'ad-1', 'view', '2026-05-19', 50, 'api', true, 'normalized'),
-        ($1::bigint, 'meta_ads', 'act_123', 'campaign-1', 'adset-1', 'ad-1', 'view', '2026-05-25', 4, 'api', false, 'normalized'),
-        ($1::bigint, 'meta_ads', 'act_123', 'campaign-other', NULL, NULL, 'view', '2026-05-25', 99, 'api', true, 'normalized')
+        ($1::bigint, 'meta_ads', 'act_123', 'campaign-1', 'adset-1', 'ad-1', NULL, 'view', '2026-05-25', 6, 'api', true, 'normalized'),
+        ($1::bigint, 'meta_ads', 'act_123', 'campaign-1', 'adset-1', 'ad-1', NULL, 'impression', '2026-05-25', 12, 'api', true, 'normalized'),
+        ($1::bigint, 'meta_ads', 'act_123', 'campaign-1', 'adset-1', 'ad-1', NULL, 'view', '2026-05-19', 50, 'api', true, 'normalized'),
+        ($1::bigint, 'meta_ads', 'act_123', 'campaign-1', 'adset-1', 'ad-1', 'creative-unverified', 'view', '2026-05-25', 4, 'api', false, 'normalized'),
+        ($1::bigint, 'meta_ads', 'act_123', 'campaign-other', NULL, NULL, NULL, 'view', '2026-05-25', 99, 'api', true, 'normalized')
     `,
 		[source.rows[0].id],
 	);
