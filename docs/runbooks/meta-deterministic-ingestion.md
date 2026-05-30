@@ -31,6 +31,7 @@ Normal operating rules:
 
 - keep the scheduler enabled only when the latest rollout verifier passes and recent jobs complete inside the freshness target
 - use per-connection enablement for account-level rollout; do not enable every account during an incident
+- keep deterministic view/impression sync disabled by default for new and existing Meta connections until the staged rollout procedure below explicitly enables the account
 - treat `META_ADS_DETERMINISTIC_SYNC_LOOKBACK_DAYS` as the routine catch-up window and keep it small enough for one scheduled job to finish predictably
 - treat `META_ADS_DETERMINISTIC_SYNC_INITIAL_LOOKBACK_DAYS` as the onboarding window for accounts without checkpoints
 - do not manually edit checkpoints unless application engineering confirms the affected job/date scope and replay behavior
@@ -79,13 +80,114 @@ Healthy sync characteristics:
 - completed jobs advance checkpoints only after accepted persistence and verification have finished
 - skipped workers occur only when `META_ADS_DETERMINISTIC_SYNC_ENABLED="false"` is intentionally deployed
 
+## Staged Rollout Procedure
+
+Meta deterministic view/impression ingestion is staged and disabled by default. Do not skip stages unless application engineering and the ads owner both approve the exception in the release notes.
+
+### Stage 0: Disabled By Default
+
+Use this state before first rollout, after risky deploys, and while investigating incidents.
+
+1. Confirm extraction is globally disabled or no accounts are enabled:
+   `sh infra/cloud-run/scheduler.sh <environment> meta-deterministic status`
+2. Confirm no active production connection is enabled unexpectedly:
+   ```sql
+   SELECT id, ad_account_id, status, deterministic_view_impression_sync_enabled
+   FROM meta_ads_connections
+   WHERE status = 'active'
+     AND deterministic_view_impression_sync_enabled = true
+   ORDER BY id;
+   ```
+3. If the job should remain deployed but extract nothing, set `META_ADS_DETERMINISTIC_SYNC_ENABLED="false"` in `infra/cloud-run/environments/<environment>.env`, redeploy, and verify the next execution emits `meta_ads_deterministic_worker_skipped`.
+
+Success gate: no unexpected enabled active connections, no pending deterministic jobs for production accounts outside an approved rollout, and no deterministic view/impression model outputs created from unapproved accounts.
+
+Failure gate: any unapproved enabled production connection, new accepted rows for an unapproved account, or deterministic view outputs touching canonical click attribution. Pause the scheduler and follow the rollback order.
+
+### Stage 1: Internal Account
+
+Enable only an internal or test Meta ad account with known low volume and known Meta delivery.
+
+1. Keep the scheduler paused while enabling the account:
+   `sh infra/cloud-run/scheduler.sh <environment> meta-deterministic pause`
+2. Enable exactly one internal connection:
+   ```sql
+   UPDATE meta_ads_connections
+   SET deterministic_view_impression_sync_enabled = true
+   WHERE id = <internal_connection_id>;
+   ```
+3. Run a bounded dry-run backfill for one to three recent dates, then enqueue the same bounded window only if the dry run returns the expected connection and date count:
+   ```sh
+   DATABASE_URL="<database-url>" npm run meta-ads:deterministic:backfill -- \
+     --connection-id <internal_connection_id> \
+     --start-date 2026-05-25 \
+     --end-date 2026-05-27 \
+     --requested-by rollout-internal-2026-05-30 \
+     --worker-id rollout-internal-2026-05-30-dry-run \
+     --dry-run
+
+   DATABASE_URL="<database-url>" npm run meta-ads:deterministic:backfill -- \
+     --connection-id <internal_connection_id> \
+     --start-date 2026-05-25 \
+     --end-date 2026-05-27 \
+     --requested-by rollout-internal-2026-05-30 \
+     --worker-id rollout-internal-2026-05-30-enqueue
+   ```
+4. Execute the Cloud Run Job manually and wait:
+   `gcloud run jobs execute roas-radar-meta-deterministic-sync-<environment> --project <project> --region <region> --wait`
+5. Run the monitoring queries 5 minutes after Cloud Run completion so DB writes and log export have settled. Run them again after the next attribution materialization window if deterministic model output freshness is part of the release.
+
+Success gate: verifier passes, all enqueued internal-account dates complete or are documented as no-delivery dates, quarantine stays below threshold, reconciliation is not failed, and reporting shows deterministic outputs only in the deterministic view/impression layer.
+
+Failure gate: any worker failure, stale processing job older than `META_DETERMINISTIC_STALE_PROCESSING_HOURS`, reconciliation failure without an accepted note, API provenance/traceability quarantine spike, or any primary attribution winner/writeback mutation. Pause and roll back before adding more accounts.
+
+### Stage 2: Limited Production Cohort
+
+Use a small cohort with representative volume and an accountable ads owner. Keep the cohort narrow enough that one manual run can finish inside the Cloud Run timeout and freshness target.
+
+1. Confirm Stage 1 has stayed healthy for at least one scheduled cadence or 24 hours, whichever is longer.
+2. Pause the scheduler:
+   `sh infra/cloud-run/scheduler.sh <environment> meta-deterministic pause`
+3. Enable only the approved production cohort:
+   ```sql
+   UPDATE meta_ads_connections
+   SET deterministic_view_impression_sync_enabled = true
+   WHERE id IN (<production_connection_ids>);
+
+   UPDATE meta_ads_connections
+   SET deterministic_view_impression_sync_enabled = false
+   WHERE status = 'active'
+     AND id NOT IN (<internal_connection_id>, <production_connection_ids>);
+   ```
+4. Enqueue bounded account/date windows with `npm run meta-ads:deterministic:backfill`; prefer one connection per command so output and incident notes map cleanly to account scope.
+5. Execute the Cloud Run Job manually, run monitoring queries 5 minutes after completion, and run reconciliation checks after the expected reconciliation job has covered the date range.
+6. Resume the scheduler only after the manual cohort run passes success gates:
+   `sh infra/cloud-run/scheduler.sh <environment> meta-deterministic resume`
+
+Success gate: every enabled cohort connection has a completed job inside the freshness threshold, row counts are non-negative and traceable, quarantine rate is below threshold, no unexpected retries remain, and reporting behavior matches the non-canonical deterministic layer contract.
+
+Failure gate: broad Meta API failures, repeated account-specific permission errors, job runtime threatening timeout, unhealthy DB load, reconciliation mismatch, or deterministic outputs leaking into canonical click reporting. Disable the affected connection first; use global controls only when the failure is broad.
+
+### Stage 3: Broader Enablement
+
+Expand only after the limited production cohort has remained healthy for two scheduled cadences and the latest rollout verifier passes.
+
+1. Add accounts in batches sized by observed Stage 2 runtime and API volume.
+2. For each batch, document connection ids, account ids, date window, expected volume, Cloud Run execution id, verifier result, reconciliation status, and any no-delivery explanation.
+3. Keep `META_ADS_DETERMINISTIC_SYNC_LOOKBACK_DAYS` at the normal steady-state value. Use bounded backfill commands for catch-up instead of widening scheduler lookback for broad production.
+4. Run monitoring queries 5 minutes after each manual execution and again after the next scheduled cadence. Re-run the verifier before increasing the next batch.
+
+Success gate: no unresolved failures from the previous batch, scheduler freshness remains inside `META_DETERMINISTIC_FRESHNESS_HOURS`, and support/reporting owners confirm deterministic view metrics are visible only through the expected non-canonical surfaces.
+
+Failure gate: any unresolved Stage 2 failure gate, increasing quarantine trend across batches, queue backlog that cannot clear in one cadence, or stakeholder confusion caused by mixed canonical/non-canonical reporting. Stop expansion and follow rollback order.
+
 ## Rollout Validation
 
 Run this checklist before enabling deterministic view/impression sync for a new environment, after production promotion, and after any schema or attribution processing change that touches deterministic view/impression inputs.
 
 ### Cloud Run Job Verification
 
-1. Confirm the scheduler target is active:
+1. Confirm the scheduler target is in the expected state for the rollout stage:
    `sh infra/cloud-run/scheduler.sh <environment> meta-deterministic status`
 2. Confirm the deployed job uses the expected service account, command, env vars, timeout, retry count, and Cloud SQL attachment:
    `gcloud run jobs describe roas-radar-meta-deterministic-sync-<environment> --project <project> --region <region>`
@@ -174,6 +276,14 @@ Expected rollout evidence:
 - aggregate rows retain `attribution_window='7d_view'`, `attribution_window_days=7`, `evidence_origin='api'`, and verified raw traceability metadata
 - deterministic model output rows, when attribution processing is enabled, stay in `deterministic_model_outputs` and do not change primary attribution winner fields
 
+Monitoring query timing:
+
+- Run Cloud Logging checks during the Cloud Run execution and immediately after completion.
+- Run row-count, freshness, and quarantine SQL 5 minutes after Cloud Run completion.
+- Run reconciliation SQL after the reconciliation process has covered the promoted date range; if reconciliation is scheduled separately, wait for the next completed reconciliation run before declaring the stage healthy.
+- Run reporting API checks after the next attribution/model-output materialization window when the stage expects deterministic view/impression model output updates.
+- Re-run `npm run ops:verify-meta-deterministic-rollout` before moving from internal to limited production, before moving from limited production to broader enablement, and after any rollback.
+
 ### Verification Criteria
 
 Use these criteria before declaring a rollout, recovery, or backfill healthy:
@@ -186,6 +296,25 @@ Use these criteria before declaring a rollout, recovery, or backfill healthy:
 - Quarantine: quarantine rate is below `META_DETERMINISTIC_MAX_QUARANTINE_RATE`, and the top reasons are understood.
 - Reconciliation: the latest `meta_ads_deterministic_reconciliation_runs` row for the checked date range is not `failed`, unless the mismatch has an accepted incident note.
 - Separation: deterministic view model outputs are present only in `deterministic_model_outputs`; canonical click attribution tables and Shopify writeback fields are unchanged by this sync.
+
+Success gates:
+
+- the scheduler state matches the intended stage: paused during manual rollout/backfill, resumed only after success gates pass, or intentionally skipped when `META_ADS_DETERMINISTIC_SYNC_ENABLED="false"`
+- latest Cloud Run execution exits successfully and emits worker start/completion logs
+- every enabled connection in scope has completed jobs for the intended date range, or a documented no-delivery/permission explanation
+- verifier passes with no failures; warnings are either expected for the current stage or documented
+- quarantine rate is below `META_DETERMINISTIC_MAX_QUARANTINE_RATE` and reason codes are understood
+- reconciliation for the promoted range is passed or not failed with an accepted incident/release note
+- deterministic view/impression reporting remains non-canonical and does not mutate primary click attribution or Shopify writeback
+
+Failure gates:
+
+- unapproved enabled account, unbounded backfill scope, or scheduler resumed before manual verification
+- `meta_ads_deterministic_worker_failed`, repeated `meta_ads_deterministic_sync_job_failed`, or stale `processing` jobs older than `META_DETERMINISTIC_STALE_PROCESSING_HOURS`
+- API provenance, traceability, attribution-window, negative-metric, or duplicate-dedupe quarantine reasons affecting accepted-looking rows
+- reconciliation status `failed` for the promoted date range without an accepted note
+- row counts flatline for accounts with known Meta delivery, or queue backlog cannot clear inside one scheduler cadence
+- deterministic view/impression values appear in canonical click attribution winners, primary attribution fields, or Shopify writeback
 
 ### Quarantine Monitoring
 
@@ -280,19 +409,58 @@ Do not proceed with rollout if the latest reconciliation is `failed` for the pro
 
 ## Backfill
 
-Use backfill only for a bounded account/date recovery window. Pause the scheduler before widening lookback values so the scheduled cadence does not repeatedly enqueue the same recovery window.
+Use backfill only for a bounded account/date recovery window. Prefer `npm run meta-ads:deterministic:backfill` for exact connection/date enqueueing. Pause the scheduler before running backfill or widening lookback values so the scheduled cadence does not repeatedly enqueue the same recovery window.
 
 1. Identify the affected connection ids, account ids, and inclusive date range.
 2. Pause the scheduler:
    `sh infra/cloud-run/scheduler.sh <environment> meta-deterministic pause`
-3. Set `META_ADS_DETERMINISTIC_SYNC_LOOKBACK_DAYS` to the required bounded window in the target environment file. Keep the value no wider than the incident window plus the 7-day deterministic attribution window unless application engineering approves a larger replay.
-4. If only a subset of accounts is affected, keep unrelated connections disabled for deterministic sync until the backfill completes:
+3. If only a subset of accounts is affected, keep unrelated connections disabled for deterministic sync until the backfill completes:
    `UPDATE meta_ads_connections SET deterministic_view_impression_sync_enabled = false WHERE id NOT IN (<affected_connection_ids>);`
-5. Rerun `sh infra/cloud-run/deploy.sh <environment>` so the Cloud Run Job picks up the backfill window.
-6. Execute the deterministic job manually and wait for completion:
+4. Dry-run the exact bounded enqueue:
+   ```sh
+   DATABASE_URL="<database-url>" npm run meta-ads:deterministic:backfill -- \
+     --connection-id 123 \
+     --start-date 2026-05-20 \
+     --end-date 2026-05-22 \
+     --requested-by incident-INC-1234 \
+     --worker-id incident-INC-1234-backfill-dry-run \
+     --dry-run
+   ```
+5. Enqueue the same bounded window only after the dry run returns the expected `connectionId`, `adAccountId`, `plannedJobs`, and `existingJobs`:
+   ```sh
+   DATABASE_URL="<database-url>" npm run meta-ads:deterministic:backfill -- \
+     --connection-id 123 \
+     --start-date 2026-05-20 \
+     --end-date 2026-05-22 \
+     --requested-by incident-INC-1234 \
+     --worker-id incident-INC-1234-backfill-enqueue
+   ```
+6. If the operational scope is an ad account id instead of a connection id, use the normalized ad account id and keep the same bounded dates:
+   ```sh
+   DATABASE_URL="<database-url>" npm run meta-ads:deterministic:backfill -- \
+     --ad-account-id act_1234567890 \
+     --start-date 2026-05-20 \
+     --end-date 2026-05-22 \
+     --requested-by incident-INC-1234 \
+     --worker-id incident-INC-1234-act-1234567890
+   ```
+7. Use `--force` only when application engineering has approved replaying a disabled or inactive connection for recovery evidence:
+   ```sh
+   DATABASE_URL="<database-url>" npm run meta-ads:deterministic:backfill -- \
+     --connection-id 123 \
+     --start-date 2026-05-20 \
+     --end-date 2026-05-20 \
+     --requested-by incident-INC-1234 \
+     --worker-id incident-INC-1234-force-one-day \
+     --force
+   ```
+8. Execute the deterministic Cloud Run Job manually and wait for completion:
    `gcloud run jobs execute roas-radar-meta-deterministic-sync-<environment> --project <project> --region <region> --wait`
-7. Run the rollout verifier and the row-count, quarantine, and reconciliation checks in this runbook.
-8. Restore the normal lookback value, restore per-connection enablement, redeploy, and resume the scheduler only after verification passes.
+9. Run the rollout verifier and the row-count, quarantine, and reconciliation checks in this runbook using the monitoring timing above.
+10. Restore per-connection enablement and resume the scheduler only after verification passes:
+    `sh infra/cloud-run/scheduler.sh <environment> meta-deterministic resume`
+
+Use a temporary `META_ADS_DETERMINISTIC_SYNC_LOOKBACK_DAYS` increase only when the incident specifically requires scheduler planning behavior rather than exact job enqueueing. Keep the value no wider than the incident window plus the 7-day deterministic attribution window unless application engineering approves a larger replay. If this value changes, rerun `sh infra/cloud-run/deploy.sh <environment>` so the Cloud Run Job picks up the window, then restore the steady-state value and redeploy before resuming the scheduler.
 
 Keep `META_ADS_DETERMINISTIC_SYNC_INITIAL_LOOKBACK_DAYS` at the wider initial planning window for new account/entity checkpoints. Use `META_ADS_DETERMINISTIC_SYNC_ENABLED="false"` only as an emergency kill switch when the job should stay deployed but do no extraction.
 
@@ -300,6 +468,9 @@ Bounded backfill rules:
 
 - do not increase `META_ADS_DETERMINISTIC_SYNC_INITIAL_LOOKBACK_DAYS` for incident replay of existing checkpoints
 - do not run open-ended historical replays from production scheduler cadence
+- do not omit `--start-date`, `--end-date`, `--requested-by`, or `--worker-id`; the CLI refuses missing required flags
+- use `--dry-run` first and preserve the JSON output in incident notes before enqueueing
+- prefer one connection per command; if multiple accounts are affected, repeat bounded commands and record each output separately
 - record the temporary lookback, affected connection ids, requested date range, Cloud Run execution id, verifier result, and reconciliation status in the incident notes
 - restore the steady-state environment values before closing the incident
 
@@ -327,12 +498,14 @@ Emergency criteria:
 
 Use the narrowest rollback that stops the faulty surface while preserving unrelated ingestion.
 
-1. Pause scheduling first when a rollout is unhealthy but no bad rows are being actively consumed:
+Rollback order:
+
+1. Pause scheduling first to stop new scheduled invocations:
    `sh infra/cloud-run/scheduler.sh <environment> meta-deterministic pause`
-2. Stop extraction while leaving the Cloud Run Job deployed by setting `META_ADS_DETERMINISTIC_SYNC_ENABLED="false"` in `infra/cloud-run/environments/<environment>.env`, then redeploy:
-   `sh infra/cloud-run/deploy.sh <environment>`
-3. Disable deterministic sync for affected Meta connections when only a subset of accounts is unhealthy:
+2. Disable affected connections when only a subset of accounts is unhealthy:
    `UPDATE meta_ads_connections SET deterministic_view_impression_sync_enabled = false WHERE id = <connection_id>;`
+3. Stop extraction globally while leaving the Cloud Run Job deployed by setting `META_ADS_DETERMINISTIC_SYNC_ENABLED="false"` in `infra/cloud-run/environments/<environment>.env`, then redeploy:
+   `sh infra/cloud-run/deploy.sh <environment>`
 4. Stop attribution processing from producing deterministic view/impression model outputs by submitting attribution runs without `run_metadata.deterministicViewImpressionAttributionEnabled=true`. Existing primary attribution models continue to run and must not read `deterministic_model_outputs`.
 5. If deployed code or infrastructure must be reverted, use the Cloud Run deploy metadata:
    `sh infra/cloud-run/rollback.sh <environment> <deploy-metadata-file> previous`
