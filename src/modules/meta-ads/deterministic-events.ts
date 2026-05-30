@@ -552,6 +552,7 @@ async function getConnectionSecret(
         pgp_sym_decrypt(access_token_encrypted, $2)::text AS access_token
       FROM meta_ads_connections
       WHERE id = $1
+        AND status = 'active'
         AND deterministic_view_impression_sync_enabled = true
     `,
 		[connectionId, env.META_ADS_ENCRYPTION_KEY],

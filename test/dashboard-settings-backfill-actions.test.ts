@@ -290,6 +290,7 @@ function createSettingsHarness(
 			onOrderAttributionBackfillRefresh: () => {},
 			onMetaConnect: () => {},
 			onMetaSync: () => {},
+			onMetaDeterministicSyncToggle: () => {},
 			onGoogleSync: () => {},
 			onGoogleReconcile: () => {},
 		});

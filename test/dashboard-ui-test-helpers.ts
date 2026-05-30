@@ -920,6 +920,8 @@ export function createSettingsAdminProps(
 					status: "connected",
 					account_name: "North America Prospecting",
 					account_currency: "USD",
+					deterministic_view_impression_sync_enabled: true,
+					deterministic_view_impression_last_planned_for: "2026-04-19",
 				},
 			},
 			loading: false,
@@ -1011,6 +1013,7 @@ export function createSettingsAdminProps(
 		onOrderAttributionBackfillRefresh: noop,
 		onMetaConnect: noop,
 		onMetaSync: noop,
+		onMetaDeterministicSyncToggle: noop,
 		onGoogleSync: noop,
 		onGoogleReconcile: noop,
 	};

@@ -96,6 +96,7 @@ import {
 	syncMetaAds,
 	syncShopifyWebhooks,
 	updateAppSettings,
+	updateMetaAdsDeterministicSync,
 	updateGoogleAdsConfig,
 	updateMetaAdsConfig,
 } from "./lib/api";
@@ -1817,6 +1818,40 @@ function App() {
     }
   }
 
+  async function handleMetaDeterministicSyncToggle(enabled: boolean) {
+    const connection = metaConnection.data?.connection;
+    setActionFeedback({
+      context: 'meta-deterministic-sync',
+      loading: 'meta-deterministic-sync',
+      error: null,
+      message: null
+    });
+
+    try {
+      if (!connection) {
+        throw new Error('Connect Meta Ads before changing deterministic sync.');
+      }
+
+      await updateMetaAdsDeterministicSync(connection.id, enabled);
+      await loadConnections();
+      setActionFeedback({
+        context: 'meta-deterministic-sync',
+        loading: null,
+        error: null,
+        message: enabled
+          ? 'Enabled deterministic Meta view/impression sync.'
+          : 'Disabled deterministic Meta view/impression sync.'
+      });
+    } catch (error) {
+      setActionFeedback({
+        context: 'meta-deterministic-sync',
+        loading: null,
+        error: error instanceof Error ? error.message : 'Failed to update deterministic Meta sync',
+        message: null
+      });
+    }
+  }
+
   async function handleGoogleConfigSave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setActionFeedback({
@@ -2307,6 +2342,7 @@ function App() {
             }}
             onMetaConnect={handleMetaConnect}
             onMetaSync={handleMetaSync}
+            onMetaDeterministicSyncToggle={handleMetaDeterministicSyncToggle}
             onGoogleSync={handleGoogleSync}
             onGoogleReconcile={handleGoogleReconcile}
           />

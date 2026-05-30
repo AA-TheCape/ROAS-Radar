@@ -184,6 +184,7 @@ type SettingsAdminViewProps = {
 	onOrderAttributionBackfillRefresh: () => void | Promise<void>;
 	onMetaConnect: () => void | Promise<void>;
 	onMetaSync: () => void | Promise<void>;
+	onMetaDeterministicSyncToggle: (enabled: boolean) => void | Promise<void>;
 	onGoogleSync: () => void | Promise<void>;
 	onGoogleReconcile: () => void | Promise<void>;
 };
@@ -382,6 +383,7 @@ export default function SettingsAdminView({
 	onOrderAttributionBackfillRefresh,
 	onMetaConnect,
 	onMetaSync,
+	onMetaDeterministicSyncToggle,
 	onGoogleSync,
 	onGoogleReconcile,
 }: SettingsAdminViewProps) {
@@ -506,7 +508,8 @@ export default function SettingsAdminView({
 	const isMetaConfigSaving = actionFeedback.loading === "meta-config-save";
 	const isMetaActionBusy =
 		actionFeedback.loading === "meta-connect" ||
-		actionFeedback.loading === "meta-sync";
+		actionFeedback.loading === "meta-sync" ||
+		actionFeedback.loading === "meta-deterministic-sync";
 	const isGoogleBusy =
 		actionFeedback.loading === "google-connect" ||
 		actionFeedback.loading === "google-sync" ||
@@ -1449,6 +1452,27 @@ export default function SettingsAdminView({
 												"Not started"}
 										</dd>
 									</div>
+									<div>
+										<dt>Deterministic view/impression sync</dt>
+										<dd>
+											{metaConnection.data?.connection
+												?.deterministic_view_impression_sync_enabled
+												? "Enabled"
+												: "Disabled"}
+										</dd>
+									</div>
+									<div>
+										<dt>Deterministic planned through</dt>
+										<dd>
+											{metaConnection.data?.connection
+												?.deterministic_view_impression_last_planned_for
+												? formatDateLabel(
+														metaConnection.data.connection
+															.deterministic_view_impression_last_planned_for,
+													)
+												: "Not planned"}
+										</dd>
+									</div>
 								</DetailGrid>
 
 								{metaConnection.data?.config.missingFields.length ? (
@@ -1613,6 +1637,7 @@ export default function SettingsAdminView({
 								{hasMessageForAction(actionFeedback, [
 									"meta-connect",
 									"meta-sync",
+									"meta-deterministic-sync",
 								]) ? (
 									<FormMessage
 										tone={
@@ -1630,6 +1655,28 @@ export default function SettingsAdminView({
 												: actionFeedback.message}
 									</FormMessage>
 								) : null}
+
+								<CheckboxField
+									label="Deterministic view/impression sync"
+									htmlFor="meta-deterministic-view-impression-sync"
+									description="Allow the Meta deterministic worker to plan and claim view/impression jobs for this connection."
+								>
+									<input
+										id="meta-deterministic-view-impression-sync"
+										type="checkbox"
+										checked={Boolean(
+											metaConnection.data?.connection
+												?.deterministic_view_impression_sync_enabled,
+										)}
+										disabled={
+											actionFeedback.loading !== null ||
+											metaConnection.data?.connection == null
+										}
+										onChange={(event) =>
+											void onMetaDeterministicSyncToggle(event.target.checked)
+										}
+									/>
+								</CheckboxField>
 
 								<ButtonRow>
 									<Button

@@ -437,7 +437,9 @@ test("authenticated dashboard, order details, and settings pass automated access
             account_name: 'Meta Account',
             status: 'connected',
             last_sync_at: '2026-04-20T15:30:00.000Z',
-            last_sync_status: 'success'
+            last_sync_status: 'success',
+            deterministic_view_impression_sync_enabled: true,
+            deterministic_view_impression_last_planned_for: '2026-04-19'
           }
         },
         loading: false,
@@ -503,6 +505,7 @@ test("authenticated dashboard, order details, and settings pass automated access
       onOrderAttributionBackfillRefresh() {},
       onMetaConnect() {},
       onMetaSync() {},
+      onMetaDeterministicSyncToggle() {},
       onGoogleSync() {},
       onGoogleReconcile() {}
     })

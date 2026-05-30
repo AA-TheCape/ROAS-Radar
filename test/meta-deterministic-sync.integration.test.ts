@@ -17,6 +17,7 @@ const { resetE2EDatabase } = await import("./e2e-harness.js");
 async function seedMetaConnection(input: {
 	adAccountId: string;
 	enabled: boolean;
+	status?: string;
 }): Promise<number> {
 	const rawAccount = {
 		id: input.adAccountId,
@@ -47,7 +48,7 @@ async function seedMetaConnection(input: {
         pgp_sym_encrypt($2, $3, 'cipher-algo=aes256, compress-algo=0'),
         'Bearer',
         ARRAY['ads_read']::text[],
-        'active',
+        $9,
         $4,
         'USD',
         $5::jsonb,
@@ -69,6 +70,7 @@ async function seedMetaConnection(input: {
 			Buffer.byteLength(rawAccountJson, "utf8"),
 			createHash("sha256").update(rawAccountJson).digest("hex"),
 			input.enabled,
+			input.status ?? "active",
 		],
 	);
 
@@ -127,6 +129,11 @@ test(
 		await resetE2EDatabase();
 		await seedMetaConnection({ adAccountId: "123456789", enabled: true });
 		await seedMetaConnection({ adAccountId: "987654321", enabled: false });
+		await seedMetaConnection({
+			adAccountId: "555555555",
+			enabled: true,
+			status: "revoked",
+		});
 
 		const originalFetch = globalThis.fetch;
 		const requestedUrls: string[] = [];
@@ -192,6 +199,7 @@ test(
 			assert.equal(requestedUrls.length, 2);
 			assert.match(requestedUrls[1], /act_123456789\/insights/);
 			assert.doesNotMatch(requestedUrls[0], /987654321/);
+			assert.ok(requestedUrls.every((url) => !url.includes("555555555")));
 
 			assert.deepEqual(await loadDeterministicCounts(), {
 				jobs: "1",

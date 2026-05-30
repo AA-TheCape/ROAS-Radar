@@ -519,6 +519,8 @@ export type MetaAdsConnection = {
 	status: string;
 	account_name: string | null;
 	account_currency: string | null;
+	deterministic_view_impression_sync_enabled: boolean;
+	deterministic_view_impression_last_planned_for: string | null;
 };
 
 export type MetaAdsConfigSummary = {
@@ -534,6 +536,11 @@ export type MetaAdsConfigSummary = {
 export type MetaAdsStatusResponse = {
 	config: MetaAdsConfigSummary;
 	connection: MetaAdsConnection | null;
+};
+
+export type MetaAdsDeterministicSyncResponse = {
+	ok: true;
+	connection: MetaAdsConnection;
 };
 
 export type MetaAdsConfigPayload = {
@@ -1155,6 +1162,19 @@ export function syncMetaAds(startDate: string, endDate: string) {
 		method: "POST",
 		body: { startDate, endDate },
 	});
+}
+
+export function updateMetaAdsDeterministicSync(
+	connectionId: number,
+	enabled: boolean,
+) {
+	return requestJson<MetaAdsDeterministicSyncResponse>(
+		`/api/admin/meta-ads/connections/${connectionId}/deterministic-view-impression-sync`,
+		{
+			method: "PUT",
+			body: { enabled },
+		},
+	);
 }
 
 export function fetchGoogleAdsStatus() {
