@@ -4,7 +4,7 @@ This directory contains the checked-in deployment contract for the Node backend,
 
 The root backend `Dockerfile` is the production packaging path for every backend Cloud Run workload in this directory. It builds on `node:22-bookworm-slim` and defaults the API container command to `npm run start:api`.
 
-The deployment flow assumes eleven deployable workloads plus seven Cloud Scheduler triggers:
+The deployment flow assumes twelve deployable workloads plus eight Cloud Scheduler triggers:
 
 - `roas-radar-api`: public Cloud Run service for `/track`, Shopify webhooks, and authenticated reporting APIs.
 - `roas-radar-dashboard`: public Cloud Run service for the React reporting dashboard.
@@ -12,6 +12,7 @@ The deployment flow assumes eleven deployable workloads plus seven Cloud Schedul
 - `roas-radar-migrate`: Cloud Run Job that runs `npm run db:migrate:start` with elevated database credentials.
 - `roas-radar-meta-ads-sync`: Cloud Run Job that runs `npm run meta-ads:sync:start` once per invocation.
 - `roas-radar-meta-order-value-sync`: Cloud Run Job that runs `npm run meta-ads:order-value:start` once per invocation.
+- `roas-radar-meta-deterministic-sync`: Cloud Run Job that runs `npm run meta-ads:deterministic:start` once per invocation.
 - `roas-radar-google-ads-sync`: Cloud Run Job that runs `npm run google-ads:sync:start` once per invocation.
 - `roas-radar-session-retention`: Cloud Run Job that runs `npm run session-attribution:retention:start` to prune expired attribution-session records.
 - `roas-radar-data-quality`: Cloud Run Job that runs `npm run data-quality:check:start` once per invocation.
@@ -19,6 +20,7 @@ The deployment flow assumes eleven deployable workloads plus seven Cloud Schedul
 - `roas-radar-order-attribution-materialization`: Cloud Run Job that runs `npm run attribution:materialization:start` over a recent order window to recover attribution and refresh reporting aggregates.
 - `roas-radar-meta-ads-sync-scheduler`: Cloud Scheduler job that invokes the Meta Ads Cloud Run Job.
 - `roas-radar-meta-order-value-sync-scheduler`: Cloud Scheduler job that invokes the Meta order-value Cloud Run Job.
+- `roas-radar-meta-deterministic-sync-scheduler`: Cloud Scheduler job that invokes the Meta deterministic view/impression Cloud Run Job.
 - `roas-radar-google-ads-sync-scheduler`: Cloud Scheduler job that invokes the Google Ads Cloud Run Job.
 - `roas-radar-session-retention-scheduler`: Cloud Scheduler job that invokes the session-retention Cloud Run Job.
 - `roas-radar-data-quality-scheduler`: Cloud Scheduler job that invokes the data-quality Cloud Run Job.
@@ -62,9 +64,11 @@ The checked-in env files are valid shell files. Replace the placeholder project 
 - `WORKER_TIMEOUT_SECONDS`
 - `META_ADS_JOB_NAME`
 - `META_ADS_ORDER_VALUE_JOB_NAME`
+- `META_ADS_DETERMINISTIC_JOB_NAME`
 - `GOOGLE_ADS_JOB_NAME`
 - `META_ADS_SCHEDULER_JOB_NAME`
 - `META_ADS_ORDER_VALUE_SCHEDULER_JOB_NAME`
+- `META_ADS_DETERMINISTIC_SCHEDULER_JOB_NAME`
 - `GOOGLE_ADS_SCHEDULER_JOB_NAME`
 - `RETENTION_JOB_NAME`
 - `DATA_QUALITY_JOB_NAME`
@@ -76,6 +80,7 @@ The checked-in env files are valid shell files. Replace the placeholder project 
 - `ORDER_ATTRIBUTION_MATERIALIZATION_SCHEDULER_JOB_NAME`
 - `RETENTION_JOB_SERVICE_ACCOUNT_NAME`
 - `META_ADS_JOB_SERVICE_ACCOUNT_NAME`
+- `META_ADS_DETERMINISTIC_JOB_SERVICE_ACCOUNT_NAME`
 - `GOOGLE_ADS_JOB_SERVICE_ACCOUNT_NAME`
 - `DATA_QUALITY_JOB_SERVICE_ACCOUNT_NAME`
 - `IDENTITY_GRAPH_BACKFILL_JOB_SERVICE_ACCOUNT_NAME`
@@ -85,6 +90,11 @@ The checked-in env files are valid shell files. Replace the placeholder project 
 - `ADS_SYNC_TIME_ZONE`
 - `META_ADS_SYNC_SCHEDULE`
 - `META_ADS_ORDER_VALUE_SYNC_SCHEDULE`
+- `META_ADS_DETERMINISTIC_SYNC_SCHEDULE`
+- `META_ADS_DETERMINISTIC_SCHEDULER_PAUSED`
+- `META_ADS_DETERMINISTIC_SYNC_ENABLED`
+- `META_ADS_DETERMINISTIC_SYNC_INITIAL_LOOKBACK_DAYS`
+- `META_ADS_DETERMINISTIC_SYNC_LOOKBACK_DAYS`
 - `META_ADS_ORDER_VALUE_SCHEDULER_PAUSED`
 - `META_ADS_SCHEDULER_PAUSED`
 - `META_ADS_SCHEDULER_ATTEMPT_DEADLINE`
@@ -197,7 +207,15 @@ For Meta order-value specifically:
 - scheduler retries are disabled at the Cloud Scheduler layer (`META_ADS_SCHEDULER_MAX_RETRY_ATTEMPTS="0"`) to avoid duplicate invocations; the Cloud Run Job owns the single retry budget via `META_ADS_JOB_MAX_RETRIES`.
 - the Meta order-value job receives only `DATABASE_URL`, `META_ADS_APP_SECRET`, and `META_ADS_ENCRYPTION_KEY` from Secret Manager, while access tokens remain encrypted in application storage instead of being copied into environment files.
 
-Use `sh infra/cloud-run/scheduler.sh <environment> meta-order-value <status|pause|resume>` for the order-value operational toggle without redeploying.
+For Meta deterministic view/impression ingestion specifically:
+
+- `staging.env` and `production.env` keep `META_ADS_DETERMINISTIC_SCHEDULER_PAUSED="false"` so scheduled ingestion runs after deploy.
+- `dev.env` keeps the deterministic scheduler paused by default.
+- the deterministic job receives only `DATABASE_URL`, `META_ADS_APP_SECRET`, and `META_ADS_ENCRYPTION_KEY` from Secret Manager.
+- initial backfill breadth is controlled by `META_ADS_DETERMINISTIC_SYNC_INITIAL_LOOKBACK_DAYS`; routine catch-up is controlled by `META_ADS_DETERMINISTIC_SYNC_LOOKBACK_DAYS`.
+- use `docs/runbooks/meta-deterministic-ingestion.md` for restart, pause, and backfill procedures.
+
+Use `sh infra/cloud-run/scheduler.sh <environment> meta-order-value <status|pause|resume>` for the order-value operational toggle without redeploying. Use `sh infra/cloud-run/scheduler.sh <environment> meta-deterministic <status|pause|resume>` for deterministic view/impression ingestion.
 
 Check that the job description still shows command `npm`, args `run,ga4:ingest:start`, and `maxRetries: 0`.
 

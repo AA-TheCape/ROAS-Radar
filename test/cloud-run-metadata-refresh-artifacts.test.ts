@@ -69,6 +69,10 @@ test('cloud run environment templates declare per-platform metadata scheduler co
     const text = readRepoFile(file);
 
     assert.match(text, /META_ADS_METADATA_SCHEDULER_NAME=/);
+    assert.match(text, /META_ADS_DETERMINISTIC_JOB_NAME=/);
+    assert.match(text, /META_ADS_DETERMINISTIC_SCHEDULER_JOB_NAME=/);
+    assert.match(text, /META_ADS_DETERMINISTIC_JOB_SERVICE_ACCOUNT_NAME=/);
+    assert.match(text, /META_ADS_DETERMINISTIC_SYNC_SCHEDULE=/);
     assert.match(text, /META_ADS_METADATA_SCHEDULE=/);
     assert.match(text, /META_ADS_METADATA_SCHEDULER_ENABLED=/);
     assert.match(text, /META_ADS_METADATA_REFRESH_REQUESTED_BY=/);
@@ -87,6 +91,8 @@ test('cloud run runbooks document metadata scheduler creation and pause or resum
   assert.match(cloudRunRunbook, /pause/i);
   assert.match(cloudRunRunbook, /resume/i);
   assert.match(cloudRunRunbook, /META_ADS_METADATA_SCHEDULER_NAME/);
+  assert.match(cloudRunRunbook, /META_ADS_DETERMINISTIC_SYNC_SCHEDULE/);
+  assert.match(cloudRunRunbook, /meta-deterministic/);
   assert.match(cloudRunRunbook, /GOOGLE_ADS_METADATA_SCHEDULER_NAME/);
 
   assert.match(metadataRunbook, /campaign_metadata_sync_job_lifecycle/);
