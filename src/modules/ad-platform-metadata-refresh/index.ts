@@ -124,6 +124,8 @@ export type CampaignMetadataApiRefreshInput = {
   dryRun?: boolean;
   runId?: string | null;
   maxAttempts?: number;
+  refreshGoogleAdsMetadataConnections?: typeof refreshActiveGoogleAdsMetadataConnections;
+  refreshMetaAdsMetadataConnections?: typeof refreshActiveMetaAdsMetadataConnections;
 };
 
 export type CampaignMetadataApiRefreshReport = {
@@ -802,14 +804,18 @@ export async function refreshCampaignMetadataFromApis(
         maxAttempts: input.maxAttempts ?? 3,
         continueOnError: true
       };
+      const refreshGoogleAdsMetadataConnections =
+        input.refreshGoogleAdsMetadataConnections ?? refreshActiveGoogleAdsMetadataConnections;
+      const refreshMetaAdsMetadataConnections =
+        input.refreshMetaAdsMetadataConnections ?? refreshActiveMetaAdsMetadataConnections;
 
       const result =
         platform === 'google_ads'
-          ? await refreshActiveGoogleAdsMetadataConnections({
+          ? await refreshGoogleAdsMetadataConnections({
               ...commonOptions,
               campaignIdsByAccount: scope.campaignIdsByPlatformAccount.google_ads
             })
-          : await refreshActiveMetaAdsMetadataConnections({
+          : await refreshMetaAdsMetadataConnections({
               ...commonOptions,
               campaignIdsByAccount: scope.campaignIdsByPlatformAccount.meta_ads
             });

@@ -1272,6 +1272,17 @@ export class RecoveryJobOrchestrator<TRecord> {
 			return startResult;
 		}
 
+		if (
+			startResult.reusedExistingRun &&
+			!["queued", "running"].includes(startResult.run.status)
+		) {
+			return {
+				run: startResult.run,
+				pagesProcessed: 0,
+				recordsProcessed: 0,
+			};
+		}
+
 		return this.execute(startResult.run.id, workerId, request.now ?? new Date());
 	}
 

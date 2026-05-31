@@ -11,6 +11,7 @@ import {
 	attributionOriginPrecedence,
 	shouldApplyAttributionUpdate,
 } from "../src/modules/attribution/precedence.js";
+import { contradictoryRecoveryAttributionFixtures } from "./fixtures/recovery-precedence.fixtures.js";
 
 function attribution(
 	overrides: Partial<AttributionComparableFields> = {},
@@ -173,4 +174,23 @@ test("compareAttributionEvidenceSources exposes the shared source ordering", () 
 		) < 0,
 		true,
 	);
+});
+
+test("contradictory recovery fixtures enforce source-priority decisions", () => {
+	for (const fixture of contradictoryRecoveryAttributionFixtures) {
+		assert.equal(
+			shouldApplyAttributionUpdate({
+				current: {
+					origin: fixture.currentOrigin,
+					attribution: fixture.current,
+				},
+				proposed: {
+					origin: fixture.proposedOrigin,
+					attribution: fixture.proposed,
+				},
+			}),
+			fixture.shouldApply,
+			fixture.name,
+		);
+	}
 });

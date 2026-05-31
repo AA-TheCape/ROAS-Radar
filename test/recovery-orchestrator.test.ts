@@ -32,6 +32,7 @@ class MemoryRecoveryStore implements Store {
 	runs = new Map<string, Run>();
 	records = new Map<string, StoredRecord>();
 	errors: unknown[] = [];
+	claimCalls: string[] = [];
 	private nextRunId = 1;
 	private nextRecordId = 1;
 
@@ -105,7 +106,11 @@ class MemoryRecoveryStore implements Store {
 	}
 
 	async claimRun(runId: string, workerId: string, now: Date) {
+		this.claimCalls.push(runId);
 		const run = this.mustRun(runId);
+		if (run.status !== "queued" && run.status !== "running") {
+			throw new Error(`Recovery run ${runId} is not claimable`);
+		}
 		const updated: Run = {
 			...run,
 			status: "running",
@@ -392,4 +397,120 @@ test("recovery orchestrator retries with exponential backoff before partial fail
 		assert.equal(result.run.recordsFailed, 1);
 		assert.equal(store.errors.length, 2);
 	}
+});
+
+test("recovery orchestrator resumes from the persisted checkpoint on an existing run", async () => {
+	const { createRecoveryJobOrchestrator } = await getRecoveryModule();
+	const store = new MemoryRecoveryStore();
+	const fetchedOffsets: number[] = [];
+	const processed: number[] = [];
+	const records = [1, 2, 3];
+	const orchestrator = createRecoveryJobOrchestrator<number>(
+		{
+			jobType: "demo",
+			pageSize: 2,
+			fetchPage: async (context) => {
+				const offset =
+					typeof context.checkpoint.offset === "number"
+						? context.checkpoint.offset
+						: 0;
+				fetchedOffsets.push(offset);
+				const page = records.slice(offset, offset + context.pageSize);
+				const nextOffset = offset + page.length;
+
+				return {
+					records: page,
+					checkpoint: { offset: nextOffset },
+					done: nextOffset >= records.length,
+				};
+			},
+			identifyRecord: (record) => ({
+				recordType: "number",
+				recordKey: String(record),
+			}),
+			processRecord: async (record) => {
+				processed.push(record);
+				return { status: "succeeded" };
+			},
+		},
+		store,
+	);
+
+	const started = await orchestrator.start({
+		jobType: "demo",
+		initiatedBy: "operator",
+		timeRangeStart: "2026-05-01T00:00:00.000Z",
+		timeRangeEnd: "2026-05-10T00:00:00.000Z",
+		dryRun: false,
+		inputParameters: { pageSize: 2 },
+		resumeFromRunId: "run-interrupted",
+	});
+	assert.equal(started.started, true);
+	if (!started.started) {
+		return;
+	}
+
+	store.runs.set(started.run.id, {
+		...started.run,
+		checkpoint: { offset: 1 },
+	});
+
+	const result = await orchestrator.execute(started.run.id, "worker-resume");
+
+	assert.equal(result.run.status, "succeeded");
+	assert.deepEqual(fetchedOffsets, [1]);
+	assert.deepEqual(processed, [2, 3]);
+	assert.deepEqual(result.run.checkpoint, { offset: 3 });
+	assert.equal(result.recordsProcessed, 2);
+});
+
+test("recovery orchestrator reuses terminal idempotency keys without replaying side effects", async () => {
+	const { createRecoveryJobOrchestrator } = await getRecoveryModule();
+	const store = new MemoryRecoveryStore();
+	const processed: number[] = [];
+	const request = {
+		jobType: "demo",
+		initiatedBy: "operator",
+		timeRangeStart: "2026-05-01T00:00:00.000Z",
+		timeRangeEnd: "2026-05-10T00:00:00.000Z",
+		dryRun: false,
+	};
+	const orchestrator = createRecoveryJobOrchestrator<number>(
+		{
+			jobType: "demo",
+			fetchPage: async () => ({
+				records: [1],
+				checkpoint: { done: true },
+				done: true,
+			}),
+			identifyRecord: (record) => ({
+				recordType: "number",
+				recordKey: String(record),
+			}),
+			processRecord: async (record) => {
+				processed.push(record);
+				return {
+					status: "succeeded",
+					sideEffectAttempted: true,
+					sideEffectSucceeded: true,
+				};
+			},
+		},
+		store,
+	);
+
+	const first = await orchestrator.startAndExecute(request, "worker-1");
+	const second = await orchestrator.startAndExecute(request, "worker-2");
+
+	assert.equal("run" in first, true);
+	assert.equal("run" in second, true);
+	if ("run" in first && "run" in second) {
+		assert.equal(first.run.status, "succeeded");
+		assert.equal(second.run.id, first.run.id);
+		assert.equal(second.run.status, "succeeded");
+		assert.equal(second.pagesProcessed, 0);
+		assert.equal(second.recordsProcessed, 0);
+	}
+	assert.deepEqual(processed, [1]);
+	assert.deepEqual(store.claimCalls, ["run-1"]);
 });
