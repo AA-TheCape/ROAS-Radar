@@ -224,6 +224,207 @@
           },
           "title": "Combined report API latency p95"
         }
+      },
+      {
+        "xPos": 0,
+        "yPos": 13,
+        "width": 6,
+        "height": 4,
+        "widget": {
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "filter": "metric.type=\"logging.googleapis.com/user/roas_attribution_qa_snapshot_writes\" resource.type=\"cloud_run_revision\" metric.labels.status=\"failure\"",
+                    "aggregation": {
+                      "alignmentPeriod": "900s",
+                      "perSeriesAligner": "ALIGN_SUM",
+                      "crossSeriesReducer": "REDUCE_SUM",
+                      "groupByFields": [
+                        "metric.label.pipeline"
+                      ]
+                    }
+                  }
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1"
+              }
+            ],
+            "timeshiftDuration": "0s",
+            "yAxis": {
+              "label": "failures",
+              "scale": "LINEAR"
+            }
+          },
+          "title": "Attribution QA Snapshot Write Failures"
+        }
+      },
+      {
+        "xPos": 6,
+        "yPos": 13,
+        "width": 6,
+        "height": 4,
+        "widget": {
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "filter": "metric.type=\"logging.googleapis.com/user/roas_attribution_qa_fetch_latency_ms\" resource.type=\"cloud_run_revision\"",
+                    "aggregation": {
+                      "alignmentPeriod": "900s",
+                      "perSeriesAligner": "ALIGN_PERCENTILE_95",
+                      "crossSeriesReducer": "REDUCE_MAX",
+                      "groupByFields": [
+                        "metric.label.endpoint"
+                      ]
+                    }
+                  }
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1"
+              }
+            ],
+            "timeshiftDuration": "0s",
+            "yAxis": {
+              "label": "p95 ms",
+              "scale": "LINEAR"
+            }
+          },
+          "title": "Attribution QA Fetch Latency p95"
+        }
+      },
+      {
+        "xPos": 0,
+        "yPos": 17,
+        "width": 6,
+        "height": 4,
+        "widget": {
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "filter": "metric.type=\"logging.googleapis.com/user/roas_attribution_qa_evidence_size_bytes\" resource.type=\"cloud_run_revision\"",
+                    "aggregation": {
+                      "alignmentPeriod": "3600s",
+                      "perSeriesAligner": "ALIGN_PERCENTILE_95",
+                      "crossSeriesReducer": "REDUCE_MAX",
+                      "groupByFields": [
+                        "metric.label.event"
+                      ]
+                    }
+                  }
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1"
+              }
+            ],
+            "timeshiftDuration": "0s",
+            "yAxis": {
+              "label": "p95 bytes",
+              "scale": "LINEAR"
+            }
+          },
+          "title": "Attribution QA Evidence Size p95"
+        }
+      },
+      {
+        "xPos": 6,
+        "yPos": 17,
+        "width": 6,
+        "height": 4,
+        "widget": {
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "filter": "metric.type=\"logging.googleapis.com/user/roas_attribution_qa_cleanup_deletions\" resource.type=\"cloud_run_revision\"",
+                    "aggregation": {
+                      "alignmentPeriod": "3600s",
+                      "perSeriesAligner": "ALIGN_PERCENTILE_95",
+                      "crossSeriesReducer": "REDUCE_MAX"
+                    }
+                  }
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1"
+              }
+            ],
+            "timeshiftDuration": "0s",
+            "yAxis": {
+              "label": "deletions",
+              "scale": "LINEAR"
+            }
+          },
+          "title": "Attribution QA Cleanup Deletions"
+        }
+      },
+      {
+        "xPos": 0,
+        "yPos": 21,
+        "width": 6,
+        "height": 4,
+        "widget": {
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "filter": "metric.type=\"logging.googleapis.com/user/roas_meta_ads_api_latency_ms\" resource.type=\"cloud_run_revision\"",
+                    "aggregation": {
+                      "alignmentPeriod": "900s",
+                      "perSeriesAligner": "ALIGN_PERCENTILE_95",
+                      "crossSeriesReducer": "REDUCE_MAX"
+                    }
+                  }
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1"
+              }
+            ],
+            "timeshiftDuration": "0s",
+            "yAxis": {
+              "label": "p95 ms",
+              "scale": "LINEAR"
+            }
+          },
+          "title": "Meta API Latency p95"
+        }
+      },
+      {
+        "xPos": 6,
+        "yPos": 21,
+        "width": 6,
+        "height": 4,
+        "widget": {
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "filter": "metric.type=\"logging.googleapis.com/user/roas_meta_order_value_sync_anomalies\" resource.type=\"cloud_run_revision\"",
+                    "aggregation": {
+                      "alignmentPeriod": "21600s",
+                      "perSeriesAligner": "ALIGN_SUM",
+                      "crossSeriesReducer": "REDUCE_SUM"
+                    }
+                  }
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1"
+              }
+            ],
+            "timeshiftDuration": "0s",
+            "yAxis": {
+              "label": "anomalies",
+              "scale": "LINEAR"
+            }
+          },
+          "title": "Meta Sync Anomalies"
+        }
       }
     ]
   }

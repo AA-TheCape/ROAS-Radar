@@ -1,0 +1,23 @@
+{
+  "name": "roas_attribution_qa_cleanup_deletions",
+  "description": "Distribution of Attribution QA raw evidence deletions and embedded QA snapshot prunes per retention batch.",
+  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"attribution_qa_retention_batch_completed\"",
+  "valueExtractor": "EXTRACT(jsonPayload.cleanupDeletionCount)",
+  "labelExtractors": {
+    "service": "EXTRACT(jsonPayload.service)"
+  },
+  "metricDescriptor": {
+    "metricKind": "DELTA",
+    "valueType": "DISTRIBUTION",
+    "unit": "1",
+    "displayName": "ROAS Radar Attribution QA Cleanup Deletions",
+    "labels": [
+      { "key": "service", "valueType": "STRING", "description": "Service emitting the QA cleanup batch event." }
+    ]
+  },
+  "bucketOptions": {
+    "explicitBuckets": {
+      "bounds": [1, 10, 50, 100, 250, 500, 1000, 5000]
+    }
+  }
+}

@@ -38,6 +38,7 @@ import {
 	type AttributionChannelTotalsResponse,
 	type AttributionExplainabilityResponse,
 	type AttributionFilters,
+	type AttributionQaDebugResponse,
 	type AttributionResultRow,
 	type AuthUser,
 	type CampaignRow,
@@ -70,6 +71,7 @@ import {
 	fetchAppSettings,
 	fetchAttributionChannelTotals,
 	fetchAttributionExplainability,
+	fetchAttributionQaPayload,
 	fetchCampaigns,
 	fetchCurrentUser,
 	fetchGoogleAdsStatus,
@@ -111,6 +113,7 @@ import { isAttributionTier } from "./lib/attributionTier";
 
 const ReportingDashboard = lazy(() => import('./components/ReportingDashboard'));
 const AttributionDashboard = lazy(() => import('./components/AttributionDashboard'));
+const AttributionQaToolingView = lazy(() => import('./components/AttributionQaToolingView'));
 const MetaOrderValueView = lazy(() => import('./components/MetaOrderValueView'));
 const OrderDetailsView = lazy(() => import('./components/OrderDetailsView'));
 const SettingsAdminView = lazy(() => import('./components/SettingsAdminView'));
@@ -740,6 +743,13 @@ function App() {
     loading: false,
     error: null
   });
+  const [attributionQaPayloadSection, setAttributionQaPayloadSection] = useState<
+    AsyncSection<AttributionQaDebugResponse>
+  >({
+    data: null,
+    loading: false,
+    error: null
+  });
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [newUserForm, setNewUserForm] = useState<CreateUserPayload>({
     email: '',
@@ -1195,6 +1205,11 @@ function App() {
           loading: false,
           error: null
         });
+        setAttributionQaPayloadSection({
+          data: null,
+          loading: false,
+          error: null
+        });
         setSelectedOrderId(null);
         setAttributionState({
           results: {
@@ -1218,24 +1233,63 @@ function App() {
   }, []);
 
   const openOrderDetails = useCallback(async (shopifyOrderId: string) => {
+    const canLoadAdminQa = authState.user?.isAdmin === true;
     setCurrentPage('order-details');
     setSelectedOrderId(shopifyOrderId);
     setOrderDetailsSection(createLoadingSection());
+    setAttributionQaPayloadSection(canLoadAdminQa ? createLoadingSection() : {
+      data: null,
+      loading: false,
+      error: null
+    });
 
-    try {
-      const response = await fetchOrderDetails(shopifyOrderId);
-      setOrderDetailsSection(createResolvedSection(response));
-    } catch (error) {
+    const [orderDetailsResult, qaPayloadResult] = await Promise.allSettled([
+      fetchOrderDetails(shopifyOrderId),
+      canLoadAdminQa ? fetchAttributionQaPayload(shopifyOrderId) : Promise.resolve(null)
+    ]);
+
+    if (orderDetailsResult.status === 'fulfilled') {
+      setOrderDetailsSection(createResolvedSection(orderDetailsResult.value));
+    } else {
       setOrderDetailsSection(
-        createErroredSection(error instanceof Error ? error.message : 'Failed to load order details')
+        createErroredSection(
+          orderDetailsResult.reason instanceof Error
+            ? orderDetailsResult.reason.message
+            : 'Failed to load order details'
+        )
       );
     }
-  }, []);
+
+    if (!canLoadAdminQa) {
+      setAttributionQaPayloadSection({
+        data: null,
+        loading: false,
+        error: null
+      });
+    } else if (qaPayloadResult.status === 'fulfilled' && qaPayloadResult.value) {
+      setAttributionQaPayloadSection(createResolvedSection(qaPayloadResult.value));
+    } else if (qaPayloadResult.status === 'rejected') {
+      setAttributionQaPayloadSection(
+        createErroredSection(
+          qaPayloadResult.reason instanceof Error
+            ? qaPayloadResult.reason.message
+            : 'Failed to load attribution QA payload'
+        )
+      );
+    } else {
+      setAttributionQaPayloadSection(createErroredSection('Failed to load attribution QA payload'));
+    }
+  }, [authState.user?.isAdmin]);
 
   const closeOrderDetails = useCallback(() => {
     setCurrentPage('dashboard');
     setSelectedOrderId(null);
     setOrderDetailsSection({
+      data: null,
+      loading: false,
+      error: null
+    });
+    setAttributionQaPayloadSection({
       data: null,
       loading: false,
       error: null
@@ -2239,7 +2293,7 @@ function App() {
         <section className="grid gap-section">
           <Panel
             title="Order details"
-            description="Everything currently stored for this Shopify order, including line items, attribution credits, and raw payload."
+            description="Everything currently stored for this Shopify order, including line items, attribution QA, attribution credits, and raw payload."
             wide
           >
             <Suspense
@@ -2256,6 +2310,28 @@ function App() {
               />
             </Suspense>
           </Panel>
+          {isAdmin ? (
+            <Panel
+              title="Attribution QA tooling"
+              description="Per-order QA payload view for candidate matching, winner rationale, diagnostics, raw evidence, and GA4 fallback details."
+              wide
+            >
+              <Suspense
+                fallback={
+                  <SectionState loading empty={false} error={null} emptyLabel="">
+                    <div />
+                  </SectionState>
+                }
+              >
+                <AttributionQaToolingView
+                  selectedOrderId={selectedOrderId}
+                  reportingTimezone={reportingTimezone}
+                  qaPayloadSection={attributionQaPayloadSection}
+                  onLookupOrder={(shopifyOrderId) => void openOrderDetails(shopifyOrderId)}
+                />
+              </Suspense>
+            </Panel>
+          ) : null}
         </section>
       ) : null}
 

@@ -3,6 +3,7 @@ import type {
 	AttributionExplainRecordV1,
 	AttributionLookbackRule,
 	AttributionModelKey,
+	AttributionQaPayloadV1,
 	AttributionResultRecordV1,
 	AttributionTouchpointInputV1,
 	OrderAttributionBackfillEnqueueResponse,
@@ -369,6 +370,90 @@ export type OrderDetailsResponse = {
 	order: OrderDetail;
 	lineItems: OrderDetailLineItem[];
 	attributionCredits: OrderDetailAttributionCredit[];
+};
+
+export type AttributionQaPayloadSource =
+  | 'persisted_snapshot'
+  | 'generated_on_read';
+
+export type AttributionQaPayloadResponse = {
+  orderId: string;
+  source: AttributionQaPayloadSource;
+  payload: AttributionQaPayloadV1;
+};
+
+export type AttributionQaEvidenceState =
+  | 'available'
+  | 'missing'
+  | 'expired_or_pruned';
+
+export type AttributionQaRawEvidenceRecord = {
+  id: string;
+  runId: string;
+  orderId: string;
+  evidenceType: 'shopify_hint' | 'tracking_touchpoint';
+  sourceTable: string;
+  sourceRecordId: string;
+  touchpointId: string | null;
+  sessionId: string | null;
+  ingestionSource: string | null;
+  eventType: string | null;
+  occurredAtUtc: string | null;
+  capturedAtUtc: string | null;
+  evidenceStatus: 'valid' | 'malformed';
+  errorCode: string | null;
+  errorMessage: string | null;
+  normalizedMetadata: Record<string, unknown>;
+  rawPayload: unknown;
+  payloadSizeBytes: number;
+  payloadHash: string;
+  createdAtUtc: string;
+  retainedUntil: string;
+};
+
+export type AttributionQaGa4FallbackCandidate = {
+  candidateKey: string;
+  occurredAt: string;
+  ga4UserKey: string;
+  ga4ClientId: string | null;
+  ga4SessionId: string | null;
+  transactionId: string | null;
+  emailHash: string | null;
+  customerIdentityId: string | null;
+  source: string | null;
+  medium: string | null;
+  campaign: string | null;
+  content: string | null;
+  term: string | null;
+  clickIdType: string | null;
+  clickIdValue: string | null;
+  sessionHasRequiredFields: boolean;
+  sourceExportHour: string;
+  sourceDataset: string;
+  sourceTableType: string;
+  retainedUntil: string;
+  createdAt: string;
+  updatedAt: string;
+  matchedOn: string;
+};
+
+export type AttributionQaDebugResponse = AttributionQaPayloadResponse & {
+  selectedRunId: string | null;
+  selectedRunReason:
+    | 'explicit_run_id'
+    | 'latest_run_for_order'
+    | 'no_persisted_attribution_run';
+  generatedAtUtc: string;
+  evidenceState: {
+    attributionRun: AttributionQaEvidenceState;
+    rawEvidence: AttributionQaEvidenceState;
+    rawShopifyHints: AttributionQaEvidenceState;
+    rawTouchpoints: AttributionQaEvidenceState;
+    ga4FallbackCandidate: AttributionQaEvidenceState;
+  };
+  rawShopifyHints: AttributionQaRawEvidenceRecord[];
+  rawTouchpoints: AttributionQaRawEvidenceRecord[];
+  ga4FallbackCandidate: AttributionQaGa4FallbackCandidate | null;
 };
 
 export type AttributionResultRow = {
@@ -1057,6 +1142,12 @@ export function fetchOrderDetails(shopifyOrderId: string) {
 	return requestJson<OrderDetailsResponse>(
 		`/api/reporting/orders/${encodeURIComponent(shopifyOrderId)}`,
 	);
+}
+
+export function fetchAttributionQaPayload(shopifyOrderId: string) {
+  return requestJson<AttributionQaDebugResponse>(
+    `/api/admin/attribution/orders/${encodeURIComponent(shopifyOrderId)}/qa-debug`
+  );
 }
 
 export function fetchAttributionResults(

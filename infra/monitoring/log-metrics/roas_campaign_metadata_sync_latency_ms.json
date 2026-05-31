@@ -1,7 +1,29 @@
-New distribution metric extracting `jsonPayload.durationMs` from completed
-`campaign_metadata_sync_job_lifecycle` logs.
-
-Labels:
-- service
-- worker_id
-- dry_run
+{
+  "name": "roas_campaign_metadata_sync_latency_ms",
+  "description": "Distribution of completed campaign metadata sync job durations.",
+  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"campaign_metadata_sync_job_lifecycle\" AND jsonPayload.stage=\"completed\"",
+  "valueExtractor": "EXTRACT(jsonPayload.durationMs)",
+  "labelExtractors": {
+    "service": "EXTRACT(jsonPayload.service)",
+    "platform": "EXTRACT(jsonPayload.platform)",
+    "worker_id": "EXTRACT(jsonPayload.workerId)",
+    "requested_by": "EXTRACT(jsonPayload.requestedBy)"
+  },
+  "metricDescriptor": {
+    "metricKind": "DELTA",
+    "valueType": "DISTRIBUTION",
+    "unit": "ms",
+    "displayName": "ROAS Radar Campaign Metadata Sync Latency",
+    "labels": [
+      { "key": "service", "valueType": "STRING", "description": "Service emitting the sync lifecycle event." },
+      { "key": "platform", "valueType": "STRING", "description": "Ad platform." },
+      { "key": "worker_id", "valueType": "STRING", "description": "Worker identity for the sync job." },
+      { "key": "requested_by", "valueType": "STRING", "description": "Scheduler or operator source that requested the sync." }
+    ]
+  },
+  "bucketOptions": {
+    "explicitBuckets": {
+      "bounds": [1000, 5000, 15000, 30000, 60000, 120000, 300000, 600000]
+    }
+  }
+}

@@ -15,6 +15,7 @@ The deployment flow assumes twelve deployable workloads plus eight Cloud Schedul
 - `roas-radar-meta-deterministic-sync`: Cloud Run Job that runs `npm run meta-ads:deterministic:start` once per invocation.
 - `roas-radar-google-ads-sync`: Cloud Run Job that runs `npm run google-ads:sync:start` once per invocation.
 - `roas-radar-session-retention`: Cloud Run Job that runs `npm run session-attribution:retention:start` to prune expired attribution-session records.
+- `roas-radar-attribution-qa-retention`: Cloud Run Job that runs `npm run attribution-qa:retention:start` to prune expired Attribution QA raw evidence and embedded QA snapshots.
 - `roas-radar-data-quality`: Cloud Run Job that runs `npm run data-quality:check:start` once per invocation.
 - `roas-radar-identity-graph-backfill`: Cloud Run Job that runs `npm run identity:backfill-graph:start` over a recent window to reconcile graph attachments and catch missed identity stitching.
 - `roas-radar-order-attribution-materialization`: Cloud Run Job that runs `npm run attribution:materialization:start` over a recent order window to recover attribution and refresh reporting aggregates.
@@ -23,6 +24,7 @@ The deployment flow assumes twelve deployable workloads plus eight Cloud Schedul
 - `roas-radar-meta-deterministic-sync-scheduler`: Cloud Scheduler job that invokes the Meta deterministic view/impression Cloud Run Job.
 - `roas-radar-google-ads-sync-scheduler`: Cloud Scheduler job that invokes the Google Ads Cloud Run Job.
 - `roas-radar-session-retention-scheduler`: Cloud Scheduler job that invokes the session-retention Cloud Run Job.
+- `roas-radar-attribution-qa-retention-scheduler`: Cloud Scheduler job that invokes the Attribution QA retention Cloud Run Job daily.
 - `roas-radar-data-quality-scheduler`: Cloud Scheduler job that invokes the data-quality Cloud Run Job.
 - `roas-radar-identity-graph-backfill-scheduler`: Cloud Scheduler job that invokes the identity-graph backfill Cloud Run Job.
 - `roas-radar-order-attribution-materialization-scheduler`: Cloud Scheduler job that invokes the order-attribution materialization Cloud Run Job.
@@ -71,10 +73,12 @@ The checked-in env files are valid shell files. Replace the placeholder project 
 - `META_ADS_DETERMINISTIC_SCHEDULER_JOB_NAME`
 - `GOOGLE_ADS_SCHEDULER_JOB_NAME`
 - `RETENTION_JOB_NAME`
+- `ATTRIBUTION_QA_RETENTION_JOB_NAME`
 - `DATA_QUALITY_JOB_NAME`
 - `IDENTITY_GRAPH_BACKFILL_JOB_NAME`
 - `ORDER_ATTRIBUTION_MATERIALIZATION_JOB_NAME`
 - `RETENTION_SCHEDULER_JOB_NAME`
+- `ATTRIBUTION_QA_RETENTION_SCHEDULER_JOB_NAME`
 - `DATA_QUALITY_SCHEDULER_JOB_NAME`
 - `IDENTITY_GRAPH_BACKFILL_SCHEDULER_JOB_NAME`
 - `ORDER_ATTRIBUTION_MATERIALIZATION_SCHEDULER_JOB_NAME`
@@ -112,6 +116,7 @@ The checked-in env files are valid shell files. Replace the placeholder project 
 - `META_ADS_ORDER_VALUE_NULL_SPIKE_RATIO_DELTA`
 - `GOOGLE_ADS_SYNC_SCHEDULE`
 - `RETENTION_SCHEDULE`
+- `ATTRIBUTION_QA_RETENTION_SCHEDULE`
 - `DATA_QUALITY_SCHEDULE`
 - `IDENTITY_GRAPH_BACKFILL_SCHEDULE`
 - `ORDER_ATTRIBUTION_MATERIALIZATION_SCHEDULE`
@@ -141,6 +146,9 @@ The checked-in env files are valid shell files. Replace the placeholder project 
 - `SESSION_ATTRIBUTION_RETENTION_DAYS`
 - `SESSION_ATTRIBUTION_RETENTION_BATCH_SIZE`
 - `SESSION_ATTRIBUTION_RETENTION_MAX_BATCHES`
+- `ATTRIBUTION_QA_RETENTION_DAYS`
+- `ATTRIBUTION_QA_RETENTION_BATCH_SIZE`
+- `ATTRIBUTION_QA_RETENTION_MAX_BATCHES`
 
 Run these commands from the repo root on Node 22 before deploying:
 

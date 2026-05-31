@@ -2,11 +2,19 @@ import type { PoolClient } from 'pg';
 
 import type { OrderAttributionBackfillReport as OrderAttributionBackfillJobReport } from '../../../packages/attribution-schema/index.js';
 import { withTransaction } from '../../db/pool.js';
-import { emitAttributionResolverOutcomeLog, logError, logInfo } from '../../observability/index.js';
+import {
+  emitAttributionQaSnapshotWriteLog,
+  emitAttributionResolverOutcomeLog,
+  logError,
+  logInfo
+} from '../../observability/index.js';
 import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
 import { formatDateInTimezone, getReportingTimezone } from '../settings/index.js';
 import { applyShopifyOrderWriteback } from '../shopify/writeback.js';
-import { extractAttributionCandidatesForOrder } from './candidate-extraction.js';
+import {
+  extractAttributionCandidatesForOrder,
+  type AttributionCandidateExtractionResult
+} from './candidate-extraction.js';
 import { buildEmptyOrderAttributionBackfillProgress, parseOrderAttributionBackfillProgress, type OrderAttributionBackfillProgress } from './backfill-progress.js';
 import {
   ATTRIBUTION_MODELS,
@@ -18,6 +26,7 @@ import {
   buildAttributionMatchSource,
   buildOrderAttributionAuditRecord
 } from './order-attribution-audit.js';
+import { buildAttributionQaSnapshot } from './qa-snapshot.js';
 import { resolveAttributionTier, type ResolvedAttributionTouchpoint, type ResolvedJourney } from './resolver.js';
 
 const ATTRIBUTION_MODEL_VERSION = 1;
@@ -39,6 +48,9 @@ const MISSING_ATTRIBUTION_SQL = `
 type OrderRow = {
   id: string;
   shopify_order_id: string;
+  name: string | null;
+  currency_code: string | null;
+  subtotal_price: string | null;
   total_price: string;
   processed_at: Date | null;
   created_at_shopify: Date | null;
@@ -46,11 +58,17 @@ type OrderRow = {
   landing_session_id: string | null;
   checkout_token: string | null;
   cart_token: string | null;
+  shopify_customer_id: string | null;
   email_hash: string | null;
   customer_identity_id: string | null;
   identity_journey_id: string | null;
   source_name: string | null;
   raw_payload: unknown;
+};
+
+type ResolvedAttributionJourney = {
+  journey: ResolvedJourney;
+  candidateEvaluation: AttributionCandidateExtractionResult;
 };
 
 type ScopeMetrics = {
@@ -276,6 +294,9 @@ async function fetchOrder(client: PoolClient, shopifyOrderId: string): Promise<O
       SELECT
         id::text,
         shopify_order_id,
+        shopify_order_number AS name,
+        currency_code,
+        subtotal_price::text AS subtotal_price,
         total_price,
         processed_at,
         created_at_shopify,
@@ -283,6 +304,7 @@ async function fetchOrder(client: PoolClient, shopifyOrderId: string): Promise<O
         landing_session_id::text AS landing_session_id,
         checkout_token,
         cart_token,
+        shopify_customer_id,
         email_hash,
         customer_identity_id::text AS customer_identity_id,
         identity_journey_id::text AS identity_journey_id,
@@ -298,8 +320,8 @@ async function fetchOrder(client: PoolClient, shopifyOrderId: string): Promise<O
   return result.rows[0] ?? null;
 }
 
-async function resolveAttributionJourney(client: PoolClient, order: OrderRow): Promise<ResolvedJourney> {
-  const candidates = await extractAttributionCandidatesForOrder(client, {
+async function resolveAttributionJourney(client: PoolClient, order: OrderRow): Promise<ResolvedAttributionJourney> {
+  const candidateEvaluation = await extractAttributionCandidatesForOrder(client, {
     shopifyOrderId: order.shopify_order_id,
     processedAt: order.processed_at,
     createdAtShopify: order.created_at_shopify,
@@ -314,7 +336,10 @@ async function resolveAttributionJourney(client: PoolClient, order: OrderRow): P
     rawPayload: order.raw_payload
   });
 
-  return resolveAttributionTier(candidates);
+  return {
+    journey: resolveAttributionTier(candidateEvaluation),
+    candidateEvaluation
+  };
 }
 
 function selectPrimaryCredit(credits: AttributionCredit[]): AttributionCredit | undefined {
@@ -361,7 +386,12 @@ function selectPersistedPrimaryTouchpoint(
   };
 }
 
-async function persistAttribution(client: PoolClient, order: OrderRow, journey: ResolvedJourney): Promise<void> {
+async function persistAttribution(
+  client: PoolClient,
+  order: OrderRow,
+  resolved: ResolvedAttributionJourney
+): Promise<void> {
+  const { journey, candidateEvaluation } = resolved;
   const orderOccurredAt = journey.orderOccurredAtUtc ?? resolveOrderOccurredAt(order);
   const execution = executeAttributionModels(journey.touchpoints, {
     orderOccurredAt,
@@ -377,6 +407,23 @@ async function persistAttribution(client: PoolClient, order: OrderRow, journey: 
   const orderAttributionAudit = buildOrderAttributionAuditRecord(journey, matchedAt);
   const matchSource = buildAttributionMatchSource(journey);
   const confidenceLabel = buildAttributionConfidenceLabel(journey.confidenceScore);
+  const qaSnapshot = buildAttributionQaSnapshot({
+    order,
+    candidates: candidateEvaluation,
+    journey,
+    execution,
+    generatedAt: matchedAt
+  });
+  const attributionSnapshot = {
+    tier: journey.tier,
+    attributionReason: journey.attributionReason,
+    orderOccurredAtUtc: journey.orderOccurredAtUtc?.toISOString() ?? null,
+    normalizationFailures: journey.normalizationFailures,
+    confidenceScore: journey.confidenceScore,
+    winner: journey.winner ? serializeResolvedTouchpoint(journey.winner) : null,
+    timeline: journey.touchpoints.map(serializeResolvedTouchpoint),
+    qaSnapshot
+  };
 
   await client.query('DELETE FROM attribution_order_credits WHERE shopify_order_id = $1', [order.shopify_order_id]);
 
@@ -529,35 +576,48 @@ async function persistAttribution(client: PoolClient, order: OrderRow, journey: 
     ]
   );
 
-  await client.query(
-    `
-      UPDATE shopify_orders
-      SET
-        attribution_tier = $2,
-        attribution_source = $3,
-        attribution_matched_at = $4,
-        attribution_reason = $5,
-        attribution_snapshot = $6::jsonb,
-        attribution_snapshot_updated_at = $4
-      WHERE shopify_order_id = $1
-    `,
-    [
-      order.shopify_order_id,
-      orderAttributionAudit.tier,
-      orderAttributionAudit.source,
-      orderAttributionAudit.matchedAt,
-      orderAttributionAudit.reason,
-      JSON.stringify({
-        tier: journey.tier,
-        attributionReason: journey.attributionReason,
-        orderOccurredAtUtc: journey.orderOccurredAtUtc?.toISOString() ?? null,
-        normalizationFailures: journey.normalizationFailures,
-        confidenceScore: journey.confidenceScore,
-        winner: journey.winner ? serializeResolvedTouchpoint(journey.winner) : null,
-        timeline: journey.touchpoints.map(serializeResolvedTouchpoint)
-      })
-    ]
-  );
+  try {
+    await client.query(
+      `
+        UPDATE shopify_orders
+        SET
+          attribution_tier = $2,
+          attribution_source = $3,
+          attribution_matched_at = $4,
+          attribution_reason = $5,
+          attribution_snapshot = $6::jsonb,
+          attribution_snapshot_updated_at = $4
+        WHERE shopify_order_id = $1
+      `,
+      [
+        order.shopify_order_id,
+        orderAttributionAudit.tier,
+        orderAttributionAudit.source,
+        orderAttributionAudit.matchedAt,
+        orderAttributionAudit.reason,
+        JSON.stringify(attributionSnapshot)
+      ]
+    );
+    emitAttributionQaSnapshotWriteLog({
+      orderId: order.shopify_order_id,
+      pipeline: 'order_backfill',
+      status: 'success',
+      attributionTier: journey.tier,
+      matchSource,
+      payload: qaSnapshot
+    });
+  } catch (error) {
+    emitAttributionQaSnapshotWriteLog({
+      orderId: order.shopify_order_id,
+      pipeline: 'order_backfill',
+      status: 'failure',
+      attributionTier: journey.tier,
+      matchSource,
+      payload: qaSnapshot,
+      error
+    });
+    throw error;
+  }
 
   emitAttributionResolverOutcomeLog({
     shopifyOrderId: order.shopify_order_id,
@@ -753,8 +813,8 @@ export async function backfillRecentOrdersWithRecoveredAttribution(options: Orde
               return null;
             }
 
-            const journey = await resolveAttributionJourney(client, order);
-            return { order, journey };
+            const attribution = await resolveAttributionJourney(client, order);
+            return { order, attribution };
           });
 
           scannedOrders += 1;
@@ -770,10 +830,10 @@ export async function backfillRecentOrdersWithRecoveredAttribution(options: Orde
           }
 
           if (preview.length < MAX_PREVIEW_ORDERS) {
-            preview.push(previewRowForOrder(resolved.order, resolved.journey));
+            preview.push(previewRowForOrder(resolved.order, resolved.attribution.journey));
           }
 
-          if (resolved.journey.winner) {
+          if (resolved.attribution.journey.winner) {
             recoverableOrders += 1;
           } else {
             unrecoverableOrders += 1;
@@ -781,7 +841,7 @@ export async function backfillRecentOrdersWithRecoveredAttribution(options: Orde
 
           if (!dryRun) {
             await withTransaction(async (client) => {
-              await persistAttribution(client, resolved.order, resolved.journey);
+              await persistAttribution(client, resolved.order, resolved.attribution);
 
               if (reportingTimezone) {
                 reportingDates.add(formatDateInTimezone(resolveOrderOccurredAt(resolved.order), reportingTimezone));

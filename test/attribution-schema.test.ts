@@ -5,6 +5,9 @@ import {
   ORDER_ATTRIBUTION_BACKFILL_DEFAULT_LIMIT,
   ORDER_ATTRIBUTION_BACKFILL_MAX_LIMIT,
   attributionEngineV1JsonSchemas,
+  attributionQaPayloadV1JsonSchema,
+  attributionQaPayloadV1NoMatchFixture,
+  attributionQaPayloadV1SuccessFixture,
   normalizeAttributionCaptureV1,
   normalizeAttributionCreditRecordV1,
   normalizeAttributionConsentState,
@@ -12,6 +15,7 @@ import {
   normalizeAttributionExplainRecordV1,
   normalizeAttributionHintInputV1,
   normalizeAttributionOrderInputV1,
+  normalizeAttributionQaPayloadV1,
   normalizeAttributionResultRecordV1,
   normalizeAttributionTouchpointInputV1,
   normalizeAttributionUtcTimestamp,
@@ -706,6 +710,7 @@ test('attribution engine package publishes JSON schema documents for canonical v
     'AttributionExplainRecordV1',
     'AttributionHintInputV1',
     'AttributionOrderInputV1',
+    'AttributionQaPayloadV1',
     'AttributionResultRecordV1',
     'AttributionTouchpointInputV1',
     'MetaDeterministicAttributionAggregateV1',
@@ -715,8 +720,118 @@ test('attribution engine package publishes JSON schema documents for canonical v
   assert.equal(attributionEngineV1JsonSchemas.AttributionOrderInputV1.title, 'AttributionOrderInputV1');
   assert.equal(attributionEngineV1JsonSchemas.AttributionTouchpointInputV1.type, 'object');
   assert.equal(attributionEngineV1JsonSchemas.AttributionResultRecordV1.additionalProperties, false);
+  assert.equal(attributionQaPayloadV1JsonSchema.title, 'AttributionQaPayloadV1');
   assert.equal(
     attributionEngineV1JsonSchemas.MetaDeterministicAttributionAggregateV1.title,
     'MetaDeterministicAttributionAggregateV1'
+  );
+});
+
+test('attribution QA payload fixtures validate success and no-match outcomes', () => {
+  const success = normalizeAttributionQaPayloadV1(attributionQaPayloadV1SuccessFixture);
+  const noMatch = normalizeAttributionQaPayloadV1(attributionQaPayloadV1NoMatchFixture);
+  const selectedSuccessCandidates = [
+    ...success.candidates.deterministic_first_party,
+    ...success.candidates.shopify_hint,
+    ...success.candidates.ga4_fallback
+  ].filter((candidate) => candidate.selected);
+  const selectedNoMatchCandidates = [
+    ...noMatch.candidates.deterministic_first_party,
+    ...noMatch.candidates.shopify_hint,
+    ...noMatch.candidates.ga4_fallback
+  ].filter((candidate) => candidate.selected);
+
+  assert.equal(success.outcome.status, 'success');
+  assert.equal(success.outcome.attribution_tier, 'deterministic_first_party');
+  assert.equal(success.order.currency_code, 'USD');
+  assert.equal(success.candidates.deterministic_first_party[0]?.source, 'google');
+  assert.equal(success.generated_at_utc, '2026-04-30T12:30:00.000Z');
+  assert.equal(selectedSuccessCandidates.length, 1);
+  assert.ok(success.outcome.winner_touchpoint_id || success.outcome.winner_session_id);
+
+  assert.equal(noMatch.outcome.status, 'no_match');
+  assert.equal(noMatch.outcome.attribution_tier, 'unattributed');
+  assert.equal(noMatch.outcome.winner_touchpoint_id, null);
+  assert.equal(noMatch.outcome.winner_session_id, null);
+  assert.equal(noMatch.outcome.confidence_score, 0);
+  assert.equal(noMatch.outcome.confidence_label, 'none');
+  assert.equal(selectedNoMatchCandidates.length, 0);
+  assert.equal(noMatch.credits.length, 0);
+});
+
+test('attribution QA payload serialization round-trips normalized schema fields', () => {
+  const payload = normalizeAttributionQaPayloadV1({
+    ...attributionQaPayloadV1SuccessFixture,
+    generated_at_utc: '2026-04-30T12:30:00-05:00',
+    order: {
+      ...attributionQaPayloadV1SuccessFixture.order,
+      currency_code: 'usd',
+      subtotal_amount: 180,
+      total_amount: 195,
+      identifiers: {
+        ...attributionQaPayloadV1SuccessFixture.order.identifiers,
+        checkout_token: undefined,
+        cart_token: '   ',
+        email_hash: undefined
+      }
+    },
+    candidates: {
+      ...attributionQaPayloadV1SuccessFixture.candidates,
+      deterministic_first_party: attributionQaPayloadV1SuccessFixture.candidates.deterministic_first_party.map(
+        (candidate) => ({
+          ...candidate,
+          occurred_at_utc: '2026-04-30T11:15:00-05:00',
+          source: ' Google ',
+          medium: ' CPC ',
+          content: undefined,
+          click_id_type: undefined
+        })
+      )
+    }
+  });
+  const serialized = JSON.parse(JSON.stringify(payload));
+  const reparsed = normalizeAttributionQaPayloadV1(serialized);
+
+  assert.deepEqual(reparsed, serialized);
+  assert.equal(reparsed.generated_at_utc, '2026-04-30T17:30:00.000Z');
+  assert.equal(reparsed.order.currency_code, 'USD');
+  assert.equal(reparsed.order.subtotal_amount, '180.00');
+  assert.equal(reparsed.order.identifiers.checkout_token, null);
+  assert.equal(reparsed.order.identifiers.cart_token, null);
+  assert.equal(reparsed.order.identifiers.email_hash, null);
+  assert.equal(reparsed.candidates.deterministic_first_party[0]?.source, 'google');
+  assert.equal(reparsed.candidates.deterministic_first_party[0]?.medium, 'cpc');
+  assert.equal(reparsed.candidates.deterministic_first_party[0]?.content, null);
+  assert.equal(reparsed.candidates.deterministic_first_party[0]?.click_id_type, null);
+  assert.equal(reparsed.candidates.deterministic_first_party[0]?.occurred_at_utc, '2026-04-30T16:15:00.000Z');
+});
+
+test('attribution QA payload enforces success and no-match invariants', () => {
+  assert.throws(
+    () =>
+      normalizeAttributionQaPayloadV1({
+        ...attributionQaPayloadV1SuccessFixture,
+        outcome: {
+          ...attributionQaPayloadV1SuccessFixture.outcome,
+          status: 'no_match'
+        }
+      }),
+    /no_match payloads must be unattributed/
+  );
+
+  assert.throws(
+    () =>
+      normalizeAttributionQaPayloadV1({
+        ...attributionQaPayloadV1NoMatchFixture,
+        outcome: {
+          ...attributionQaPayloadV1NoMatchFixture.outcome,
+          status: 'success',
+          attribution_tier: 'deterministic_first_party',
+          match_source: 'landing_session_id',
+          confidence_score: 1,
+          confidence_label: 'high'
+        }
+      }),
+    /success payloads require winner_touchpoint_id or winner_session_id/
   );
 });

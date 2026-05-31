@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { Buffer } from 'node:buffer';
 import { randomUUID } from 'node:crypto';
 
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
@@ -125,6 +126,29 @@ type CampaignMetadataSyncJobLifecycleLogInput = {
   campaignResolvedRate?: number | null;
   overallUnresolvedRate?: number | null;
   staleEntityCount?: number | null;
+  error?: unknown;
+};
+
+type AttributionQaSnapshotWriteLogInput = {
+  orderId: string;
+  pipeline: 'realtime_queue' | 'order_backfill' | 'generated_on_read' | string;
+  status: 'success' | 'failure';
+  attributionTier?: string | null;
+  matchSource?: string | null;
+  payload?: unknown;
+  error?: unknown;
+};
+
+type AttributionQaPayloadFetchLogInput = {
+  endpoint: 'public_qa_payload' | 'admin_qa_debug' | string;
+  orderId: string;
+  status: 'success' | 'not_found' | 'failure';
+  statusCode: number;
+  durationMs: number;
+  source?: string | null;
+  payload?: unknown;
+  rawEvidenceCount?: number | null;
+  rawEvidenceSizeBytes?: number | null;
   error?: unknown;
 };
 
@@ -324,6 +348,40 @@ function hasMeaningfulValue(value: unknown): boolean {
   return value.trim().length > 0;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function arrayLength(value: unknown): number {
+  return Array.isArray(value) ? value.length : 0;
+}
+
+function measureJsonSizeBytes(value: unknown): number {
+  try {
+    return Buffer.byteLength(JSON.stringify(value) ?? 'null', 'utf8');
+  } catch {
+    return 0;
+  }
+}
+
+function summarizeAttributionQaPayload(payload: unknown): SerializableFields {
+  const record = asRecord(payload);
+  const candidates = asRecord(record?.candidates);
+  const diagnostics = asRecord(record?.diagnostics);
+
+  return {
+    payloadSizeBytes: payload === undefined ? 0 : measureJsonSizeBytes(payload),
+    candidateCount:
+      arrayLength(candidates?.deterministic_first_party) +
+      arrayLength(candidates?.shopify_hint) +
+      arrayLength(candidates?.ga4_fallback),
+    modelSummaryCount: arrayLength(record?.model_summaries),
+    creditCount: arrayLength(record?.credits),
+    explainabilityRecordCount: arrayLength(record?.explainability),
+    normalizationFailureCount: arrayLength(diagnostics?.normalization_failures)
+  };
+}
+
 function buildCaptureStatus(payload: Record<string, unknown>): 'missing_session_id' | 'complete' | 'partial' {
   if (!hasMeaningfulValue(payload.roas_radar_session_id)) {
     return 'missing_session_id';
@@ -442,6 +500,53 @@ export function emitAttributionResolverOutcomeLog(input: ResolverOutcomeInput): 
     service: process.env.K_SERVICE ?? 'roas-radar-attribution-worker',
     ...summarizeResolverOutcome(input)
   });
+}
+
+export function emitAttributionQaSnapshotWriteLog(input: AttributionQaSnapshotWriteLogInput): void {
+  const fields: SerializableFields = {
+    service: process.env.K_SERVICE ?? 'roas-radar-attribution-worker',
+    order_id: input.orderId,
+    orderId: input.orderId,
+    pipeline: input.pipeline,
+    status: input.status,
+    attributionTier: input.attributionTier ?? null,
+    matchSource: input.matchSource ?? null,
+    ...summarizeAttributionQaPayload(input.payload)
+  };
+
+  if (input.status === 'failure') {
+    logError('attribution_qa_snapshot_write', input.error ?? new Error('Attribution QA snapshot write failed'), {
+      ...fields,
+      alertable: true
+    });
+    return;
+  }
+
+  logInfo('attribution_qa_snapshot_write', fields);
+}
+
+export function emitAttributionQaPayloadFetchLog(input: AttributionQaPayloadFetchLogInput): void {
+  const fields: SerializableFields = {
+    service: process.env.K_SERVICE ?? 'roas-radar-api',
+    endpoint: input.endpoint,
+    order_id: input.orderId,
+    orderId: input.orderId,
+    status: input.status,
+    statusCode: input.statusCode,
+    statusClass: `${Math.floor(input.statusCode / 100)}xx`,
+    source: input.source ?? null,
+    durationMs: Number(input.durationMs.toFixed(2)),
+    rawEvidenceCount: input.rawEvidenceCount ?? null,
+    rawEvidenceSizeBytes: input.rawEvidenceSizeBytes ?? null,
+    ...summarizeAttributionQaPayload(input.payload)
+  };
+
+  if (input.status === 'failure') {
+    logError('attribution_qa_payload_fetch', input.error ?? new Error('Attribution QA payload fetch failed'), fields);
+    return;
+  }
+
+  logInfo('attribution_qa_payload_fetch', fields);
 }
 
 export function runWithRequestContext<T>(context: RequestContext, callback: () => T): T {

@@ -1,9 +1,31 @@
-New distribution metric extracting `jsonPayload.resolvedRate` from
-`campaign_metadata_resolution_coverage` logs.
-
-Labels:
-- service
-- resolution_scope
-- platform
-- entity_type
-- source
+{
+  "name": "roas_campaign_metadata_resolution_rate",
+  "description": "Distribution of campaign metadata resolved rates emitted by campaign_metadata_resolution_coverage logs.",
+  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"campaign_metadata_resolution_coverage\"",
+  "valueExtractor": "EXTRACT(jsonPayload.resolvedRate)",
+  "labelExtractors": {
+    "service": "EXTRACT(jsonPayload.service)",
+    "resolution_scope": "EXTRACT(jsonPayload.resolutionScope)",
+    "platform": "EXTRACT(jsonPayload.platform)",
+    "entity_type": "EXTRACT(jsonPayload.entityType)",
+    "source": "EXTRACT(jsonPayload.source)"
+  },
+  "metricDescriptor": {
+    "metricKind": "DELTA",
+    "valueType": "DISTRIBUTION",
+    "unit": "1",
+    "displayName": "ROAS Radar Campaign Metadata Resolution Rate",
+    "labels": [
+      { "key": "service", "valueType": "STRING", "description": "Service emitting the coverage event." },
+      { "key": "resolution_scope", "valueType": "STRING", "description": "Campaign metadata resolution scope." },
+      { "key": "platform", "valueType": "STRING", "description": "Ad platform." },
+      { "key": "entity_type", "valueType": "STRING", "description": "Resolved entity type." },
+      { "key": "source", "valueType": "STRING", "description": "Source field used for resolution diagnostics." }
+    ]
+  },
+  "bucketOptions": {
+    "explicitBuckets": {
+      "bounds": [0, 0.5, 0.75, 0.85, 0.9, 0.95, 1]
+    }
+  }
+}

@@ -1,6 +1,8 @@
 import type { PoolClient } from 'pg';
 
+import { env } from '../../config/env.js';
 import { withTransaction } from '../../db/pool.js';
+import { buildRawPayloadStorageMetadata } from '../../shared/raw-payload-storage.js';
 import {
   assertNoDeterministicViewImpressionOrderAttribution,
   isDeterministicViewImpressionAttributionEnabled,
@@ -125,6 +127,88 @@ async function insertExplainRecord(
   );
 }
 
+async function insertRawEvidenceRecords(
+  client: PoolClient,
+  runId: string,
+  orderId: string,
+  rawEvidence: AttributionPreprocessingDataset['rawEvidence']
+): Promise<void> {
+  const retentionDays = Math.max(Math.trunc(env.ATTRIBUTION_QA_RETENTION_DAYS), 1);
+  await client.query('DELETE FROM attribution_raw_evidence WHERE run_id = $1::uuid AND order_id = $2', [runId, orderId]);
+
+  for (const evidence of rawEvidence.filter((record) => record.orderId === orderId)) {
+    const payloadMetadata = buildRawPayloadStorageMetadata(evidence.rawPayload);
+
+    await client.query(
+      `
+        INSERT INTO attribution_raw_evidence (
+          run_id,
+          order_id,
+          evidence_type,
+          source_table,
+          source_record_id,
+          touchpoint_id,
+          session_id,
+          ingestion_source,
+          event_type,
+          occurred_at_utc,
+          captured_at_utc,
+          evidence_status,
+          error_code,
+          error_message,
+          normalized_metadata,
+          raw_payload,
+          payload_size_bytes,
+          payload_hash,
+          retained_until
+        )
+        VALUES (
+          $1::uuid,
+          $2,
+          $3,
+          $4,
+          $5,
+          $6,
+          $7::uuid,
+          $8,
+          $9,
+          $10::timestamptz,
+          $11::timestamptz,
+          $12,
+          $13,
+          $14,
+          $15::jsonb,
+          $16::jsonb,
+          $17,
+          $18,
+          $19::timestamptz
+        )
+      `,
+      [
+        runId,
+        orderId,
+        evidence.evidenceType,
+        evidence.sourceTable,
+        evidence.sourceRecordId,
+        evidence.touchpointId,
+        evidence.sessionId,
+        evidence.ingestionSource,
+        evidence.eventType,
+        evidence.occurredAtUtc,
+        evidence.capturedAtUtc,
+        evidence.evidenceStatus,
+        evidence.errorCode,
+        evidence.errorMessage,
+        JSON.stringify(evidence.normalizedMetadata),
+        payloadMetadata.rawPayloadJson,
+        payloadMetadata.payloadSizeBytes,
+        payloadMetadata.payloadHash,
+        new Date(Date.now() + retentionDays * 24 * 60 * 60 * 1000)
+      ]
+    );
+  }
+}
+
 async function persistBatch(
   client: PoolClient,
   run: ClaimedAttributionRun,
@@ -208,6 +292,8 @@ async function persistBatch(
         JSON.stringify(order.raw_order_ref ?? {})
       ]
     );
+
+    await insertRawEvidenceRecords(client, run.id, orderId, dataset.rawEvidence);
 
     for (const touchpoint of orderTouchpoints) {
       assertNoDeterministicViewImpressionOrderAttribution({

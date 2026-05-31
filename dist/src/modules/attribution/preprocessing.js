@@ -233,6 +233,128 @@ function buildHintInput(payload) {
         raw_hint_keys: Array.from(new Set(rawHintKeys)).sort()
     });
 }
+function buildRawShopifyHintPayload(rawPayload) {
+    if (!rawPayload || typeof rawPayload !== 'object' || Array.isArray(rawPayload)) {
+        return rawPayload;
+    }
+    const record = rawPayload;
+    return {
+        landing_site: record.landing_site ?? null,
+        referring_site: record.referring_site ?? null,
+        source_name: record.source_name ?? null,
+        note_attributes: record.note_attributes ?? null,
+        attributes: record.attributes ?? null
+    };
+}
+function safeBuildHintInput(order) {
+    const rawHintPayload = buildRawShopifyHintPayload(order.rawPayload);
+    const baseEvidence = {
+        orderId: order.shopifyOrderId,
+        evidenceType: 'shopify_hint',
+        sourceTable: 'shopify_orders',
+        sourceRecordId: order.shopifyOrderId,
+        touchpointId: `shopify_hint:${order.shopifyOrderId}`,
+        sessionId: normalizeNullableString(order.landingSessionId),
+        ingestionSource: 'shopify_marketing_hint',
+        eventType: null,
+        occurredAtUtc: null,
+        capturedAtUtc: null,
+        rawPayload: rawHintPayload
+    };
+    if (!order.rawPayload || typeof order.rawPayload !== 'object' || Array.isArray(order.rawPayload)) {
+        return {
+            hint: null,
+            evidence: {
+                ...baseEvidence,
+                evidenceStatus: 'malformed',
+                errorCode: 'invalid_shopify_payload_shape',
+                errorMessage: 'Shopify order raw payload must be an object to extract attribution hints.',
+                normalizedMetadata: {}
+            }
+        };
+    }
+    try {
+        const hint = buildHintInput(order.rawPayload);
+        return {
+            hint,
+            evidence: {
+                ...baseEvidence,
+                evidenceStatus: 'valid',
+                errorCode: null,
+                errorMessage: null,
+                normalizedMetadata: hint
+                    ? {
+                        hintType: hint.hint_type,
+                        rawHintKeys: hint.raw_hint_keys,
+                        source: hint.source,
+                        medium: hint.medium,
+                        campaign: hint.campaign,
+                        clickIdType: hint.click_id_type,
+                        confidenceLabel: hint.hint_confidence_label
+                    }
+                    : {
+                        hintType: null,
+                        rawHintKeys: []
+                    }
+            }
+        };
+    }
+    catch (error) {
+        return {
+            hint: null,
+            evidence: {
+                ...baseEvidence,
+                evidenceStatus: 'malformed',
+                errorCode: 'shopify_hint_parse_failed',
+                errorMessage: error instanceof Error ? error.message : 'Failed to parse Shopify attribution hints.',
+                normalizedMetadata: {}
+            }
+        };
+    }
+}
+function buildRawTrackingEvidence(order, sessionContext, event, touchpoint) {
+    const occurredAtUtc = normalizeIsoTimestamp(event.occurredAt);
+    const capturedAtUtc = normalizeIsoTimestamp(event.capturedAt ?? event.occurredAt);
+    const missingPayload = event.rawPayload === undefined;
+    const timestampError = !occurredAtUtc || !capturedAtUtc
+        ? {
+            code: 'invalid_touchpoint_timestamp',
+            message: 'Tracking touchpoint occurred_at or captured_at is missing or invalid.'
+        }
+        : null;
+    const payloadError = missingPayload
+        ? {
+            code: 'missing_raw_payload',
+            message: 'Tracking touchpoint raw payload is missing.'
+        }
+        : null;
+    const error = timestampError ?? payloadError;
+    return {
+        orderId: order.shopifyOrderId,
+        evidenceType: 'tracking_touchpoint',
+        sourceTable: 'session_attribution_touch_events',
+        sourceRecordId: event.touchEventId,
+        touchpointId: touchpoint?.touchpoint_id ?? `event:${event.touchEventId}`,
+        sessionId: sessionContext.sessionId,
+        ingestionSource: normalizeNullableString(event.ingestionSource),
+        eventType: normalizeNullableString(event.eventType),
+        occurredAtUtc,
+        capturedAtUtc,
+        evidenceStatus: error ? 'malformed' : 'valid',
+        errorCode: error?.code ?? null,
+        errorMessage: error?.message ?? null,
+        normalizedMetadata: {
+            evidenceSource: touchpoint?.evidence_source ?? null,
+            attributionReason: touchpoint?.attribution_reason ?? null,
+            engagementType: touchpoint?.engagement_type ?? null,
+            source: touchpoint?.source ?? null,
+            medium: touchpoint?.medium ?? null,
+            campaign: touchpoint?.campaign ?? null,
+            clickIdType: touchpoint?.click_id_type ?? null
+        },
+        rawPayload: event.rawPayload ?? null
+    };
+}
 function resolveMatchedSessionContexts(order, sessionIdentityById, eventsBySessionId, journeyBySessionId) {
     const sessionIds = new Set();
     const normalizedCheckoutToken = normalizeNullableString(order.checkoutToken);
@@ -548,6 +670,7 @@ export function preprocessAttributionSnapshot(snapshot, options) {
     const failures = [];
     const orders = [];
     const touchpointCandidates = [];
+    const rawEvidence = [];
     const sessionIdentityById = new Map();
     for (const identity of snapshot.sessionIdentities) {
         sessionIdentityById.set(identity.sessionId, identity);
@@ -648,26 +771,32 @@ export function preprocessAttributionSnapshot(snapshot, options) {
             }
             for (const event of (eventsBySessionId.get(sessionContext.sessionId) ?? []).slice().sort((left, right) => left.touchEventId.localeCompare(right.touchEventId))) {
                 const eventCandidate = buildEventCandidate(order, occurredAtUtc, sessionContext, event);
+                rawEvidence.push(buildRawTrackingEvidence(order, sessionContext, event, eventCandidate?.touchpoint ?? null));
                 if (!eventCandidate) {
                     continue;
                 }
                 touchpointCandidates.push(eventCandidate);
             }
         }
-        if (order.rawPayload && typeof order.rawPayload === 'object') {
-            const hint = buildHintInput(order.rawPayload);
-            if (hint) {
-                touchpointCandidates.push(buildHintCandidate(order, occurredAtUtc, hint));
-            }
+        const { hint, evidence } = safeBuildHintInput(order);
+        rawEvidence.push({
+            ...evidence,
+            occurredAtUtc,
+            capturedAtUtc: occurredAtUtc
+        });
+        if (hint) {
+            touchpointCandidates.push(buildHintCandidate(order, occurredAtUtc, hint));
         }
-        else if (order.rawPayload != null) {
+        else if (evidence.evidenceStatus === 'malformed') {
             logFailure(failures, options, {
                 scope: 'hint',
                 orderId: order.shopifyOrderId,
                 touchpointId: null,
                 sessionId: null,
-                reasonCode: 'invalid_shopify_payload_shape',
-                details: {}
+                reasonCode: evidence.errorCode ?? 'invalid_shopify_payload_shape',
+                details: {
+                    errorMessage: evidence.errorMessage
+                }
             });
         }
     }
@@ -675,7 +804,8 @@ export function preprocessAttributionSnapshot(snapshot, options) {
     return {
         orders,
         touchpoints,
-        failures
+        failures,
+        rawEvidence
     };
 }
 export async function loadAttributionPreprocessingSnapshot(client, orderIds) {

@@ -142,6 +142,58 @@ paths:
           description: Authentication required
         "404":
           description: Attribution result not found
+  /api/attribution/orders/{orderId}/qa-payload:
+    get:
+      summary: Fetch per-order attribution QA payload
+      operationId: getAttributionQaPayload
+      parameters:
+        - in: path
+          name: orderId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Schema-validated attribution QA payload for one Shopify order
+        "400":
+          description: Invalid request
+        "401":
+          description: Authentication required
+        "404":
+          description: Shopify order not found
+  /api/admin/attribution/orders/{orderId}/qa-debug:
+    get:
+      summary: Fetch full per-order attribution QA debug payload
+      operationId: getAdminAttributionQaDebugPayload
+      description: >
+        Internal admin-user-only endpoint that returns the schema-validated
+        AttributionQaPayloadV1 without public redaction, grouped raw Shopify
+        hint evidence, grouped raw tracking touchpoint evidence, optional GA4
+        fallback candidate details, and explicit evidence-state metadata for
+        missing or pruned evidence rows.
+      parameters:
+        - in: path
+          name: orderId
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: runId
+          schema:
+            type: string
+            format: uuid
+          description: Optional attribution run to inspect. Defaults to the latest persisted run for the order.
+      responses:
+        "200":
+          description: Full admin QA debug payload for one Shopify order
+        "400":
+          description: Invalid request
+        "401":
+          description: Authentication required
+        "403":
+          description: Internal admin user access required
+        "404":
+          description: Shopify order or requested attribution run not found
 components:
   securitySchemes:
     bearerAuth:
