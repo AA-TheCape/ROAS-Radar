@@ -2,12 +2,20 @@ import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
 
-import { buildRawPayloadFixture, resetIntegrationTables } from './integration-test-helpers.js';
+import {
+	DEFAULT_REPORTING_TIMEZONE,
+	formatDateInTimezone,
+} from "../src/modules/settings/index.js";
+import {
+	buildRawPayloadFixture,
+	resetIntegrationTables,
+} from "./integration-test-helpers.js";
 
-process.env.DATABASE_URL ??= 'postgres://postgres:postgres@127.0.0.1:5432/roas_radar';
-process.env.REPORTING_API_TOKEN = 'test-reporting-token';
-process.env.SHOPIFY_APP_API_SECRET ??= 'test-app-secret';
-process.env.SHOPIFY_WEBHOOK_SECRET ??= 'test-webhook-secret';
+process.env.DATABASE_URL ??=
+	"postgres://postgres:postgres@127.0.0.1:5432/roas_radar";
+process.env.REPORTING_API_TOKEN = "test-reporting-token";
+process.env.SHOPIFY_APP_API_SECRET ??= "test-app-secret";
+process.env.SHOPIFY_WEBHOOK_SECRET ??= "test-webhook-secret";
 
 async function getModules() {
 	const poolModule = await import("../src/db/pool.js");
@@ -26,23 +34,23 @@ async function getModules() {
 async function resetIntegrationDatabase() {
 	const { pool } = await getModules();
 
-  await resetIntegrationTables(pool, [
-    'attribution_jobs',
-    'shopify_order_writeback_jobs',
-    'attribution_order_credits',
-    'attribution_results',
-    'daily_reporting_metrics',
-    'order_attribution_links',
-    'session_attribution_touch_events',
-    'session_attribution_identities',
-    'shopify_order_line_items',
-    'shopify_orders',
-    'shopify_webhook_receipts',
-    'tracking_events',
-    'tracking_sessions',
-    'shopify_customers',
-    'customer_identities'
-  ]);
+	await resetIntegrationTables(pool, [
+		"attribution_jobs",
+		"shopify_order_writeback_jobs",
+		"attribution_order_credits",
+		"attribution_results",
+		"daily_reporting_metrics",
+		"order_attribution_links",
+		"session_attribution_touch_events",
+		"session_attribution_identities",
+		"shopify_order_line_items",
+		"shopify_orders",
+		"shopify_webhook_receipts",
+		"tracking_events",
+		"tracking_sessions",
+		"shopify_customers",
+		"customer_identities",
+	]);
 }
 
 test("request-context bootstrap fallback preserves attributable revenue when the browser page beacon is missing", async () => {
@@ -147,27 +155,60 @@ test("request-context bootstrap fallback preserves attributable revenue when the
 			[bootstrapBody.sessionId],
 		);
 
-    assert.equal(persistedTouchEvent.rowCount, 1);
-    assert.equal(persistedTouchEvent.rows[0].ingestion_source, 'request_query');
-    assert.equal(persistedTouchEvent.rows[0].consent_state, 'unknown');
-    assert.deepEqual(persistedTouchEvent.rows[0].raw_payload, {
-      pageUrl:
-        'https://store.example/products/widget?utm_source=google&utm_medium=cpc&utm_campaign=spring-sale&gbraid=GBRAID-123',
-      landingUrl:
-        'https://store.example/products/widget?utm_source=google&utm_medium=cpc&utm_campaign=spring-sale&gbraid=GBRAID-123',
-      referrerUrl: 'https://www.google.com/search?q=widget',
-      referer: 'https://store.example/products/widget?utm_source=google&utm_medium=cpc&utm_campaign=spring-sale'
-    });
-    const orderProcessedAt = new Date(Date.now() + 60_000).toISOString();
-    const reportingDate = orderProcessedAt.slice(0, 10);
+		assert.equal(persistedTouchEvent.rowCount, 1);
+		assert.equal(persistedTouchEvent.rows[0].ingestion_source, "request_query");
+		assert.equal(persistedTouchEvent.rows[0].consent_state, "unknown");
+		assert.deepEqual(persistedTouchEvent.rows[0].raw_payload, {
+			pageUrl:
+				"https://store.example/products/widget?utm_source=google&utm_medium=cpc&utm_campaign=spring-sale&gbraid=GBRAID-123",
+			landingUrl:
+				"https://store.example/products/widget?utm_source=google&utm_medium=cpc&utm_campaign=spring-sale&gbraid=GBRAID-123",
+			referrerUrl: "https://www.google.com/search?q=widget",
+			referer:
+				"https://store.example/products/widget?utm_source=google&utm_medium=cpc&utm_campaign=spring-sale",
+		});
+		const orderProcessedAt = new Date(Date.now() - 1_000);
+		const touchOccurredAt = new Date(
+			orderProcessedAt.getTime() - 86_400_000,
+		).toISOString();
+		const reportingDate = formatDateInTimezone(
+			orderProcessedAt,
+			DEFAULT_REPORTING_TIMEZONE,
+		);
 
-    const orderFixture = buildRawPayloadFixture(
-      {
-        id: 'fallback-order-1',
-        landing_session_id: bootstrapBody.sessionId
-      },
-      'fallback-order-1'
-    );
+		await pool.query(
+			`
+        UPDATE tracking_sessions
+        SET first_seen_at = $2::timestamptz,
+            last_seen_at = $2::timestamptz
+        WHERE id = $1::uuid
+      `,
+			[bootstrapBody.sessionId, touchOccurredAt],
+		);
+		await pool.query(
+			`
+        UPDATE tracking_events
+        SET occurred_at = $2::timestamptz
+        WHERE session_id = $1::uuid
+      `,
+			[bootstrapBody.sessionId, touchOccurredAt],
+		);
+		await pool.query(
+			`
+        UPDATE session_attribution_touch_events
+        SET occurred_at = $2::timestamptz
+        WHERE roas_radar_session_id = $1::uuid
+      `,
+			[bootstrapBody.sessionId, touchOccurredAt],
+		);
+
+		const orderFixture = buildRawPayloadFixture(
+			{
+				id: "fallback-order-1",
+				landing_session_id: bootstrapBody.sessionId,
+			},
+			"fallback-order-1",
+		);
 
 		await pool.query(
 			`
@@ -200,16 +241,16 @@ test("request-context bootstrap fallback preserves attributable revenue when the
           now()
         )
       `,
-      [
-        'fallback-order-1',
-        orderProcessedAt,
-        bootstrapBody.sessionId,
-        orderFixture.payloadExternalId,
-        orderFixture.payloadSizeBytes,
-        orderFixture.payloadHash,
-        orderFixture.rawPayloadJson
-      ]
-    );
+			[
+				"fallback-order-1",
+				orderProcessedAt.toISOString(),
+				bootstrapBody.sessionId,
+				orderFixture.payloadExternalId,
+				orderFixture.payloadSizeBytes,
+				orderFixture.payloadHash,
+				orderFixture.rawPayloadJson,
+			],
+		);
 
 		await enqueueAttributionForOrder(
 			"fallback-order-1",
@@ -272,8 +313,8 @@ test("request-context bootstrap fallback preserves attributable revenue when the
           AND medium = 'cpc'
           AND campaign = 'spring-sale'
       `,
-      [reportingDate]
-    );
+			[reportingDate],
+		);
 
 		assert.equal(reportingRow.rowCount, 1);
 		assert.equal(reportingRow.rows[0].attributed_orders, 1);

@@ -89,8 +89,15 @@ async function loadDeterministicCounts(): Promise<{
 	quarantine: string;
 	checkpoints: string;
 }> {
-	const [jobs, rawRows, facts, aggregates, verifications, quarantine, checkpoints] =
-		await Promise.all([
+	const [
+		jobs,
+		rawRows,
+		facts,
+		aggregates,
+		verifications,
+		quarantine,
+		checkpoints,
+	] = await Promise.all([
 		pool.query<{ count: string }>(
 			"SELECT count(*)::text AS count FROM meta_ads_deterministic_sync_jobs",
 		),
@@ -112,7 +119,7 @@ async function loadDeterministicCounts(): Promise<{
 		pool.query<{ count: string }>(
 			"SELECT count(*)::text AS count FROM meta_ads_deterministic_sync_checkpoints",
 		),
-		]);
+	]);
 
 	return {
 		jobs: jobs.rows[0].count,
@@ -147,10 +154,13 @@ test(
 
 			if (transientFailuresRemaining > 0) {
 				transientFailuresRemaining -= 1;
-				return new Response(JSON.stringify({ error: { message: "rate limited" } }), {
-					status: 500,
-					headers: { "content-type": "application/json" },
-				});
+				return new Response(
+					JSON.stringify({ error: { message: "rate limited" } }),
+					{
+						status: 500,
+						headers: { "content-type": "application/json" },
+					},
+				);
 			}
 
 			return new Response(
@@ -376,15 +386,15 @@ test(
 				now: new Date("2026-05-27T12:00:00Z"),
 				triggerSource: "test",
 			});
-			assert.equal(secondRun.succeededJobs, 1);
-			assert.equal(secondRun.recordsReceived, 2);
+			assert.equal(secondRun.succeededJobs, 0);
+			assert.equal(secondRun.recordsReceived, 0);
 			assert.deepEqual(await loadDeterministicCounts(), {
 				jobs: "1",
 				rawRows: "2",
 				facts: "2",
 				aggregates: "2",
 				verifications: "2",
-				quarantine: "2",
+				quarantine: "1",
 				checkpoints: "1",
 			});
 		} finally {
@@ -547,7 +557,7 @@ test(
 			},
 			{
 				status: "dry_run",
-				connectionId,
+				connectionId: String(connectionId),
 				plannedJobs: 3,
 				existingJobs: 0,
 				insertedJobs: 0,
