@@ -23,6 +23,22 @@ Blocked. The attached execution workspace cannot invoke staging:
 
 No staging dry-run or live-run was executed from this workspace, and no staging data was modified.
 
+Capability checks re-run from the attached workspace on 2026-05-31:
+
+```text
+$ gcloud --version
+/bin/bash: line 1: gcloud: command not found
+
+$ gcloud auth list --filter=status:ACTIVE '--format=value(account)'
+/bin/bash: line 1: gcloud: command not found
+
+$ gcloud run jobs list --project=roas-radar-staging --region=us-central1 '--format=value(metadata.name)'
+/bin/bash: line 1: gcloud: command not found
+
+$ env | rg '^(DATABASE_URL|PGHOST|PGDATABASE|PGUSER|PGPASSWORD|GCP_PROJECT_ID|GOOGLE_APPLICATION_CREDENTIALS|CLOUDSDK_CONFIG|REPORTING_API_TOKEN)='
+<no output>
+```
+
 ## Intended Staging Commands
 
 Use the same window and `requested-by` value across dry and live runs so outputs are comparable.
@@ -91,7 +107,7 @@ Capture before and after snapshots for the same 30-day window:
 SELECT attribution_tier, attribution_status, COUNT(*) AS orders
 FROM shopify_order_attribution_snapshots
 WHERE processed_at >= '2026-05-01T00:00:00Z'
-  AND processed_at < '2026-06-01T00:00:00Z'
+  AND processed_at < '2026-05-31T00:00:00Z'
 GROUP BY attribution_tier, attribution_status
 ORDER BY attribution_tier, attribution_status;
 
