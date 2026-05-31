@@ -44,7 +44,7 @@ test('cloud run metadata refresh jobs use provider-specific secret bindings', ()
   const googleAdsSection = extractSection(
     script,
     'echo "Deploying Google Ads metadata refresh job $GOOGLE_ADS_METADATA_JOB_NAME"',
-    'echo "Deploying session retention job $RETENTION_JOB_NAME"'
+    'echo "Deploying GA4 ingestion job $GA4_INGESTION_JOB_NAME"'
   );
 
   assert.match(
@@ -92,4 +92,16 @@ test('cloud run runbooks document metadata scheduler creation and pause or resum
   assert.match(metadataRunbook, /campaign_metadata_sync_job_lifecycle/);
   assert.match(metadataRunbook, /META_ADS_METADATA_REFRESH_REQUESTED_BY/);
   assert.match(metadataRunbook, /GOOGLE_ADS_METADATA_REFRESH_REQUESTED_BY/);
+});
+
+test('cloud run runbook documents recovery queue and dead-letter replay workflows', () => {
+  const cloudRunRunbook = readRepoFile('docs/runbooks/cloud-run-pipelines.md');
+
+  assert.match(cloudRunRunbook, /Automatic recovery queue checks/);
+  assert.match(cloudRunRunbook, /Dead-letter replay workflow/);
+  assert.match(cloudRunRunbook, /--dry-run/);
+  assert.match(cloudRunRunbook, /sourcePrecedence=\["shopify","ga4","ad_platforms"\]/);
+  assert.match(cloudRunRunbook, /Retryable:/);
+  assert.match(cloudRunRunbook, /Permanent:/);
+  assert.match(cloudRunRunbook, /raw payload hashes and storage URIs remain unchanged/);
 });

@@ -319,6 +319,75 @@ test("recovery job contracts normalize requests and require Shopify > GA4 > ad p
 	);
 });
 
+test("recovery job contracts reject invalid windows and classify failure retryability", () => {
+	assert.throws(
+		() =>
+			normalizeRecoveryJobRequest({
+				schemaVersion: 1,
+				jobType: "ga4_fallback_unattributed_recovery",
+				initiatedBy: "ops@example.com",
+				timeRangeStart: "2026-05-02T00:00:00Z",
+				timeRangeEnd: "2026-05-01T00:00:00Z",
+			}),
+		/timeRangeStart must be on or before timeRangeEnd/,
+	);
+
+	const report = normalizeRecoveryJobReport({
+		schemaVersion: 1,
+		jobId: "run-2",
+		jobType: "ga4_fallback_unattributed_recovery",
+		status: "partial_failure",
+		startedAt: "2026-05-01T00:00:00Z",
+		completedAt: "2026-05-01T00:05:00Z",
+		dryRun: false,
+		sourcePrecedence: ["shopify", "ga4", "ad_platforms"],
+		counters: {
+			recordsDiscovered: 2,
+			recordsProcessed: 2,
+			recordsSucceeded: 1,
+			recordsFailed: 1,
+			recordsSkipped: 0,
+			sideEffectsAttempted: 1,
+			sideEffectsSucceeded: 1,
+			sideEffectsSuppressed: 0,
+		},
+		failures: [
+			{
+				recordType: "shopify_order",
+				recordKey: "1001",
+				code: "ga4_export_lag",
+				message: "GA4 export is not available yet",
+				sourceSystem: "ga4",
+				retryable: true,
+			},
+			{
+				recordType: "shopify_order",
+				recordKey: "1002",
+				code: "invalid_order_payload",
+				message: "Order payload is missing required ids",
+				sourceSystem: "shopify",
+				retryable: false,
+			},
+		],
+	});
+
+	assert.equal(report.failures[0].retryable, true);
+	assert.equal(report.failures[1].retryable, false);
+	assert.throws(
+		() =>
+			normalizeRecoveryJobReport({
+				...report,
+				failures: [
+					{
+						...report.failures[0],
+						sourceSystem: "warehouse",
+					},
+				],
+			}),
+		/Invalid enum value/,
+	);
+});
+
 test("recovery source payload contracts normalize Shopify, GA4, and ad metadata fields", () => {
 	const shopifySnapshot = normalizeShopifyRawPayloadSnapshot({
 		schemaVersion: 1,
@@ -395,6 +464,7 @@ test("recovery source payload contracts normalize Shopify, GA4, and ad metadata 
 	});
 
 	assert.equal(shopifySnapshot.normalized.currencyCode, "USD");
+	assert.deepEqual(shopifySnapshot.rawPayload, { id: 1001 });
 	assert.equal(shopifyHint.source, "google");
 	assert.equal(shopifyHint.sourcePrecedenceRank, 1);
 	assert.equal(ga4.medium, "email");

@@ -59,6 +59,8 @@ Do not sign off staging or continue to production unless the smoke evidence incl
 
 Manual recovery jobs are deployed with `--max-retries=0` and job-level invoker grants only. By default the environment deployer service account and attribution worker service account can execute them; add human or break-glass identities through `MANUAL_JOB_INVOKER_MEMBERS` as comma-separated IAM members, such as `group:roas-radar-operators@example.com`.
 
+Use dry runs first for every recovery workflow. The application-level recovery queue owns retry classification and dead-letter state; Cloud Run Job retries stay disabled so a failed execution does not duplicate side effects outside the idempotency key.
+
 Use `gcloud run jobs execute` with a complete arg override. Examples:
 
 ```sh
@@ -78,6 +80,30 @@ gcloud run jobs execute roas-radar-campaign-metadata-backfill-production \
 ```
 
 Before running production jobs, confirm the target job service account has only the required Secret Manager bindings in `infra/cloud-run/bootstrap-iam.sh`, then run the same command in staging and retain the execution log URL.
+
+Automatic recovery queue checks:
+
+1. Confirm the queued run is bounded by job type, scope key, and date range:
+   `gcloud logging read 'jsonPayload.message="recovery_job_enqueued" AND jsonPayload.jobType="<job-type>"' --project=<project> --limit=20 --format=json`
+2. Confirm duplicate alert or scheduler signals reused the existing idempotency key instead of creating overlapping work.
+3. Confirm the completion report includes `sourcePrecedence=["shopify","ga4","ad_platforms"]`, dry-run state, counters, artifacts, and per-record failures with `retryable=true` or `retryable=false`.
+4. For stale `running` jobs, execute the recovery worker once, then verify heartbeat-expired runs either returned to `queued` with backoff or moved to `dead_lettered` after max attempts.
+
+Dead-letter replay workflow:
+
+1. Find the failed source and window:
+   `gcloud logging read 'jsonPayload.sourceTable="recovery_job_runs" OR jsonPayload.sourceTable="attribution_jobs"' --project=<project> --limit=50 --format=json`
+2. Run replay in dry-run mode first:
+   `gcloud run jobs execute roas-radar-dead-letter-replay-<environment> --project=<project> --region=us-central1 --args=run,dead-letters:replay:start,--,--source-table,recovery_job_runs,--from,2026-05-01T00:00:00Z,--to,2026-05-02T00:00:00Z,--requested-by,operator@example.com,--dry-run --wait`
+3. Verify `candidateCount` and `dryRunCount` match the intended records, and verify source records were not requeued.
+4. After the upstream issue is fixed, rerun without `--dry-run`; verify `replayedCount` increases, source rows return to queued or pending state, and dead letters are marked replayed.
+5. If replaying Shopify recovery, confirm raw payload hashes and storage URIs remain unchanged. Replay must reprocess the preserved payload, not fetch a fresh replacement unless the job explicitly documents reimport behavior.
+
+Failure triage:
+
+- Retryable: upstream timeout, quota, lock timeout, heartbeat expiration before max attempts, or temporarily unavailable GA4/ad-platform export. These should return to `queued` with backoff.
+- Permanent: invalid schema, unsupported job type, missing immutable source identifiers, malformed preserved raw payload, or exhausted retry attempts. These should be `dead_lettered` with enough payload context to replay after operator correction.
+- Source precedence: Shopify fields win over GA4 fields; GA4 fills only missing Shopify fields; ad-platform metadata refreshes names and hierarchy only.
 
 Recommended operating posture:
 

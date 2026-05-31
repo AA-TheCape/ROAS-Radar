@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type {
 	EnqueueRecoveryJobInput,
+	RecoveryJobCounters,
 	RecoveryJobError,
 	RecoveryJobPayload,
 	RecoveryJobProgressUpdate,
@@ -155,6 +156,20 @@ class MemoryRecoveryJobStore implements RecoveryJobStore {
 				run.recordsProcessed + (update.counters?.recordsProcessed ?? 0),
 			recordsSucceeded:
 				run.recordsSucceeded + (update.counters?.recordsSucceeded ?? 0),
+			recordsFailed: run.recordsFailed + (update.counters?.recordsFailed ?? 0),
+			recordsSkipped:
+				run.recordsSkipped + (update.counters?.recordsSkipped ?? 0),
+			recordsRetried:
+				run.recordsRetried + (update.counters?.recordsRetried ?? 0),
+			sideEffectsAttempted:
+				run.sideEffectsAttempted +
+				(update.counters?.sideEffectsAttempted ?? 0),
+			sideEffectsSucceeded:
+				run.sideEffectsSucceeded +
+				(update.counters?.sideEffectsSucceeded ?? 0),
+			sideEffectsSuppressed:
+				run.sideEffectsSuppressed +
+				(update.counters?.sideEffectsSuppressed ?? 0),
 			lastHeartbeatAt: now.toISOString(),
 		};
 		this.runs.set(runId, updated);
@@ -166,6 +181,7 @@ class MemoryRecoveryJobStore implements RecoveryJobStore {
 		workerId: string,
 		status: "succeeded" | "partial_failure" | "failed",
 		report: RecoveryJobPayload,
+		counters: Partial<RecoveryJobCounters> = {},
 	) {
 		const run = this.mustRun(runId, workerId);
 		const updated: RecoveryJobRun = {
@@ -173,6 +189,19 @@ class MemoryRecoveryJobStore implements RecoveryJobStore {
 			status,
 			completedAt: new Date().toISOString(),
 			completionReport: report,
+			recordsDiscovered:
+				run.recordsDiscovered + (counters.recordsDiscovered ?? 0),
+			recordsProcessed: run.recordsProcessed + (counters.recordsProcessed ?? 0),
+			recordsSucceeded: run.recordsSucceeded + (counters.recordsSucceeded ?? 0),
+			recordsFailed: run.recordsFailed + (counters.recordsFailed ?? 0),
+			recordsSkipped: run.recordsSkipped + (counters.recordsSkipped ?? 0),
+			recordsRetried: run.recordsRetried + (counters.recordsRetried ?? 0),
+			sideEffectsAttempted:
+				run.sideEffectsAttempted + (counters.sideEffectsAttempted ?? 0),
+			sideEffectsSucceeded:
+				run.sideEffectsSucceeded + (counters.sideEffectsSucceeded ?? 0),
+			sideEffectsSuppressed:
+				run.sideEffectsSuppressed + (counters.sideEffectsSuppressed ?? 0),
 		};
 		this.runs.set(runId, updated);
 		return updated;
@@ -200,7 +229,25 @@ class MemoryRecoveryJobStore implements RecoveryJobStore {
 	}
 
 	async recoverStale() {
-		return [];
+		const recovered: RecoveryJobRun[] = [];
+		for (const run of this.runs.values()) {
+			if (run.status !== "running" || !run.lockExpiresAt) {
+				continue;
+			}
+			const deadLetter = run.attemptCount >= run.maxAttempts;
+			const updated: RecoveryJobRun = {
+				...run,
+				status: deadLetter ? "dead_lettered" : "queued",
+				claimedBy: null,
+				lockExpiresAt: null,
+				errorCode: "recovery_job_heartbeat_expired",
+				errorMessage: `Recovery job heartbeat expired for worker ${run.claimedBy}`,
+				deadLetteredAt: deadLetter ? new Date().toISOString() : null,
+			};
+			this.runs.set(run.id, updated);
+			recovered.push(updated);
+		}
+		return recovered;
 	}
 
 	async getRun(runId: string) {
@@ -300,6 +347,160 @@ test("recovery job executor claims, reports progress, and completes a job", asyn
 			processedOrderId: "order-1",
 		});
 	}
+});
+
+test("recovery job executor propagates dry-run and suppresses side effects", async () => {
+	const { createRecoveryJobExecutor } = await getRecoveryJobsModule();
+	const store = new MemoryRecoveryJobStore();
+	const sideEffects: string[] = [];
+	const executor = createRecoveryJobExecutor(
+		[
+			{
+				jobType: "dry-run-demo",
+				run: async (context) => {
+					if (!context.dryRun) {
+						sideEffects.push(String(context.run.payload.orderId));
+					}
+					return {
+						report: { dryRun: context.dryRun },
+						counters: {
+							recordsProcessed: 1,
+							sideEffectsAttempted: 1,
+							sideEffectsSucceeded: context.dryRun ? 0 : 1,
+							sideEffectsSuppressed: context.dryRun ? 1 : 0,
+						},
+					};
+				},
+			},
+		],
+		store,
+	);
+
+	await executor.enqueue({
+		jobType: "dry-run-demo",
+		initiatedBy: "test",
+		timeRangeStart: "2026-05-01T00:00:00.000Z",
+		timeRangeEnd: "2026-05-01T23:59:59.999Z",
+		payload: { orderId: "order-1" },
+	});
+
+	const result = await executor.executeNext({ workerId: "worker-1" });
+
+	assert.equal(result.claimed, true);
+	assert.deepEqual(sideEffects, []);
+	if (result.claimed) {
+		assert.deepEqual(result.run.completionReport, { dryRun: true });
+		assert.equal(result.run.sideEffectsAttempted, 1);
+		assert.equal(result.run.sideEffectsSucceeded, 0);
+		assert.equal(result.run.sideEffectsSuppressed, 1);
+	}
+});
+
+test("recovery job executor classifies retryable and permanent failures", async () => {
+	const { createRecoveryJobExecutor } = await getRecoveryJobsModule();
+	const store = new MemoryRecoveryJobStore();
+	const executor = createRecoveryJobExecutor(
+		[
+			{
+				jobType: "retryable-demo",
+				run: async () => {
+					throw {
+						code: "upstream_timeout",
+						message: "Temporary upstream outage",
+						details: { upstream: "ga4" },
+						retryable: true,
+					};
+				},
+			},
+			{
+				jobType: "permanent-demo",
+				run: async () => {
+					throw {
+						code: "invalid_schema",
+						message: "Payload cannot be recovered",
+						details: { field: "shopifyOrderId" },
+						retryable: false,
+					};
+				},
+			},
+		],
+		store,
+	);
+
+	await executor.enqueue({
+		jobType: "retryable-demo",
+		initiatedBy: "test",
+		timeRangeStart: "2026-05-01T00:00:00.000Z",
+		timeRangeEnd: "2026-05-01T23:59:59.999Z",
+		maxAttempts: 2,
+	});
+
+	const retryable = await executor.executeNext({
+		workerId: "worker-1",
+		jobTypes: ["retryable-demo"],
+	});
+	assert.equal(retryable.claimed, true);
+	if (retryable.claimed) {
+		assert.equal(retryable.run.status, "queued");
+		assert.equal(retryable.run.errorCode, "upstream_timeout");
+		assert.deepEqual(retryable.run.lastErrorDetails, { upstream: "ga4" });
+	}
+
+	await executor.enqueue({
+		jobType: "permanent-demo",
+		initiatedBy: "test",
+		timeRangeStart: "2026-05-01T00:00:00.000Z",
+		timeRangeEnd: "2026-05-01T23:59:59.999Z",
+	});
+
+	const permanent = await executor.executeNext({
+		workerId: "worker-1",
+		jobTypes: ["permanent-demo"],
+	});
+	assert.equal(permanent.claimed, true);
+	if (permanent.claimed) {
+		assert.equal(permanent.run.status, "dead_lettered");
+		assert.equal(permanent.run.errorCode, "invalid_schema");
+		assert.ok(permanent.run.deadLetteredAt);
+	}
+});
+
+test("recovery job executor recovers stale runs for retry or dead-letter replay", async () => {
+	const { createRecoveryJobExecutor } = await getRecoveryJobsModule();
+	const store = new MemoryRecoveryJobStore();
+	const executor = createRecoveryJobExecutor(
+		[
+			{
+				jobType: "stale-demo",
+				run: async () => ({ processed: true }),
+			},
+		],
+		store,
+	);
+
+	await executor.enqueue({
+		jobType: "stale-demo",
+		initiatedBy: "test",
+		timeRangeStart: "2026-05-01T00:00:00.000Z",
+		timeRangeEnd: "2026-05-01T23:59:59.999Z",
+		heartbeatTimeoutSeconds: 1,
+		maxAttempts: 2,
+	});
+	const claimed = await store.claimNext({ workerId: "worker-1" });
+	assert.ok(claimed);
+	store.runs.set(claimed.id, {
+		...claimed,
+		lockExpiresAt: "2026-05-01T00:00:01.000Z",
+	});
+
+	const recovered = await executor.recoverStale(
+		new Date("2026-05-01T00:00:02.000Z"),
+	);
+
+	assert.equal(recovered.length, 1);
+	assert.equal(recovered[0].status, "queued");
+	assert.equal(recovered[0].claimedBy, null);
+	assert.equal(recovered[0].errorCode, "recovery_job_heartbeat_expired");
 });
 
 test("recovery job executor dead-letters unknown job types", async () => {
