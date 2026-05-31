@@ -522,3 +522,101 @@ test("recovery job executor dead-letters unknown job types", async () => {
 		assert.equal(result.run.errorCode, "unknown_recovery_job_type");
 	}
 });
+
+test("registered recovery worker queue polls, claims, and completes queued work", async () => {
+	const { createRecoveryJobExecutor } = await getRecoveryJobsModule();
+	const { processRegisteredRecoveryJobs } = await import(
+		"../src/modules/recovery-jobs/registered.js"
+	);
+	const store = new MemoryRecoveryJobStore();
+	const processedRunIds: string[] = [];
+	const executor = createRecoveryJobExecutor(
+		[
+			{
+				jobType: "shopify_attribution_hint_recovery",
+				run: async (context) => {
+					processedRunIds.push(context.run.id);
+					await context.heartbeat();
+					return {
+						report: { migratedJob: context.run.jobType },
+						counters: {
+							recordsDiscovered: 1,
+							recordsProcessed: 1,
+							recordsSucceeded: 1,
+						},
+					};
+				},
+			},
+		],
+		store,
+	);
+
+	const enqueued = await executor.enqueue({
+		jobType: "shopify_attribution_hint_recovery",
+		mode: "manual",
+		initiatedBy: "operator@example.com",
+		dryRun: true,
+		timeRangeStart: "2026-05-01T00:00:00.000Z",
+		timeRangeEnd: "2026-05-01T23:59:59.999Z",
+		payload: { pageSize: 50 },
+	});
+
+	const result = await processRegisteredRecoveryJobs({
+		workerId: "worker-1",
+		limit: 1,
+		executor,
+	});
+
+	assert.equal(result.claimed, 1);
+	assert.equal(result.completed, 1);
+	assert.equal(result.lastRun?.status, "succeeded");
+	assert.deepEqual(processedRunIds, [enqueued.run.id]);
+	assert.equal(store.runs.get(enqueued.run.id)?.claimedBy, "worker-1");
+});
+
+test("registered recovery worker recovers expired heartbeats before claiming work", async () => {
+	const { createRecoveryJobExecutor } = await getRecoveryJobsModule();
+	const { processRegisteredRecoveryJobs } = await import(
+		"../src/modules/recovery-jobs/registered.js"
+	);
+	const store = new MemoryRecoveryJobStore();
+	const executor = createRecoveryJobExecutor(
+		[
+			{
+				jobType: "shopify_attribution_hint_recovery",
+				run: async () => ({ recovered: true }),
+			},
+		],
+		store,
+	);
+
+	await executor.enqueue({
+		jobType: "shopify_attribution_hint_recovery",
+		mode: "manual",
+		initiatedBy: "operator@example.com",
+		dryRun: true,
+		timeRangeStart: "2026-05-01T00:00:00.000Z",
+		timeRangeEnd: "2026-05-01T23:59:59.999Z",
+		heartbeatTimeoutSeconds: 1,
+		maxAttempts: 2,
+	});
+	const claimed = await store.claimNext({ workerId: "worker-1" });
+	assert.ok(claimed);
+	store.runs.set(claimed.id, {
+		...claimed,
+		lockExpiresAt: "2026-05-01T00:00:01.000Z",
+	});
+
+	const result = await processRegisteredRecoveryJobs({
+		workerId: "worker-2",
+		limit: 0,
+		executor,
+	});
+
+	const recovered = store.runs.get(claimed.id);
+	assert.equal(result.recoveredStale, 1);
+	assert.equal(result.claimed, 0);
+	assert.equal(recovered?.status, "queued");
+	assert.equal(recovered?.claimedBy, null);
+	assert.equal(recovered?.errorCode, "recovery_job_heartbeat_expired");
+});

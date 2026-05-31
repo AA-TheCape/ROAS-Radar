@@ -140,6 +140,7 @@ export type RecoveryJobDefinition<
 	parsePayload?: (payload: RecoveryJobPayload) => TPayload;
 	maxAttempts?: number;
 	heartbeatTimeoutSeconds?: number;
+	managesCompletion?: boolean;
 	run: (
 		context: RecoveryJobExecutionContext<TPayload>,
 	) => Promise<RecoveryJobCompletion<TReport> | TReport | undefined>;
@@ -1087,7 +1088,24 @@ export class RecoveryJobExecutor {
 				updateProgress: (update) =>
 					this.store.updateProgress(run.id, input.workerId, update, new Date()),
 			};
-			const result = await definition.run(context);
+			const heartbeatIntervalMs = Math.max(
+				1_000,
+				Math.min(30_000, (run.heartbeatTimeoutSeconds * 1_000) / 2),
+			);
+			const heartbeatTimer = setInterval(() => {
+				void context.heartbeat().catch(() => undefined);
+			}, heartbeatIntervalMs);
+			heartbeatTimer.unref?.();
+			let result: RecoveryJobCompletion | RecoveryJobPayload | undefined;
+			try {
+				result = await definition.run(context);
+			} finally {
+				clearInterval(heartbeatTimer);
+			}
+			if (definition.managesCompletion) {
+				const finalized = await this.store.getRun(run.id);
+				return { claimed: true, run: finalized ?? run };
+			}
 			const completion = normalizeCompletion(result);
 			const completed = await this.store.complete(
 				run.id,
@@ -1099,6 +1117,21 @@ export class RecoveryJobExecutor {
 			);
 			return { claimed: true, run: completed };
 		} catch (error) {
+			if (definition.managesCompletion) {
+				const finalized = await this.store.getRun(run.id);
+				if (
+					finalized &&
+					[
+						"succeeded",
+						"partial_failure",
+						"failed",
+						"cancelled",
+						"dead_lettered",
+					].includes(finalized.status)
+				) {
+					return { claimed: true, run: finalized };
+				}
+			}
 			const failed = await this.store.fail(
 				run.id,
 				input.workerId,

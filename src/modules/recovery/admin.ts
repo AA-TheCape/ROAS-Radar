@@ -3,13 +3,12 @@ import { z } from "zod";
 
 import { attachAuthContext, requireAdmin, type AuthContext } from "../auth/index.js";
 import { query, withTransaction } from "../../db/pool.js";
-import { logError } from "../../observability/index.js";
 import {
-	executeRegisteredRecoveryRun,
 	getDefaultRecoveryScopeKey,
 	getRegisteredRecoveryJobTypes,
 	isRegisteredRecoveryJobType,
 } from "./registered-jobs.js";
+import { createRegisteredRecoveryJobExecutor } from "../recovery-jobs/registered.js";
 import {
 	PostgresRecoveryJobStore,
 	buildRecoveryConcurrencyKey,
@@ -377,26 +376,6 @@ async function cancelRun(
 	});
 }
 
-function executeRunInBackground(run: RecoveryRun, workerId: string): void {
-	if (!isRegisteredRecoveryJobType(run.jobType)) {
-		throw new RecoveryAdminHttpError(
-			400,
-			"unsupported_recovery_job_type",
-			`Unsupported recovery job type: ${run.jobType}`,
-		);
-	}
-
-	setImmediate(() => {
-		void executeRegisteredRecoveryRun(run, workerId).catch((error) => {
-			logError("manual_recovery_run_failed", error, {
-				runId: run.id,
-				jobType: run.jobType,
-				workerId,
-			});
-		});
-	});
-}
-
 export function createRecoveryAdminRouter(): Router {
 	const router = createRouter();
 
@@ -533,7 +512,8 @@ export function createRecoveryAdminRouter(): Router {
 				return;
 			}
 
-			const { run, created } = await store.createOrGetRun({
+			const executor = createRegisteredRecoveryJobExecutor();
+			const { run: enqueued, created } = await executor.enqueue({
 				jobType: input.jobType,
 				mode: "manual",
 				initiatedBy,
@@ -543,16 +523,14 @@ export function createRecoveryAdminRouter(): Router {
 				idempotencyKey,
 				concurrencyKey,
 				scopeKey,
-				resumeFromRunId: null,
-				rerunOfRunId: null,
-				inputParameters,
-				checkpoint: {},
+				payload: inputParameters,
 				now: new Date(),
 			});
+			const run = await getRun(enqueued.id);
 
 			res.status(created ? 201 : 200).json({
 				created,
-				...buildRunResponse(run),
+				...buildRunResponse(run ?? (enqueued as unknown as RecoveryRun)),
 			});
 		} catch (error) {
 			next(error);
@@ -620,13 +598,10 @@ export function createRecoveryAdminRouter(): Router {
 				);
 			}
 
-			const workerId =
-				input.workerId ?? `manual-${run.jobType.replaceAll("_", "-")}`;
-
-			executeRunInBackground(run, workerId);
-
 			res.status(202).json({
 				started: true,
+				queued: true,
+				workerId: input.workerId ?? null,
 				...buildRunResponse(run),
 			});
 		} catch (error) {
