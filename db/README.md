@@ -45,6 +45,10 @@ The recovery job registry added in `0045_add_recovery_run_registry.sql` can be r
 
 - `db/rollbacks/0045_add_recovery_run_registry.down.sql`
 
+The shared recovery job queue fields added in `0048_add_shared_recovery_job_queue.sql` can be rolled back with:
+
+- `db/rollbacks/0048_add_shared_recovery_job_queue.down.sql`
+
 ## Session Attribution Capture Schema
 
 Migration `0019_add_session_attribution_capture_tables.sql` adds three additive tables for canonical first-party capture persistence:
@@ -101,3 +105,11 @@ Migration `0045_add_recovery_run_registry.sql` adds generic run tracking for aut
 - `recovery_job_status_events`: status transition audit trail
 
 The registry includes descending timestamp indexes and job/status/initiator composites intended for last-30-days operational lookups.
+
+Migration `0048_add_shared_recovery_job_queue.sql` extends the registry with worker queue semantics:
+
+- queue claim ordering through `priority` and `available_at`
+- run-level attempt limits and retry backoff state
+- heartbeat expiration through `lock_expires_at`
+- `dead_lettered` terminal state and replay through `event_dead_letters`
+- durable completion reports in `recovery_job_completion_reports`

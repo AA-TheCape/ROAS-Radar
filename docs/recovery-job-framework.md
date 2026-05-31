@@ -47,6 +47,8 @@ Recovery runs follow the registry-backed lifecycle already implemented by `src/m
 
 Dry runs are the default for new requests. Write-enabled jobs must keep idempotency keys stable across retries and must suppress duplicate side effects through `sideEffectKey` or an equivalent downstream uniqueness constraint.
 
+Shared automatic workers can use `src/modules/recovery-jobs` when a job needs queue semantics rather than immediate orchestration. The module provides typed enqueue payloads, deterministic idempotency and concurrency keys, next-job claiming with `FOR UPDATE SKIP LOCKED`, progress updates, retry backoff, heartbeat recovery, completion report storage, and dead-letter transitions through `event_dead_letters`.
+
 ## Payload Responsibilities
 
 `RecoveryJobRequestV1` is the common enqueue shape for manual, scheduled, and automatic runs. `inputParameters` is reserved for job-specific filters such as shop domain, campaign ids, GA4 property id, or worker tuning.
