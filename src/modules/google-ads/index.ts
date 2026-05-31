@@ -230,6 +230,22 @@ type GoogleMetadataRecord = {
 	lastSeenAt: Date;
 };
 
+type GoogleAdsMetadataRefreshFailure = {
+	connectionId: number;
+	accountId: string;
+	attempts: number;
+	error: string;
+};
+
+type GoogleAdsMetadataRefreshResult = {
+	attempted: number;
+	refreshed: number;
+	skipped: number;
+	failed: number;
+	recordCount: number;
+	failures: GoogleAdsMetadataRefreshFailure[];
+};
+
 type GoogleAdsNormalizedSpendRow = {
 	granularity: GoogleAdsSpendGranularity;
 	entityKey: string;
@@ -2307,6 +2323,40 @@ async function loadActiveGoogleAdsConnections(): Promise<GoogleAdsMetadataConnec
 	return result.rows;
 }
 
+function normalizeGoogleAdsCampaignIds(campaignIds: string[] | undefined): string[] {
+	const normalizedIds = new Set<string>();
+
+	for (const campaignId of campaignIds ?? []) {
+		const normalized = normalizeString(campaignId);
+
+		if (!normalized) {
+			continue;
+		}
+
+		if (!/^\d+$/.test(normalized)) {
+			throw new GoogleAdsHttpError(
+				400,
+				"invalid_google_ads_campaign_id",
+				"Google Ads campaign ids must contain digits only",
+			);
+		}
+
+		normalizedIds.add(normalized);
+	}
+
+	return [...normalizedIds].sort();
+}
+
+function buildGoogleCampaignMetadataQuery(campaignIds: string[] | undefined): string {
+	const normalizedIds = normalizeGoogleAdsCampaignIds(campaignIds);
+	const idFilter =
+		normalizedIds.length > 0
+			? ` AND campaign.id IN (${normalizedIds.join(", ")})`
+			: "";
+
+	return `SELECT campaign.id, campaign.name FROM campaign WHERE campaign.id IS NOT NULL${idFilter}`;
+}
+
 async function acquireMetadataRefreshLock(platform: string, accountId: string): Promise<boolean> {
 	const result = await query<{ acquired: boolean }>(
 		"SELECT pg_try_advisory_lock(hashtext($1), hashtext($2)) AS acquired",
@@ -2388,6 +2438,9 @@ export async function refreshGoogleAdsMetadataForConnection(
 	now = new Date(),
 	workerId = "google-ads-metadata-refresh",
 	requestedBy?: string,
+	options?: {
+		campaignIds?: string[];
+	},
 ): Promise<{ skipped: boolean; recordCount: number }> {
 	const acquired = await acquireMetadataRefreshLock("google_ads", connection.customer_id);
 
@@ -2407,11 +2460,23 @@ export async function refreshGoogleAdsMetadataForConnection(
 
 	try {
 		const accessToken = await fetchGoogleAccessToken(connection);
-		const [campaignRows, adsetRows, adRows] = await Promise.all([
+		const campaignIds = normalizeGoogleAdsCampaignIds(options?.campaignIds);
+		const campaignQuery = buildGoogleCampaignMetadataQuery(campaignIds);
+		const [campaignRows, adsetRows, adRows] = campaignIds.length > 0
+			? [
+					await fetchGoogleMetadataRows<{ campaign?: { id?: string; name?: string } }>(
+						connection,
+						accessToken,
+						campaignQuery,
+					),
+					[],
+					[],
+				]
+			: await Promise.all([
 			fetchGoogleMetadataRows<{ campaign?: { id?: string; name?: string } }>(
 				connection,
 				accessToken,
-				"SELECT campaign.id, campaign.name FROM campaign WHERE campaign.id IS NOT NULL",
+				campaignQuery,
 			),
 			fetchGoogleMetadataRows<{ adGroup?: { id?: string; name?: string } }>(
 				connection,
@@ -2475,23 +2540,69 @@ export async function refreshActiveGoogleAdsMetadataConnections(options?: {
 	now?: Date;
 	workerId?: string;
 	requestedBy?: string;
-}): Promise<{ attempted: number; refreshed: number; skipped: number }> {
-	const connections = await loadActiveGoogleAdsConnections();
+	accountIds?: string[];
+	campaignIds?: string[];
+	campaignIdsByAccount?: Record<string, string[]>;
+	maxAttempts?: number;
+	continueOnError?: boolean;
+}): Promise<GoogleAdsMetadataRefreshResult> {
+	const accountIds = new Set((options?.accountIds ?? []).map((accountId) => accountId.trim()).filter(Boolean));
+	const connections = (await loadActiveGoogleAdsConnections()).filter(
+		(connection) => accountIds.size === 0 || accountIds.has(connection.customer_id),
+	);
 	let refreshed = 0;
 	let skipped = 0;
+	let failed = 0;
+	let recordCount = 0;
+	const failures: GoogleAdsMetadataRefreshFailure[] = [];
+	const maxAttempts = Math.max(1, options?.maxAttempts ?? 1);
 
 	for (const connection of connections) {
-		const result = await refreshGoogleAdsMetadataForConnection(
-			connection,
-			options?.now ?? new Date(),
-			options?.workerId ?? "google-ads-metadata-refresh",
-			options?.requestedBy,
-		);
+		let lastError: unknown;
+		let result: { skipped: boolean; recordCount: number } | null = null;
+
+		for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+			try {
+				result = await refreshGoogleAdsMetadataForConnection(
+					connection,
+					options?.now ?? new Date(),
+					options?.workerId ?? "google-ads-metadata-refresh",
+					options?.requestedBy,
+					{
+						campaignIds: options?.campaignIdsByAccount?.[connection.customer_id] ?? options?.campaignIds,
+					},
+				);
+				break;
+			} catch (error) {
+				lastError = error;
+
+				if (attempt < maxAttempts) {
+					await delay(attempt * 500);
+				}
+			}
+		}
+
+		if (!result) {
+			failed += 1;
+			failures.push({
+				connectionId: connection.id,
+				accountId: connection.customer_id,
+				attempts: maxAttempts,
+				error: lastError instanceof Error ? lastError.message : String(lastError),
+			});
+
+			if (!options?.continueOnError) {
+				throw lastError;
+			}
+
+			continue;
+		}
 
 		if (result.skipped) {
 			skipped += 1;
 		} else {
 			refreshed += 1;
+			recordCount += result.recordCount;
 		}
 	}
 
@@ -2499,6 +2610,9 @@ export async function refreshActiveGoogleAdsMetadataConnections(options?: {
 		attempted: connections.length,
 		refreshed,
 		skipped,
+		failed,
+		recordCount,
+		failures,
 	};
 }
 

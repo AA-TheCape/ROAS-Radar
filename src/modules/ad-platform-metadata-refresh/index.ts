@@ -6,6 +6,8 @@ import {
   emitCampaignMetadataSyncJobLifecycleLog,
   logInfo
 } from '../../observability/index.js';
+import { refreshActiveGoogleAdsMetadataConnections } from '../google-ads/index.js';
+import { refreshActiveMetaAdsMetadataConnections } from '../meta-ads/index.js';
 import { resolveCampaignDisplayMetadata } from '../reporting/metadata-resolution.js';
 
 type MetadataPlatform = 'google_ads' | 'meta_ads';
@@ -83,6 +85,61 @@ export type CampaignMetadataBackfillReport = {
   campaignCoverageAfter: CoverageSummary;
   unresolvedRate: UnresolvedSummary;
   unresolvedSamples: UnresolvedSample[];
+};
+
+type ApiRefreshScopeRow = {
+  platform: MetadataPlatform;
+  account_id: string;
+  campaign_id: string;
+};
+
+type ApiRefreshScope = {
+  accountIdsByPlatform: Record<MetadataPlatform, string[]>;
+  campaignIdsByPlatformAccount: Record<MetadataPlatform, Record<string, string[]>>;
+  totalCampaignReferences: number;
+};
+
+type ApiRefreshPlatformProgress = {
+  platform: MetadataPlatform;
+  attempted: number;
+  refreshed: number;
+  skipped: number;
+  failed: number;
+  recordCount: number;
+  failures: Array<{
+    connectionId: number;
+    accountId: string;
+    attempts: number;
+    error: string;
+  }>;
+};
+
+export type CampaignMetadataApiRefreshInput = {
+  requestedBy: string;
+  workerId: string;
+  startDate?: string | null;
+  endDate?: string | null;
+  campaignIds?: string[];
+  platforms?: MetadataPlatform[];
+  dryRun?: boolean;
+  runId?: string | null;
+  maxAttempts?: number;
+};
+
+export type CampaignMetadataApiRefreshReport = {
+  runId: string;
+  status: 'completed' | 'failed';
+  startedAt: string;
+  completedAt: string;
+  requestedBy: string;
+  workerId: string;
+  startDate: string | null;
+  endDate: string | null;
+  dryRun: boolean;
+  platforms: MetadataPlatform[];
+  scopedCampaignIds: string[];
+  totalCampaignReferences: number;
+  platformProgress: ApiRefreshPlatformProgress[];
 };
 
 function normalizeString(value: string | null | undefined): string | null {
@@ -283,6 +340,119 @@ async function loadRequestedCampaigns(startDate: string, endDate: string): Promi
   );
 
   return result.rows.map((row) => row.campaign);
+}
+
+function uniqueSorted(values: string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))].sort();
+}
+
+function normalizePlatforms(platforms: MetadataPlatform[] | undefined): MetadataPlatform[] {
+  const normalized = uniqueSorted(platforms ?? ['google_ads', 'meta_ads']);
+  return normalized.filter((platform): platform is MetadataPlatform => platform === 'google_ads' || platform === 'meta_ads');
+}
+
+async function loadApiRefreshScope(input: {
+  startDate?: string | null;
+  endDate?: string | null;
+  campaignIds?: string[];
+  platforms: MetadataPlatform[];
+}): Promise<ApiRefreshScope> {
+  const scopedCampaignIds = uniqueSorted(input.campaignIds ?? []);
+  const platformSet = new Set(input.platforms);
+  const rows: ApiRefreshScopeRow[] = [];
+
+  if (input.startDate && input.endDate) {
+    if (platformSet.has('google_ads')) {
+      const result = await query<ApiRefreshScopeRow>(
+        `
+          SELECT DISTINCT 'google_ads'::text AS platform, account_id, campaign_id
+          FROM google_ads_daily_spend
+          WHERE report_date BETWEEN $1::date AND $2::date
+            AND account_id IS NOT NULL
+            AND campaign_id IS NOT NULL
+            AND ($3::text[] IS NULL OR campaign_id = ANY($3::text[]))
+        `,
+        [input.startDate, input.endDate, scopedCampaignIds.length > 0 ? scopedCampaignIds : null]
+      );
+      rows.push(...result.rows);
+    }
+
+    if (platformSet.has('meta_ads')) {
+      const result = await query<ApiRefreshScopeRow>(
+        `
+          SELECT DISTINCT 'meta_ads'::text AS platform, account_id, campaign_id
+          FROM meta_ads_daily_spend
+          WHERE report_date BETWEEN $1::date AND $2::date
+            AND account_id IS NOT NULL
+            AND campaign_id IS NOT NULL
+            AND ($3::text[] IS NULL OR campaign_id = ANY($3::text[]))
+        `,
+        [input.startDate, input.endDate, scopedCampaignIds.length > 0 ? scopedCampaignIds : null]
+      );
+      rows.push(...result.rows);
+    }
+  } else if (scopedCampaignIds.length > 0) {
+    for (const platform of input.platforms) {
+      const tableName = platform === 'google_ads' ? 'google_ads_daily_spend' : 'meta_ads_daily_spend';
+      const result = await query<ApiRefreshScopeRow>(
+        `
+          SELECT DISTINCT $1::text AS platform, account_id, campaign_id
+          FROM ${tableName}
+          WHERE account_id IS NOT NULL
+            AND campaign_id = ANY($2::text[])
+        `,
+        [platform, scopedCampaignIds]
+      );
+      rows.push(...result.rows);
+    }
+  }
+
+  const accountIdsByPlatform: Record<MetadataPlatform, string[]> = {
+    google_ads: [],
+    meta_ads: []
+  };
+  const campaignIdsByPlatformAccount: Record<MetadataPlatform, Record<string, string[]>> = {
+    google_ads: {},
+    meta_ads: {}
+  };
+
+  for (const row of rows) {
+    const accountId = normalizeString(row.account_id);
+    const campaignId = normalizeString(row.campaign_id);
+
+    if (!accountId || !campaignId) {
+      continue;
+    }
+
+    accountIdsByPlatform[row.platform].push(accountId);
+    campaignIdsByPlatformAccount[row.platform][accountId] ??= [];
+    campaignIdsByPlatformAccount[row.platform][accountId].push(campaignId);
+  }
+
+  for (const platform of ['google_ads', 'meta_ads'] as const) {
+    accountIdsByPlatform[platform] = uniqueSorted(accountIdsByPlatform[platform]);
+
+    for (const [accountId, campaignIds] of Object.entries(campaignIdsByPlatformAccount[platform])) {
+      campaignIdsByPlatformAccount[platform][accountId] = uniqueSorted(campaignIds);
+    }
+  }
+
+  return {
+    accountIdsByPlatform,
+    campaignIdsByPlatformAccount,
+    totalCampaignReferences: rows.length
+  };
+}
+
+async function updateApiRefreshRunReport(runId: string, report: Partial<CampaignMetadataApiRefreshReport>): Promise<void> {
+  await query(
+    `
+      UPDATE campaign_metadata_backfill_runs
+      SET report = report || $2::jsonb, updated_at = now()
+      WHERE id = $1::uuid
+    `,
+    [runId, JSON.stringify(report)]
+  );
 }
 
 function summarizeCoverage(result: Awaited<ReturnType<typeof resolveCampaignDisplayMetadata>>): CoverageSummary {
@@ -491,6 +661,232 @@ export async function backfillCampaignMetadataHistory(
         WHERE id = $1::uuid
       `,
       [runId, completedAt, error instanceof Error ? error.name : 'Error', errorMessage]
+    );
+
+    emitCampaignMetadataSyncJobLifecycleLog({
+      stage: 'failed',
+      platform: 'all',
+      workerId: input.workerId,
+      jobId: runId,
+      requestedBy: input.requestedBy,
+      startedAt: startedAt.toISOString(),
+      completedAt: completedAt.toISOString(),
+      error
+    });
+
+    throw error;
+  }
+}
+
+export async function refreshCampaignMetadataFromApis(
+  input: CampaignMetadataApiRefreshInput
+): Promise<CampaignMetadataApiRefreshReport> {
+  const runId = input.runId?.trim() || randomUUID();
+  const startedAt = new Date();
+  const dryRun = Boolean(input.dryRun);
+  const platforms = normalizePlatforms(input.platforms);
+  const scopedCampaignIds = uniqueSorted(input.campaignIds ?? []);
+  const startDate = input.startDate?.trim() || null;
+  const endDate = input.endDate?.trim() || null;
+  const syntheticWindowDate = new Date().toISOString().slice(0, 10);
+  const platformProgress: ApiRefreshPlatformProgress[] = [];
+
+  if ((!startDate || !endDate) && scopedCampaignIds.length === 0) {
+    throw new Error('API metadata refresh requires --start-date/--end-date or --campaign-ids');
+  }
+
+  await query(
+    `
+      INSERT INTO campaign_metadata_backfill_runs (
+        id,
+        status,
+        requested_by,
+        worker_id,
+        started_at,
+        window_start,
+        window_end,
+        dry_run,
+        report
+      )
+      VALUES ($1::uuid, 'processing', $2, $3, $4, $5::date, $6::date, $7, $8::jsonb)
+    `,
+    [
+      runId,
+      input.requestedBy,
+      input.workerId,
+      startedAt,
+      startDate ?? syntheticWindowDate,
+      endDate ?? startDate ?? syntheticWindowDate,
+      dryRun,
+      JSON.stringify({
+        mode: 'api_refresh',
+        startDate,
+        endDate,
+        scopedCampaignIds,
+        platforms,
+        platformProgress
+      })
+    ]
+  );
+
+  emitCampaignMetadataSyncJobLifecycleLog({
+    stage: 'started',
+    platform: 'all',
+    workerId: input.workerId,
+    jobId: runId,
+    requestedBy: input.requestedBy,
+    startedAt: startedAt.toISOString()
+  });
+
+  try {
+    const scope = await loadApiRefreshScope({
+      startDate,
+      endDate,
+      campaignIds: scopedCampaignIds,
+      platforms
+    });
+
+    await updateApiRefreshRunReport(runId, {
+      runId,
+      status: 'completed',
+      startedAt: startedAt.toISOString(),
+      completedAt: '',
+      requestedBy: input.requestedBy,
+      workerId: input.workerId,
+      startDate,
+      endDate,
+      dryRun,
+      platforms,
+      scopedCampaignIds,
+      totalCampaignReferences: scope.totalCampaignReferences,
+      platformProgress
+    });
+
+    for (const platform of platforms) {
+      if (dryRun) {
+        platformProgress.push({
+          platform,
+          attempted: scope.accountIdsByPlatform[platform].length,
+          refreshed: 0,
+          skipped: 0,
+          failed: 0,
+          recordCount: 0,
+          failures: []
+        });
+        continue;
+      }
+
+      const hasAccountScope = scope.accountIdsByPlatform[platform].length > 0;
+      const canGlobalIdScope = !startDate && scopedCampaignIds.length > 0;
+
+      if (!hasAccountScope && !canGlobalIdScope) {
+        platformProgress.push({
+          platform,
+          attempted: 0,
+          refreshed: 0,
+          skipped: 0,
+          failed: 0,
+          recordCount: 0,
+          failures: []
+        });
+        await updateApiRefreshRunReport(runId, { platformProgress });
+        continue;
+      }
+
+      const commonOptions = {
+        now: new Date(),
+        workerId: input.workerId,
+        requestedBy: input.requestedBy,
+        accountIds: hasAccountScope ? scope.accountIdsByPlatform[platform] : undefined,
+        campaignIds: hasAccountScope ? undefined : scopedCampaignIds,
+        maxAttempts: input.maxAttempts ?? 3,
+        continueOnError: true
+      };
+
+      const result =
+        platform === 'google_ads'
+          ? await refreshActiveGoogleAdsMetadataConnections({
+              ...commonOptions,
+              campaignIdsByAccount: scope.campaignIdsByPlatformAccount.google_ads
+            })
+          : await refreshActiveMetaAdsMetadataConnections({
+              ...commonOptions,
+              campaignIdsByAccount: scope.campaignIdsByPlatformAccount.meta_ads
+            });
+
+      platformProgress.push({ platform, ...result });
+      await updateApiRefreshRunReport(runId, { platformProgress });
+    }
+
+    const completedAt = new Date();
+    const report: CampaignMetadataApiRefreshReport = {
+      runId,
+      status: platformProgress.some((progress) => progress.failed > 0) ? 'failed' : 'completed',
+      startedAt: startedAt.toISOString(),
+      completedAt: completedAt.toISOString(),
+      requestedBy: input.requestedBy,
+      workerId: input.workerId,
+      startDate,
+      endDate,
+      dryRun,
+      platforms,
+      scopedCampaignIds,
+      totalCampaignReferences: scope.totalCampaignReferences,
+      platformProgress
+    };
+
+    await query(
+      `
+        UPDATE campaign_metadata_backfill_runs
+        SET
+          status = $2,
+          completed_at = $3,
+          report = $4::jsonb,
+          error_code = CASE WHEN $2 = 'failed' THEN 'partial_api_refresh_failure' ELSE NULL END,
+          error_message = CASE WHEN $2 = 'failed' THEN 'One or more platform metadata refresh attempts failed; partial progress was retained.' ELSE NULL END,
+          updated_at = now()
+        WHERE id = $1::uuid
+      `,
+      [runId, report.status, completedAt, JSON.stringify(report)]
+    );
+
+    emitCampaignMetadataSyncJobLifecycleLog({
+      stage: report.status,
+      platform: 'all',
+      workerId: input.workerId,
+      jobId: runId,
+      requestedBy: input.requestedBy,
+      startedAt: startedAt.toISOString(),
+      completedAt: completedAt.toISOString(),
+      durationMs: completedAt.getTime() - startedAt.getTime(),
+      plannedUpdates: platformProgress.reduce((sum, progress) => sum + progress.recordCount, 0)
+    });
+
+    logInfo('campaign_metadata_api_refresh_completed', {
+      runId,
+      status: report.status,
+      totalCampaignReferences: scope.totalCampaignReferences,
+      platformProgress
+    });
+
+    return report;
+  } catch (error) {
+    const completedAt = new Date();
+    const errorMessage = error instanceof Error ? error.message : String(error);
+
+    await query(
+      `
+        UPDATE campaign_metadata_backfill_runs
+        SET
+          status = 'failed',
+          completed_at = $2,
+          error_code = $3,
+          error_message = $4,
+          report = jsonb_set(report, '{platformProgress}', $5::jsonb, true),
+          updated_at = now()
+        WHERE id = $1::uuid
+      `,
+      [runId, completedAt, error instanceof Error ? error.name : 'Error', errorMessage, JSON.stringify(platformProgress)]
     );
 
     emitCampaignMetadataSyncJobLifecycleLog({
