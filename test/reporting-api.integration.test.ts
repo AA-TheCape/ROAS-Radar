@@ -5,6 +5,7 @@ import test from "node:test";
 process.env.DATABASE_URL ??=
 	"postgres://postgres:postgres@127.0.0.1:5432/roas_radar";
 process.env.REPORTING_API_TOKEN = "test-reporting-token";
+process.env.DEFAULT_ORGANIZATION_ID = "77";
 process.env.SHOPIFY_APP_API_SECRET ??= "test-app-secret";
 process.env.SHOPIFY_WEBHOOK_SECRET ??= "test-webhook-secret";
 
@@ -15,6 +16,7 @@ const harnessModule = await import("./e2e-harness.js");
 const { pool } = poolModule;
 const { closeServer, createServer } = serverModule;
 const { resetE2EDatabase } = harnessModule;
+const { buildRawPayloadFixture } = await import("./integration-test-helpers.js");
 
 function buildHeaders(): Record<string, string> {
 	return {
@@ -34,6 +36,143 @@ async function requestJson(
 	const body = await response.json();
 
 	return { response, body };
+}
+
+async function seedMetaConnection(adAccountId: string): Promise<number> {
+	const rawAccountFixture = buildRawPayloadFixture(
+		{
+			id: adAccountId,
+			name: `Account ${adAccountId}`,
+			currency: "USD",
+		},
+		adAccountId,
+	);
+	const result = await pool.query<{ id: number }>(
+		`
+      INSERT INTO meta_ads_connections (
+        ad_account_id,
+        access_token_encrypted,
+        account_currency,
+        raw_account_data,
+        raw_account_source,
+        raw_account_received_at,
+        raw_account_payload_size_bytes,
+        raw_account_payload_hash,
+        raw_account_external_id
+      )
+      VALUES (
+        $1,
+        '\\x01'::bytea,
+        'USD',
+        $2::jsonb,
+        'meta_ads_account',
+        '2026-04-10T15:55:00.000Z',
+        $3,
+        $4,
+        $5
+      )
+      RETURNING id
+    `,
+		[
+			adAccountId,
+			rawAccountFixture.rawPayloadJson,
+			rawAccountFixture.payloadSizeBytes,
+			rawAccountFixture.payloadHash,
+			rawAccountFixture.payloadExternalId,
+		],
+	);
+
+	return result.rows[0].id;
+}
+
+async function seedMetaOrderValueSyncJob(
+	connectionId: number,
+	syncDate: string,
+): Promise<number> {
+	const result = await pool.query<{ id: number }>(
+		`
+      INSERT INTO meta_ads_order_value_sync_jobs (connection_id, sync_date)
+      VALUES ($1, $2::date)
+      RETURNING id
+    `,
+		[connectionId, syncDate],
+	);
+
+	return result.rows[0].id;
+}
+
+async function seedMetaViewThroughAggregate(params: {
+	connectionId: number;
+	syncJobId: number;
+	reportDate: string;
+	campaignId: string;
+	campaignName: string;
+	attributedRevenue: number;
+	purchaseCount: number;
+	spend: number;
+}): Promise<void> {
+	await pool.query(
+		`
+      INSERT INTO meta_ads_order_value_aggregates (
+        organization_id,
+        meta_connection_id,
+        sync_job_id,
+        ad_account_id,
+        report_date,
+        raw_date_start,
+        raw_date_stop,
+        campaign_id,
+        campaign_name,
+        attributed_revenue,
+        purchase_count,
+        spend,
+        purchase_roas,
+        currency,
+        canonical_action_type,
+        canonical_selection_mode,
+        raw_action_values,
+        raw_actions,
+        raw_revenue_record_ids,
+        source_synced_at,
+        action_report_time,
+        use_account_attribution_setting
+      )
+      VALUES (
+        77,
+        $1,
+        $2,
+        '123456789',
+        $3::date,
+        $3::date,
+        $3::date,
+        $4,
+        $5,
+        $6,
+        $7,
+        $8,
+        CASE WHEN $8::numeric > 0 THEN ($6::numeric / $8::numeric) ELSE NULL END,
+        'USD',
+        'purchase',
+        'priority',
+        '[]'::jsonb,
+        '[]'::jsonb,
+        '[]'::jsonb,
+        '2026-04-10T16:00:00.000Z',
+        'impression',
+        true
+      )
+    `,
+		[
+			params.connectionId,
+			params.syncJobId,
+			params.reportDate,
+			params.campaignId,
+			params.campaignName,
+			params.attributedRevenue,
+			params.purchaseCount,
+			params.spend,
+		],
+	);
 }
 
 test("reporting summary reads persisted daily aggregates from PostgreSQL", async () => {
@@ -94,6 +233,11 @@ test("reporting summary reads persisted daily aggregates from PostgreSQL", async
 				startDate: "2026-04-10",
 				endDate: "2026-04-10",
 			},
+			reportingMode: "clicks",
+			reportingModeLabel: "Click attribution",
+			totalsLabel: "Click attribution",
+			totalsCanonical: true,
+			totalsDescription: "Canonical reporting totals from click-attributed order credits.",
 			totals: {
 				visits: 42,
 				orders: 3,
@@ -102,7 +246,121 @@ test("reporting summary reads persisted daily aggregates from PostgreSQL", async
 				conversionRate: 3 / 42,
 				roas: null,
 			},
+			comparisonTotals: {
+				combined: {
+					label: "Non-canonical comparison total",
+					canonical: false,
+					description:
+						"Comparison-only sum of click attribution and deterministic view attribution; do not treat as canonical revenue.",
+					totals: {
+						visits: 42,
+						orders: 3,
+						revenue: 390,
+						spend: 0,
+						conversionRate: 3 / 42,
+						roas: null,
+					},
+				},
+			},
+			layers: {
+				clicks: {
+					label: "Click attribution",
+					canonical: true,
+					description: "Canonical reporting totals from click-attributed order credits.",
+					totals: {
+						visits: 42,
+						orders: 3,
+						revenue: 390,
+						spend: 0,
+						conversionRate: 3 / 42,
+						roas: null,
+					},
+				},
+				deterministicViews: {
+					label: "Deterministic view layer",
+					canonical: false,
+					description:
+						"Layer-only Meta API-verified deterministic view/impression attribution.",
+					totals: {
+						visits: 0,
+						orders: 0,
+						revenue: 0,
+						spend: 0,
+						conversionRate: 0,
+						roas: null,
+					},
+				},
+				metaViewThrough: {
+					label: "Meta API view-through",
+					canonical: false,
+					description:
+						"Meta API-reported view-through purchase revenue, purchases, and ROAS from impression-time reporting.",
+					totals: {
+						visits: 0,
+						orders: 0,
+						revenue: 0,
+						spend: 0,
+						conversionRate: 0,
+						roas: null,
+					},
+				},
+			},
 		});
+	} finally {
+		await closeServer(server);
+		await resetE2EDatabase();
+	}
+});
+
+test("reporting summary exposes Meta API view-through totals as a separate layer", async () => {
+	await resetE2EDatabase();
+	const connectionId = await seedMetaConnection("123456789");
+	const syncJobId = await seedMetaOrderValueSyncJob(connectionId, "2026-04-10");
+	await seedMetaViewThroughAggregate({
+		connectionId,
+		syncJobId,
+		reportDate: "2026-04-10",
+		campaignId: "cmp_view",
+		campaignName: "View Prospecting",
+		attributedRevenue: 250,
+		purchaseCount: 5,
+		spend: 100,
+	});
+
+	const server = createServer();
+
+	try {
+		const { response, body } = await requestJson(
+			server,
+			"/api/reporting/summary?startDate=2026-04-10&endDate=2026-04-10&reportingMode=meta_view_through&source=meta&campaign=cmp_view",
+		);
+
+		assert.equal(response.status, 200);
+		assert.equal(body.reportingMode, "meta_view_through");
+		assert.deepEqual(body.totals, {
+			visits: 0,
+			orders: 5,
+			revenue: 250,
+			spend: 100,
+			conversionRate: 0,
+			roas: 2.5,
+		});
+		assert.deepEqual(body.layers.metaViewThrough, {
+			label: "Meta API view-through",
+			canonical: false,
+			description:
+				"Meta API-reported view-through purchase revenue, purchases, and ROAS from impression-time reporting.",
+			totals: {
+				visits: 0,
+				orders: 5,
+				revenue: 250,
+				spend: 100,
+				conversionRate: 0,
+				roas: 2.5,
+			},
+		});
+		assert.equal(body.layers.clicks.totals.revenue, 0);
+		assert.equal(body.layers.deterministicViews.totals.revenue, 0);
 	} finally {
 		await closeServer(server);
 		await resetE2EDatabase();

@@ -32,6 +32,7 @@ export const ATTRIBUTION_CLICK_ID_FIELDS = ['gclid', 'gbraid', 'wbraid', 'fbclid
 
 const ISO_TIMESTAMP_REGEX =
 	/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
+const DATE_ONLY_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 const UUID_REGEX =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -247,6 +248,12 @@ const isoTimestampOrNullSchema = z
 const decimalStringSchema = z
   .union([z.string(), z.number()])
   .transform((value) => normalizeAttributionDecimalString(value));
+const dateOnlySchema = z.string().trim().regex(DATE_ONLY_REGEX, 'Use YYYY-MM-DD.');
+const positiveIdSchema = z.number().int().positive();
+const nullablePositiveIdSchema = z
+  .union([positiveIdSchema, z.null(), z.undefined()])
+  .transform((value) => value ?? null);
+const nonEmptyMetaTextSchema = z.string().trim().min(1).max(MAX_ATTRIBUTION_TEXT_LENGTH);
 
 export const ATTRIBUTION_EVIDENCE_SOURCES = [
   'landing_session_id',
@@ -293,6 +300,18 @@ export const ATTRIBUTION_ALLOCATION_STATUSES = [
 export const ATTRIBUTION_LOOKBACK_RULES = ['28d_click', '7d_view', 'mixed'] as const;
 export const ATTRIBUTION_EXPLAIN_STAGES = ['candidate_extraction', 'eligibility_filter', 'model_scoring', 'fallback'] as const;
 export const ATTRIBUTION_EXPLAIN_DECISIONS = ['included', 'excluded', 'winner', 'fallback_used', 'no_credit'] as const;
+export const META_DETERMINISTIC_ATTRIBUTION_EVENT_TYPES = ['impression', 'view'] as const;
+export const META_DETERMINISTIC_ATTRIBUTION_FAMILIES = [
+  'deterministic_views',
+  'deterministic_impressions'
+] as const;
+export const META_DETERMINISTIC_ATTRIBUTION_WINDOWS = ['7d_view'] as const;
+export const META_DETERMINISTIC_ATTRIBUTION_VERIFICATION_STATUSES = [
+  'pending',
+  'verified',
+  'failed',
+  'superseded'
+] as const;
 
 export const attributionHintConfidenceLabelSchema = nonEmptyLowercaseEnum(['low', 'medium', 'high']);
 
@@ -447,6 +466,116 @@ export const attributionExplainRecordV1Schema = z.object({
   created_at_utc: isoTimestampSchema
 });
 
+export const metaDeterministicAttributionIdentityTupleV1Schema = z.object({
+  organization_id: positiveIdSchema,
+  ad_account_id: nonEmptyMetaTextSchema,
+  report_date: dateOnlySchema,
+  attribution_family: z.enum(META_DETERMINISTIC_ATTRIBUTION_FAMILIES),
+  attribution_window: z.enum(META_DETERMINISTIC_ATTRIBUTION_WINDOWS),
+  campaign_id: nullableTextSchema,
+  adset_id: nullableTextSchema,
+  ad_id: nullableTextSchema
+}).superRefine((value, ctx) => {
+  if (!value.campaign_id && !value.ad_id) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'campaign_id or ad_id is required for deterministic Meta aggregate identity'
+    });
+  }
+});
+
+export const metaDeterministicAttributionAggregateV1Schema = z.object({
+  schema_version: z.literal(1),
+  platform: z.literal('meta_ads'),
+  organization_id: positiveIdSchema,
+  meta_connection_id: positiveIdSchema,
+  source_id: positiveIdSchema,
+  raw_event_id: positiveIdSchema,
+  fact_id: nullablePositiveIdSchema,
+  ad_account_id: nonEmptyMetaTextSchema,
+  report_date: dateOnlySchema,
+  campaign_id: nullableTextSchema,
+  campaign_name: nullableTextSchema,
+  adset_id: nullableTextSchema,
+  adset_name: nullableTextSchema,
+  ad_id: nullableTextSchema,
+  ad_name: nullableTextSchema,
+  event_type: z.enum(META_DETERMINISTIC_ATTRIBUTION_EVENT_TYPES),
+  attribution_family: z.enum(META_DETERMINISTIC_ATTRIBUTION_FAMILIES),
+  attribution_window: z.enum(META_DETERMINISTIC_ATTRIBUTION_WINDOWS),
+  attribution_window_days: z.literal(7),
+  aggregate_count: z.number().int().nonnegative(),
+  evidence_origin: z.literal('api'),
+  platform_verified: z.boolean(),
+  verification_status: z.enum(META_DETERMINISTIC_ATTRIBUTION_VERIFICATION_STATUSES),
+  verified_by_source_id: nullablePositiveIdSchema,
+  verified_at_utc: isoTimestampOrNullSchema,
+  raw_record_metadata: z.record(z.string(), z.unknown()),
+  created_at: isoTimestampSchema.optional(),
+  updated_at: isoTimestampSchema.optional()
+}).superRefine((value, ctx) => {
+  const expectedEventType =
+    value.attribution_family === 'deterministic_views' ? 'view' : 'impression';
+
+  if (value.event_type !== expectedEventType) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'event_type must match attribution_family'
+    });
+  }
+
+  if (!value.campaign_id && !value.ad_id) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'campaign_id or ad_id is required for deterministic Meta aggregate rows'
+    });
+  }
+
+  if (
+    value.platform_verified &&
+    (
+      value.verification_status !== 'verified' ||
+      value.verified_by_source_id === null ||
+      value.verified_at_utc === null
+    )
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'verified Meta aggregate rows require verified status, source, and timestamp'
+    });
+  }
+
+  if (value.platform_verified) {
+    const requiredMetadataFields = [
+      'sourceId',
+      'rawEventId',
+      'rawTable',
+      'apiVersion',
+      'apiEndpoint',
+      'apiAccountId',
+      'apiRequestTimestampUtc',
+      'requestId'
+    ];
+
+    for (const field of requiredMetadataFields) {
+      const metadataValue = value.raw_record_metadata[field];
+      if (typeof metadataValue === 'string' && metadataValue.trim().length > 0) {
+        continue;
+      }
+
+      if (typeof metadataValue === 'number' && Number.isFinite(metadataValue) && metadataValue > 0) {
+        continue;
+      }
+
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'verified Meta aggregate rows require raw payload and Meta API provenance metadata',
+        path: ['raw_record_metadata', field]
+      });
+    }
+  }
+});
+
 const jsonSchemaNullableString = (maxLength = MAX_ATTRIBUTION_TEXT_LENGTH): JsonSchemaDocument => ({
   type: ['string', 'null'],
   maxLength
@@ -490,6 +619,22 @@ const jsonSchemaEvidenceSourceOrNull: JsonSchemaDocument = {
 const jsonSchemaModelKeyOrNull: JsonSchemaDocument = {
   type: ['string', 'null'],
   enum: [...ATTRIBUTION_MODEL_KEYS, null]
+};
+
+const jsonSchemaDateOnly: JsonSchemaDocument = {
+  type: 'string',
+  format: 'date',
+  pattern: DATE_ONLY_REGEX.source
+};
+
+const jsonSchemaPositiveId: JsonSchemaDocument = {
+  type: 'integer',
+  minimum: 1
+};
+
+const jsonSchemaPositiveIdOrNull: JsonSchemaDocument = {
+  type: ['integer', 'null'],
+  minimum: 1
 };
 
 export const attributionHintInputV1JsonSchema: JsonSchemaDocument = {
@@ -776,13 +921,111 @@ export const attributionExplainRecordV1JsonSchema: JsonSchemaDocument = {
   }
 };
 
+export const metaDeterministicAttributionIdentityTupleV1JsonSchema: JsonSchemaDocument = {
+  $schema: ATTRIBUTION_JSON_SCHEMA_DRAFT,
+  title: 'MetaDeterministicAttributionIdentityTupleV1',
+  type: 'object',
+  additionalProperties: false,
+  required: [
+    'organization_id',
+    'ad_account_id',
+    'report_date',
+    'attribution_family',
+    'attribution_window',
+    'campaign_id',
+    'adset_id',
+    'ad_id'
+  ],
+  properties: {
+    organization_id: jsonSchemaPositiveId,
+    ad_account_id: { type: 'string', minLength: 1, maxLength: MAX_ATTRIBUTION_TEXT_LENGTH },
+    report_date: jsonSchemaDateOnly,
+    attribution_family: { type: 'string', enum: [...META_DETERMINISTIC_ATTRIBUTION_FAMILIES] },
+    attribution_window: { type: 'string', enum: [...META_DETERMINISTIC_ATTRIBUTION_WINDOWS] },
+    campaign_id: jsonSchemaNullableString(),
+    adset_id: jsonSchemaNullableString(),
+    ad_id: jsonSchemaNullableString()
+  },
+  anyOf: [
+    { required: ['campaign_id'], properties: { campaign_id: { type: 'string', minLength: 1 } } },
+    { required: ['ad_id'], properties: { ad_id: { type: 'string', minLength: 1 } } }
+  ]
+};
+
+export const metaDeterministicAttributionAggregateV1JsonSchema: JsonSchemaDocument = {
+  $schema: ATTRIBUTION_JSON_SCHEMA_DRAFT,
+  title: 'MetaDeterministicAttributionAggregateV1',
+  type: 'object',
+  additionalProperties: false,
+  required: [
+    'schema_version',
+    'platform',
+    'organization_id',
+    'meta_connection_id',
+    'source_id',
+    'raw_event_id',
+    'fact_id',
+    'ad_account_id',
+    'report_date',
+    'campaign_id',
+    'campaign_name',
+    'adset_id',
+    'adset_name',
+    'ad_id',
+    'ad_name',
+    'event_type',
+    'attribution_family',
+    'attribution_window',
+    'attribution_window_days',
+    'aggregate_count',
+    'evidence_origin',
+    'platform_verified',
+    'verification_status',
+    'verified_by_source_id',
+    'verified_at_utc',
+    'raw_record_metadata'
+  ],
+  properties: {
+    schema_version: { const: 1, type: 'integer' },
+    platform: { const: 'meta_ads', type: 'string' },
+    organization_id: jsonSchemaPositiveId,
+    meta_connection_id: jsonSchemaPositiveId,
+    source_id: jsonSchemaPositiveId,
+    raw_event_id: jsonSchemaPositiveId,
+    fact_id: jsonSchemaPositiveIdOrNull,
+    ad_account_id: { type: 'string', minLength: 1, maxLength: MAX_ATTRIBUTION_TEXT_LENGTH },
+    report_date: jsonSchemaDateOnly,
+    campaign_id: jsonSchemaNullableString(),
+    campaign_name: jsonSchemaNullableString(),
+    adset_id: jsonSchemaNullableString(),
+    adset_name: jsonSchemaNullableString(),
+    ad_id: jsonSchemaNullableString(),
+    ad_name: jsonSchemaNullableString(),
+    event_type: { type: 'string', enum: [...META_DETERMINISTIC_ATTRIBUTION_EVENT_TYPES] },
+    attribution_family: { type: 'string', enum: [...META_DETERMINISTIC_ATTRIBUTION_FAMILIES] },
+    attribution_window: { type: 'string', enum: [...META_DETERMINISTIC_ATTRIBUTION_WINDOWS] },
+    attribution_window_days: { const: 7, type: 'integer' },
+    aggregate_count: { type: 'integer', minimum: 0 },
+    evidence_origin: { const: 'api', type: 'string' },
+    platform_verified: { type: 'boolean' },
+    verification_status: { type: 'string', enum: [...META_DETERMINISTIC_ATTRIBUTION_VERIFICATION_STATUSES] },
+    verified_by_source_id: jsonSchemaPositiveIdOrNull,
+    verified_at_utc: jsonSchemaIsoTimestampOrNull,
+    raw_record_metadata: { type: 'object', additionalProperties: true },
+    created_at: jsonSchemaIsoTimestamp,
+    updated_at: jsonSchemaIsoTimestamp
+  }
+};
+
 export const attributionEngineV1JsonSchemas = {
   AttributionHintInputV1: attributionHintInputV1JsonSchema,
   AttributionOrderInputV1: attributionOrderInputV1JsonSchema,
   AttributionTouchpointInputV1: attributionTouchpointInputV1JsonSchema,
   AttributionResultRecordV1: attributionResultRecordV1JsonSchema,
   AttributionCreditRecordV1: attributionCreditRecordV1JsonSchema,
-  AttributionExplainRecordV1: attributionExplainRecordV1JsonSchema
+  AttributionExplainRecordV1: attributionExplainRecordV1JsonSchema,
+  MetaDeterministicAttributionAggregateV1: metaDeterministicAttributionAggregateV1JsonSchema,
+  MetaDeterministicAttributionIdentityTupleV1: metaDeterministicAttributionIdentityTupleV1JsonSchema
 } as const;
 
 export type AttributionEvidenceSource = (typeof ATTRIBUTION_EVIDENCE_SOURCES)[number];
@@ -795,12 +1038,18 @@ export type AttributionAllocationStatus = (typeof ATTRIBUTION_ALLOCATION_STATUSE
 export type AttributionLookbackRule = (typeof ATTRIBUTION_LOOKBACK_RULES)[number];
 export type AttributionExplainStage = (typeof ATTRIBUTION_EXPLAIN_STAGES)[number];
 export type AttributionExplainDecision = (typeof ATTRIBUTION_EXPLAIN_DECISIONS)[number];
+export type MetaDeterministicAttributionEventType = (typeof META_DETERMINISTIC_ATTRIBUTION_EVENT_TYPES)[number];
+export type MetaDeterministicAttributionFamily = (typeof META_DETERMINISTIC_ATTRIBUTION_FAMILIES)[number];
+export type MetaDeterministicAttributionWindow = (typeof META_DETERMINISTIC_ATTRIBUTION_WINDOWS)[number];
+export type MetaDeterministicAttributionVerificationStatus = (typeof META_DETERMINISTIC_ATTRIBUTION_VERIFICATION_STATUSES)[number];
 export type AttributionHintInputV1 = z.infer<typeof attributionHintInputV1Schema>;
 export type AttributionOrderInputV1 = z.infer<typeof attributionOrderInputV1Schema>;
 export type AttributionTouchpointInputV1 = z.infer<typeof attributionTouchpointInputV1Schema>;
 export type AttributionResultRecordV1 = z.infer<typeof attributionResultRecordV1Schema>;
 export type AttributionCreditRecordV1 = z.infer<typeof attributionCreditRecordV1Schema>;
 export type AttributionExplainRecordV1 = z.infer<typeof attributionExplainRecordV1Schema>;
+export type MetaDeterministicAttributionIdentityTupleV1 = z.infer<typeof metaDeterministicAttributionIdentityTupleV1Schema>;
+export type MetaDeterministicAttributionAggregateV1 = z.infer<typeof metaDeterministicAttributionAggregateV1Schema>;
 
 export function normalizeAttributionOrderInputV1(input: unknown): AttributionOrderInputV1 {
   return attributionOrderInputV1Schema.parse(input);
@@ -824,4 +1073,16 @@ export function normalizeAttributionCreditRecordV1(input: unknown): AttributionC
 
 export function normalizeAttributionExplainRecordV1(input: unknown): AttributionExplainRecordV1 {
   return attributionExplainRecordV1Schema.parse(input);
+}
+
+export function normalizeMetaDeterministicAttributionIdentityTupleV1(
+  input: unknown
+): MetaDeterministicAttributionIdentityTupleV1 {
+  return metaDeterministicAttributionIdentityTupleV1Schema.parse(input);
+}
+
+export function normalizeMetaDeterministicAttributionAggregateV1(
+  input: unknown
+): MetaDeterministicAttributionAggregateV1 {
+  return metaDeterministicAttributionAggregateV1Schema.parse(input);
 }

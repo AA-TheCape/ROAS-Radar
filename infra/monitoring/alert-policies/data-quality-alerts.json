@@ -1,7 +1,7 @@
 {
 	"displayName": "ROAS Radar __ENVIRONMENT__ Data Quality Alerts",
 	"documentation": {
-		"content": "Identity graph data quality thresholds were breached. Review `/api/reporting/reconciliation` and follow the runbook: __RUNBOOK_URL_DATA_QUALITY__",
+		"content": "Data quality thresholds were breached. Review `/api/reporting/reconciliation` and follow the runbook: __RUNBOOK_URL_DATA_QUALITY__",
 		"mimeType": "text/markdown"
 	},
 	"combiner": "OR",

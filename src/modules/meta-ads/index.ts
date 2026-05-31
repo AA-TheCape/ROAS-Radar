@@ -20,6 +20,7 @@ import {
   __metaAdsTestUtils as __metaOrderValueTestUtils,
   runMetaAdsOrderValueSync
 } from './order-value.js';
+export { runMetaDeterministicSync, processMetaDeterministicSyncQueue } from './deterministic-events.js';
 
 export { runMetaAdsOrderValueSync };
 
@@ -50,6 +51,10 @@ const metaAdsConfigUpdateSchema = z.object({
 const manualSyncSchema = z.object({
   startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+});
+
+const deterministicViewImpressionSyncSchema = z.object({
+  enabled: z.boolean()
 });
 
 const oauthCallbackSchema = z.object({
@@ -91,6 +96,8 @@ type MetaAdsConnectionSummaryRow = {
   status: string;
   account_name: string | null;
   account_currency: string | null;
+  deterministic_view_impression_sync_enabled: boolean;
+  deterministic_view_impression_last_planned_for: string | null;
 };
 
 type MetaAdsSettingsRow = {
@@ -1886,7 +1893,9 @@ export function createMetaAdsAdminRouter(): Router {
             last_sync_error,
             status,
             account_name,
-            account_currency
+            account_currency,
+            deterministic_view_impression_sync_enabled,
+            deterministic_view_impression_last_planned_for::text
           FROM meta_ads_connections
           ORDER BY updated_at DESC
           LIMIT 1
@@ -1927,6 +1936,50 @@ export function createMetaAdsAdminRouter(): Router {
         ok: true,
         enqueuedJobs,
         dates
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.put('/connections/:connectionId/deterministic-view-impression-sync', async (req, res, next) => {
+    try {
+      const connectionId = z.coerce.number().int().positive().parse(req.params.connectionId);
+      const payload = deterministicViewImpressionSyncSchema.parse(req.body);
+      const result = await query<MetaAdsConnectionSummaryRow>(
+        `
+          UPDATE meta_ads_connections
+          SET deterministic_view_impression_sync_enabled = $2,
+              updated_at = now()
+          WHERE id = $1
+          RETURNING
+            id,
+            ad_account_id,
+            granted_scopes,
+            token_expires_at,
+            last_refreshed_at,
+            last_sync_started_at,
+            last_sync_completed_at,
+            last_sync_status,
+            last_sync_error,
+            status,
+            account_name,
+            account_currency,
+            deterministic_view_impression_sync_enabled,
+            deterministic_view_impression_last_planned_for::text
+        `,
+        [connectionId, payload.enabled]
+      );
+
+      const connection = result.rows[0];
+      if (!connection) {
+        res.status(404).json({ message: 'Meta Ads connection not found' });
+        return;
+      }
+
+      res.status(200).json({
+        ok: true,
+        connection
       });
     } catch (error) {
       next(error);

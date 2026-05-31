@@ -232,6 +232,22 @@ test("reporting dashboard keeps overview, charts, and report tables internally c
 		typeof import("../dashboard/src/components/ReportingDashboard")
 	>("dashboard/src/components/ReportingDashboard.tsx");
 
+	const qaTotals = {
+		visits: 1500,
+		orders: 12,
+		revenue: 1200,
+		spend: 600,
+		conversionRate: 0.008,
+		roas: 2,
+	};
+	const zeroTotals = {
+		visits: 0,
+		orders: 0,
+		revenue: 0,
+		spend: 0,
+		conversionRate: 0,
+		roas: null,
+	};
   const props = createReportingDashboardProps({
     summaryCards: [
       { label: 'Visits', value: '1,500', detail: 'Apr 1 to Apr 3' },
@@ -242,12 +258,44 @@ test("reporting dashboard keeps overview, charts, and report tables internally c
     ],
     summarySection: {
       data: {
-        visits: 1500,
-        orders: 12,
-        revenue: 1200,
-        spend: 600,
-        conversionRate: 0.008,
-        roas: 2
+        range: {
+          startDate: '2026-04-01',
+          endDate: '2026-04-03'
+        },
+        reportingMode: 'clicks',
+        reportingModeLabel: 'Clicks',
+        totalsLabel: 'Click-attributed totals',
+        totalsCanonical: true,
+        totalsDescription: 'Canonical totals from click-attributed orders.',
+        totals: qaTotals,
+        comparisonTotals: {
+          combined: {
+            label: 'Combined',
+            canonical: false,
+            description: 'Comparison totals combining click and view-through attribution.',
+            totals: qaTotals
+          }
+        },
+        layers: {
+          clicks: {
+            label: 'Clicks',
+            canonical: true,
+            description: 'Canonical click-attributed totals.',
+            totals: qaTotals
+          },
+          deterministicViews: {
+            label: 'Deterministic views',
+            canonical: false,
+            description: 'Deterministic view-through totals.',
+            totals: zeroTotals
+          },
+          metaViewThrough: {
+            label: 'Meta view-through',
+            canonical: false,
+            description: 'Meta API view-through totals.',
+            totals: zeroTotals
+          }
+        }
       },
       loading: false,
       error: null
@@ -355,7 +403,7 @@ test("reporting dashboard keeps overview, charts, and report tables internally c
     }
   });
 
-	const summary = props.summarySection.data;
+	const summary = props.summarySection.data?.totals;
 	const campaigns = props.campaignsSection.data ?? [];
 	const points = props.timeseriesSection.data ?? [];
 	const orders = props.ordersSection.data ?? [];

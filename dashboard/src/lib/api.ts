@@ -32,6 +32,7 @@ export type AttributionTier =
 export type ReportingFilters = {
   startDate: string;
   endDate: string;
+  reportingMode?: ReportingMode;
   attributionTier?: AttributionTier | '';
   attributionModel?:
     | 'first_touch'
@@ -43,6 +44,8 @@ export type ReportingFilters = {
   source?: string;
   campaign?: string;
 };
+
+export type ReportingMode = 'combined' | 'clicks' | 'deterministic_views' | 'meta_view_through';
 
 export type AttributionFilters = {
   startDate: string;
@@ -62,12 +65,32 @@ export type SummaryTotals = {
 	roas: number | null;
 };
 
+export type SummaryLayer<TTotals = SummaryTotals> = {
+	label: string;
+	canonical: boolean;
+	description: string;
+	totals: TTotals;
+};
+
 export type SummaryResponse = {
 	range: {
 		startDate: string;
 		endDate: string;
 	};
+	reportingMode: ReportingMode;
+	reportingModeLabel: string;
+	totalsLabel: string;
+	totalsCanonical: boolean;
+	totalsDescription: string;
 	totals: SummaryTotals;
+	comparisonTotals: {
+		combined: SummaryLayer;
+	};
+	layers: {
+		clicks: SummaryLayer;
+		deterministicViews: SummaryLayer;
+		metaViewThrough: SummaryLayer;
+	};
 };
 
 export type CampaignRow = {
@@ -496,6 +519,8 @@ export type MetaAdsConnection = {
 	status: string;
 	account_name: string | null;
 	account_currency: string | null;
+	deterministic_view_impression_sync_enabled: boolean;
+	deterministic_view_impression_last_planned_for: string | null;
 };
 
 export type MetaAdsConfigSummary = {
@@ -511,6 +536,11 @@ export type MetaAdsConfigSummary = {
 export type MetaAdsStatusResponse = {
 	config: MetaAdsConfigSummary;
 	connection: MetaAdsConnection | null;
+};
+
+export type MetaAdsDeterministicSyncResponse = {
+	ok: true;
+	connection: MetaAdsConnection;
 };
 
 export type MetaAdsConfigPayload = {
@@ -799,6 +829,10 @@ function buildSearchParams(
 
 	if (filters.attributionModel?.trim()) {
 		params.set("attributionModel", filters.attributionModel.trim());
+	}
+
+	if (filters.reportingMode?.trim()) {
+		params.set("reportingMode", filters.reportingMode.trim());
 	}
 
   if (filters.attributionTier?.trim()) {
@@ -1128,6 +1162,19 @@ export function syncMetaAds(startDate: string, endDate: string) {
 		method: "POST",
 		body: { startDate, endDate },
 	});
+}
+
+export function updateMetaAdsDeterministicSync(
+	connectionId: number,
+	enabled: boolean,
+) {
+	return requestJson<MetaAdsDeterministicSyncResponse>(
+		`/api/admin/meta-ads/connections/${connectionId}/deterministic-view-impression-sync`,
+		{
+			method: "PUT",
+			body: { enabled },
+		},
+	);
 }
 
 export function fetchGoogleAdsStatus() {

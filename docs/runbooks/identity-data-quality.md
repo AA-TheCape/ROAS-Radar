@@ -1,6 +1,6 @@
 # Identity Data Quality Runbook
 
-Use this runbook when the scheduled data-quality job emits `data_quality_alert_triggered` or `/api/reporting/reconciliation` shows failed identity checks.
+Use this runbook when the scheduled data-quality job emits `data_quality_alert_triggered` or `/api/reporting/reconciliation` shows failed data-quality checks.
 
 ## Checks
 
@@ -8,6 +8,7 @@ Use this runbook when the scheduled data-quality job emits `data_quality_alert_t
 - `identity_graph_duplicate_canonical_assignments`: the same session resolves to multiple canonical journeys across `tracking_sessions`, `tracking_events`, `session_attribution_identities`, or `customer_journey`.
 - `identity_graph_conflicting_shopify_mappings`: a single `shopify_customer_id` resolves to multiple journeys across Shopify and identity surfaces.
 - `identity_graph_hash_format_anomalies`: hashed identifiers are present but do not match the expected 64-character lowercase SHA-256 format.
+- `meta_ads_deterministic_api_reconciliation`: Meta deterministic API pull counts disagree with platform-verified raw rows or normalized facts for the same account/entity/date/event scope.
 - `reporting_anomaly_check`: reporting metrics materially dropped versus the trailing baseline.
 
 ## First Response
@@ -17,6 +18,16 @@ Use this runbook when the scheduled data-quality job emits `data_quality_alert_t
 3. Check the `roas-radar-data-quality` Cloud Run Job execution logs for `data_quality_alert_triggered`.
 
 ## Investigation Queries
+
+### Meta deterministic reconciliation
+
+```sql
+SELECT *
+FROM meta_ads_deterministic_reconciliation_investigation
+WHERE run_date = $1::date
+ORDER BY absolute_delta DESC, account_id ASC, event_type ASC
+LIMIT 100;
+```
 
 ### Orphan sessions
 
