@@ -18,21 +18,11 @@ let cachedModules: {
 	pool: typeof import("../src/db/pool.js").pool;
 	createServer: typeof import("../src/server.js").createServer;
 	closeServer: typeof import("../src/server.js").closeServer;
-	enqueueAttributionForOrder: typeof import(
-		"../src/modules/attribution/index.js",
-	).enqueueAttributionForOrder;
-	processAttributionQueue: typeof import(
-		"../src/modules/attribution/index.js",
-	).processAttributionQueue;
-	enqueueShopifyOrderWriteback: typeof import(
-		"../src/modules/shopify/writeback.js",
-	).enqueueShopifyOrderWriteback;
-	processShopifyOrderWritebackQueue: typeof import(
-		"../src/modules/shopify/writeback.js",
-	).processShopifyOrderWritebackQueue;
-	testUtils: typeof import(
-		"../src/modules/shopify/writeback.js",
-	).__shopifyWritebackTestUtils;
+	enqueueAttributionForOrder: typeof import("../src/modules/attribution/index.js").enqueueAttributionForOrder;
+	processAttributionQueue: typeof import("../src/modules/attribution/index.js").processAttributionQueue;
+	enqueueShopifyOrderWriteback: typeof import("../src/modules/shopify/writeback.js").enqueueShopifyOrderWriteback;
+	processShopifyOrderWritebackQueue: typeof import("../src/modules/shopify/writeback.js").processShopifyOrderWritebackQueue;
+	testUtils: typeof import("../src/modules/shopify/writeback.js").__shopifyWritebackTestUtils;
 	resetE2EDatabase: typeof import("./e2e-harness.js").resetE2EDatabase;
 } | null = null;
 
