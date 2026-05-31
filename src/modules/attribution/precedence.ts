@@ -9,6 +9,18 @@ export const ATTRIBUTION_ORIGINS = [
 
 export type AttributionOrigin = (typeof ATTRIBUTION_ORIGINS)[number];
 
+export const ATTRIBUTION_EVIDENCE_SOURCES = [
+	"landing_session_id",
+	"checkout_token",
+	"cart_token",
+	"customer_identity",
+	"shopify_marketing_hint",
+	"ga4_fallback",
+] as const;
+
+export type AttributionEvidenceSource =
+	(typeof ATTRIBUTION_EVIDENCE_SOURCES)[number];
+
 export type AttributionOriginInput = {
 	attributionTier?: string | null;
 	attributionSource?: string | null;
@@ -42,6 +54,15 @@ const ORIGIN_PRECEDENCE: Record<AttributionOrigin, number> = {
 	deterministic_first_party: 50,
 };
 
+const EVIDENCE_SOURCE_ORDER: Record<AttributionEvidenceSource, number> = {
+	landing_session_id: 0,
+	checkout_token: 1,
+	cart_token: 2,
+	customer_identity: 3,
+	shopify_marketing_hint: 4,
+	ga4_fallback: 5,
+};
+
 function normalizeNullableString(
 	value: string | null | undefined,
 ): string | null {
@@ -51,6 +72,22 @@ function normalizeNullableString(
 
 export function attributionOriginPrecedence(origin: AttributionOrigin): number {
 	return ORIGIN_PRECEDENCE[origin];
+}
+
+export function attributionEvidenceSourcePrecedence(
+	source: AttributionEvidenceSource,
+): number {
+	return EVIDENCE_SOURCE_ORDER[source];
+}
+
+export function compareAttributionEvidenceSources(
+	left: AttributionEvidenceSource,
+	right: AttributionEvidenceSource,
+): number {
+	return (
+		attributionEvidenceSourcePrecedence(left) -
+		attributionEvidenceSourcePrecedence(right)
+	);
 }
 
 export function classifyAttributionOrigin(
@@ -124,13 +161,7 @@ export function classifyAttributionOrigin(
 }
 
 export function mapResolvedIngestionSourceToAttributionOrigin(
-	source:
-		| "landing_session_id"
-		| "checkout_token"
-		| "cart_token"
-		| "customer_identity"
-		| "shopify_marketing_hint"
-		| "ga4_fallback",
+	source: AttributionEvidenceSource,
 ): AttributionOrigin {
 	switch (source) {
 		case "landing_session_id":

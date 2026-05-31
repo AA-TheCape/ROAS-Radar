@@ -21,6 +21,7 @@ import { buildAttributionConfidenceLabel } from "./order-attribution-audit.js";
 import {
 	type AttributionComparableFields,
 	type AttributionOrigin,
+	classifyAttributionOrigin,
 	shouldApplyAttributionUpdate,
 } from "./precedence.js";
 import { type ResolvedJourney, resolveAttributionTier } from "./resolver.js";
@@ -232,33 +233,12 @@ function buildCurrentSnapshot(row: CurrentAttributionRow | null): Snapshot | nul
 	}
 
 	return {
-		origin: isCurrentlyUnattributedSnapshot({
-			origin: "unattributed",
-			result: {
-				sessionId: row.session_id,
-				source: row.attributed_source,
-				medium: row.attributed_medium,
-				campaign: row.attributed_campaign,
-				content: row.attributed_content,
-				term: row.attributed_term,
-				clickIdType: row.attributed_click_id_type,
-				clickIdValue: row.attributed_click_id_value,
-				confidenceScore:
-					row.confidence_score === null ? null : Number(row.confidence_score),
-				attributionReason: row.attribution_reason,
-				matchSource: row.match_source,
-				confidenceLabel: row.confidence_label,
-				attributedAt: row.attributed_at?.toISOString() ?? null,
-			},
-			order: {
-				tier: row.order_attribution_tier,
-				source: row.order_attribution_source,
-				reason: row.order_attribution_reason,
-				snapshot: row.order_attribution_snapshot,
-			},
-		})
-			? "unattributed"
-			: "unknown",
+		origin: classifyAttributionOrigin({
+			attributionTier: row.order_attribution_tier,
+			attributionSource: row.order_attribution_source,
+			matchSource: row.match_source,
+			attributionReason: row.attribution_reason ?? row.order_attribution_reason,
+		}),
 		result: {
 			sessionId: row.session_id,
 			source: row.attributed_source,
@@ -756,20 +736,14 @@ function buildRecoveryDefinition(
 					await fetchCurrentAttribution(client, record.shopify_order_id),
 				);
 
-				if (!isCurrentlyUnattributedSnapshot(current)) {
-					return buildRecordResult({
-						status: "skipped",
-						sideEffectAttempted: false,
-						result: {
-							reason: "current_attribution_not_unattributed",
-							currentOrigin: current?.origin ?? null,
-						},
-					});
-				}
-
 				const proposed = buildProposedSnapshot(journey, context.now);
 				const shouldApply = shouldApplyAttributionUpdate({
-					current: null,
+					current: current
+						? {
+								origin: current.origin,
+								attribution: buildComparableFromSnapshot(current),
+							}
+						: null,
 					proposed: {
 						origin: proposed.origin,
 						attribution: buildComparableFromSnapshot(proposed),

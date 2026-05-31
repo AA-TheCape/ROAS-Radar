@@ -1,5 +1,6 @@
 import type { AttributionTouchpoint } from './engine.js';
 import {
+  attributionEvidenceSourcePrecedence,
   attributionOriginPrecedence,
   mapResolvedIngestionSourceToAttributionOrigin
 } from './precedence.js';
@@ -80,21 +81,11 @@ export type TieredAttributionResolverInput = {
   }>;
 };
 
-const INGESTION_SOURCE_PRECEDENCE: Record<DeterministicIngestionSource, number> = {
-  landing_session_id: 0,
-  checkout_token: 1,
-  cart_token: 2,
-  customer_identity: 3
-};
-
 function ingestionSourcePrecedence(source: ResolvedIngestionSource): number {
   const originRank =
     1_000 -
     attributionOriginPrecedence(mapResolvedIngestionSourceToAttributionOrigin(source));
-  const sourceRank =
-    source in INGESTION_SOURCE_PRECEDENCE
-      ? INGESTION_SOURCE_PRECEDENCE[source as DeterministicIngestionSource]
-      : 0;
+  const sourceRank = attributionEvidenceSourcePrecedence(source);
 
   return originRank * 10 + sourceRank;
 }

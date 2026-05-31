@@ -4,7 +4,11 @@ import test from "node:test";
 import {
 	type AttributionComparableFields,
 	type AttributionOrigin,
+	ATTRIBUTION_EVIDENCE_SOURCES,
+	ATTRIBUTION_ORIGINS,
 	classifyAttributionOrigin,
+	compareAttributionEvidenceSources,
+	attributionOriginPrecedence,
 	shouldApplyAttributionUpdate,
 } from "../src/modules/attribution/precedence.js";
 
@@ -108,6 +112,65 @@ test("shouldApplyAttributionUpdate is idempotent and preserves stronger first-pa
 			),
 			proposed,
 		}),
+		true,
+	);
+});
+
+test("shouldApplyAttributionUpdate covers every origin conflict permutation", () => {
+	for (const currentOrigin of ATTRIBUTION_ORIGINS) {
+		for (const proposedOrigin of ATTRIBUTION_ORIGINS) {
+			const current = candidate(currentOrigin);
+			const proposed = candidate(proposedOrigin);
+			const currentPrecedence = attributionOriginPrecedence(currentOrigin);
+			const proposedPrecedence = attributionOriginPrecedence(proposedOrigin);
+			const expected =
+				proposedOrigin !== "unattributed" &&
+				proposedPrecedence > currentPrecedence;
+
+			assert.equal(
+				shouldApplyAttributionUpdate({ current, proposed }),
+				expected,
+				`${proposedOrigin} proposed over ${currentOrigin}`,
+			);
+		}
+	}
+});
+
+test("shouldApplyAttributionUpdate uses stable same-origin tie-break behavior", () => {
+	assert.equal(
+		shouldApplyAttributionUpdate({
+			current: candidate("ga4_fallback", attribution({ campaign: "old" })),
+			proposed: candidate("ga4_fallback", attribution({ campaign: "new" })),
+		}),
+		true,
+	);
+	assert.equal(
+		shouldApplyAttributionUpdate({
+			current: candidate("ga4_fallback"),
+			proposed: candidate("ga4_fallback"),
+		}),
+		false,
+	);
+});
+
+test("compareAttributionEvidenceSources exposes the shared source ordering", () => {
+	const sorted = ATTRIBUTION_EVIDENCE_SOURCES.slice().sort(
+		compareAttributionEvidenceSources,
+	);
+
+	assert.deepEqual(sorted, [
+		"landing_session_id",
+		"checkout_token",
+		"cart_token",
+		"customer_identity",
+		"shopify_marketing_hint",
+		"ga4_fallback",
+	]);
+	assert.equal(
+		compareAttributionEvidenceSources(
+			"shopify_marketing_hint",
+			"ga4_fallback",
+		) < 0,
 		true,
 	);
 });

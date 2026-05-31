@@ -669,23 +669,27 @@ function buildRecoveryDefinition(
 					});
 				}
 
-				await persistRecoveredAttribution({
-					client,
-					order: record,
-					before: current,
-					after: proposed,
-					runId: context.run.id,
-					jobType: context.run.jobType,
-					changedBy: context.run.initiatedBy,
-					now: context.now,
-				});
+				if (!context.dryRun) {
+					await persistRecoveredAttribution({
+						client,
+						order: record,
+						before: current,
+						after: proposed,
+						runId: context.run.id,
+						jobType: context.run.jobType,
+						changedBy: context.run.initiatedBy,
+						now: context.now,
+					});
+				}
 
 				return buildRecordResult({
 					status: "succeeded",
-					sideEffectAttempted: true,
-					sideEffectSucceeded: true,
+					sideEffectAttempted: !context.dryRun,
+					sideEffectSucceeded: !context.dryRun,
 					result: {
-						reason: "attribution_recovered_from_shopify_hint",
+						reason: context.dryRun
+							? "shopify_hint_recovery_preview"
+							: "attribution_recovered_from_shopify_hint",
 						beforeOrigin: current?.origin ?? null,
 						afterOrigin: proposed.origin,
 					},

@@ -4,6 +4,10 @@ import {
   isWithinLookbackWindow,
   qualifiesSyntheticHintSignal
 } from './rules.js';
+import {
+  compareAttributionEvidenceSources,
+  type AttributionEvidenceSource as PrecedenceAttributionEvidenceSource
+} from './precedence.js';
 
 export const ATTRIBUTION_MODELS = [
   'first_touch',
@@ -16,12 +20,7 @@ export const ATTRIBUTION_MODELS = [
 
 export type AttributionModel = (typeof ATTRIBUTION_MODELS)[number];
 export type AttributionEvidenceSource =
-  | 'landing_session_id'
-  | 'checkout_token'
-  | 'cart_token'
-  | 'customer_identity'
-  | 'shopify_marketing_hint'
-  | 'ga4_fallback';
+  PrecedenceAttributionEvidenceSource;
 export type AttributionEngagementType = 'click' | 'view' | 'unknown';
 export type AttributionAllocationStatus =
   | 'attributed'
@@ -134,15 +133,6 @@ type StrategyResult = {
   directSuppressionApplied: boolean;
   deterministicBlockApplied: boolean;
   lookbackRuleApplied: AttributionLookbackRule;
-};
-
-const EVIDENCE_SOURCE_PRECEDENCE: Record<AttributionEvidenceSource, number> = {
-  landing_session_id: 0,
-  checkout_token: 1,
-  cart_token: 2,
-  customer_identity: 3,
-  shopify_marketing_hint: 4,
-  ga4_fallback: 5
 };
 
 const FIRST_PARTY_EVIDENCE_SOURCES = new Set<AttributionEvidenceSource>([
@@ -269,7 +259,7 @@ function compareTimelineOrder(left: NormalizedTouchpoint, right: NormalizedTouch
     return occurredAtComparison;
   }
 
-  const evidenceComparison = EVIDENCE_SOURCE_PRECEDENCE[left.evidenceSource] - EVIDENCE_SOURCE_PRECEDENCE[right.evidenceSource];
+  const evidenceComparison = compareAttributionEvidenceSources(left.evidenceSource, right.evidenceSource);
   if (evidenceComparison !== 0) {
     return evidenceComparison;
   }
@@ -291,7 +281,7 @@ function compareLastTouchWinner(left: NormalizedTouchpoint, right: NormalizedTou
     return occurredAtComparison;
   }
 
-  const evidenceComparison = EVIDENCE_SOURCE_PRECEDENCE[left.evidenceSource] - EVIDENCE_SOURCE_PRECEDENCE[right.evidenceSource];
+  const evidenceComparison = compareAttributionEvidenceSources(left.evidenceSource, right.evidenceSource);
   if (evidenceComparison !== 0) {
     return evidenceComparison;
   }
@@ -313,7 +303,7 @@ function compareFirstTouchWinner(left: NormalizedTouchpoint, right: NormalizedTo
     return occurredAtComparison;
   }
 
-  const evidenceComparison = EVIDENCE_SOURCE_PRECEDENCE[left.evidenceSource] - EVIDENCE_SOURCE_PRECEDENCE[right.evidenceSource];
+  const evidenceComparison = compareAttributionEvidenceSources(left.evidenceSource, right.evidenceSource);
   if (evidenceComparison !== 0) {
     return evidenceComparison;
   }
