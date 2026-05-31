@@ -3,6 +3,11 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { PoolClient } from "pg";
 
 import { query, withTransaction } from "../../db/pool.js";
+import {
+	emitRecoveryRecordFailureLog,
+	emitRecoveryRunChunkLog,
+	emitRecoveryRunLifecycleLog,
+} from "../../observability/index.js";
 
 export type RecoveryJobMode = "manual" | "scheduled" | "automatic";
 export type RecoveryRunStatus =
@@ -1135,10 +1140,87 @@ export class RecoveryJobOrchestrator<TRecord> {
 		let pagesProcessed = 0;
 		let recordsProcessed = 0;
 		let done = false;
+		const runStartedAt = process.hrtime.bigint();
 
-		while (!done) {
+		emitRecoveryRunLifecycleLog({
+			stage: "started",
+			run,
+			workerId,
+			pagesProcessed,
+			durationMs: 0,
+		});
+
+		try {
+			while (!done) {
+				const latestRun = await this.store.getRun(run.id);
+				if (latestRun?.status === "cancelled") {
+					emitRecoveryRunLifecycleLog({
+						stage: "cancelled",
+						run: latestRun,
+						workerId,
+						pagesProcessed,
+						durationMs: Number(process.hrtime.bigint() - runStartedAt) / 1_000_000,
+					});
+
+					return {
+						run: latestRun,
+						pagesProcessed,
+						recordsProcessed,
+					};
+				}
+
+				const context = this.buildContext(run, workerId, now);
+				const pageStartedAt = process.hrtime.bigint();
+				const page = await this.definition.fetchPage(context);
+				if (page.records.length > 0) {
+					run = await this.store.incrementRunCounters(
+						run.id,
+						{
+							recordsDiscovered: page.records.length,
+							recordsClaimed: page.records.length,
+						},
+						now,
+					);
+				}
+
+				let pageRecordsProcessed = 0;
+				for (const record of page.records) {
+					const processed = await this.processRecord(record, context, now);
+					pageRecordsProcessed += processed ? 1 : 0;
+					recordsProcessed += processed ? 1 : 0;
+				}
+
+				pagesProcessed += 1;
+				run = await this.store.updateCheckpoint(
+					run.id,
+					"default",
+					page.checkpoint,
+					page.records.length,
+					now,
+				);
+				emitRecoveryRunChunkLog({
+					run,
+					workerId,
+					pageNumber: pagesProcessed,
+					recordsDiscovered: page.records.length,
+					recordsProcessed: pageRecordsProcessed,
+					done: page.done,
+					durationMs: Number(process.hrtime.bigint() - pageStartedAt) / 1_000_000,
+					checkpoint: page.checkpoint,
+				});
+				done = page.done;
+			}
+
 			const latestRun = await this.store.getRun(run.id);
 			if (latestRun?.status === "cancelled") {
+				emitRecoveryRunLifecycleLog({
+					stage: "cancelled",
+					run: latestRun,
+					workerId,
+					pagesProcessed,
+					durationMs: Number(process.hrtime.bigint() - runStartedAt) / 1_000_000,
+				});
+
 				return {
 					run: latestRun,
 					pagesProcessed,
@@ -1146,55 +1228,38 @@ export class RecoveryJobOrchestrator<TRecord> {
 				};
 			}
 
-			const context = this.buildContext(run, workerId, now);
-			const page = await this.definition.fetchPage(context);
-			if (page.records.length > 0) {
-				run = await this.store.incrementRunCounters(
-					run.id,
-					{
-						recordsDiscovered: page.records.length,
-						recordsClaimed: page.records.length,
-					},
-					now,
-				);
-			}
+			const terminalStatus =
+				run.recordsFailed > 0 || run.recordsRetried > 0
+					? "partial_failure"
+					: "succeeded";
+			const finalized = await this.store.finalizeRun(run.id, terminalStatus, null, now);
 
-			for (const record of page.records) {
-				const processed = await this.processRecord(record, context, now);
-				recordsProcessed += processed ? 1 : 0;
-			}
+			emitRecoveryRunLifecycleLog({
+				stage: "completed",
+				run: finalized,
+				workerId,
+				pagesProcessed,
+				durationMs: Number(process.hrtime.bigint() - runStartedAt) / 1_000_000,
+			});
 
-			pagesProcessed += 1;
-			run = await this.store.updateCheckpoint(
-				run.id,
-				"default",
-				page.checkpoint,
-				page.records.length,
-				now,
-			);
-			done = page.done;
-		}
-
-		const latestRun = await this.store.getRun(run.id);
-		if (latestRun?.status === "cancelled") {
 			return {
-				run: latestRun,
+				run: finalized,
 				pagesProcessed,
 				recordsProcessed,
 			};
+		} catch (error) {
+			const normalizedError = normalizeRecoveryError(error);
+			const failedRun = await this.store.finalizeRun(run.id, "failed", normalizedError, new Date());
+			emitRecoveryRunLifecycleLog({
+				stage: "failed",
+				run: failedRun,
+				workerId,
+				pagesProcessed,
+				durationMs: Number(process.hrtime.bigint() - runStartedAt) / 1_000_000,
+				error,
+			});
+			throw error;
 		}
-
-		const terminalStatus =
-			run.recordsFailed > 0 || run.recordsRetried > 0
-				? "partial_failure"
-				: "succeeded";
-		const finalized = await this.store.finalizeRun(run.id, terminalStatus, null, now);
-
-		return {
-			run: finalized,
-			pagesProcessed,
-			recordsProcessed,
-		};
 	}
 
 	async startAndExecute(
@@ -1331,6 +1396,26 @@ export class RecoveryJobOrchestrator<TRecord> {
 					error: normalizedError,
 					retryable,
 					now,
+				});
+				emitRecoveryRecordFailureLog({
+					run: context.run,
+					workerId: context.workerId,
+					recordId: storedRecord.id,
+					recordType: identity.recordType,
+					recordKey: identity.recordKey,
+					attemptNumber,
+					retryable,
+					nextAttemptAt: retryable
+						? new Date(
+								now.getTime() +
+									calculateRecoveryBackoffMs(
+										attemptNumber,
+										this.definition.backoffBaseMs,
+										this.definition.backoffMaxMs,
+									),
+							)
+						: null,
+					error: normalizedError,
 				});
 
 				if (!retryable) {

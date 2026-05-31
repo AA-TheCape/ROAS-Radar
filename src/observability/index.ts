@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 
 import type { OrderAttributionBackfillReport } from '../../packages/attribution-schema/index.js';
+import type { NormalizedRecoveryError, RecoveryCheckpoint, RecoveryRun } from '../modules/recovery/index.js';
 
 type SerializableFields = Record<string, unknown>;
 
@@ -128,6 +129,38 @@ type CampaignMetadataSyncJobLifecycleLogInput = {
   error?: unknown;
 };
 
+type RecoveryRunLifecycleLogInput = {
+  stage: 'started' | 'completed' | 'failed' | 'cancelled';
+  run: RecoveryRun;
+  workerId: string;
+  pagesProcessed?: number;
+  durationMs?: number | null;
+  error?: unknown;
+};
+
+type RecoveryRunChunkLogInput = {
+  run: RecoveryRun;
+  workerId: string;
+  pageNumber: number;
+  recordsDiscovered: number;
+  recordsProcessed: number;
+  done: boolean;
+  durationMs: number;
+  checkpoint: RecoveryCheckpoint;
+};
+
+type RecoveryRecordFailureLogInput = {
+  run: RecoveryRun;
+  workerId: string;
+  recordId: string;
+  recordType: string;
+  recordKey: string;
+  attemptNumber: number;
+  retryable: boolean;
+  nextAttemptAt?: Date | null;
+  error: NormalizedRecoveryError;
+};
+
 const requestContextStorage = new AsyncLocalStorage<RequestContext>();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -228,6 +261,151 @@ function normalizeBackfillErrorMessage(error: unknown): string | null {
   }
 
   return null;
+}
+
+function calculateDurationMs(startedAt: string | null, completedAt: string | null): number | null {
+  if (!startedAt || !completedAt) {
+    return null;
+  }
+
+  const started = new Date(startedAt).getTime();
+  const completed = new Date(completedAt).getTime();
+
+  if (Number.isNaN(started) || Number.isNaN(completed)) {
+    return null;
+  }
+
+  return Math.max(0, completed - started);
+}
+
+function buildRecoveryTraceFields(runId: string): SerializableFields {
+  const traceId = runId.replaceAll('-', '').toLowerCase();
+  const projectId = getGoogleCloudProjectId();
+  const isCloudTraceCompatible = /^[a-f0-9]{32}$/.test(traceId);
+
+  return {
+    recoveryTraceId: traceId,
+    ...(projectId && isCloudTraceCompatible
+      ? { 'logging.googleapis.com/trace': `projects/${projectId}/traces/${traceId}` }
+      : {})
+  };
+}
+
+function summarizeRecoveryRun(run: RecoveryRun): SerializableFields {
+  return {
+    runId: run.id,
+    jobType: run.jobType,
+    status: run.status,
+    mode: run.mode,
+    initiatedBy: run.initiatedBy,
+    dryRun: run.dryRun,
+    scopeKey: run.scopeKey,
+    timeRangeStart: run.timeRangeStart,
+    timeRangeEnd: run.timeRangeEnd,
+    resumeFromRunId: run.resumeFromRunId,
+    rerunOfRunId: run.rerunOfRunId,
+    queuedAt: run.queuedAt,
+    startedAt: run.startedAt,
+    completedAt: run.completedAt,
+    lastHeartbeatAt: run.lastHeartbeatAt,
+    durationMs: calculateDurationMs(run.startedAt, run.completedAt),
+    processedCount: run.recordsProcessed,
+    updatedCount: run.sideEffectsSucceeded,
+    skippedCount: run.recordsSkipped,
+    failedCount: run.recordsFailed,
+    retriedCount: run.recordsRetried,
+    discoveredCount: run.recordsDiscovered,
+    claimedCount: run.recordsClaimed,
+    sideEffectsAttempted: run.sideEffectsAttempted,
+    sideEffectsSuppressed: run.sideEffectsSuppressed,
+    errorCode: run.errorCode,
+    errorMessage: run.errorMessage,
+    ...buildRecoveryTraceFields(run.id)
+  };
+}
+
+export function emitRecoveryRunLifecycleLog(input: RecoveryRunLifecycleLogInput): void {
+  const runSummary = summarizeRecoveryRun(input.run);
+  const fields: SerializableFields = {
+    service: process.env.K_SERVICE ?? 'roas-radar-recovery-worker',
+    stage: input.stage,
+    workerId: input.workerId,
+    pagesProcessed: input.pagesProcessed ?? null,
+    ...runSummary,
+    durationMs:
+      typeof input.durationMs === 'number'
+        ? Number(input.durationMs.toFixed(2))
+        : runSummary.durationMs
+  };
+
+  if (input.stage === 'failed') {
+    fields.alertable = true;
+    fields.failureContext = {
+      runId: input.run.id,
+      jobType: input.run.jobType,
+      workerId: input.workerId,
+      status: input.run.status,
+      checkpoint: input.run.checkpoint,
+      counters: {
+        processed: input.run.recordsProcessed,
+        updated: input.run.sideEffectsSucceeded,
+        skipped: input.run.recordsSkipped,
+        failed: input.run.recordsFailed,
+        retried: input.run.recordsRetried
+      }
+    };
+    logError('recovery_run_lifecycle', input.error ?? new Error('Recovery run failed'), fields);
+    return;
+  }
+
+  logInfo('recovery_run_lifecycle', fields);
+}
+
+export function emitRecoveryRunChunkLog(input: RecoveryRunChunkLogInput): void {
+  logInfo('recovery_run_chunk_processed', {
+    service: process.env.K_SERVICE ?? 'roas-radar-recovery-worker',
+    ...summarizeRecoveryRun(input.run),
+    workerId: input.workerId,
+    pageNumber: input.pageNumber,
+    recordsDiscovered: input.recordsDiscovered,
+    recordsProcessed: input.recordsProcessed,
+    processedCount: input.run.recordsProcessed,
+    updatedCount: input.run.sideEffectsSucceeded,
+    skippedCount: input.run.recordsSkipped,
+    failedCount: input.run.recordsFailed,
+    retriedCount: input.run.recordsRetried,
+    done: input.done,
+    durationMs: Number(input.durationMs.toFixed(2)),
+    checkpoint: input.checkpoint
+  });
+}
+
+export function emitRecoveryRecordFailureLog(input: RecoveryRecordFailureLogInput): void {
+  logError('recovery_record_failure', new Error(input.error.message), {
+    service: process.env.K_SERVICE ?? 'roas-radar-recovery-worker',
+    workerId: input.workerId,
+    runId: input.run.id,
+    jobType: input.run.jobType,
+    status: input.run.status,
+    mode: input.run.mode,
+    dryRun: input.run.dryRun,
+    recordId: input.recordId,
+    recordType: input.recordType,
+    recordKey: input.recordKey,
+    attemptNumber: input.attemptNumber,
+    retryable: input.retryable,
+    nextAttemptAt: input.nextAttemptAt?.toISOString() ?? null,
+    errorCode: input.error.code,
+    errorMessage: input.error.message,
+    errorDetails: input.error.details,
+    actionContext: {
+      inspectRunFilter: `jsonPayload.event="recovery_run_lifecycle" jsonPayload.runId="${input.run.id}"`,
+      inspectRecordFilter: `jsonPayload.event="recovery_record_failure" jsonPayload.runId="${input.run.id}" jsonPayload.recordKey="${input.recordKey}"`,
+      checkpoint: input.run.checkpoint
+    },
+    alertable: !input.retryable,
+    ...buildRecoveryTraceFields(input.run.id)
+  });
 }
 
 function toBackfillLifecycleStatus(stage: BackfillLifecycleStage): 'queued' | 'processing' | 'completed' | 'failed' {

@@ -1,0 +1,29 @@
+{
+  "name": "roas_recovery_chunk_duration_ms",
+  "description": "Distribution of recovery chunk/page processing duration.",
+  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"recovery_run_chunk_processed\"",
+  "valueExtractor": "EXTRACT(jsonPayload.durationMs)",
+  "labelExtractors": {
+    "service": "EXTRACT(jsonPayload.service)",
+    "job_type": "EXTRACT(jsonPayload.jobType)",
+    "dry_run": "EXTRACT(jsonPayload.dryRun)",
+    "done": "EXTRACT(jsonPayload.done)"
+  },
+  "metricDescriptor": {
+    "metricKind": "DELTA",
+    "valueType": "DISTRIBUTION",
+    "unit": "ms",
+    "displayName": "ROAS Radar Recovery Chunk Duration",
+    "labels": [
+      { "key": "service", "valueType": "STRING", "description": "Service emitting the recovery telemetry." },
+      { "key": "job_type", "valueType": "STRING", "description": "Recovery job type." },
+      { "key": "dry_run", "valueType": "STRING", "description": "Whether side effects were suppressed." },
+      { "key": "done", "valueType": "STRING", "description": "Whether this chunk completed the run." }
+    ]
+  },
+  "bucketOptions": {
+    "explicitBuckets": {
+      "bounds": [1000, 5000, 30000, 60000, 300000, 900000, 1800000]
+    }
+  }
+}
