@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RecoveryJobRequestV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "jobType",
+    "mode",
+    "initiatedBy",
+    "dryRun",
+    "timeRangeStart",
+    "timeRangeEnd",
+    "scopeKey",
+    "idempotencyKey",
+    "resumeFromRunId",
+    "rerunOfRunId",
+    "inputParameters"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1, "type": "integer" },
+    "jobType": {
+      "type": "string",
+      "enum": [
+        "shopify_attribution_hint_recovery",
+        "ga4_fallback_unattributed_recovery",
+        "campaign_metadata_api_refresh",
+        "campaign_metadata_history_backfill",
+        "shopify_order_reimport",
+        "order_attribution_backfill"
+      ]
+    },
+    "mode": { "type": "string", "enum": ["manual", "scheduled", "automatic"] },
+    "initiatedBy": { "type": "string", "minLength": 1 },
+    "dryRun": { "type": "boolean" },
+    "timeRangeStart": { "type": "string", "format": "date-time" },
+    "timeRangeEnd": { "type": "string", "format": "date-time" },
+    "scopeKey": { "type": "string", "minLength": 1 },
+    "idempotencyKey": { "type": ["string", "null"] },
+    "resumeFromRunId": { "type": ["string", "null"] },
+    "rerunOfRunId": { "type": ["string", "null"] },
+    "inputParameters": { "type": "object", "additionalProperties": true }
+  }
+}

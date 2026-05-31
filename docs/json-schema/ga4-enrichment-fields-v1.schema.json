@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Ga4EnrichmentFieldsV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "shopifyOrderId",
+    "ga4PropertyId",
+    "ga4EventDate",
+    "enrichedAt",
+    "clientId",
+    "sessionId",
+    "userPseudoId",
+    "transactionId",
+    "source",
+    "medium",
+    "campaign",
+    "content",
+    "term",
+    "clickIdType",
+    "clickIdValue",
+    "collectedTrafficSource",
+    "sourcePrecedenceRank"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1, "type": "integer" },
+    "shopifyOrderId": { "type": "string", "minLength": 1 },
+    "ga4PropertyId": { "type": "string", "minLength": 1 },
+    "ga4EventDate": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+    "enrichedAt": { "type": "string", "format": "date-time" },
+    "clientId": { "type": ["string", "null"] },
+    "sessionId": { "type": ["string", "null"] },
+    "userPseudoId": { "type": ["string", "null"] },
+    "transactionId": { "type": ["string", "null"] },
+    "source": { "type": ["string", "null"] },
+    "medium": { "type": ["string", "null"] },
+    "campaign": { "type": ["string", "null"] },
+    "content": { "type": ["string", "null"] },
+    "term": { "type": ["string", "null"] },
+    "clickIdType": {
+      "type": ["string", "null"],
+      "enum": ["gclid", "gbraid", "wbraid", "fbclid", "ttclid", "msclkid", null]
+    },
+    "clickIdValue": { "type": ["string", "null"] },
+    "collectedTrafficSource": {
+      "anyOf": [
+        { "type": "object", "additionalProperties": true },
+        { "type": "null" }
+      ]
+    },
+    "sourcePrecedenceRank": { "const": 2, "type": "integer" }
+  }
+}

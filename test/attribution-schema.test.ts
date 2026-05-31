@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
   ORDER_ATTRIBUTION_BACKFILL_DEFAULT_LIMIT,
   ORDER_ATTRIBUTION_BACKFILL_MAX_LIMIT,
+  RECOVERY_SOURCE_PRECEDENCE,
   attributionEngineV1JsonSchemas,
+  campaignMetadataRefreshPayloadJsonSchema,
+  ga4EnrichmentFieldsJsonSchema,
+  normalizeCampaignMetadataRefreshPayload,
   normalizeAttributionCaptureV1,
   normalizeAttributionCreditRecordV1,
   normalizeAttributionConsentState,
@@ -15,9 +20,18 @@ import {
   normalizeAttributionResultRecordV1,
   normalizeAttributionTouchpointInputV1,
   normalizeAttributionUtcTimestamp,
+  normalizeGa4EnrichmentFields,
   normalizeOrderAttributionBackfillRequest,
+  normalizeRecoveryJobReport,
+  normalizeRecoveryJobRequest,
+  normalizeShopifyAttributionHint,
+  normalizeShopifyRawPayloadSnapshot,
   orderAttributionBackfillEnqueueResponseSchema,
-  orderAttributionBackfillJobResponseSchema
+  orderAttributionBackfillJobResponseSchema,
+  recoveryJobReportJsonSchema,
+  recoveryJobRequestJsonSchema,
+  shopifyAttributionHintJsonSchema,
+  shopifyRawPayloadSnapshotJsonSchema
 } from "../packages/attribution-schema/index.js";
 
 test("attribution consent state defaults to unknown and accepts explicit opt-out", () => {
@@ -253,6 +267,158 @@ test("order attribution backfill job responses accept queued and processing payl
 	assert.equal(processingJob.startedAt, "2026-04-25T12:35:00.000Z");
 	assert.equal(processingJob.completedAt, null);
 	assert.equal(processingJob.error, null);
+});
+
+test("recovery job contracts normalize requests and require Shopify > GA4 > ad platforms precedence", () => {
+	const request = normalizeRecoveryJobRequest({
+		schemaVersion: 1,
+		jobType: "shopify_attribution_hint_recovery",
+		initiatedBy: "ops@example.com",
+		timeRangeStart: "2026-05-01T00:00:00Z",
+		timeRangeEnd: "2026-05-02T00:00:00Z",
+	});
+
+	assert.equal(request.mode, "manual");
+	assert.equal(request.dryRun, true);
+	assert.equal(request.scopeKey, "global");
+	assert.deepEqual(RECOVERY_SOURCE_PRECEDENCE, [
+		"shopify",
+		"ga4",
+		"ad_platforms",
+	]);
+
+	const report = normalizeRecoveryJobReport({
+		schemaVersion: 1,
+		jobId: "run-1",
+		jobType: "shopify_attribution_hint_recovery",
+		status: "succeeded",
+		startedAt: "2026-05-01T00:00:01Z",
+		completedAt: "2026-05-01T00:00:02Z",
+		dryRun: true,
+		sourcePrecedence: ["shopify", "ga4", "ad_platforms"],
+		counters: {
+			recordsDiscovered: 1,
+			recordsProcessed: 1,
+			recordsSucceeded: 1,
+			recordsFailed: 0,
+			recordsSkipped: 0,
+			sideEffectsAttempted: 0,
+			sideEffectsSucceeded: 0,
+			sideEffectsSuppressed: 1,
+		},
+	});
+
+	assert.equal(report.completedAt, "2026-05-01T00:00:02.000Z");
+	assert.throws(
+		() =>
+			normalizeRecoveryJobReport({
+				...report,
+				sourcePrecedence: ["ga4", "shopify", "ad_platforms"],
+			}),
+		/Invalid literal value/,
+	);
+});
+
+test("recovery source payload contracts normalize Shopify, GA4, and ad metadata fields", () => {
+	const shopifySnapshot = normalizeShopifyRawPayloadSnapshot({
+		schemaVersion: 1,
+		snapshotId: "snapshot-1",
+		shopDomain: "example.myshopify.com",
+		shopifyOrderId: "1001",
+		capturedAt: "2026-05-01T00:00:00Z",
+		payloadVersion: 1,
+		payloadSha256: "a".repeat(64),
+		storageUri: null,
+		rawPayload: { id: 1001 },
+		normalized: {
+			orderName: "#1001",
+			processedAt: "2026-05-01T00:00:00Z",
+			createdAtShopify: null,
+			currencyCode: "usd",
+			totalPrice: "120.00",
+			subtotalPrice: "100.00",
+			landingSite: "https://example.com/?utm_source=Google",
+			referringSite: null,
+			checkoutToken: "checkout-1",
+			cartToken: null,
+			customerId: "customer-1",
+			sourceName: "web",
+		},
+	});
+	const shopifyHint = normalizeShopifyAttributionHint({
+		schemaVersion: 1,
+		shopifyOrderId: "1001",
+		extractedAt: "2026-05-01T00:00:01Z",
+		hintSource: "landing_site",
+		source: "Google",
+		medium: "CPC",
+		campaign: "Brand",
+		content: null,
+		term: null,
+		clickIdType: "gclid",
+		clickIdValue: "ABC123",
+		landingSite: "https://example.com/?gclid=ABC123",
+		referringSite: null,
+		confidenceScore: 0.8,
+		confidenceLabel: "high",
+		sourcePrecedenceRank: 1,
+	});
+	const ga4 = normalizeGa4EnrichmentFields({
+		schemaVersion: 1,
+		shopifyOrderId: "1001",
+		ga4PropertyId: "properties/123",
+		ga4EventDate: "2026-05-01",
+		enrichedAt: "2026-05-01T00:00:02Z",
+		clientId: "client-1",
+		sessionId: null,
+		userPseudoId: null,
+		transactionId: "1001",
+		source: "Newsletter",
+		medium: "Email",
+		campaign: "May",
+		content: null,
+		term: null,
+		clickIdType: null,
+		clickIdValue: null,
+		collectedTrafficSource: { manual_source: "newsletter" },
+		sourcePrecedenceRank: 2,
+	});
+	const metadata = normalizeCampaignMetadataRefreshPayload({
+		schemaVersion: 1,
+		requestedBy: "ops@example.com",
+		workerId: "metadata-refresh",
+		mode: "api_refresh",
+		platforms: ["google_ads", "meta_ads"],
+		startDate: "2026-05-01",
+		endDate: "2026-05-02",
+		sourcePrecedenceRank: 3,
+	});
+
+	assert.equal(shopifySnapshot.normalized.currencyCode, "USD");
+	assert.equal(shopifyHint.source, "google");
+	assert.equal(shopifyHint.sourcePrecedenceRank, 1);
+	assert.equal(ga4.medium, "email");
+	assert.equal(ga4.sourcePrecedenceRank, 2);
+	assert.deepEqual(metadata.campaignIds, []);
+	assert.equal(metadata.sourcePrecedenceRank, 3);
+});
+
+test("committed recovery JSON Schema files cover shared recovery contract titles", () => {
+	const expectedSchemas = [
+		["docs/json-schema/recovery-job-request-v1.schema.json", recoveryJobRequestJsonSchema],
+		["docs/json-schema/recovery-job-report-v1.schema.json", recoveryJobReportJsonSchema],
+		["docs/json-schema/shopify-raw-payload-snapshot-v1.schema.json", shopifyRawPayloadSnapshotJsonSchema],
+		["docs/json-schema/shopify-attribution-hint-v1.schema.json", shopifyAttributionHintJsonSchema],
+		["docs/json-schema/ga4-enrichment-fields-v1.schema.json", ga4EnrichmentFieldsJsonSchema],
+		["docs/json-schema/campaign-metadata-refresh-payload-v1.schema.json", campaignMetadataRefreshPayloadJsonSchema],
+	] as const;
+
+	for (const [path, exportedSchema] of expectedSchemas) {
+		const committed = JSON.parse(readFileSync(path, "utf8"));
+
+		assert.equal(committed.$schema, "https://json-schema.org/draft/2020-12/schema");
+		assert.equal(committed.title, exportedSchema.title);
+	}
 });
 
 test('attribution v1 order, touchpoint, and hint schemas normalize canonical preprocessing records', () => {
