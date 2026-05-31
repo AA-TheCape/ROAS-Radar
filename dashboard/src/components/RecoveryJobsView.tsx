@@ -1,13 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { ORDER_ATTRIBUTION_BACKFILL_DEFAULT_LIMIT } from "../../../packages/attribution-schema/index.js";
 import {
-	ORDER_ATTRIBUTION_BACKFILL_DEFAULT_LIMIT,
-	orderAttributionBackfillRequestSchema,
-} from "../../../packages/attribution-schema/index.js";
-import {
-	backfillShopifyOrders,
 	cancelRecoveryRun,
 	createRecoveryRun,
-	enqueueOrderAttributionBackfill,
 	fetchRecoveryRuns,
 	startRecoveryRun,
 	type RecoveryJobType,
@@ -46,6 +41,9 @@ type ActionKey =
 	| "shopify-order-import"
 	| "shopify-hint-recovery"
 	| "ga4-fallback-recovery"
+	| "ga4-session-enrichment"
+	| "campaign-metadata-refresh"
+	| "campaign-metadata-history"
 	| "order-attribution-backfill";
 
 type Feedback = {
@@ -61,6 +59,7 @@ type ActionSummary = {
 };
 
 const RECOVERY_JOB_LABELS: Record<RecoveryJobType, string> = {
+	shopify_order_reimport: "Shopify order import",
 	shopify_attribution_hint_recovery: "Shopify hint recovery",
 	ga4_fallback_unattributed_recovery: "GA4 fallback recovery",
 	ga4_session_enrichment_backfill: "GA4 session enrichment",
@@ -203,6 +202,15 @@ export default function RecoveryJobsView({
 			return;
 		}
 
+		if (jobType === "order_attribution_backfill" && !Number.isInteger(parsedLimit)) {
+			setFeedback({
+				loading: null,
+				error: "Enter a valid order limit before launching order attribution backfill.",
+				message: null,
+			});
+			return;
+		}
+
 		if (!dryRun) {
 			const confirmed = window.confirm(
 				`Launch write-enabled ${RECOVERY_JOB_LABELS[jobType]} for ${startDate} to ${endDate}? Run this only after a dry run for the same window.`,
@@ -225,6 +233,13 @@ export default function RecoveryJobsView({
 				...(jobType === "ga4_fallback_unattributed_recovery" && Number.isInteger(parsedLookbackDays)
 					? { lookbackDays: parsedLookbackDays }
 					: {}),
+				...(jobType === "order_attribution_backfill" && Number.isInteger(parsedLimit)
+					? {
+							limit: parsedLimit,
+							onlyWebOrders: true,
+							skipShopifyWriteback: false,
+						}
+					: {}),
 			});
 			await startRecoveryRun(created.runId);
 			setSummary({
@@ -242,87 +257,6 @@ export default function RecoveryJobsView({
 			setFeedback({
 				loading: null,
 				error: error instanceof Error ? error.message : "Failed to launch recovery run",
-				message: null,
-			});
-		}
-	}
-
-	async function launchShopifyImport() {
-		if (rangeInvalid) {
-			setFeedback({ loading: null, error: "Enter a valid date range before importing Shopify orders.", message: null });
-			return;
-		}
-
-		const confirmed = window.confirm(
-			`Import Shopify orders for ${startDate} to ${endDate}? This action reimports source order data and does not expose scheduling controls.`,
-		);
-
-		if (!confirmed) {
-			return;
-		}
-
-		setFeedback({ loading: "shopify-order-import", error: null, message: null });
-
-		try {
-			const response = await backfillShopifyOrders(startDate, endDate);
-			setSummary({
-				label: "Shopify order import",
-				detail: `${formatNumber(response.importedOrders)} imported, ${formatNumber(response.ordersInserted)} inserted, ${formatNumber(response.ordersUpdated)} updated.`,
-				at: new Date().toISOString(),
-			});
-			setFeedback({ loading: null, error: null, message: "Shopify order import completed." });
-		} catch (error) {
-			setFeedback({
-				loading: null,
-				error: error instanceof Error ? error.message : "Failed to import Shopify orders",
-				message: null,
-			});
-		}
-	}
-
-	async function launchOrderAttributionBackfill() {
-		const parsed = orderAttributionBackfillRequestSchema.safeParse({
-			startDate,
-			endDate,
-			dryRun,
-			limit: parsedLimit,
-			webOrdersOnly: true,
-			skipShopifyWriteback: false,
-		});
-
-		if (!parsed.success) {
-			setFeedback({
-				loading: null,
-				error: parsed.error.issues[0]?.message ?? "Enter valid order attribution backfill options.",
-				message: null,
-			});
-			return;
-		}
-
-		if (!dryRun) {
-			const confirmed = window.confirm(
-				`Queue write-enabled order attribution backfill for ${startDate} to ${endDate}? Run a dry run first for this exact window.`,
-			);
-
-			if (!confirmed) {
-				return;
-			}
-		}
-
-		setFeedback({ loading: "order-attribution-backfill", error: null, message: null });
-
-		try {
-			const response = await enqueueOrderAttributionBackfill(parsed.data);
-			setSummary({
-				label: "Order attribution backfill",
-				detail: `Queued job ${response.jobId} for up to ${formatNumber(response.options.limit)} orders in ${response.options.dryRun ? "dry-run" : "write-enabled"} mode.`,
-				at: new Date().toISOString(),
-			});
-			setFeedback({ loading: null, error: null, message: `Queued order attribution backfill job ${response.jobId}.` });
-		} catch (error) {
-			setFeedback({
-				loading: null,
-				error: error instanceof Error ? error.message : "Failed to queue order attribution backfill",
 				message: null,
 			});
 		}
@@ -436,11 +370,11 @@ export default function RecoveryJobsView({
 					<div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
 						<RecoveryActionCard
 							title="Shopify order import"
-							badge="Backfill"
-							description="Reimport Shopify orders for the selected production window before running attribution recovery."
+							badge={dryRun ? "Dry run" : "Write-enabled"}
+							description="Reimport Shopify orders for the selected window through the recovery registry before running attribution recovery."
 							disabled={Boolean(feedback.loading) || rangeInvalid}
 							loading={feedback.loading === "shopify-order-import"}
-							onRun={launchShopifyImport}
+							onRun={() => void launchRegistryRun("shopify_order_reimport", "shopify-order-import")}
 						/>
 						<RecoveryActionCard
 							title="Shopify hint recovery"
@@ -459,12 +393,36 @@ export default function RecoveryJobsView({
 							onRun={() => void launchRegistryRun("ga4_fallback_unattributed_recovery", "ga4-fallback-recovery")}
 						/>
 						<RecoveryActionCard
+							title="GA4 session enrichment"
+							badge={dryRun ? "Dry run" : "Write-enabled"}
+							description="Backfill GA4 session enrichment hourly windows through the shared recovery run queue."
+							disabled={Boolean(feedback.loading) || rangeInvalid}
+							loading={feedback.loading === "ga4-session-enrichment"}
+							onRun={() => void launchRegistryRun("ga4_session_enrichment_backfill", "ga4-session-enrichment")}
+						/>
+						<RecoveryActionCard
+							title="Campaign metadata refresh"
+							badge={dryRun ? "Dry run" : "Write-enabled"}
+							description="Refresh campaign metadata from connected ad-platform APIs for the selected reporting window."
+							disabled={Boolean(feedback.loading) || rangeInvalid}
+							loading={feedback.loading === "campaign-metadata-refresh"}
+							onRun={() => void launchRegistryRun("campaign_metadata_api_refresh", "campaign-metadata-refresh")}
+						/>
+						<RecoveryActionCard
+							title="Campaign metadata history"
+							badge={dryRun ? "Dry run" : "Write-enabled"}
+							description="Backfill unresolved campaign metadata history into the shared recovery run history."
+							disabled={Boolean(feedback.loading) || rangeInvalid}
+							loading={feedback.loading === "campaign-metadata-history"}
+							onRun={() => void launchRegistryRun("campaign_metadata_history_backfill", "campaign-metadata-history")}
+						/>
+						<RecoveryActionCard
 							title="Order attribution backfill"
 							badge={dryRun ? "Dry run" : "Write-enabled"}
-							description="Queue the broader order attribution backfill after source import and targeted recovery checks."
+							description="Run the broader order attribution recovery after source import and targeted recovery checks."
 							disabled={Boolean(feedback.loading) || rangeInvalid}
 							loading={feedback.loading === "order-attribution-backfill"}
-							onRun={() => void launchOrderAttributionBackfill()}
+							onRun={() => void launchRegistryRun("order_attribution_backfill", "order-attribution-backfill")}
 						/>
 					</div>
 					{summary ? (

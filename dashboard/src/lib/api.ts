@@ -659,6 +659,7 @@ export type ShopifyAttributionRecoveryResponse = {
 };
 
 export type RecoveryJobType =
+	| "shopify_order_reimport"
 	| "shopify_attribution_hint_recovery"
 	| "ga4_fallback_unattributed_recovery"
 	| "ga4_session_enrichment_backfill"

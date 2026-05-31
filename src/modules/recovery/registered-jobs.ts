@@ -27,6 +27,7 @@ import {
 	SHOPIFY_ATTRIBUTION_RECOVERY_JOB_TYPE,
 	executeShopifyAttributionRecoveryRun,
 } from "../attribution/shopify-hint-recovery.js";
+import { reimportShopifyOrdersForDateRange } from "../shopify/index.js";
 import {
 	PostgresRecoveryJobStore,
 	type NormalizedRecoveryError,
@@ -43,6 +44,7 @@ export const CAMPAIGN_METADATA_HISTORY_BACKFILL_JOB_TYPE =
 export const GA4_SESSION_ENRICHMENT_BACKFILL_JOB_TYPE =
 	"ga4_session_enrichment_backfill";
 export const ORDER_ATTRIBUTION_BACKFILL_JOB_TYPE = "order_attribution_backfill";
+export const SHOPIFY_ORDER_REIMPORT_JOB_TYPE = "shopify_order_reimport";
 
 export type RegisteredRecoveryJobType =
 	| ContractRecoveryJobType
@@ -69,6 +71,10 @@ type ExecuteSingleRunInput = {
 };
 
 const registeredJobMetadata: RegisteredRecoveryJobMetadata[] = [
+	{
+		jobType: SHOPIFY_ORDER_REIMPORT_JOB_TYPE,
+		defaultScopeKey: "shopify-order-reimport",
+	},
 	{
 		jobType: SHOPIFY_ATTRIBUTION_RECOVERY_JOB_TYPE,
 		defaultScopeKey: "shopify-attribution-hints",
@@ -299,6 +305,74 @@ async function executeCampaignMetadataHistoryBackfill(
 					sideEffectsSucceeded:
 						run.dryRun || report.status === "failed" ? 0 : plannedWrites,
 					sideEffectsSuppressed: run.dryRun ? plannedWrites : 0,
+				},
+			};
+		},
+	});
+}
+
+async function executeShopifyOrderReimport(
+	runId: string,
+	workerId: string,
+	now: Date,
+): Promise<RecoveryExecutionResult> {
+	return executeSingleRecoveryRun({
+		runId,
+		workerId,
+		now,
+		execute: async (run) => {
+			const startDate =
+				getString(run.inputParameters, "startDate") ?? dateOnly(run.timeRangeStart);
+			const endDate =
+				getString(run.inputParameters, "endDate") ?? dateOnly(run.timeRangeEnd);
+
+			if (run.dryRun) {
+				return {
+					status: "succeeded",
+					report: toRecoveryCheckpoint({
+						shopDomain: null,
+						startDate,
+						endDate,
+						importedOrders: 0,
+						ordersInserted: 0,
+						ordersUpdated: 0,
+						payloadsRefreshed: 0,
+						payloadsUnchanged: 0,
+						duplicateReceipts: 0,
+						dryRun: true,
+						sourcePrecedence: RECOVERY_SOURCE_PRECEDENCE,
+					}),
+					recordsProcessed: 0,
+					checkpoint: { completedAt: new Date().toISOString() },
+					counters: {
+						sideEffectsSuppressed: 1,
+					},
+				};
+			}
+
+			const report = await reimportShopifyOrdersForDateRange({
+				startDate,
+				endDate,
+			});
+
+			return {
+				status: "succeeded",
+				report: toRecoveryCheckpoint({
+					...report,
+					sourcePrecedence: RECOVERY_SOURCE_PRECEDENCE,
+				}),
+				recordsProcessed: report.importedOrders,
+				checkpoint: { completedAt: new Date().toISOString() },
+				counters: {
+					recordsDiscovered: report.importedOrders,
+					recordsClaimed: report.importedOrders,
+					recordsSucceeded: report.ordersInserted + report.ordersUpdated,
+					recordsSkipped: report.duplicateReceipts,
+					sideEffectsAttempted: report.importedOrders,
+					sideEffectsSucceeded:
+						report.ordersInserted +
+						report.ordersUpdated +
+						report.payloadsRefreshed,
 				},
 			};
 		},
@@ -543,6 +617,8 @@ export async function executeRegisteredRecoveryRun(
 	now = new Date(),
 ): Promise<RecoveryExecutionResult> {
 	switch (run.jobType) {
+		case SHOPIFY_ORDER_REIMPORT_JOB_TYPE:
+			return executeShopifyOrderReimport(run.id, workerId, now);
 		case SHOPIFY_ATTRIBUTION_RECOVERY_JOB_TYPE:
 			return executeShopifyAttributionRecoveryRun(run.id, workerId, now);
 		case GA4_FALLBACK_RECOVERY_JOB_TYPE:

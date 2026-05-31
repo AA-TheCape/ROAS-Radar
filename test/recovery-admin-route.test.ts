@@ -328,6 +328,147 @@ test("manual recovery admin route durably enqueues work without starting executi
 	}
 });
 
+test("manual recovery admin route enqueues newly exposed registry job payloads", async () => {
+	const cases = [
+		{
+			jobType: "shopify_order_reimport",
+			body: {},
+			expectedScope: "shopify-order-reimport",
+			expectedPayload: {
+				chunkSize: 250,
+				pageSize: 250,
+				startDate: "2026-04-01",
+				endDate: "2026-04-05",
+			},
+		},
+		{
+			jobType: "ga4_session_enrichment_backfill",
+			body: {
+				batchSize: 12,
+				pipelineName: "ga4-session-attribution",
+			},
+			expectedScope: "ga4-session-enrichment",
+			expectedPayload: {
+				chunkSize: 250,
+				pageSize: 250,
+				batchSize: 12,
+				pipelineName: "ga4-session-attribution",
+				startDate: "2026-04-01",
+				endDate: "2026-04-05",
+			},
+		},
+		{
+			jobType: "campaign_metadata_api_refresh",
+			body: {
+				platforms: ["google_ads"],
+				maxAttempts: 2,
+			},
+			expectedScope: "campaign-metadata-api-refresh",
+			expectedPayload: {
+				chunkSize: 250,
+				pageSize: 250,
+				platforms: ["google_ads"],
+				maxAttempts: 2,
+				startDate: "2026-04-01",
+				endDate: "2026-04-05",
+			},
+		},
+		{
+			jobType: "order_attribution_backfill",
+			body: {
+				limit: 500,
+				onlyWebOrders: true,
+				skipShopifyWriteback: false,
+			},
+			expectedScope: "order-attribution-backfill",
+			expectedPayload: {
+				chunkSize: 250,
+				pageSize: 250,
+				limit: 500,
+				onlyWebOrders: true,
+				skipShopifyWriteback: false,
+				startDate: "2026-04-01",
+				endDate: "2026-04-05",
+			},
+		},
+	];
+
+	for (const testCase of cases) {
+		let insertValues: unknown[] = [];
+		pool.query = (async (sql: unknown) => {
+			const text = String(sql);
+			if (text.includes("tstzrange")) {
+				return { rows: [] };
+			}
+			if (text.includes("WHERE id = $1")) {
+				return {
+					rows: [
+						buildRecoveryRunRow({
+							job_type: testCase.jobType,
+							scope_key: testCase.expectedScope,
+							input_parameters: testCase.expectedPayload,
+						}),
+					],
+				};
+			}
+			return { rows: [] };
+		}) as typeof pool.query;
+
+		pool.connect = (async () => {
+			return {
+				query: async (sql: unknown, values?: unknown[]) => {
+					if (String(sql).includes("INSERT INTO recovery_job_runs")) {
+						insertValues = values ?? [];
+						return {
+							rows: [
+								buildRecoveryRunRow({
+									job_type: testCase.jobType,
+									scope_key: testCase.expectedScope,
+									input_parameters: testCase.expectedPayload,
+								}),
+							],
+						};
+					}
+					return { rows: [] };
+				},
+				release: () => undefined,
+			};
+		}) as typeof pool.connect;
+
+		const server = createServer();
+
+		try {
+			const { response, body } = await requestJson(
+				server,
+				"/api/admin/recovery/runs",
+				{
+					method: "POST",
+					headers: {
+						authorization: "Bearer test-reporting-token",
+					},
+					body: {
+						jobType: testCase.jobType,
+						startDate: "2026-04-01",
+						endDate: "2026-04-05",
+						dryRun: true,
+						...testCase.body,
+					},
+				},
+			);
+
+			assert.equal(response.status, 201);
+			assert.equal(body.jobType, testCase.jobType);
+			assert.equal(insertValues[0], testCase.jobType);
+			assert.equal(insertValues[8], testCase.expectedScope);
+			assert.deepEqual(JSON.parse(String(insertValues[11])), testCase.expectedPayload);
+		} finally {
+			pool.query = originalPoolQuery as typeof pool.query;
+			pool.connect = originalPoolConnect as typeof pool.connect;
+			await closeServer(server);
+		}
+	}
+});
+
 test("manual recovery admin route lists registered recovery job kinds", async () => {
 	let queryCalls = 0;
 	pool.query = (async () => {
@@ -353,6 +494,7 @@ test("manual recovery admin route lists registered recovery job kinds", async ()
 		assert.deepEqual(
 			body.jobTypes.map((job: { jobType: string }) => job.jobType),
 			[
+				"shopify_order_reimport",
 				"shopify_attribution_hint_recovery",
 				"ga4_fallback_unattributed_recovery",
 				"campaign_metadata_api_refresh",
