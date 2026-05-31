@@ -37,5 +37,6 @@ docker build -t roas-radar .
 - Engineer setup and local validation: [docs/implementation-guide.md](docs/implementation-guide.md)
 - Cloud Run deployment contract: [infra/cloud-run/README.md](infra/cloud-run/README.md)
 - Cloud Run deploy and rollback runbook: [docs/runbooks/cloud-run-pipelines.md](docs/runbooks/cloud-run-pipelines.md)
+- Production manual backfill and recovery runbook: [docs/runbooks/production-manual-backfill-recovery.md](docs/runbooks/production-manual-backfill-recovery.md)
 - GA4 hourly ingestion operations: [docs/runbooks/ga4-hourly-ingestion.md](docs/runbooks/ga4-hourly-ingestion.md)
 - Full docs index: [docs/README.md](docs/README.md)
