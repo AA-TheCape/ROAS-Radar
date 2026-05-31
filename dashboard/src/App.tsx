@@ -1645,7 +1645,7 @@ function App() {
         context: 'shopify-backfill',
         loading: null,
         error: null,
-        message: `Backfilled ${response.importedOrders} Shopify orders for ${response.startDate} to ${response.endDate} (${response.processedOrders} imported, ${response.duplicatedOrders} already present).`
+        message: `Reimported ${response.importedOrders} Shopify orders for ${response.startDate} to ${response.endDate} (${response.ordersInserted} inserted, ${response.ordersUpdated} upserted, ${response.payloadsRefreshed} payloads refreshed, ${response.payloadsUnchanged} unchanged).`
       });
     } catch (error) {
       setActionFeedback({

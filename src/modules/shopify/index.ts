@@ -129,10 +129,42 @@ const callbackQuerySchema = z.object({
 
 const shopifyBackfillRequestSchema = z
 	.object({
-		startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-		endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+		startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+		endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+	})
+	.transform((value) => {
+		if (value.startDate && value.endDate) {
+			return {
+				startDate: value.startDate,
+				endDate: value.endDate,
+			};
+		}
+
+		if (value.startDate || value.endDate) {
+			return value;
+		}
+
+		return buildDefaultShopifyReimportRange();
 	})
 	.superRefine((value, ctx) => {
+		if (!value.startDate) {
+			ctx.addIssue({
+				code: z.ZodIssueCode.custom,
+				message: "startDate is required when endDate is provided",
+				path: ["startDate"],
+			});
+			return;
+		}
+
+		if (!value.endDate) {
+			ctx.addIssue({
+				code: z.ZodIssueCode.custom,
+				message: "endDate is required when startDate is provided",
+				path: ["endDate"],
+			});
+			return;
+		}
+
 		if (value.startDate > value.endDate) {
 			ctx.addIssue({
 				code: z.ZodIssueCode.custom,
@@ -203,6 +235,30 @@ type ShopifyAttributionRecoveryResponse = {
   relinkedOrders: number;
   requeuedOrders: number;
   shopifyHintAttributedOrders: number;
+};
+
+type ShopifyOrderPersistenceResult = {
+	insertedOrder: boolean;
+	updatedOrder: boolean;
+	payloadRefreshed: boolean;
+	payloadVersion: number;
+};
+
+export type ShopifyFullReimportReport = {
+	shopDomain: string;
+	startDate: string;
+	endDate: string;
+	importedOrders: number;
+	ordersInserted: number;
+	ordersUpdated: number;
+	payloadsRefreshed: number;
+	payloadsUnchanged: number;
+	duplicateReceipts: number;
+};
+
+type ShopifyDateRange = {
+	startDate: string;
+	endDate: string;
 };
 
 class ShopifyHttpError extends Error {
@@ -632,6 +688,37 @@ function parseDateOnly(dateString: string): {
 	};
 }
 
+function formatUtcDateOnly(date: Date): string {
+	return date.toISOString().slice(0, 10);
+}
+
+export function buildDefaultShopifyReimportRange(now = new Date()): ShopifyDateRange {
+	const end = new Date(
+		Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+	);
+	const start = new Date(end);
+	start.setUTCDate(start.getUTCDate() - 29);
+
+	return {
+		startDate: formatUtcDateOnly(start),
+		endDate: formatUtcDateOnly(end),
+	};
+}
+
+function parseShopifyDateRangeInput(input: unknown): ShopifyDateRange {
+	const parsed = shopifyBackfillRequestSchema.parse(input ?? {});
+
+	if (!parsed.startDate || !parsed.endDate) {
+		throw new ShopifyHttpError(
+			400,
+			"invalid_date_range",
+			"startDate and endDate are required",
+		);
+	}
+
+	return parsed as ShopifyDateRange;
+}
+
 function getTimeZoneLocalParts(
 	date: Date,
 	timeZone: string,
@@ -755,15 +842,14 @@ async function backfillShopifyOrders(
 	reportingTimezone: string,
 	startDate: string,
 	endDate: string,
-): Promise<{
-	importedOrders: number;
-	processedOrders: number;
-	duplicatedOrders: number;
-}> {
+): Promise<ShopifyFullReimportReport> {
 	let pageInfo: string | null = null;
 	let importedOrders = 0;
-	let processedOrders = 0;
-	let duplicatedOrders = 0;
+	let ordersInserted = 0;
+	let ordersUpdated = 0;
+	let payloadsRefreshed = 0;
+	let payloadsUnchanged = 0;
+	let duplicateReceipts = 0;
 
 	do {
 		const searchParams = new URLSearchParams();
@@ -811,9 +897,17 @@ async function backfillShopifyOrders(
 
 			importedOrders += 1;
 			if (persisted.duplicated) {
-				duplicatedOrders += 1;
+				duplicateReceipts += 1;
+			}
+			if (persisted.order.insertedOrder) {
+				ordersInserted += 1;
+			} else if (persisted.order.updatedOrder) {
+				ordersUpdated += 1;
+			}
+			if (persisted.order.payloadRefreshed) {
+				payloadsRefreshed += 1;
 			} else {
-				processedOrders += 1;
+				payloadsUnchanged += 1;
 			}
 		}
 
@@ -821,9 +915,15 @@ async function backfillShopifyOrders(
 	} while (pageInfo);
 
 	return {
+		shopDomain,
+		startDate,
+		endDate,
 		importedOrders,
-		processedOrders,
-		duplicatedOrders,
+		ordersInserted,
+		ordersUpdated,
+		payloadsRefreshed,
+		payloadsUnchanged,
+		duplicateReceipts,
 	};
 }
 
@@ -1233,6 +1333,36 @@ async function getActiveInstalledShopDomain(): Promise<string | null> {
 	return result.rows[0]?.shop_domain ?? null;
 }
 
+export async function reimportShopifyOrdersForDateRange(options: {
+	startDate: string;
+	endDate: string;
+}): Promise<ShopifyFullReimportReport> {
+	assertShopifyAppConfig();
+
+	const installation = await getShopifyInstallationSummary();
+
+	if (!installation || installation.status !== "active") {
+		throw new ShopifyHttpError(
+			404,
+			"shopify_installation_not_found",
+			"No active Shopify installation was found",
+		);
+	}
+
+	const accessToken = await getActiveShopifyAccessToken(
+		installation.shop_domain,
+	);
+	const reportingTimezone = await getReportingTimezone();
+
+	return backfillShopifyOrders(
+		installation.shop_domain,
+		accessToken,
+		reportingTimezone,
+		options.startDate,
+		options.endDate,
+	);
+}
+
 async function markInstallationUninstalled(shopDomain: string): Promise<void> {
 	await query(
 		`
@@ -1573,7 +1703,8 @@ async function normalizeShopifyOrder(
 	receiptId: number,
 	payload: ShopifyOrderPayload,
 	rawPayload: unknown,
-): Promise<void> {
+	sourceTopic: string,
+): Promise<ShopifyOrderPersistenceResult> {
 	const shopifyCustomerId = payload.customer?.id
 		? String(payload.customer.id)
 		: null;
@@ -1589,8 +1720,24 @@ async function normalizeShopifyOrder(
 	const rawPayloadMetadata = buildRawPayloadStorageMetadata(rawPayload);
 	const { rawPayloadJson, payloadSizeBytes, payloadHash } = rawPayloadMetadata;
 
-	await withTransaction(async (client) => {
+	return withTransaction(async (client) => {
 		const landingSessionId = await resolveLandingSessionId(client, payload);
+		const existingOrderResult = await client.query<{
+			payload_hash: string | null;
+		}>(
+			`
+        SELECT payload_hash
+        FROM shopify_orders
+        WHERE shopify_order_id = $1
+        FOR UPDATE
+      `,
+			[shopifyOrderId],
+		);
+		const existingPayloadHash =
+			existingOrderResult.rows[0]?.payload_hash ?? null;
+		const insertedOrder = !existingOrderResult.rowCount;
+		const payloadRefreshed =
+			insertedOrder || existingPayloadHash !== payloadHash;
 
 		if (shopifyCustomerId) {
 			await client.query(
@@ -1690,12 +1837,22 @@ async function normalizeShopifyOrder(
           checkout_token = COALESCE(EXCLUDED.checkout_token, shopify_orders.checkout_token),
           cart_token = COALESCE(EXCLUDED.cart_token, shopify_orders.cart_token),
           source_name = COALESCE(EXCLUDED.source_name, shopify_orders.source_name),
-          payload_received_at = EXCLUDED.payload_received_at,
+          payload_received_at = CASE
+            WHEN shopify_orders.payload_hash IS DISTINCT FROM EXCLUDED.payload_hash
+              OR shopify_orders.raw_payload IS DISTINCT FROM EXCLUDED.raw_payload
+            THEN EXCLUDED.payload_received_at
+            ELSE shopify_orders.payload_received_at
+          END,
           payload_external_id = EXCLUDED.payload_external_id,
           payload_size_bytes = EXCLUDED.payload_size_bytes,
           payload_hash = EXCLUDED.payload_hash,
           raw_payload = EXCLUDED.raw_payload,
-          ingested_at = now()
+          ingested_at = CASE
+            WHEN shopify_orders.payload_hash IS DISTINCT FROM EXCLUDED.payload_hash
+              OR shopify_orders.raw_payload IS DISTINCT FROM EXCLUDED.raw_payload
+            THEN now()
+            ELSE shopify_orders.ingested_at
+          END
         RETURNING
           payload_size_bytes AS "storedPayloadSizeBytes",
           payload_hash AS "storedPayloadHash",
@@ -1741,42 +1898,100 @@ async function normalizeShopifyOrder(
 			},
 		);
 
-		await upsertShopifyOrderLineItems(
-			client,
-			shopifyOrderId,
-			payload.line_items,
-			rawLineItems,
+		if (payloadRefreshed) {
+			await upsertShopifyOrderLineItems(
+				client,
+				shopifyOrderId,
+				payload.line_items,
+				rawLineItems,
+			);
+		}
+
+		const versionResult = await client.query<{ payload_version: number }>(
+			`
+        WITH next_version AS (
+          SELECT COALESCE(MAX(payload_version), 0) + 1 AS payload_version
+          FROM shopify_order_raw_payload_versions
+          WHERE shopify_order_id = $1
+        ),
+        inserted AS (
+          INSERT INTO shopify_order_raw_payload_versions (
+            shopify_order_id,
+            payload_version,
+            payload_hash,
+            payload_size_bytes,
+            payload_source,
+            payload_external_id,
+            source_topic,
+            source_receipt_id,
+            raw_payload,
+            refreshed_at
+          )
+          SELECT
+            $1,
+            next_version.payload_version,
+            $2,
+            $3,
+            'shopify_order',
+            $4,
+            $5,
+            $6,
+            $7::jsonb,
+            now()
+          FROM next_version
+          ON CONFLICT (shopify_order_id, payload_hash) DO NOTHING
+          RETURNING payload_version
+        )
+        SELECT payload_version FROM inserted
+        UNION ALL
+        SELECT payload_version
+        FROM shopify_order_raw_payload_versions
+        WHERE shopify_order_id = $1
+          AND payload_hash = $2
+        LIMIT 1
+      `,
+			[
+				shopifyOrderId,
+				payloadHash,
+				payloadSizeBytes,
+				shopifyOrderId,
+				sourceTopic,
+				receiptId,
+				rawPayloadJson,
+			],
 		);
 
-		await stitchKnownCustomerIdentity(client, {
-			shopifyOrderId,
-			shopifyCustomerId,
-			email: normalizedOrderEmail,
-			phoneHash,
-			landingSessionId,
-			checkoutToken: payload.checkout_token ?? null,
-			cartToken: payload.cart_token ?? null,
-			sourceTimestamp:
-				payload.updated_at ??
-				payload.processed_at ??
-				payload.created_at ??
-				new Date().toISOString(),
-			evidenceSource: "shopify_order_webhook",
-			sourceTable: "shopify_orders",
-			sourceRecordId: shopifyOrderId,
-			idempotencyKey: `shopify_order_identity:${shopifyOrderId}:${payloadHash}`,
-		});
+		if (payloadRefreshed) {
+			await stitchKnownCustomerIdentity(client, {
+				shopifyOrderId,
+				shopifyCustomerId,
+				email: normalizedOrderEmail,
+				phoneHash,
+				landingSessionId,
+				checkoutToken: payload.checkout_token ?? null,
+				cartToken: payload.cart_token ?? null,
+				sourceTimestamp:
+					payload.updated_at ??
+					payload.processed_at ??
+					payload.created_at ??
+					new Date().toISOString(),
+				evidenceSource: "shopify_order_webhook",
+				sourceTable: "shopify_orders",
+				sourceRecordId: shopifyOrderId,
+				idempotencyKey: `shopify_order_identity:${shopifyOrderId}:${payloadHash}`,
+			});
 
-		await enqueueAttributionForOrder(
-			shopifyOrderId,
-			"shopify_order_upserted",
-			client,
-		);
-		await enqueueShopifyOrderWriteback(
-			shopifyOrderId,
-			"shopify_order_upserted",
-			client,
-		);
+			await enqueueAttributionForOrder(
+				shopifyOrderId,
+				"shopify_order_upserted",
+				client,
+			);
+			await enqueueShopifyOrderWriteback(
+				shopifyOrderId,
+				"shopify_order_upserted",
+				client,
+			);
+		}
 
 		await client.query(
 			`
@@ -1788,12 +2003,19 @@ async function normalizeShopifyOrder(
       `,
 			[receiptId],
 		);
+
+		return {
+			insertedOrder,
+			updatedOrder: !insertedOrder,
+			payloadRefreshed,
+			payloadVersion: versionResult.rows[0]?.payload_version ?? 1,
+		};
 	});
 }
 
 async function persistWebhook(
 	input: PersistWebhookInput,
-): Promise<{ duplicated: boolean }> {
+): Promise<{ duplicated: boolean; order: ShopifyOrderPersistenceResult }> {
 	const payloadHash = createHash("sha256").update(input.rawBody).digest("hex");
 	const receipt = await createOrReuseWebhookReceipt(
 		input.topic,
@@ -1805,14 +2027,21 @@ async function persistWebhook(
 
 	if (receipt.status === "processed") {
 		if (input.topic === "orders/backfill") {
-			await normalizeShopifyOrder(receipt.id, input.payload, input.rawPayload);
+			const order = await normalizeShopifyOrder(
+				receipt.id,
+				input.payload,
+				input.rawPayload,
+				input.topic,
+			);
 			logInfo("shopify_webhook_reprocessed_from_backfill", {
 				topic: input.topic,
 				shopDomain: input.shopDomain,
 				webhookId: input.webhookId,
 				shopifyOrderId: String(input.payload.id),
+				payloadRefreshed: order.payloadRefreshed,
+				payloadVersion: order.payloadVersion,
 			});
-			return { duplicated: true };
+			return { duplicated: true, order };
 		}
 
 		logInfo("shopify_webhook_duplicate", {
@@ -1820,20 +2049,35 @@ async function persistWebhook(
 			shopDomain: input.shopDomain,
 			webhookId: input.webhookId,
 		});
-		return { duplicated: true };
+		return {
+			duplicated: true,
+			order: {
+				insertedOrder: false,
+				updatedOrder: false,
+				payloadRefreshed: false,
+				payloadVersion: 0,
+			},
+		};
 	}
 
 	try {
 		// Preserve every decoded Shopify order payload in shopify_orders, regardless of source_name.
-		await normalizeShopifyOrder(receipt.id, input.payload, input.rawPayload);
+		const order = await normalizeShopifyOrder(
+			receipt.id,
+			input.payload,
+			input.rawPayload,
+			input.topic,
+		);
 		logInfo("shopify_webhook_processed", {
 			topic: input.topic,
 			shopDomain: input.shopDomain,
 			webhookId: input.webhookId,
 			duplicated: false,
 			shopifyOrderId: String(input.payload.id),
+			payloadRefreshed: order.payloadRefreshed,
+			payloadVersion: order.payloadVersion,
 		});
-		return { duplicated: false };
+		return { duplicated: false, order };
 	} catch (error) {
 		await markWebhookReceiptStatus(receipt.id, "failed");
 		throw error;
@@ -2158,36 +2402,11 @@ export function createShopifyAdminRouter(): Router {
 
 	router.post("/orders/backfill", async (req, res, next) => {
 		try {
-			assertShopifyAppConfig();
-
-			const input = shopifyBackfillRequestSchema.parse(req.body ?? {});
-			const installation = await getShopifyInstallationSummary();
-
-			if (!installation || installation.status !== "active") {
-				throw new ShopifyHttpError(
-					404,
-					"shopify_installation_not_found",
-					"No active Shopify installation was found",
-				);
-			}
-
-			const accessToken = await getActiveShopifyAccessToken(
-				installation.shop_domain,
-			);
-			const reportingTimezone = await getReportingTimezone();
-			const result = await backfillShopifyOrders(
-				installation.shop_domain,
-				accessToken,
-				reportingTimezone,
-				input.startDate,
-				input.endDate,
-			);
+			const input = parseShopifyDateRangeInput(req.body);
+			const result = await reimportShopifyOrdersForDateRange(input);
 
 			res.status(200).json({
 				ok: true,
-				shopDomain: installation.shop_domain,
-				startDate: input.startDate,
-				endDate: input.endDate,
 				...result,
 			});
 		} catch (error) {
@@ -2197,7 +2416,7 @@ export function createShopifyAdminRouter(): Router {
 
 	router.post("/orders/recover-attribution", async (req, res, next) => {
 		try {
-			const input = shopifyBackfillRequestSchema.parse(req.body ?? {});
+			const input = parseShopifyDateRangeInput(req.body);
 			const reportingTimezone = await getReportingTimezone();
 			const result = await recoverShopifyAttributionHints(
 				reportingTimezone,
@@ -2230,4 +2449,5 @@ export const __shopifyTestUtils = {
 	persistWebhook,
 	extractShopifyHintAttribution,
 	recoverShopifyAttributionHints,
+	buildDefaultShopifyReimportRange,
 };

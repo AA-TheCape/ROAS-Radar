@@ -65,3 +65,15 @@ test("extractRawShopifyLineItems returns untouched raw line item nodes from the 
 		},
 	]);
 });
+
+test("buildDefaultShopifyReimportRange covers the last 30 UTC calendar days", () => {
+	assert.deepEqual(
+		__shopifyTestUtils.buildDefaultShopifyReimportRange(
+			new Date("2026-05-31T22:15:00.000Z"),
+		),
+		{
+			startDate: "2026-05-02",
+			endDate: "2026-05-31",
+		},
+	);
+});

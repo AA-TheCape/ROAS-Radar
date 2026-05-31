@@ -31,6 +31,7 @@
     "google-ads:metadata-refresh": "tsx src/google-ads-metadata-refresh-worker.ts",
     "google-ads:metadata-refresh:start": "node dist/src/google-ads-metadata-refresh-worker.js",
     "campaign-metadata:backfill": "tsx src/admin/backfill-campaign-metadata.ts",
+    "shopify:reimport-orders": "tsx src/admin/reimport-shopify-orders.ts",
     "data-quality:check": "tsx src/data-quality-worker.ts",
     "data-quality:check:start": "node dist/src/data-quality-worker.js",
     "session-attribution:retention": "tsx src/session-attribution-retention-worker.ts",

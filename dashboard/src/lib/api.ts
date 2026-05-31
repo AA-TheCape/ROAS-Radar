@@ -641,8 +641,11 @@ export type ShopifyBackfillResponse = {
 	startDate: string;
 	endDate: string;
 	importedOrders: number;
-	processedOrders: number;
-	duplicatedOrders: number;
+	ordersInserted: number;
+	ordersUpdated: number;
+	payloadsRefreshed: number;
+	payloadsUnchanged: number;
+	duplicateReceipts: number;
 };
 
 export type ShopifyAttributionRecoveryResponse = {
