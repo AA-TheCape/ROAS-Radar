@@ -4,7 +4,7 @@ This directory contains the checked-in deployment contract for the Node backend,
 
 The root backend `Dockerfile` is the production packaging path for every backend Cloud Run workload in this directory. It builds on `node:22-bookworm-slim` and defaults the API container command to `npm run start:api`.
 
-The deployment flow assumes eleven deployable workloads plus seven Cloud Scheduler triggers:
+The deployment flow assumes eighteen deployable workloads plus eight Cloud Scheduler triggers:
 
 - `roas-radar-api`: public Cloud Run service for `/track`, Shopify webhooks, and authenticated reporting APIs.
 - `roas-radar-dashboard`: public Cloud Run service for the React reporting dashboard.
@@ -13,6 +13,13 @@ The deployment flow assumes eleven deployable workloads plus seven Cloud Schedul
 - `roas-radar-meta-ads-sync`: Cloud Run Job that runs `npm run meta-ads:sync:start` once per invocation.
 - `roas-radar-meta-order-value-sync`: Cloud Run Job that runs `npm run meta-ads:order-value:start` once per invocation.
 - `roas-radar-google-ads-sync`: Cloud Run Job that runs `npm run google-ads:sync:start` once per invocation.
+- `roas-radar-ga4-ingestion`: Cloud Run Job that runs `npm run ga4:ingest:start` once per invocation.
+- `roas-radar-campaign-metadata-backfill`: manual Cloud Run Job for `npm run campaign-metadata:backfill:start`.
+- `roas-radar-shopify-order-reimport`: manual Cloud Run Job for `npm run shopify:reimport-orders:start`.
+- `roas-radar-order-attribution-backfill`: manual Cloud Run Job for `npm run attribution:backfill-orders:start`.
+- `roas-radar-shopify-attribution-recovery`: manual Cloud Run Job for `npm run attribution:recover-shopify-hints:start`.
+- `roas-radar-ga4-fallback-recovery`: manual Cloud Run Job for `npm run attribution:recover-ga4-fallback:start`.
+- `roas-radar-dead-letter-replay`: manual Cloud Run Job for `npm run dead-letters:replay:start`.
 - `roas-radar-session-retention`: Cloud Run Job that runs `npm run session-attribution:retention:start` to prune expired attribution-session records.
 - `roas-radar-data-quality`: Cloud Run Job that runs `npm run data-quality:check:start` once per invocation.
 - `roas-radar-identity-graph-backfill`: Cloud Run Job that runs `npm run identity:backfill-graph:start` over a recent window to reconcile graph attachments and catch missed identity stitching.
@@ -20,6 +27,7 @@ The deployment flow assumes eleven deployable workloads plus seven Cloud Schedul
 - `roas-radar-meta-ads-sync-scheduler`: Cloud Scheduler job that invokes the Meta Ads Cloud Run Job.
 - `roas-radar-meta-order-value-sync-scheduler`: Cloud Scheduler job that invokes the Meta order-value Cloud Run Job.
 - `roas-radar-google-ads-sync-scheduler`: Cloud Scheduler job that invokes the Google Ads Cloud Run Job.
+- `roas-radar-ga4-ingestion-scheduler`: Cloud Scheduler job that invokes the GA4 ingestion Cloud Run Job.
 - `roas-radar-session-retention-scheduler`: Cloud Scheduler job that invokes the session-retention Cloud Run Job.
 - `roas-radar-data-quality-scheduler`: Cloud Scheduler job that invokes the data-quality Cloud Run Job.
 - `roas-radar-identity-graph-backfill-scheduler`: Cloud Scheduler job that invokes the identity-graph backfill Cloud Run Job.
@@ -27,7 +35,7 @@ The deployment flow assumes eleven deployable workloads plus seven Cloud Schedul
 
 ## Files
 
-Each recurring job now runs as its own service account. Cloud Scheduler uses a dedicated invoker identity, but job invocation is granted at the individual Cloud Run Job level by `deploy.sh` instead of project-wide `roles/run.invoker`. That keeps ads sync, data quality, identity reconciliation, and attribution materialization from sharing unnecessary secret access.
+Each recurring and manual job now runs as its own service account. Cloud Scheduler uses a dedicated invoker identity, and manual backfill/recovery jobs grant job-level `roles/run.invoker` only to the attribution worker, the environment deployer service account, and any `MANUAL_JOB_INVOKER_MEMBERS` entries. That keeps ads sync, GA4 ingestion, data quality, identity reconciliation, attribution materialization, and operator recovery paths from sharing unnecessary secret access.
 
 ## Required environment values
 
@@ -63,9 +71,17 @@ The checked-in env files are valid shell files. Replace the placeholder project 
 - `META_ADS_JOB_NAME`
 - `META_ADS_ORDER_VALUE_JOB_NAME`
 - `GOOGLE_ADS_JOB_NAME`
+- `GA4_INGESTION_JOB_NAME`
+- `CAMPAIGN_METADATA_BACKFILL_JOB_NAME`
+- `SHOPIFY_ORDER_REIMPORT_JOB_NAME`
+- `ORDER_ATTRIBUTION_BACKFILL_JOB_NAME`
+- `SHOPIFY_ATTRIBUTION_RECOVERY_JOB_NAME`
+- `GA4_FALLBACK_RECOVERY_JOB_NAME`
+- `DEAD_LETTER_REPLAY_JOB_NAME`
 - `META_ADS_SCHEDULER_JOB_NAME`
 - `META_ADS_ORDER_VALUE_SCHEDULER_JOB_NAME`
 - `GOOGLE_ADS_SCHEDULER_JOB_NAME`
+- `GA4_INGESTION_SCHEDULER_JOB_NAME`
 - `RETENTION_JOB_NAME`
 - `DATA_QUALITY_JOB_NAME`
 - `IDENTITY_GRAPH_BACKFILL_JOB_NAME`
@@ -77,10 +93,19 @@ The checked-in env files are valid shell files. Replace the placeholder project 
 - `RETENTION_JOB_SERVICE_ACCOUNT_NAME`
 - `META_ADS_JOB_SERVICE_ACCOUNT_NAME`
 - `GOOGLE_ADS_JOB_SERVICE_ACCOUNT_NAME`
+- `GA4_INGESTION_JOB_SERVICE_ACCOUNT_NAME`
+- `CAMPAIGN_METADATA_BACKFILL_JOB_SERVICE_ACCOUNT_NAME`
+- `SHOPIFY_ORDER_REIMPORT_JOB_SERVICE_ACCOUNT_NAME`
+- `ORDER_ATTRIBUTION_BACKFILL_JOB_SERVICE_ACCOUNT_NAME`
+- `SHOPIFY_ATTRIBUTION_RECOVERY_JOB_SERVICE_ACCOUNT_NAME`
+- `GA4_FALLBACK_RECOVERY_JOB_SERVICE_ACCOUNT_NAME`
+- `DEAD_LETTER_REPLAY_JOB_SERVICE_ACCOUNT_NAME`
 - `DATA_QUALITY_JOB_SERVICE_ACCOUNT_NAME`
 - `IDENTITY_GRAPH_BACKFILL_JOB_SERVICE_ACCOUNT_NAME`
 - `ORDER_ATTRIBUTION_MATERIALIZATION_JOB_SERVICE_ACCOUNT_NAME`
 - `SCHEDULER_INVOKER_SERVICE_ACCOUNT_NAME`
+- `DEPLOYER_SERVICE_ACCOUNT_NAME`
+- `MANUAL_JOB_INVOKER_MEMBERS`
 - `ADS_SYNC_DATABASE_POOL_MAX`
 - `ADS_SYNC_TIME_ZONE`
 - `META_ADS_SYNC_SCHEDULE`
@@ -101,6 +126,28 @@ The checked-in env files are valid shell files. Replace the placeholder project 
 - `META_ADS_ORDER_VALUE_NULL_SPIKE_MIN_RATIO`
 - `META_ADS_ORDER_VALUE_NULL_SPIKE_RATIO_DELTA`
 - `GOOGLE_ADS_SYNC_SCHEDULE`
+- `GA4_INGESTION_SCHEDULE`
+- `GA4_INGESTION_SCHEDULER_TIME_ZONE`
+- `GA4_INGESTION_SCHEDULER_ENABLED`
+- `GA4_INGESTION_REQUESTED_BY`
+- `GA4_INGESTION_BATCH_SIZE`
+- `GA4_INGESTION_MAX_RETRIES`
+- `GA4_INGESTION_INITIAL_BACKOFF_SECONDS`
+- `GA4_INGESTION_MAX_BACKOFF_SECONDS`
+- `GA4_INGESTION_STALE_LOCK_MINUTES`
+- `GA4_BIGQUERY_PROJECT_ID`
+- `GA4_BIGQUERY_LOCATION`
+- `GA4_BIGQUERY_DATASET`
+- `GA4_BIGQUERY_EVENTS_TABLE_PATTERN`
+- `GA4_BIGQUERY_INTRADAY_TABLE_PATTERN`
+- `GA4_BIGQUERY_LOOKBACK_HOURS`
+- `GA4_BIGQUERY_BACKFILL_HOURS`
+- `GOOGLE_ADS_TRANSFER_BIGQUERY_PROJECT_ID`
+- `GOOGLE_ADS_TRANSFER_BIGQUERY_LOCATION`
+- `GOOGLE_ADS_TRANSFER_BIGQUERY_DATASET`
+- `GOOGLE_ADS_TRANSFER_TABLE_PATTERN`
+- `GOOGLE_ADS_TRANSFER_LOOKBACK_DAYS`
+- `GA4_LINKED_GOOGLE_ADS_CUSTOMER_IDS`
 - `RETENTION_SCHEDULE`
 - `DATA_QUALITY_SCHEDULE`
 - `IDENTITY_GRAPH_BACKFILL_SCHEDULE`

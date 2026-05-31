@@ -15,6 +15,13 @@ Use this runbook when deploying or operating the scheduled Cloud Run workers in 
   - `roas-radar-meta-ads-metadata-refresh`
   - `roas-radar-google-ads-metadata-refresh`
   - `roas-radar-google-ads-sync`
+  - `roas-radar-ga4-ingestion`
+  - `roas-radar-campaign-metadata-backfill`
+  - `roas-radar-shopify-order-reimport`
+  - `roas-radar-order-attribution-backfill`
+  - `roas-radar-shopify-attribution-recovery`
+  - `roas-radar-ga4-fallback-recovery`
+  - `roas-radar-dead-letter-replay`
   - `roas-radar-session-retention`
   - `roas-radar-data-quality`
   - `roas-radar-identity-graph-backfill`
@@ -47,6 +54,30 @@ Do not sign off staging or continue to production unless the smoke evidence incl
 - `META_ADS_ORDER_VALUE_SYNC_ENABLED` is the emergency kill switch for Meta order-value extraction without disabling the broader deploy surface.
 - `META_ADS_METADATA_SCHEDULER_NAME` and `GOOGLE_ADS_METADATA_SCHEDULER_NAME` identify the campaign metadata refresh schedulers created by deploys.
 - `META_ADS_METADATA_REFRESH_REQUESTED_BY` and `GOOGLE_ADS_METADATA_REFRESH_REQUESTED_BY` should appear in `campaign_metadata_sync_job_lifecycle` logs for scheduler-triggered refreshes.
+
+## Manual Backfill And Recovery
+
+Manual recovery jobs are deployed with `--max-retries=0` and job-level invoker grants only. By default the environment deployer service account and attribution worker service account can execute them; add human or break-glass identities through `MANUAL_JOB_INVOKER_MEMBERS` as comma-separated IAM members, such as `group:roas-radar-operators@example.com`.
+
+Use `gcloud run jobs execute` with a complete arg override. Examples:
+
+```sh
+gcloud run jobs execute roas-radar-order-attribution-backfill-staging \
+  --project=roas-radar-staging \
+  --region=us-central1 \
+  --args=run,attribution:backfill-orders:start,--,--from,2026-05-01T00:00:00Z,--to,2026-05-02T00:00:00Z,--requested-by,operator@example.com,--dry-run \
+  --wait
+```
+
+```sh
+gcloud run jobs execute roas-radar-campaign-metadata-backfill-production \
+  --project=roas-radar-production \
+  --region=us-central1 \
+  --args=run,campaign-metadata:backfill:start,--,--mode,api-refresh,--requested-by,operator@example.com,--platforms,meta_ads,--dry-run \
+  --wait
+```
+
+Before running production jobs, confirm the target job service account has only the required Secret Manager bindings in `infra/cloud-run/bootstrap-iam.sh`, then run the same command in staging and retain the execution log URL.
 
 Recommended operating posture:
 

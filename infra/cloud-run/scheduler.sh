@@ -3,7 +3,7 @@
 set -eu
 
 if [ "$#" -ne 3 ]; then
-  echo "usage: $0 <environment> <meta-ads|meta-order-value|google-ads|retention|data-quality|identity-graph-backfill|order-attribution-materialization> <status|pause|resume>" >&2
+  echo "usage: $0 <environment> <meta-ads|meta-order-value|google-ads|ga4-ingestion|retention|data-quality|identity-graph-backfill|order-attribution-materialization> <status|pause|resume>" >&2
   exit 1
 fi
 
@@ -41,6 +41,9 @@ case "$PIPELINE" in
     ;;
   google-ads)
     JOB_NAME="$GOOGLE_ADS_SCHEDULER_JOB_NAME"
+    ;;
+  ga4-ingestion)
+    JOB_NAME="$GA4_INGESTION_SCHEDULER_JOB_NAME"
     ;;
   retention)
     JOB_NAME="$RETENTION_SCHEDULER_JOB_NAME"
