@@ -60,6 +60,67 @@ async function loadModule<T>(relativePath: string): Promise<T> {
 	return import(moduleUrl) as Promise<T>;
 }
 
+function createSummaryResponse() {
+	const totals = {
+		visits: 12480,
+		orders: 324,
+		revenue: 48920,
+		spend: 11376,
+		conversionRate: 0.02596,
+		roas: 4.3,
+	};
+	const zeroTotals = {
+		visits: 0,
+		orders: 0,
+		revenue: 0,
+		spend: 0,
+		conversionRate: 0,
+		roas: null,
+	};
+
+	return {
+		range: {
+			startDate: "2026-04-01",
+			endDate: "2026-04-20",
+		},
+		reportingMode: "clicks",
+		reportingModeLabel: "Clicks",
+		totalsLabel: "Click-attributed totals",
+		totalsCanonical: true,
+		totalsDescription: "Canonical totals from click-attributed orders.",
+		totals,
+		comparisonTotals: {
+			combined: {
+				label: "Combined",
+				canonical: false,
+				description:
+					"Comparison totals combining click and view-through attribution.",
+				totals,
+			},
+		},
+		layers: {
+			clicks: {
+				label: "Clicks",
+				canonical: true,
+				description: "Canonical click-attributed totals.",
+				totals,
+			},
+			deterministicViews: {
+				label: "Deterministic views",
+				canonical: false,
+				description: "Deterministic view-through totals.",
+				totals: zeroTotals,
+			},
+			metaViewThrough: {
+				label: "Meta view-through",
+				canonical: false,
+				description: "Meta API view-through totals.",
+				totals: zeroTotals,
+			},
+		},
+	};
+}
+
 async function renderSnapshots() {
 	const [
 		{ default: AuthenticatedAppShell },
@@ -178,6 +239,7 @@ async function renderSnapshots() {
         endDate: '2026-04-20',
         source: '',
         campaign: '',
+        reportingMode: 'clicks',
         attributionTier: ''
       },
       onFiltersChange: noop,
@@ -198,14 +260,7 @@ async function renderSnapshots() {
         { label: 'AOV', value: '$150.99', detail: '324 attributed orders' }
       ],
       summarySection: {
-        data: {
-          visits: 12480,
-          orders: 324,
-          revenue: 48920,
-          spend: 11376,
-          conversionRate: 0.02596,
-          roas: 4.3
-        },
+        data: createSummaryResponse(),
         loading: false,
         error: null
       },
