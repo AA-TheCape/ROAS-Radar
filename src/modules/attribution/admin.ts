@@ -12,7 +12,11 @@ import {
 } from '../../observability/index.js';
 import { attachAuthContext, requireAdmin, type AuthContext } from '../auth/index.js';
 import { enqueueOrderAttributionBackfillRun, getOrderAttributionBackfillRun } from './backfill-run-store.js';
-import { getAttributionQaPayloadForOrder } from './qa-payload-service.js';
+import {
+  getAttributionQaPayloadForOrder,
+  redactSensitiveQaValue,
+  sanitizeAttributionQaPayload
+} from './qa-payload-service.js';
 
 class AttributionAdminHttpError extends Error {
   statusCode: number;
@@ -159,6 +163,23 @@ function asObjectRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
+function redactedHint(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = value.trim();
+  if (!normalized) {
+    return null;
+  }
+
+  if (normalized.length <= 8) {
+    return '[REDACTED]';
+  }
+
+  return `${normalized.slice(0, 4)}...[REDACTED]...${normalized.slice(-4)}`;
+}
+
 async function resolveQaDebugRun(orderId: string, requestedRunId?: string): Promise<LatestRunRow | null> {
   const result = await query<LatestRunRow>(
     `
@@ -279,8 +300,8 @@ function mapRawEvidence(row: RawEvidenceRow) {
     evidenceType: row.evidence_type,
     sourceTable: row.source_table,
     sourceRecordId: row.source_record_id,
-    touchpointId: row.touchpoint_id,
-    sessionId: row.session_id,
+    touchpointId: redactedHint(row.touchpoint_id),
+    sessionId: redactedHint(row.session_id),
     ingestionSource: row.ingestion_source,
     eventType: row.event_type,
     occurredAtUtc: row.occurred_at_utc?.toISOString() ?? null,
@@ -288,8 +309,8 @@ function mapRawEvidence(row: RawEvidenceRow) {
     evidenceStatus: row.evidence_status,
     errorCode: row.error_code,
     errorMessage: row.error_message,
-    normalizedMetadata: asObjectRecord(row.normalized_metadata),
-    rawPayload: row.raw_payload,
+    normalizedMetadata: asObjectRecord(redactSensitiveQaValue(row.normalized_metadata)),
+    rawPayload: redactSensitiveQaValue(row.raw_payload),
     payloadSizeBytes: row.payload_size_bytes,
     payloadHash: row.payload_hash,
     createdAtUtc: row.created_at_utc.toISOString(),
@@ -303,21 +324,21 @@ function mapGa4FallbackDebugCandidate(row: Ga4FallbackDebugCandidateRow | null) 
   }
 
   return {
-    candidateKey: row.candidate_key,
+    candidateKey: redactedHint(row.candidate_key),
     occurredAt: row.occurred_at.toISOString(),
-    ga4UserKey: row.ga4_user_key,
-    ga4ClientId: row.ga4_client_id,
-    ga4SessionId: row.ga4_session_id,
+    ga4UserKey: redactedHint(row.ga4_user_key),
+    ga4ClientId: redactedHint(row.ga4_client_id),
+    ga4SessionId: redactedHint(row.ga4_session_id),
     transactionId: row.transaction_id,
-    emailHash: row.email_hash,
-    customerIdentityId: row.customer_identity_id,
+    emailHash: redactedHint(row.email_hash),
+    customerIdentityId: redactedHint(row.customer_identity_id),
     source: row.source,
     medium: row.medium,
     campaign: row.campaign,
     content: row.content,
     term: row.term,
     clickIdType: row.click_id_type,
-    clickIdValue: row.click_id_value,
+    clickIdValue: redactedHint(row.click_id_value),
     sessionHasRequiredFields: row.session_has_required_fields,
     sourceExportHour: row.source_export_hour.toISOString(),
     sourceDataset: row.source_dataset,
@@ -403,6 +424,7 @@ export function createAttributionAdminRouter(): Router {
         throw new AttributionAdminHttpError(404, 'shopify_order_not_found', `No Shopify order was found for ${orderId}`);
       }
 
+      const responsePayload = sanitizeAttributionQaPayload(result.payload);
       const run = await resolveQaDebugRun(orderId, input.runId);
       if (input.runId && !run) {
         emitAttributionQaPayloadFetchLog({
@@ -412,7 +434,7 @@ export function createAttributionAdminRouter(): Router {
           statusCode: 404,
           durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
           source: result.source,
-          payload: result.payload
+          payload: responsePayload
         });
         throw new AttributionAdminHttpError(
           404,
@@ -440,7 +462,7 @@ export function createAttributionAdminRouter(): Router {
         statusCode: 200,
         durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
         source: result.source,
-        payload: result.payload,
+        payload: responsePayload,
         rawEvidenceCount: rawEvidence.length,
         rawEvidenceSizeBytes
       });
@@ -457,7 +479,7 @@ export function createAttributionAdminRouter(): Router {
           rawTouchpoints: rawEvidenceState(run, rawTouchpoints.length),
           ga4FallbackCandidate: ga4EvidenceState(ga4CandidateKeys.length > 0, ga4FallbackCandidate)
         },
-        payload: result.payload,
+        payload: responsePayload,
         rawShopifyHints: rawShopifyHints.map(mapRawEvidence),
         rawTouchpoints: rawTouchpoints.map(mapRawEvidence),
         ga4FallbackCandidate: mapGa4FallbackDebugCandidate(ga4FallbackCandidate)

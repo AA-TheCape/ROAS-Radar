@@ -201,7 +201,7 @@ test('order attribution QA debug route rejects authenticated non-admin users bef
   }
 });
 
-test('order attribution QA debug route returns full schema payload and grouped raw evidence for admin users', async () => {
+test('order attribution QA debug route returns redacted schema payload and grouped raw evidence for admin users', async () => {
   const capturedQueries: Array<{ text: string; params?: unknown[] }> = [];
   const fullPayload = {
     ...attributionQaPayloadV1SuccessFixture,
@@ -212,7 +212,7 @@ test('order attribution QA debug route returns full schema payload and grouped r
         ...attributionQaPayloadV1SuccessFixture.order.identifiers,
         checkout_token: 'checkout-token-secret',
         cart_token: 'cart-token-secret',
-        email_hash: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+        email_hash: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
       }
     },
     candidates: {
@@ -282,7 +282,7 @@ test('order attribution QA debug route returns full schema payload and grouped r
             checkout_token: 'checkout-token-secret',
             cart_token: 'cart-token-secret',
             shopify_customer_id: null,
-            email_hash: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            email_hash: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
             customer_identity_id: null,
             identity_journey_id: null,
             source_name: 'web',
@@ -327,7 +327,11 @@ test('order attribution QA debug route returns full schema payload and grouped r
             error_code: null,
             error_message: null,
             normalized_metadata: { hint: 'landing_site' },
-            raw_payload: { landing_site: 'https://store.example/?gclid=RAW-GCLID' },
+            raw_payload: {
+              landing_site: 'https://store.example/?gclid=RAW-GCLID',
+              checkout_token: 'raw-checkout-token-secret',
+              email_hash: 'fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210'
+            },
             payload_size_bytes: 64,
             payload_hash: 'a'.repeat(64),
             created_at_utc: new Date('2026-04-10T12:05:00.000Z'),
@@ -349,8 +353,14 @@ test('order attribution QA debug route returns full schema payload and grouped r
             evidence_status: 'valid',
             error_code: null,
             error_message: null,
-            normalized_metadata: {},
-            raw_payload: { gclid: 'RAW-TOUCH-GCLID' },
+            normalized_metadata: {
+              ga4_client_id: 'raw-ga4-client-id',
+              referrer: 'https://store.example/?email_hash=raw-email-hash'
+            },
+            raw_payload: {
+              gclid: 'RAW-TOUCH-GCLID',
+              url: 'https://store.example/products/widget?fbclid=RAW-FBCLID&discount=SAVE10'
+            },
             payload_size_bytes: 32,
             payload_hash: 'b'.repeat(64),
             created_at_utc: new Date('2026-04-10T12:05:00.000Z'),
@@ -363,7 +373,7 @@ test('order attribution QA debug route returns full schema payload and grouped r
     if (text.includes('FROM ga4_fallback_candidates')) {
       assert.deepEqual(params?.[0], ['ga4-candidate-key']);
       assert.equal(params?.[1], 'order-qa-debug');
-      assert.equal(params?.[2], 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
+      assert.equal(params?.[2], '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef');
       return {
         rows: [
           {
@@ -373,7 +383,7 @@ test('order attribution QA debug route returns full schema payload and grouped r
             ga4_client_id: 'ga4-client-secret',
             ga4_session_id: 'ga4-session-secret',
             transaction_id: 'order-qa-debug',
-            email_hash: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            email_hash: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
             customer_identity_id: null,
             source: 'google',
             medium: 'cpc',
@@ -415,11 +425,43 @@ test('order attribution QA debug route returns full schema payload and grouped r
     assert.equal(body.evidenceState.rawShopifyHints, 'available');
     assert.equal(body.evidenceState.rawTouchpoints, 'available');
     assert.equal(body.evidenceState.ga4FallbackCandidate, 'available');
-    assert.equal(body.payload.order.identifiers.checkout_token, 'checkout-token-secret');
-    assert.equal(body.payload.candidates.ga4_fallback[0].click_id_value, 'GA4-GCLID-SECRET');
-    assert.equal(body.rawShopifyHints[0].rawPayload.landing_site, 'https://store.example/?gclid=RAW-GCLID');
-    assert.equal(body.rawTouchpoints[0].rawPayload.gclid, 'RAW-TOUCH-GCLID');
-    assert.equal(body.ga4FallbackCandidate.ga4ClientId, 'ga4-client-secret');
+    assert.equal(body.payload.order.identifiers.checkout_token, null);
+    assert.equal(body.payload.order.identifiers.cart_token, null);
+    assert.equal(body.payload.order.identifiers.email_hash, null);
+    assert.equal(body.payload.candidates.ga4_fallback[0].source_key, 'ga4_fallback_candidate_1');
+    assert.equal(body.payload.candidates.ga4_fallback[0].click_id_value, null);
+    assert.equal(body.rawShopifyHints[0].rawPayload.landing_site, 'https://store.example/?gclid=%5BREDACTED%5D');
+    assert.match(body.rawShopifyHints[0].rawPayload.checkout_token, /\[REDACTED\]/);
+    assert.match(body.rawShopifyHints[0].rawPayload.email_hash, /\[REDACTED\]/);
+    assert.match(body.rawTouchpoints[0].sessionId, /\[REDACTED\]/);
+    assert.match(body.rawTouchpoints[0].rawPayload.gclid, /\[REDACTED\]/);
+    assert.equal(
+      body.rawTouchpoints[0].rawPayload.url,
+      'https://store.example/products/widget?fbclid=%5BREDACTED%5D&discount=SAVE10'
+    );
+    assert.match(body.rawTouchpoints[0].normalizedMetadata.ga4_client_id, /\[REDACTED\]/);
+    assert.equal(body.rawTouchpoints[0].normalizedMetadata.referrer, 'https://store.example/?email_hash=%5BREDACTED%5D');
+    assert.match(body.ga4FallbackCandidate.candidateKey, /\[REDACTED\]/);
+    assert.match(body.ga4FallbackCandidate.ga4UserKey, /\[REDACTED\]/);
+    assert.match(body.ga4FallbackCandidate.ga4ClientId, /\[REDACTED\]/);
+    assert.match(body.ga4FallbackCandidate.ga4SessionId, /\[REDACTED\]/);
+    assert.match(body.ga4FallbackCandidate.emailHash, /\[REDACTED\]/);
+    assert.match(body.ga4FallbackCandidate.clickIdValue, /\[REDACTED\]/);
+    const serialized = JSON.stringify(body);
+    assert.doesNotMatch(serialized, /checkout-token-secret/);
+    assert.doesNotMatch(serialized, /cart-token-secret/);
+    assert.doesNotMatch(serialized, /0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/);
+    assert.doesNotMatch(serialized, /raw-checkout-token-secret/);
+    assert.doesNotMatch(serialized, /fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210/);
+    assert.doesNotMatch(serialized, /RAW-GCLID/);
+    assert.doesNotMatch(serialized, /RAW-TOUCH-GCLID/);
+    assert.doesNotMatch(serialized, /RAW-FBCLID/);
+    assert.doesNotMatch(serialized, /raw-ga4-client-id/);
+    assert.doesNotMatch(serialized, /raw-email-hash/);
+    assert.doesNotMatch(serialized, /ga4-user-secret/);
+    assert.doesNotMatch(serialized, /ga4-client-secret/);
+    assert.doesNotMatch(serialized, /ga4-session-secret/);
+    assert.doesNotMatch(serialized, /GA4-GCLID-SECRET/);
     assert.equal(capturedQueries.some((entry) => entry.text.includes('FROM attribution_raw_evidence')), true);
   } finally {
     pool.query = originalPoolQuery as typeof pool.query;

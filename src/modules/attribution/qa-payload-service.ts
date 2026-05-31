@@ -54,8 +54,50 @@ const SENSITIVE_URL_QUERY_KEYS = new Set([
   'wbraid'
 ]);
 
+const SENSITIVE_OBJECT_KEY_EXACT_MATCHES = new Set([
+  'fbclid',
+  'gclid',
+  'gbraid',
+  'msclkid',
+  'ttclid',
+  'wbraid'
+]);
+
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function redactedHint(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = value.trim();
+  if (!normalized) {
+    return null;
+  }
+
+  if (normalized.length <= 8) {
+    return '[REDACTED]';
+  }
+
+  return `${normalized.slice(0, 4)}...[REDACTED]...${normalized.slice(-4)}`;
+}
+
+function isSensitiveObjectKey(key: string): boolean {
+  const normalized = key.toLowerCase();
+  return (
+    normalized.includes('token') ||
+    normalized.includes('email') ||
+    normalized.includes('password') ||
+    normalized.includes('secret') ||
+    normalized.includes('click_id') ||
+    normalized.includes('client_id') ||
+    normalized.includes('session_id') ||
+    normalized.includes('user_key') ||
+    normalized.startsWith('ga4_') ||
+    SENSITIVE_OBJECT_KEY_EXACT_MATCHES.has(normalized)
+  );
 }
 
 function redactSensitiveUrlQueryValues(value: string): string {
@@ -77,13 +119,13 @@ function redactSensitiveUrlQueryValues(value: string): string {
   }
 }
 
-function redactSensitiveJson(value: unknown): unknown {
+export function redactSensitiveQaValue(value: unknown): unknown {
   if (typeof value === 'string') {
     return redactSensitiveUrlQueryValues(value);
   }
 
   if (Array.isArray(value)) {
-    return value.map((item) => redactSensitiveJson(item));
+    return value.map((item) => redactSensitiveQaValue(item));
   }
 
   const record = asObjectRecord(value);
@@ -91,7 +133,36 @@ function redactSensitiveJson(value: unknown): unknown {
     return value;
   }
 
-  return Object.fromEntries(Object.entries(record).map(([key, item]) => [key, redactSensitiveJson(item)]));
+  return Object.fromEntries(
+    Object.entries(record).map(([key, item]) => [
+      key,
+      isSensitiveObjectKey(key) ? redactedHint(String(item ?? '')) : redactSensitiveQaValue(item)
+    ])
+  );
+}
+
+function redactCandidateSourceKey(value: string): string {
+  const separatorIndex = value.indexOf(':');
+  if (separatorIndex === -1) {
+    return value;
+  }
+
+  const prefix = value.slice(0, separatorIndex);
+  if (!SENSITIVE_URL_QUERY_KEYS.has(prefix.toLowerCase()) && prefix.toLowerCase() !== 'landing_session_id') {
+    return value;
+  }
+
+  return `${prefix}:${redactedHint(value.slice(separatorIndex + 1)) ?? '[REDACTED]'}`;
+}
+
+function sanitizeNonGa4Candidate(candidate: AttributionQaPayloadV1['candidates']['deterministic_first_party'][number]) {
+  return {
+    ...candidate,
+    source_key: redactCandidateSourceKey(candidate.source_key),
+    session_id: null,
+    source_touch_event_id: null,
+    click_id_value: null
+  };
 }
 
 export function sanitizeAttributionQaPayload(payload: AttributionQaPayloadV1): AttributionQaPayloadV1 {
@@ -129,14 +200,8 @@ export function sanitizeAttributionQaPayload(payload: AttributionQaPayloadV1): A
       winner_session_id: null
     },
     candidates: {
-      deterministic_first_party: payload.candidates.deterministic_first_party.map((candidate) => ({
-        ...candidate,
-        click_id_value: null
-      })),
-      shopify_hint: payload.candidates.shopify_hint.map((candidate) => ({
-        ...candidate,
-        click_id_value: null
-      })),
+      deterministic_first_party: payload.candidates.deterministic_first_party.map(sanitizeNonGa4Candidate),
+      shopify_hint: payload.candidates.shopify_hint.map(sanitizeNonGa4Candidate),
       ga4_fallback: sanitizedGa4Candidates
     },
     model_summaries: payload.model_summaries.map((summary) => ({
@@ -151,7 +216,7 @@ export function sanitizeAttributionQaPayload(payload: AttributionQaPayloadV1): A
     explainability: payload.explainability.map((record) => ({
       ...record,
       touchpoint_id: record.touchpoint_id ? ga4TouchpointIds.get(record.touchpoint_id) ?? record.touchpoint_id : null,
-      details_json: redactSensitiveJson(record.details_json) as Record<string, unknown>
+      details_json: redactSensitiveQaValue(record.details_json) as Record<string, unknown>
     })),
     diagnostics: {
       normalization_failures: payload.diagnostics.normalization_failures.map((failure) => ({
