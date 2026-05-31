@@ -658,6 +658,77 @@ export type ShopifyAttributionRecoveryResponse = {
 	shopifyHintAttributedOrders: number;
 };
 
+export type RecoveryJobType =
+	| "shopify_attribution_hint_recovery"
+	| "ga4_fallback_unattributed_recovery";
+
+export type RecoveryRunStatus =
+	| "queued"
+	| "running"
+	| "succeeded"
+	| "partial_failure"
+	| "failed"
+	| "cancelled";
+
+export type RecoveryRun = {
+	id: string;
+	jobType: RecoveryJobType;
+	status: RecoveryRunStatus;
+	mode: "manual" | "scheduled" | "automatic";
+	initiatedBy: string;
+	dryRun: boolean;
+	timeRangeStart: string;
+	timeRangeEnd: string;
+	scopeKey: string;
+	inputParameters: Record<string, unknown>;
+	checkpoint: Record<string, unknown>;
+	recordsDiscovered: number;
+	recordsClaimed: number;
+	recordsProcessed: number;
+	recordsSucceeded: number;
+	recordsFailed: number;
+	recordsSkipped: number;
+	recordsRetried: number;
+	sideEffectsAttempted: number;
+	sideEffectsSucceeded: number;
+	sideEffectsSuppressed: number;
+	claimedBy: string | null;
+	queuedAt: string;
+	startedAt: string | null;
+	completedAt: string | null;
+	lastHeartbeatAt: string | null;
+	errorCode: string | null;
+	errorMessage: string | null;
+};
+
+export type RecoveryRunResponse = {
+	runId: string;
+	status: RecoveryRunStatus;
+	jobType: RecoveryJobType;
+	dryRun: boolean;
+	progressLink: string;
+	startLink: string;
+	cancelLink: string;
+	run: RecoveryRun;
+	created?: boolean;
+	started?: boolean;
+	cancelled?: boolean;
+};
+
+export type RecoveryRunListResponse = {
+	runs: RecoveryRun[];
+};
+
+export type CreateRecoveryRunPayload = {
+	jobType: RecoveryJobType;
+	startDate: string;
+	endDate: string;
+	dryRun?: boolean;
+	chunkSize?: number;
+	scopeKey?: string;
+	lookbackDays?: number;
+};
+
 export type IdentityHealthFilters = {
 	startDate: string;
 	endDate: string;
@@ -1241,6 +1312,57 @@ export function fetchOrderAttributionBackfillJob(jobId: string) {
 		{
 			parse: (response) =>
 				orderAttributionBackfillJobResponseSchema.parse(response),
+		},
+	);
+}
+
+export function fetchRecoveryRuns(options: {
+	jobType?: RecoveryJobType;
+	status?: RecoveryRunStatus;
+	limit?: number;
+} = {}) {
+	const searchParams = new URLSearchParams();
+
+	if (options.jobType) {
+		searchParams.set("jobType", options.jobType);
+	}
+
+	if (options.status) {
+		searchParams.set("status", options.status);
+	}
+
+	if (options.limit) {
+		searchParams.set("limit", String(options.limit));
+	}
+
+	return requestJson<RecoveryRunListResponse>("/api/admin/recovery/runs", {
+		searchParams,
+	});
+}
+
+export function createRecoveryRun(payload: CreateRecoveryRunPayload) {
+	return requestJson<RecoveryRunResponse>("/api/admin/recovery/runs", {
+		method: "POST",
+		body: payload,
+	});
+}
+
+export function startRecoveryRun(runId: string) {
+	return requestJson<RecoveryRunResponse>(
+		`/api/admin/recovery/runs/${encodeURIComponent(runId)}/start`,
+		{
+			method: "POST",
+			body: {},
+		},
+	);
+}
+
+export function cancelRecoveryRun(runId: string) {
+	return requestJson<RecoveryRunResponse>(
+		`/api/admin/recovery/runs/${encodeURIComponent(runId)}/cancel`,
+		{
+			method: "POST",
+			body: {},
 		},
 	);
 }

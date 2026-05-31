@@ -190,3 +190,84 @@ test("manual recovery admin route rejects invalid chunk sizes before enqueueing"
 		await closeServer(server);
 	}
 });
+
+test("manual recovery admin route lists run history with filters", async () => {
+	let capturedSql = "";
+	let capturedValues: unknown[] = [];
+	pool.query = (async (sql: unknown, values?: unknown[]) => {
+		capturedSql = String(sql);
+		capturedValues = values ?? [];
+		return {
+			rows: [
+				{
+					id: "11111111-1111-4111-8111-111111111111",
+					job_type: "ga4_fallback_unattributed_recovery",
+					status: "failed",
+					mode: "manual",
+					initiated_by: "operator@example.com",
+					dry_run: true,
+					time_range_start: new Date("2026-04-01T00:00:00.000Z"),
+					time_range_end: new Date("2026-04-30T23:59:59.999Z"),
+					idempotency_key: "idem-key",
+					concurrency_key: "concurrency-key",
+					scope_key: "ga4-fallback-unattributed",
+					resume_from_run_id: null,
+					rerun_of_run_id: null,
+					input_parameters: { chunkSize: 250 },
+					checkpoint: { page: 2 },
+					records_discovered: 12,
+					records_claimed: 10,
+					records_processed: 9,
+					records_succeeded: 7,
+					records_failed: 2,
+					records_skipped: 1,
+					records_retried: 3,
+					side_effects_attempted: 0,
+					side_effects_succeeded: 0,
+					side_effects_suppressed: 7,
+					claimed_by: "manual-ga4-fallback-recovery",
+					queued_at: new Date("2026-05-01T10:00:00.000Z"),
+					started_at: new Date("2026-05-01T10:01:00.000Z"),
+					completed_at: new Date("2026-05-01T10:05:00.000Z"),
+					last_heartbeat_at: new Date("2026-05-01T10:04:00.000Z"),
+					error_code: "ga4_recovery_failed",
+					error_message: "One record failed",
+				},
+			],
+		};
+	}) as typeof pool.query;
+
+	const server = createServer();
+
+	try {
+		const { response, body } = await requestJson(
+			server,
+			"/api/admin/recovery/runs?jobType=ga4_fallback_unattributed_recovery&status=failed&limit=5",
+			{
+				headers: {
+					authorization: "Bearer test-reporting-token",
+				},
+			},
+		);
+
+		assert.equal(response.status, 200);
+		assert.match(capturedSql, /FROM recovery_job_runs/);
+		assert.match(capturedSql, /job_type = \$1/);
+		assert.match(capturedSql, /status = \$2/);
+		assert.match(capturedSql, /LIMIT \$3/);
+		assert.deepEqual(capturedValues, [
+			"ga4_fallback_unattributed_recovery",
+			"failed",
+			5,
+		]);
+		assert.equal(body.runs.length, 1);
+		assert.equal(body.runs[0].id, "11111111-1111-4111-8111-111111111111");
+		assert.equal(body.runs[0].jobType, "ga4_fallback_unattributed_recovery");
+		assert.equal(body.runs[0].recordsProcessed, 9);
+		assert.equal(body.runs[0].sideEffectsSuppressed, 7);
+		assert.equal(body.runs[0].errorMessage, "One record failed");
+	} finally {
+		pool.query = originalPoolQuery as typeof pool.query;
+		await closeServer(server);
+	}
+});

@@ -164,6 +164,14 @@ const startRunSchema = z.object({
 	workerId: z.string().trim().min(1).max(255).optional(),
 });
 
+const listRunsSchema = z.object({
+	jobType: jobTypeSchema.optional(),
+	status: z
+		.enum(["queued", "running", "succeeded", "partial_failure", "failed", "cancelled"])
+		.optional(),
+	limit: z.coerce.number().int().min(1).max(100).optional().default(25),
+});
+
 function parseInput<TSchema extends z.ZodTypeAny>(
 	schema: TSchema,
 	input: unknown,
@@ -407,6 +415,47 @@ export function createRecoveryAdminRouter(): Router {
 				},
 			],
 		});
+	});
+
+	router.get("/runs", async (req, res, next) => {
+		try {
+			const input = parseInput(
+				listRunsSchema,
+				req.query ?? {},
+				"Invalid recovery run history request",
+			);
+			const whereClauses: string[] = [];
+			const values: unknown[] = [];
+
+			if (input.jobType) {
+				values.push(input.jobType);
+				whereClauses.push(`job_type = $${values.length}`);
+			}
+
+			if (input.status) {
+				values.push(input.status);
+				whereClauses.push(`status = $${values.length}`);
+			}
+
+			values.push(input.limit);
+
+			const result = await query<RecoveryRunRow>(
+				`
+					SELECT ${runColumns}
+					FROM recovery_job_runs
+					${whereClauses.length ? `WHERE ${whereClauses.join(" AND ")}` : ""}
+					ORDER BY queued_at DESC
+					LIMIT $${values.length}
+				`,
+				values,
+			);
+
+			res.status(200).json({
+				runs: result.rows.map(mapRun),
+			});
+		} catch (error) {
+			next(error);
+		}
 	});
 
 	router.post("/runs", async (req, res, next) => {
