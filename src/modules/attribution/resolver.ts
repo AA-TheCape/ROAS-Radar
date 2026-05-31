@@ -1,5 +1,9 @@
 import type { AttributionTouchpoint } from './engine.js';
 import {
+  attributionOriginPrecedence,
+  mapResolvedIngestionSourceToAttributionOrigin
+} from './precedence.js';
+import {
   CLICK_LOOKBACK_WINDOW_DAYS,
   hasClickId,
   isDirectTouchpoint as isCanonicalDirectTouchpoint,
@@ -84,15 +88,15 @@ const INGESTION_SOURCE_PRECEDENCE: Record<DeterministicIngestionSource, number> 
 };
 
 function ingestionSourcePrecedence(source: ResolvedIngestionSource): number {
-  if (source === 'shopify_marketing_hint') {
-    return Number.MAX_SAFE_INTEGER - 1;
-  }
+  const originRank =
+    1_000 -
+    attributionOriginPrecedence(mapResolvedIngestionSourceToAttributionOrigin(source));
+  const sourceRank =
+    source in INGESTION_SOURCE_PRECEDENCE
+      ? INGESTION_SOURCE_PRECEDENCE[source as DeterministicIngestionSource]
+      : 0;
 
-  if (source === 'ga4_fallback') {
-    return Number.MAX_SAFE_INTEGER;
-  }
-
-  return INGESTION_SOURCE_PRECEDENCE[source];
+  return originRank * 10 + sourceRank;
 }
 
 function compareDatesDescending(left: Date, right: Date): number {
