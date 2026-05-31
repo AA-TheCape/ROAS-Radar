@@ -6,6 +6,228 @@
       {
         "xPos": 0,
         "yPos": 0,
+        "width": 12,
+        "height": 1,
+        "widget": {
+          "text": {
+            "content": "ROAS Radar deterministic pipeline and model health",
+            "format": "MARKDOWN"
+          }
+        }
+      },
+      {
+        "xPos": 0,
+        "yPos": 1,
+        "width": 6,
+        "height": 4,
+        "widget": {
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "filter": "metric.type=\"logging.googleapis.com/user/roas_meta_deterministic_ingestion_latency_ms\" resource.type=\"cloud_run_revision\"",
+                    "aggregation": {
+                      "alignmentPeriod": "300s",
+                      "perSeriesAligner": "ALIGN_PERCENTILE_95",
+                      "crossSeriesReducer": "REDUCE_MAX"
+                    }
+                  }
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1"
+              }
+            ],
+            "timeshiftDuration": "0s",
+            "yAxis": {
+              "label": "p95 ms",
+              "scale": "LINEAR"
+            },
+            "chartOptions": {
+              "mode": "COLOR"
+            }
+          },
+          "title": "Deterministic ingestion latency p95"
+        }
+      },
+      {
+        "xPos": 6,
+        "yPos": 1,
+        "width": 6,
+        "height": 4,
+        "widget": {
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "filter": "metric.type=\"logging.googleapis.com/user/roas_meta_deterministic_api_failures\" resource.type=\"cloud_run_revision\"",
+                    "aggregation": {
+                      "alignmentPeriod": "300s",
+                      "perSeriesAligner": "ALIGN_SUM",
+                      "crossSeriesReducer": "REDUCE_SUM"
+                    }
+                  }
+                },
+                "plotType": "STACKED_BAR",
+                "targetAxis": "Y1"
+              }
+            ],
+            "timeshiftDuration": "0s",
+            "yAxis": {
+              "label": "failures",
+              "scale": "LINEAR"
+            },
+            "chartOptions": {
+              "mode": "COLOR"
+            }
+          },
+          "title": "Deterministic Meta API failures"
+        }
+      },
+      {
+        "xPos": 0,
+        "yPos": 5,
+        "width": 6,
+        "height": 4,
+        "widget": {
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "filter": "metric.type=\"logging.googleapis.com/user/roas_meta_deterministic_verification_rejection_rate\" resource.type=\"cloud_run_revision\"",
+                    "aggregation": {
+                      "alignmentPeriod": "300s",
+                      "perSeriesAligner": "ALIGN_PERCENTILE_95",
+                      "crossSeriesReducer": "REDUCE_MAX"
+                    }
+                  }
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1"
+              }
+            ],
+            "timeshiftDuration": "0s",
+            "yAxis": {
+              "label": "p95 rejection rate",
+              "scale": "LINEAR"
+            },
+            "chartOptions": {
+              "mode": "COLOR"
+            }
+          },
+          "title": "Verification rejection rate"
+        }
+      },
+      {
+        "xPos": 6,
+        "yPos": 5,
+        "width": 6,
+        "height": 4,
+        "widget": {
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "filter": "metric.type=\"logging.googleapis.com/user/roas_combined_report_model_output_freshness_hours\" resource.type=\"cloud_run_revision\"",
+                    "aggregation": {
+                      "alignmentPeriod": "300s",
+                      "perSeriesAligner": "ALIGN_PERCENTILE_95",
+                      "crossSeriesReducer": "REDUCE_MAX"
+                    }
+                  }
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1"
+              }
+            ],
+            "timeshiftDuration": "0s",
+            "yAxis": {
+              "label": "hours",
+              "scale": "LINEAR"
+            },
+            "chartOptions": {
+              "mode": "COLOR"
+            }
+          },
+          "title": "Model output freshness"
+        }
+      },
+      {
+        "xPos": 0,
+        "yPos": 9,
+        "width": 6,
+        "height": 4,
+        "widget": {
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "filter": "metric.type=\"logging.googleapis.com/user/roas_combined_report_api_errors\" resource.type=\"cloud_run_revision\"",
+                    "aggregation": {
+                      "alignmentPeriod": "300s",
+                      "perSeriesAligner": "ALIGN_SUM",
+                      "crossSeriesReducer": "REDUCE_SUM"
+                    }
+                  }
+                },
+                "plotType": "STACKED_BAR",
+                "targetAxis": "Y1"
+              }
+            ],
+            "timeshiftDuration": "0s",
+            "yAxis": {
+              "label": "errors",
+              "scale": "LINEAR"
+            },
+            "chartOptions": {
+              "mode": "COLOR"
+            }
+          },
+          "title": "Combined report API errors"
+        }
+      },
+      {
+        "xPos": 6,
+        "yPos": 9,
+        "width": 6,
+        "height": 4,
+        "widget": {
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "filter": "metric.type=\"logging.googleapis.com/user/roas_api_latency_ms\" resource.type=\"cloud_run_revision\" metric.labels.path=\"/api/reporting/summary\"",
+                    "aggregation": {
+                      "alignmentPeriod": "300s",
+                      "perSeriesAligner": "ALIGN_PERCENTILE_95",
+                      "crossSeriesReducer": "REDUCE_MAX"
+                    }
+                  }
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1"
+              }
+            ],
+            "timeshiftDuration": "0s",
+            "yAxis": {
+              "label": "p95 ms",
+              "scale": "LINEAR"
+            },
+            "chartOptions": {
+              "mode": "COLOR"
+            }
+          },
+          "title": "Combined report API latency p95"
+        }
+      },
+      {
+        "xPos": 0,
+        "yPos": 13,
         "width": 6,
         "height": 4,
         "widget": {
@@ -19,7 +241,9 @@
                       "alignmentPeriod": "900s",
                       "perSeriesAligner": "ALIGN_SUM",
                       "crossSeriesReducer": "REDUCE_SUM",
-                      "groupByFields": ["metric.label.pipeline"]
+                      "groupByFields": [
+                        "metric.label.pipeline"
+                      ]
                     }
                   }
                 },
@@ -38,7 +262,7 @@
       },
       {
         "xPos": 6,
-        "yPos": 0,
+        "yPos": 13,
         "width": 6,
         "height": 4,
         "widget": {
@@ -52,7 +276,9 @@
                       "alignmentPeriod": "900s",
                       "perSeriesAligner": "ALIGN_PERCENTILE_95",
                       "crossSeriesReducer": "REDUCE_MAX",
-                      "groupByFields": ["metric.label.endpoint"]
+                      "groupByFields": [
+                        "metric.label.endpoint"
+                      ]
                     }
                   }
                 },
@@ -71,7 +297,7 @@
       },
       {
         "xPos": 0,
-        "yPos": 4,
+        "yPos": 17,
         "width": 6,
         "height": 4,
         "widget": {
@@ -85,7 +311,9 @@
                       "alignmentPeriod": "3600s",
                       "perSeriesAligner": "ALIGN_PERCENTILE_95",
                       "crossSeriesReducer": "REDUCE_MAX",
-                      "groupByFields": ["metric.label.event"]
+                      "groupByFields": [
+                        "metric.label.event"
+                      ]
                     }
                   }
                 },
@@ -104,7 +332,7 @@
       },
       {
         "xPos": 6,
-        "yPos": 4,
+        "yPos": 17,
         "width": 6,
         "height": 4,
         "widget": {
@@ -136,7 +364,7 @@
       },
       {
         "xPos": 0,
-        "yPos": 8,
+        "yPos": 21,
         "width": 6,
         "height": 4,
         "widget": {
@@ -168,7 +396,7 @@
       },
       {
         "xPos": 6,
-        "yPos": 8,
+        "yPos": 21,
         "width": 6,
         "height": 4,
         "widget": {

@@ -1,0 +1,32 @@
+{
+  "displayName": "ROAS Radar __ENVIRONMENT__ Meta Deterministic Ingestion Latency",
+  "documentation": {
+    "content": "Meta deterministic ingestion job latency is above the freshness target. Check `meta_ads_deterministic_sync_job_completed` logs by `batchId` and `adAccountId`. Runbook: __RUNBOOK_URL_INGESTION__",
+    "mimeType": "text/markdown"
+  },
+  "combiner": "OR",
+  "enabled": true,
+  "severity": "WARNING",
+  "notificationChannels": __ALERT_NOTIFICATION_CHANNELS__,
+  "conditions": [
+    {
+      "displayName": "P95 deterministic ingestion job duration exceeds 5 minutes for 30 minutes",
+      "conditionThreshold": {
+        "filter": "metric.type=\"logging.googleapis.com/user/roas_meta_deterministic_ingestion_latency_ms\" resource.type=\"cloud_run_revision\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 300000,
+        "duration": "1800s",
+        "aggregations": [
+          {
+            "alignmentPeriod": "1800s",
+            "perSeriesAligner": "ALIGN_PERCENTILE_95",
+            "crossSeriesReducer": "REDUCE_MAX"
+          }
+        ],
+        "trigger": {
+          "count": 1
+        }
+      }
+    }
+  ]
+}

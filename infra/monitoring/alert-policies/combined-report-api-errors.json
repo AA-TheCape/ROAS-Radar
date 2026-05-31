@@ -1,0 +1,32 @@
+{
+  "displayName": "ROAS Radar __ENVIRONMENT__ Combined Report API Errors",
+  "documentation": {
+    "content": "The combined report summary API is returning errors. Inspect `combined_report_api_health` and `http_request_completed` logs for `/api/reporting/summary`. Runbook: __RUNBOOK_URL_API_LATENCY__",
+    "mimeType": "text/markdown"
+  },
+  "combiner": "OR",
+  "enabled": true,
+  "severity": "CRITICAL",
+  "notificationChannels": __ALERT_NOTIFICATION_CHANNELS__,
+  "conditions": [
+    {
+      "displayName": "Combined report API errors exceed 0 in 10 minutes",
+      "conditionThreshold": {
+        "filter": "metric.type=\"logging.googleapis.com/user/roas_combined_report_api_errors\" resource.type=\"cloud_run_revision\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 0,
+        "duration": "600s",
+        "aggregations": [
+          {
+            "alignmentPeriod": "600s",
+            "perSeriesAligner": "ALIGN_SUM",
+            "crossSeriesReducer": "REDUCE_SUM"
+          }
+        ],
+        "trigger": {
+          "count": 1
+        }
+      }
+    }
+  ]
+}

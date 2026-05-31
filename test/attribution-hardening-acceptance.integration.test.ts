@@ -277,7 +277,7 @@ test('hard-to-lose acceptance preserves canonical capture, session id, and Shopi
       msclkid: 'MSCLKID-123',
       ingestion_source: 'request_query'
     });
-    const orderProcessedAt = new Date(`${new Date().toISOString().slice(0, 10)}T12:15:00.000Z`);
+    const orderProcessedAt = new Date(Date.now() + 60_000);
     const orderFixture = buildRawPayloadFixture(
       {
         id: 'hardening-order-1',

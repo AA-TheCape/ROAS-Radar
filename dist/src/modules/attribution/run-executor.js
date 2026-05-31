@@ -1,6 +1,7 @@
 import { env } from '../../config/env.js';
 import { withTransaction } from '../../db/pool.js';
 import { buildRawPayloadStorageMetadata } from '../../shared/raw-payload-storage.js';
+import { assertNoDeterministicViewImpressionOrderAttribution, isDeterministicViewImpressionAttributionEnabled, persistDeterministicViewImpressionModelOutputs } from './deterministic-view-impression-model.js';
 import { ATTRIBUTION_MODELS, executeAttributionModels } from './engine.js';
 import { preprocessAttributionOrders } from './preprocessing.js';
 import { parseAttributionRunProgress } from './run-progress.js';
@@ -149,6 +150,7 @@ async function insertRawEvidenceRecords(client, runId, orderId, rawEvidence) {
 async function persistBatch(client, run, orderIds) {
     const succeededOrderIds = [];
     const failedOrderIds = [];
+    const deterministicViewImpressionEnabled = isDeterministicViewImpressionAttributionEnabled(run.runMetadata);
     for (const orderId of orderIds) {
         const dataset = await preprocessAttributionOrders(client, [orderId]);
         const order = dataset.orders[0];
@@ -219,6 +221,15 @@ async function persistBatch(client, run, orderIds) {
         ]);
         await insertRawEvidenceRecords(client, run.id, orderId, dataset.rawEvidence);
         for (const touchpoint of orderTouchpoints) {
+            assertNoDeterministicViewImpressionOrderAttribution({
+                surface: 'attribution_touchpoint_inputs',
+                values: {
+                    attribution_reason: touchpoint.attribution_reason,
+                    evidence_source: touchpoint.evidence_source,
+                    ingestion_source: touchpoint.ingestion_source,
+                    touchpoint_source_kind: touchpoint.touchpoint_source_kind
+                }
+            });
             await client.query(`
           INSERT INTO attribution_touchpoint_inputs (
             run_id,
@@ -337,6 +348,15 @@ async function persistBatch(client, run, orderIds) {
         });
         for (const model of ATTRIBUTION_MODELS) {
             const summary = execution.summariesByModel[model];
+            assertNoDeterministicViewImpressionOrderAttribution({
+                surface: 'attribution_model_summaries',
+                values: {
+                    model_key: model,
+                    winner_attribution_reason: summary.winnerAttributionReason,
+                    winner_evidence_source: summary.winnerEvidenceSource,
+                    winner_selection_rule: summary.winnerSelectionRule
+                }
+            });
             await client.query(`
           INSERT INTO attribution_model_summaries (
             run_id,
@@ -406,6 +426,15 @@ async function persistBatch(client, run, orderIds) {
             const modelCredits = execution.creditsByModel[model];
             const creditedTouchpointIds = new Set(modelCredits.map((credit) => credit.touchpointId).filter(Boolean));
             for (const credit of modelCredits) {
+                assertNoDeterministicViewImpressionOrderAttribution({
+                    surface: 'attribution_model_credits',
+                    values: {
+                        attribution_reason: credit.attributionReason,
+                        evidence_source: credit.evidenceSource,
+                        match_source: credit.evidenceSource,
+                        model_key: model
+                    }
+                });
                 await client.query(`
             INSERT INTO attribution_model_credits (
               run_id,
@@ -525,6 +554,12 @@ async function persistBatch(client, run, orderIds) {
                 });
             }
         }
+        await persistDeterministicViewImpressionModelOutputs(client, {
+            runId: run.id,
+            orderId,
+            orderOccurredAtUtc: order.order_occurred_at_utc,
+            enabled: deterministicViewImpressionEnabled
+        });
         succeededOrderIds.push(orderId);
     }
     return {

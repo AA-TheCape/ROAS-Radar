@@ -1,0 +1,32 @@
+{
+  "displayName": "ROAS Radar __ENVIRONMENT__ Combined Report Model Output Staleness",
+  "documentation": {
+    "content": "Combined reporting is seeing stale or missing deterministic model outputs. Inspect `combined_report_api_health` logs and the deterministic model materialization pipeline. Runbook: __RUNBOOK_URL_ATTRIBUTION__",
+    "mimeType": "text/markdown"
+  },
+  "combiner": "OR",
+  "enabled": true,
+  "severity": "CRITICAL",
+  "notificationChannels": __ALERT_NOTIFICATION_CHANNELS__,
+  "conditions": [
+    {
+      "displayName": "Model output freshness exceeds 24 hours for 30 minutes",
+      "conditionThreshold": {
+        "filter": "metric.type=\"logging.googleapis.com/user/roas_combined_report_model_output_freshness_hours\" resource.type=\"cloud_run_revision\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 24,
+        "duration": "1800s",
+        "aggregations": [
+          {
+            "alignmentPeriod": "1800s",
+            "perSeriesAligner": "ALIGN_PERCENTILE_95",
+            "crossSeriesReducer": "REDUCE_MAX"
+          }
+        ],
+        "trigger": {
+          "count": 1
+        }
+      }
+    }
+  ]
+}

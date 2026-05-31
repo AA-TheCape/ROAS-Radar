@@ -19,6 +19,8 @@ import {
   normalizeAttributionResultRecordV1,
   normalizeAttributionTouchpointInputV1,
   normalizeAttributionUtcTimestamp,
+  normalizeMetaDeterministicAttributionAggregateV1,
+  normalizeMetaDeterministicAttributionIdentityTupleV1,
   normalizeOrderAttributionBackfillRequest,
   orderAttributionBackfillEnqueueResponseSchema,
   orderAttributionBackfillJobResponseSchema
@@ -549,6 +551,159 @@ test('attribution v1 schemas reject timestamps without timezone offsets', () => 
   );
 });
 
+test('Meta deterministic attribution schemas enforce identity, verification, and window contracts', () => {
+  const identity = normalizeMetaDeterministicAttributionIdentityTupleV1({
+    organization_id: 1,
+    ad_account_id: 'act_123',
+    report_date: '2026-05-20',
+    attribution_family: 'deterministic_views',
+    attribution_window: '7d_view',
+    campaign_id: 'campaign-1',
+    adset_id: null,
+    ad_id: null
+  });
+
+  const aggregate = normalizeMetaDeterministicAttributionAggregateV1({
+    schema_version: 1,
+    platform: 'meta_ads',
+    organization_id: 1,
+    meta_connection_id: 2,
+    source_id: 3,
+    raw_event_id: 4,
+    fact_id: null,
+    ad_account_id: 'act_123',
+    report_date: '2026-05-20',
+    campaign_id: 'campaign-1',
+    campaign_name: 'Campaign',
+    adset_id: null,
+    adset_name: null,
+    ad_id: null,
+    ad_name: null,
+    event_type: 'view',
+    attribution_family: 'deterministic_views',
+    attribution_window: '7d_view',
+    attribution_window_days: 7,
+    aggregate_count: 42,
+    evidence_origin: 'api',
+    platform_verified: true,
+    verification_status: 'verified',
+    verified_by_source_id: 3,
+    verified_at_utc: '2026-05-21T12:00:00Z',
+    raw_record_metadata: {
+      sourceId: 3,
+      sourceTable: 'deterministic_event_sources',
+      rawTable: 'raw_deterministic_events',
+      rawEventId: 4,
+      apiVersion: 'v20.0',
+      apiEndpoint: 'insights',
+      apiAccountId: 'act_123',
+      apiRequestTimestampUtc: '2026-05-21T11:59:59Z',
+      requestId: 'trace-123'
+    }
+  });
+
+  assert.equal(identity.campaign_id, 'campaign-1');
+  assert.equal(aggregate.verified_at_utc, '2026-05-21T12:00:00.000Z');
+  assert.equal(aggregate.attribution_window_days, 7);
+
+  assert.throws(
+    () =>
+      normalizeAttributionResultRecordV1({
+        run_id: '11111111-1111-4111-8111-111111111111',
+        attribution_spec_version: 'v1',
+        order_id: 'order-1',
+        model_key: 'deterministic_views',
+        allocation_status: 'attributed',
+        winner_touchpoint_id: 'touch-1',
+        winner_session_id: null,
+        winner_evidence_source: 'landing_session_id',
+        winner_attribution_reason: 'matched_by_landing_session',
+        total_credit_weight: '1.00',
+        total_revenue_credited: '200.00',
+        touchpoint_count_considered: 1,
+        eligible_click_count: 1,
+        eligible_view_count: 0,
+        lookback_rule_applied: '28d_click',
+        winner_selection_rule: 'last_touch',
+        direct_suppression_applied: false,
+        deterministic_block_applied: false,
+        normalization_failures_count: 0,
+        generated_at_utc: '2026-05-21T12:00:00Z'
+      }),
+    /Invalid enum value/
+  );
+
+  assert.throws(
+    () =>
+      normalizeAttributionCreditRecordV1({
+        run_id: '11111111-1111-4111-8111-111111111111',
+        attribution_spec_version: 'v1',
+        order_id: 'order-1',
+        model_key: 'last_touch',
+        touchpoint_id: 'touch-1',
+        session_id: null,
+        touchpoint_position: 1,
+        occurred_at_utc: '2026-05-21T12:00:00Z',
+        source: 'meta',
+        medium: 'paid_social',
+        campaign: 'campaign-1',
+        content: null,
+        term: null,
+        click_id_type: null,
+        click_id_value: null,
+        touch_type: 'view',
+        is_direct: false,
+        evidence_source: 'deterministic_views',
+        is_synthetic: false,
+        attribution_reason: 'deterministic_views',
+        credit_weight: '1.00',
+        revenue_credit: '200.00',
+        is_primary: true
+      }),
+    /Invalid enum value/
+  );
+
+  assert.throws(
+    () =>
+      normalizeMetaDeterministicAttributionAggregateV1({
+        ...aggregate,
+        event_type: 'impression'
+      }),
+    /event_type must match attribution_family/
+  );
+
+  assert.throws(
+    () =>
+      normalizeMetaDeterministicAttributionAggregateV1({
+        ...aggregate,
+        verified_by_source_id: null
+      }),
+    /verified Meta aggregate rows require verified status/
+  );
+
+  assert.throws(
+    () =>
+      normalizeMetaDeterministicAttributionAggregateV1({
+        ...aggregate,
+        raw_record_metadata: {
+          ...aggregate.raw_record_metadata,
+          requestId: null
+        }
+      }),
+    /verified Meta aggregate rows require raw payload and Meta API provenance metadata/
+  );
+
+  assert.throws(
+    () =>
+      normalizeMetaDeterministicAttributionIdentityTupleV1({
+        ...identity,
+        campaign_id: null,
+        ad_id: null
+      }),
+    /campaign_id or ad_id is required/
+  );
+});
+
 test('attribution engine package publishes JSON schema documents for canonical v1 records', () => {
   assert.deepEqual(Object.keys(attributionEngineV1JsonSchemas).sort(), [
     'AttributionCreditRecordV1',
@@ -557,13 +712,19 @@ test('attribution engine package publishes JSON schema documents for canonical v
     'AttributionOrderInputV1',
     'AttributionQaPayloadV1',
     'AttributionResultRecordV1',
-    'AttributionTouchpointInputV1'
+    'AttributionTouchpointInputV1',
+    'MetaDeterministicAttributionAggregateV1',
+    'MetaDeterministicAttributionIdentityTupleV1'
   ]);
 
   assert.equal(attributionEngineV1JsonSchemas.AttributionOrderInputV1.title, 'AttributionOrderInputV1');
   assert.equal(attributionEngineV1JsonSchemas.AttributionTouchpointInputV1.type, 'object');
   assert.equal(attributionEngineV1JsonSchemas.AttributionResultRecordV1.additionalProperties, false);
   assert.equal(attributionQaPayloadV1JsonSchema.title, 'AttributionQaPayloadV1');
+  assert.equal(
+    attributionEngineV1JsonSchemas.MetaDeterministicAttributionAggregateV1.title,
+    'MetaDeterministicAttributionAggregateV1'
+  );
 });
 
 test('attribution QA payload fixtures validate success and no-match outcomes', () => {

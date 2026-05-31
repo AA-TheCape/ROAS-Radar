@@ -1,0 +1,146 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import type { PoolClient } from "pg";
+
+import {
+	DETERMINISTIC_VIEW_IMPRESSION_LOOKBACK_DAYS,
+	assertNoDeterministicViewImpressionOrderAttribution,
+	isDeterministicViewImpressionAttributionEnabled,
+	isDeterministicViewImpressionOrderAttributionValue,
+	persistDeterministicViewImpressionModelOutputs,
+} from "../src/modules/attribution/deterministic-view-impression-model.js";
+
+function buildFakeClient(rowCount: number): {
+	client: PoolClient;
+	queries: Array<{ text: string; params?: unknown[] }>;
+} {
+	const queries: Array<{ text: string; params?: unknown[] }> = [];
+	const client = {
+		query: async (text: string, params?: unknown[]) => {
+			queries.push({ text, params });
+			return { rows: [], rowCount };
+		},
+	} as unknown as PoolClient;
+
+	return { client, queries };
+}
+
+test("deterministic view/impression model is independently disabled by default", async () => {
+	assert.equal(isDeterministicViewImpressionAttributionEnabled({}), false);
+
+	const { client, queries } = buildFakeClient(1);
+	const result = await persistDeterministicViewImpressionModelOutputs(client, {
+		runId: "11111111-1111-4111-8111-111111111111",
+		orderId: "order-1",
+		orderOccurredAtUtc: "2026-05-26T10:00:00.000Z",
+		enabled: false,
+	});
+
+	assert.deepEqual(result, {
+		enabled: false,
+		insertedRows: 0,
+	});
+	assert.equal(queries.length, 0);
+});
+
+test("deterministic view/impression model writes separate outputs without click model mutation", async () => {
+	assert.equal(
+		isDeterministicViewImpressionAttributionEnabled({
+			deterministicViewImpressionAttributionEnabled: true,
+		}),
+		true,
+	);
+
+	const { client, queries } = buildFakeClient(2);
+	const result = await persistDeterministicViewImpressionModelOutputs(client, {
+		runId: "11111111-1111-4111-8111-111111111111",
+		orderId: "order-1",
+		orderOccurredAtUtc: "2026-05-26T10:00:00.000Z",
+		enabled: true,
+	});
+
+	assert.deepEqual(result, {
+		enabled: true,
+		insertedRows: 2,
+	});
+	assert.equal(queries.length, 2);
+	assert.match(queries[0].text, /DELETE FROM deterministic_model_outputs/);
+	assert.match(queries[1].text, /INSERT INTO deterministic_model_outputs/);
+	assert.match(queries[1].text, /deterministic_views/);
+	assert.match(queries[1].text, /deterministic_impressions/);
+	assert.match(
+		queries[1].text,
+		/facts\.fact_date >= \(\$3::date - \(\$4::integer - 1\)\)/,
+	);
+	assert.match(queries[1].text, /facts\.fact_date <= \$3::date/);
+	assert.doesNotMatch(queries[1].text, /interval '7 days'/);
+	assert.deepEqual(queries[1].params, [
+		"11111111-1111-4111-8111-111111111111",
+		"order-1",
+		"2026-05-26T10:00:00.000Z",
+		DETERMINISTIC_VIEW_IMPRESSION_LOOKBACK_DAYS,
+	]);
+	assert.doesNotMatch(queries[1].text, /model_key IN \([^)]*first_touch/);
+	assert.doesNotMatch(queries[1].text, /model_key IN \([^)]*last_touch/);
+	assert.doesNotMatch(queries[1].text, /model_key IN \([^)]*clicks_only/);
+	assert.doesNotMatch(
+		queries.map((query) => query.text).join("\n"),
+		/attribution_model_credits/,
+	);
+	assert.doesNotMatch(
+		queries.map((query) => query.text).join("\n"),
+		/attribution_model_summaries/,
+	);
+});
+
+test("deterministic view/impression keys are blocked from order-level attribution surfaces", () => {
+	assert.equal(
+		isDeterministicViewImpressionOrderAttributionValue("deterministic_views"),
+		true,
+	);
+	assert.equal(
+		isDeterministicViewImpressionOrderAttributionValue(
+			" deterministic_impressions ",
+		),
+		true,
+	);
+	assert.equal(
+		isDeterministicViewImpressionOrderAttributionValue("last_non_direct"),
+		false,
+	);
+	assert.equal(
+		isDeterministicViewImpressionOrderAttributionValue("landing_session_id"),
+		false,
+	);
+
+	for (const surface of [
+		"attribution_touchpoint_inputs",
+		"attribution_model_summaries",
+		"attribution_model_credits",
+	]) {
+		assert.throws(
+			() =>
+				assertNoDeterministicViewImpressionOrderAttribution({
+					surface,
+					values: {
+						model_key: "deterministic_views",
+					},
+				}),
+			{
+				name: "DeterministicViewImpressionOrderAttributionError",
+				code: "deterministic_view_impression_order_attribution_blocked",
+			},
+		);
+	}
+
+	assert.doesNotThrow(() =>
+		assertNoDeterministicViewImpressionOrderAttribution({
+			surface: "attribution_model_credits",
+			values: {
+				evidence_source: "landing_session_id",
+				model_key: "last_non_direct",
+			},
+		}),
+	);
+});

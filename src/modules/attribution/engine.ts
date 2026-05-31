@@ -4,6 +4,7 @@ import {
   isWithinLookbackWindow,
   qualifiesSyntheticHintSignal
 } from './rules.js';
+import { isDeterministicViewImpressionOrderAttributionValue } from './deterministic-view-impression-model.js';
 
 export const ATTRIBUTION_MODELS = [
   'first_touch',
@@ -226,6 +227,10 @@ function allocateRevenueAcrossWeights(totalCents: number, normalizedWeights: num
 
 function inferEvidenceSource(touchpoint: AttributionTouchpoint): AttributionEvidenceSource {
   const rawEvidenceSource = touchpoint.evidenceSource ?? touchpoint.ingestionSource ?? null;
+
+  if (isDeterministicViewImpressionOrderAttributionValue(rawEvidenceSource)) {
+    throw new Error(`${rawEvidenceSource} cannot be used as an order-level attribution evidence source`);
+  }
 
   switch (rawEvidenceSource) {
     case 'landing_session_id':
