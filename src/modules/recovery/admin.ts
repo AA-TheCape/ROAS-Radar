@@ -1,17 +1,15 @@
 import { type Router, Router as createRouter } from "express";
 import { z } from "zod";
 
-import {
-	GA4_FALLBACK_RECOVERY_JOB_TYPE,
-	executeGa4FallbackRecoveryRun,
-} from "../attribution/ga4-fallback-recovery.js";
-import {
-	SHOPIFY_ATTRIBUTION_RECOVERY_JOB_TYPE,
-	executeShopifyAttributionRecoveryRun,
-} from "../attribution/shopify-hint-recovery.js";
 import { attachAuthContext, requireAdmin, type AuthContext } from "../auth/index.js";
 import { query, withTransaction } from "../../db/pool.js";
 import { logError } from "../../observability/index.js";
+import {
+	executeRegisteredRecoveryRun,
+	getDefaultRecoveryScopeKey,
+	getRegisteredRecoveryJobTypes,
+	isRegisteredRecoveryJobType,
+} from "./registered-jobs.js";
 import {
 	PostgresRecoveryJobStore,
 	buildRecoveryConcurrencyKey,
@@ -110,10 +108,9 @@ const runColumns = `
 	error_message
 `;
 
-const jobTypeSchema = z.enum([
-	SHOPIFY_ATTRIBUTION_RECOVERY_JOB_TYPE,
-	GA4_FALLBACK_RECOVERY_JOB_TYPE,
-]);
+const jobTypeSchema = z.string().refine(isRegisteredRecoveryJobType, {
+	message: "Unsupported recovery job type.",
+});
 
 const createRunSchema = z
 	.object({
@@ -126,6 +123,18 @@ const createRunSchema = z
 		chunkSize: z.number().int().min(1).max(5000).optional().default(250),
 		scopeKey: z.string().trim().min(1).max(255).optional(),
 		lookbackDays: z.number().int().min(1).max(90).optional(),
+		campaignIds: z.array(z.string().trim().min(1)).optional(),
+		platforms: z.array(z.enum(["google_ads", "meta_ads"])).optional(),
+		maxAttempts: z.number().int().min(1).max(10).optional(),
+		unresolvedSampleLimit: z.number().int().min(1).max(1000).optional(),
+		limit: z.number().int().min(1).max(10000).optional(),
+		onlyWebOrders: z.boolean().optional(),
+		skipShopifyWriteback: z.boolean().optional(),
+		batchSize: z.number().int().min(1).max(168).optional(),
+		initialBackoffSeconds: z.number().int().min(1).max(3600).optional(),
+		maxBackoffSeconds: z.number().int().min(1).max(7200).optional(),
+		staleLockMinutes: z.number().int().min(1).max(1440).optional(),
+		pipelineName: z.string().trim().min(1).max(128).optional(),
 	})
 	.superRefine((value, context) => {
 		const hasInstantRange = Boolean(value.timeRangeStart || value.timeRangeEnd);
@@ -369,14 +378,7 @@ async function cancelRun(
 }
 
 function executeRunInBackground(run: RecoveryRun, workerId: string): void {
-	const execute =
-		run.jobType === SHOPIFY_ATTRIBUTION_RECOVERY_JOB_TYPE
-			? executeShopifyAttributionRecoveryRun
-			: run.jobType === GA4_FALLBACK_RECOVERY_JOB_TYPE
-				? executeGa4FallbackRecoveryRun
-				: null;
-
-	if (!execute) {
+	if (!isRegisteredRecoveryJobType(run.jobType)) {
 		throw new RecoveryAdminHttpError(
 			400,
 			"unsupported_recovery_job_type",
@@ -385,7 +387,7 @@ function executeRunInBackground(run: RecoveryRun, workerId: string): void {
 	}
 
 	setImmediate(() => {
-		void execute(run.id, workerId).catch((error) => {
+		void executeRegisteredRecoveryRun(run, workerId).catch((error) => {
 			logError("manual_recovery_run_failed", error, {
 				runId: run.id,
 				jobType: run.jobType,
@@ -403,17 +405,7 @@ export function createRecoveryAdminRouter(): Router {
 
 	router.get("/job-types", (_req, res) => {
 		res.status(200).json({
-			jobTypes: [
-				{
-					jobType: SHOPIFY_ATTRIBUTION_RECOVERY_JOB_TYPE,
-					defaultScopeKey: "shopify-attribution-hints",
-				},
-				{
-					jobType: GA4_FALLBACK_RECOVERY_JOB_TYPE,
-					defaultScopeKey: "ga4-fallback-unattributed",
-					optionalParameters: ["lookbackDays"],
-				},
-			],
+			jobTypes: getRegisteredRecoveryJobTypes(),
 		});
 	});
 
@@ -469,16 +461,45 @@ export function createRecoveryAdminRouter(): Router {
 			const initiatedBy = getInitiatedBy(auth);
 			const { timeRangeStart, timeRangeEnd } = normalizeRange(input);
 			const scopeKey =
-				input.scopeKey ??
-				(input.jobType === SHOPIFY_ATTRIBUTION_RECOVERY_JOB_TYPE
-					? "shopify-attribution-hints"
-					: "ga4-fallback-unattributed");
+				input.scopeKey ?? getDefaultRecoveryScopeKey(input.jobType);
 			const inputParameters: RecoveryCheckpoint = {
 				chunkSize: input.chunkSize,
 				pageSize: input.chunkSize,
 				...(input.lookbackDays === undefined
 					? {}
 					: { lookbackDays: input.lookbackDays }),
+				...(input.campaignIds === undefined
+					? {}
+					: { campaignIds: input.campaignIds }),
+				...(input.platforms === undefined ? {} : { platforms: input.platforms }),
+				...(input.maxAttempts === undefined
+					? {}
+					: { maxAttempts: input.maxAttempts }),
+				...(input.unresolvedSampleLimit === undefined
+					? {}
+					: { unresolvedSampleLimit: input.unresolvedSampleLimit }),
+				...(input.limit === undefined ? {} : { limit: input.limit }),
+				...(input.onlyWebOrders === undefined
+					? {}
+					: { onlyWebOrders: input.onlyWebOrders }),
+				...(input.skipShopifyWriteback === undefined
+					? {}
+					: { skipShopifyWriteback: input.skipShopifyWriteback }),
+				...(input.batchSize === undefined ? {} : { batchSize: input.batchSize }),
+				...(input.initialBackoffSeconds === undefined
+					? {}
+					: { initialBackoffSeconds: input.initialBackoffSeconds }),
+				...(input.maxBackoffSeconds === undefined
+					? {}
+					: { maxBackoffSeconds: input.maxBackoffSeconds }),
+				...(input.staleLockMinutes === undefined
+					? {}
+					: { staleLockMinutes: input.staleLockMinutes }),
+				...(input.pipelineName === undefined
+					? {}
+					: { pipelineName: input.pipelineName }),
+				...(input.startDate === undefined ? {} : { startDate: input.startDate }),
+				...(input.endDate === undefined ? {} : { endDate: input.endDate }),
 			};
 			const idempotencyKey = buildRecoveryIdempotencyKey({
 				jobType: input.jobType,
@@ -600,10 +621,7 @@ export function createRecoveryAdminRouter(): Router {
 			}
 
 			const workerId =
-				input.workerId ??
-				(run.jobType === SHOPIFY_ATTRIBUTION_RECOVERY_JOB_TYPE
-					? "manual-shopify-attribution-recovery"
-					: "manual-ga4-fallback-recovery");
+				input.workerId ?? `manual-${run.jobType.replaceAll("_", "-")}`;
 
 			executeRunInBackground(run, workerId);
 

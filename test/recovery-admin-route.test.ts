@@ -191,6 +191,45 @@ test("manual recovery admin route rejects invalid chunk sizes before enqueueing"
 	}
 });
 
+test("manual recovery admin route lists registered recovery job kinds", async () => {
+	let queryCalls = 0;
+	pool.query = (async () => {
+		queryCalls += 1;
+		return { rows: [] };
+	}) as typeof pool.query;
+
+	const server = createServer();
+
+	try {
+		const { response, body } = await requestJson(
+			server,
+			"/api/admin/recovery/job-types",
+			{
+				headers: {
+					authorization: "Bearer test-reporting-token",
+				},
+			},
+		);
+
+		assert.equal(response.status, 200);
+		assert.equal(queryCalls, 0);
+		assert.deepEqual(
+			body.jobTypes.map((job: { jobType: string }) => job.jobType),
+			[
+				"shopify_attribution_hint_recovery",
+				"ga4_fallback_unattributed_recovery",
+				"campaign_metadata_api_refresh",
+				"campaign_metadata_history_backfill",
+				"ga4_session_enrichment_backfill",
+				"order_attribution_backfill",
+			],
+		);
+	} finally {
+		pool.query = originalPoolQuery as typeof pool.query;
+		await closeServer(server);
+	}
+});
+
 test("manual recovery admin route lists run history with filters", async () => {
 	let capturedSql = "";
 	let capturedValues: unknown[] = [];

@@ -660,7 +660,11 @@ export type ShopifyAttributionRecoveryResponse = {
 
 export type RecoveryJobType =
 	| "shopify_attribution_hint_recovery"
-	| "ga4_fallback_unattributed_recovery";
+	| "ga4_fallback_unattributed_recovery"
+	| "ga4_session_enrichment_backfill"
+	| "campaign_metadata_api_refresh"
+	| "campaign_metadata_history_backfill"
+	| "order_attribution_backfill";
 
 export type RecoveryRunStatus =
 	| "queued"
@@ -727,6 +731,18 @@ export type CreateRecoveryRunPayload = {
 	chunkSize?: number;
 	scopeKey?: string;
 	lookbackDays?: number;
+	campaignIds?: string[];
+	platforms?: Array<"google_ads" | "meta_ads">;
+	maxAttempts?: number;
+	unresolvedSampleLimit?: number;
+	limit?: number;
+	onlyWebOrders?: boolean;
+	skipShopifyWriteback?: boolean;
+	batchSize?: number;
+	initialBackoffSeconds?: number;
+	maxBackoffSeconds?: number;
+	staleLockMinutes?: number;
+	pipelineName?: string;
 };
 
 export type IdentityHealthFilters = {

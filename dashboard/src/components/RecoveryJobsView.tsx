@@ -63,6 +63,10 @@ type ActionSummary = {
 const RECOVERY_JOB_LABELS: Record<RecoveryJobType, string> = {
 	shopify_attribution_hint_recovery: "Shopify hint recovery",
 	ga4_fallback_unattributed_recovery: "GA4 fallback recovery",
+	ga4_session_enrichment_backfill: "GA4 session enrichment",
+	campaign_metadata_api_refresh: "Campaign metadata refresh",
+	campaign_metadata_history_backfill: "Campaign metadata history",
+	order_attribution_backfill: "Order attribution backfill",
 };
 
 const statusTone: Record<RecoveryRunStatus, "brand" | "success" | "warning" | "danger" | "neutral"> = {

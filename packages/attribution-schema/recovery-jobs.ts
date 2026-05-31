@@ -11,6 +11,7 @@ export const RECOVERY_SOURCE_PRECEDENCE = [
 export const RECOVERY_JOB_TYPES = [
 	"shopify_attribution_hint_recovery",
 	"ga4_fallback_unattributed_recovery",
+	"ga4_session_enrichment_backfill",
 	"campaign_metadata_api_refresh",
 	"campaign_metadata_history_backfill",
 	"shopify_order_reimport",
