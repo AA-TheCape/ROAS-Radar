@@ -72,7 +72,8 @@ async function deleteExpiredRawEvidence(
 
 async function pruneExpiredQaSnapshots(
 	client: PoolClient,
-	snapshotCutoffAt: Date,
+	cutoffAt: Date,
+	retentionDays: number,
 	batchSize: number,
 ): Promise<number> {
 	const result = await client.query(
@@ -80,10 +81,10 @@ async function pruneExpiredQaSnapshots(
 			WITH expired_snapshots AS (
 				SELECT id
 				FROM shopify_orders
-				WHERE attribution_snapshot_updated_at < $1::timestamptz
+				WHERE attribution_snapshot_updated_at + ($2::integer * interval '1 day') < $1::timestamptz
 					AND attribution_snapshot ? 'qaSnapshot'
 				ORDER BY attribution_snapshot_updated_at ASC, id ASC
-				LIMIT $2
+				LIMIT $3
 				FOR UPDATE SKIP LOCKED
 			)
 			UPDATE shopify_orders orders
@@ -93,7 +94,7 @@ async function pruneExpiredQaSnapshots(
 			FROM expired_snapshots
 			WHERE orders.id = expired_snapshots.id
 		`,
-		[snapshotCutoffAt, batchSize],
+		[cutoffAt, retentionDays, batchSize],
 	);
 
 	return result.rowCount ?? 0;
@@ -130,7 +131,8 @@ export async function runAttributionQaRetention(
 		);
 		const prunedSnapshotsInBatch = await pruneExpiredQaSnapshots(
 			client,
-			snapshotCutoffAt,
+			cutoffAt,
+			retentionDays,
 			batchSize,
 		);
 

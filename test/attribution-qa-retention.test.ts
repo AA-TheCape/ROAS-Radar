@@ -16,6 +16,8 @@ type OrderRow = {
 	attributionSnapshot: Record<string, unknown> | null;
 };
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 function buildFakeClient(input: {
 	evidence: EvidenceRow[];
 	orders: OrderRow[];
@@ -25,9 +27,9 @@ function buildFakeClient(input: {
 	return {
 		query: async (text: string, params?: unknown[]) => {
 			const cutoffAt = params?.[0] as Date;
-			const batchSize = params?.[1] as number;
 
 			if (text.includes("DELETE FROM attribution_raw_evidence")) {
+				const batchSize = params?.[1] as number;
 				input.rawEvidenceCutoffTimes?.push(cutoffAt.toISOString());
 				const expiredIds = input.evidence
 					.filter((row) => row.retainedUntil.getTime() < cutoffAt.getTime())
@@ -49,12 +51,16 @@ function buildFakeClient(input: {
 			}
 
 			if (text.includes("UPDATE shopify_orders")) {
+				const retentionDays = params?.[1] as number;
+				const batchSize = params?.[2] as number;
 				input.snapshotCutoffTimes?.push(cutoffAt.toISOString());
 				const expiredOrders = input.orders
 					.filter(
 						(row) =>
 							row.attributionSnapshotUpdatedAt &&
-							row.attributionSnapshotUpdatedAt.getTime() < cutoffAt.getTime() &&
+							row.attributionSnapshotUpdatedAt.getTime() +
+								retentionDays * DAY_MS <
+								cutoffAt.getTime() &&
 							row.attributionSnapshot &&
 							Object.hasOwn(row.attributionSnapshot, "qaSnapshot"),
 					)
@@ -83,9 +89,7 @@ function buildFakeClient(input: {
 
 test("runAttributionQaRetention deletes only raw evidence and QA snapshots expired before the cleanup boundary", async () => {
 	const snapshotWrittenAt = new Date("2026-03-26T12:00:00.000Z");
-	const expiryAt = new Date(
-		snapshotWrittenAt.getTime() + 30 * 24 * 60 * 60 * 1000,
-	);
+	const expiryAt = new Date(snapshotWrittenAt.getTime() + 30 * DAY_MS);
 	const asOf = expiryAt;
 	const rawEvidenceCutoffTimes: string[] = [];
 	const snapshotCutoffTimes: string[] = [];
@@ -157,7 +161,7 @@ test("runAttributionQaRetention deletes only raw evidence and QA snapshots expir
 	});
 	assert.deepEqual([...new Set(rawEvidenceCutoffTimes)], [asOf.toISOString()]);
 	assert.deepEqual([...new Set(snapshotCutoffTimes)], [
-		"2026-03-26T12:00:00.000Z",
+		"2026-04-25T12:00:00.000Z",
 	]);
 	assert.deepEqual(
 		evidence.map((row) => row.id),
@@ -191,6 +195,37 @@ test("runAttributionQaRetention deletes only raw evidence and QA snapshots expir
 	assert.equal(secondResult.deletedRawEvidence, 0);
 	assert.equal(secondResult.prunedSnapshots, 0);
 	assert.equal(secondResult.batchesRun, 0);
+});
+
+test("runAttributionQaRetention keeps recent embedded QA snapshots even when written before asOf", async () => {
+	const asOf = new Date("2026-04-25T12:00:00.000Z");
+	const evidence: EvidenceRow[] = [];
+	const orders: OrderRow[] = [
+		{
+			id: 1,
+			attributionSnapshotUpdatedAt: new Date("2026-04-24T12:00:00.000Z"),
+			attributionSnapshot: {
+				tier: "deterministic_first_party",
+				qaSnapshot: {},
+			},
+		},
+	];
+	const client = buildFakeClient({ evidence, orders });
+
+	const result = await runAttributionQaRetention({
+		client,
+		asOf,
+		retentionDays: 30,
+		batchSize: 10,
+		maxBatches: 5,
+		emitLogs: false,
+	});
+
+	assert.equal(result.prunedSnapshots, 0);
+	assert.deepEqual(orders[0].attributionSnapshot, {
+		tier: "deterministic_first_party",
+		qaSnapshot: {},
+	});
 });
 
 test("runAttributionQaRetention logs cleanup deletion counts for completed batches and runs", async () => {
