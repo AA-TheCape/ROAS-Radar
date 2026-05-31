@@ -228,10 +228,14 @@ class MemoryRecoveryJobStore implements RecoveryJobStore {
 		return updated;
 	}
 
-	async recoverStale() {
+	async recoverStale(now = new Date()) {
 		const recovered: RecoveryJobRun[] = [];
 		for (const run of this.runs.values()) {
-			if (run.status !== "running" || !run.lockExpiresAt) {
+			if (
+				run.status !== "running" ||
+				!run.lockExpiresAt ||
+				new Date(run.lockExpiresAt).getTime() >= now.getTime()
+			) {
 				continue;
 			}
 			const deadLetter = run.attemptCount >= run.maxAttempts;
@@ -242,7 +246,7 @@ class MemoryRecoveryJobStore implements RecoveryJobStore {
 				lockExpiresAt: null,
 				errorCode: "recovery_job_heartbeat_expired",
 				errorMessage: `Recovery job heartbeat expired for worker ${run.claimedBy}`,
-				deadLetteredAt: deadLetter ? new Date().toISOString() : null,
+				deadLetteredAt: deadLetter ? now.toISOString() : null,
 			};
 			this.runs.set(run.id, updated);
 			recovered.push(updated);

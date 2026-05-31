@@ -76,6 +76,7 @@ const statusTone: Record<RecoveryRunStatus, "brand" | "success" | "warning" | "d
 	partial_failure: "warning",
 	failed: "danger",
 	cancelled: "neutral",
+	dead_lettered: "danger",
 };
 
 function formatDateInput(date: Date): string {
@@ -108,7 +109,7 @@ function summarizeRun(run: RecoveryRun): string {
 }
 
 function isTerminal(status: RecoveryRunStatus): boolean {
-	return ["succeeded", "partial_failure", "failed", "cancelled"].includes(status);
+	return ["succeeded", "partial_failure", "failed", "cancelled", "dead_lettered"].includes(status);
 }
 
 function RecoveryActionCard({
@@ -228,13 +229,13 @@ export default function RecoveryJobsView({
 			await startRecoveryRun(created.runId);
 			setSummary({
 				label: RECOVERY_JOB_LABELS[jobType],
-				detail: `Run ${created.runId} started in ${dryRun ? "dry-run" : "write-enabled"} mode.`,
+				detail: `Run ${created.runId} queued in ${dryRun ? "dry-run" : "write-enabled"} mode.`,
 				at: new Date().toISOString(),
 			});
 			setFeedback({
 				loading: null,
 				error: null,
-				message: `Started ${RECOVERY_JOB_LABELS[jobType]} run ${created.runId}.`,
+				message: `Queued ${RECOVERY_JOB_LABELS[jobType]} run ${created.runId}.`,
 			});
 			await loadRuns();
 		} catch (error) {

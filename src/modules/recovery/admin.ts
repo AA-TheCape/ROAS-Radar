@@ -175,7 +175,15 @@ const startRunSchema = z.object({
 const listRunsSchema = z.object({
 	jobType: jobTypeSchema.optional(),
 	status: z
-		.enum(["queued", "running", "succeeded", "partial_failure", "failed", "cancelled"])
+		.enum([
+			"queued",
+			"running",
+			"succeeded",
+			"partial_failure",
+			"failed",
+			"cancelled",
+			"dead_lettered",
+		])
 		.optional(),
 	limit: z.coerce.number().int().min(1).max(100).optional().default(25),
 });
@@ -599,7 +607,7 @@ export function createRecoveryAdminRouter(): Router {
 			}
 
 			res.status(202).json({
-				started: true,
+				started: false,
 				queued: true,
 				workerId: input.workerId ?? null,
 				...buildRunResponse(run),

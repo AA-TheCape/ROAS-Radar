@@ -12,6 +12,7 @@ const serverModule = await import("../src/server.js");
 const { pool } = poolModule;
 const { closeServer, createServer } = serverModule;
 const originalPoolQuery = pool.query.bind(pool);
+const originalPoolConnect = pool.connect.bind(pool);
 
 async function requestJson(
 	server: ReturnType<typeof createServer>,
@@ -34,6 +35,55 @@ async function requestJson(
 	const body = await response.json();
 
 	return { response, body };
+}
+
+function buildRecoveryRunRow(
+	overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+	return {
+		id: "22222222-2222-4222-8222-222222222222",
+		job_type: "shopify_attribution_hint_recovery",
+		status: "queued",
+		mode: "manual",
+		initiated_by: "internal",
+		dry_run: true,
+		time_range_start: new Date("2026-04-01T00:00:00.000Z"),
+		time_range_end: new Date("2026-04-05T23:59:59.999Z"),
+		idempotency_key: "recovery:shopify_attribution_hint_recovery:test",
+		concurrency_key: "range:test",
+		scope_key: "shopify-attribution-hints",
+		resume_from_run_id: null,
+		rerun_of_run_id: null,
+		input_parameters: { chunkSize: 125, pageSize: 125 },
+		checkpoint: {},
+		records_discovered: 0,
+		records_claimed: 0,
+		records_processed: 0,
+		records_succeeded: 0,
+		records_failed: 0,
+		records_skipped: 0,
+		records_retried: 0,
+		side_effects_attempted: 0,
+		side_effects_succeeded: 0,
+		side_effects_suppressed: 0,
+		priority: 100,
+		available_at: new Date("2026-04-01T00:00:00.000Z"),
+		attempt_count: 0,
+		max_attempts: 3,
+		heartbeat_timeout_seconds: 300,
+		claimed_by: null,
+		queued_at: new Date("2026-04-01T00:00:00.000Z"),
+		started_at: null,
+		completed_at: null,
+		last_heartbeat_at: new Date("2026-04-01T00:00:00.000Z"),
+		lock_expires_at: null,
+		dead_lettered_at: null,
+		error_code: null,
+		error_message: null,
+		last_error_details: {},
+		completion_report: {},
+		...overrides,
+	};
 }
 
 test("manual recovery admin routes reject unauthorized operators", async () => {
@@ -191,6 +241,93 @@ test("manual recovery admin route rejects invalid chunk sizes before enqueueing"
 	}
 });
 
+test("manual recovery admin route durably enqueues work without starting execution", async () => {
+	const row = buildRecoveryRunRow();
+	const topLevelQueries: string[] = [];
+	const clientQueries: string[] = [];
+	let insertValues: unknown[] = [];
+
+	pool.query = (async (sql: unknown) => {
+		const text = String(sql);
+		topLevelQueries.push(text);
+		if (text.includes("tstzrange")) {
+			return { rows: [] };
+		}
+		if (text.includes("WHERE id = $1")) {
+			return { rows: [row] };
+		}
+		return { rows: [] };
+	}) as typeof pool.query;
+
+	pool.connect = (async () => {
+		return {
+			query: async (sql: unknown, values?: unknown[]) => {
+				const text = String(sql);
+				clientQueries.push(text);
+				if (text.includes("INSERT INTO recovery_job_runs")) {
+					insertValues = values ?? [];
+					return { rows: [row] };
+				}
+				return { rows: [] };
+			},
+			release: () => undefined,
+		};
+	}) as typeof pool.connect;
+
+	const server = createServer();
+
+	try {
+		const { response, body } = await requestJson(
+			server,
+			"/api/admin/recovery/runs",
+			{
+				method: "POST",
+				headers: {
+					authorization: "Bearer test-reporting-token",
+				},
+				body: {
+					jobType: "shopify_attribution_hint_recovery",
+					startDate: "2026-04-01",
+					endDate: "2026-04-05",
+					dryRun: true,
+					chunkSize: 125,
+				},
+			},
+		);
+
+		const allSql = [...topLevelQueries, ...clientQueries].join("\n");
+		const payload = JSON.parse(String(insertValues[11])) as Record<
+			string,
+			unknown
+		>;
+
+		assert.equal(response.status, 201);
+		assert.equal(body.created, true);
+		assert.equal(body.status, "queued");
+		assert.equal(body.run.status, "queued");
+		assert.match(allSql, /INSERT INTO recovery_job_runs/);
+		assert.match(allSql, /VALUES \(\$1, 'queued'/);
+		assert.doesNotMatch(allSql, new RegExp("set" + "Immediate", "i"));
+		assert.doesNotMatch(
+			allSql,
+			/UPDATE recovery_job_runs[\s\S]*status = 'running'/i,
+		);
+		assert.equal(insertValues[0], "shopify_attribution_hint_recovery");
+		assert.equal(insertValues[1], "manual");
+		assert.equal(insertValues[2], "internal");
+		assert.deepEqual(payload, {
+			chunkSize: 125,
+			pageSize: 125,
+			startDate: "2026-04-01",
+			endDate: "2026-04-05",
+		});
+	} finally {
+		pool.query = originalPoolQuery as typeof pool.query;
+		pool.connect = originalPoolConnect as typeof pool.connect;
+		await closeServer(server);
+	}
+});
+
 test("manual recovery admin route lists registered recovery job kinds", async () => {
 	let queryCalls = 0;
 	pool.query = (async () => {
@@ -241,7 +378,7 @@ test("manual recovery admin route lists run history with filters", async () => {
 				{
 					id: "11111111-1111-4111-8111-111111111111",
 					job_type: "ga4_fallback_unattributed_recovery",
-					status: "failed",
+					status: "dead_lettered",
 					mode: "manual",
 					initiated_by: "operator@example.com",
 					dry_run: true,
@@ -281,7 +418,7 @@ test("manual recovery admin route lists run history with filters", async () => {
 	try {
 		const { response, body } = await requestJson(
 			server,
-			"/api/admin/recovery/runs?jobType=ga4_fallback_unattributed_recovery&status=failed&limit=5",
+			"/api/admin/recovery/runs?jobType=ga4_fallback_unattributed_recovery&status=dead_lettered&limit=5",
 			{
 				headers: {
 					authorization: "Bearer test-reporting-token",
@@ -296,7 +433,7 @@ test("manual recovery admin route lists run history with filters", async () => {
 		assert.match(capturedSql, /LIMIT \$3/);
 		assert.deepEqual(capturedValues, [
 			"ga4_fallback_unattributed_recovery",
-			"failed",
+			"dead_lettered",
 			5,
 		]);
 		assert.equal(body.runs.length, 1);

@@ -16,7 +16,8 @@ export type RecoveryRunStatus =
 	| "succeeded"
 	| "partial_failure"
 	| "failed"
-	| "cancelled";
+	| "cancelled"
+	| "dead_lettered";
 export type RecoveryRecordStatus =
 	| "queued"
 	| "processing"

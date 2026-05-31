@@ -672,7 +672,8 @@ export type RecoveryRunStatus =
 	| "succeeded"
 	| "partial_failure"
 	| "failed"
-	| "cancelled";
+	| "cancelled"
+	| "dead_lettered";
 
 export type RecoveryRun = {
 	id: string;
@@ -716,6 +717,7 @@ export type RecoveryRunResponse = {
 	run: RecoveryRun;
 	created?: boolean;
 	started?: boolean;
+	queued?: boolean;
 	cancelled?: boolean;
 };
 
