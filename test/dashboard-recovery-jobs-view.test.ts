@@ -33,7 +33,7 @@ function parseBody(init?: RequestInit): unknown {
 	return JSON.parse(init.body);
 }
 
-function buildRun(jobType: string, id: string) {
+function buildRun(jobType: string, id: string, overrides: Record<string, unknown> = {}) {
 	return {
 		id,
 		jobType,
@@ -63,6 +63,7 @@ function buildRun(jobType: string, id: string) {
 		lastHeartbeatAt: null,
 		errorCode: null,
 		errorMessage: null,
+		...overrides,
 	};
 }
 
@@ -88,7 +89,11 @@ function createFetchStub(calls: FetchCall[]) {
 					buildRun("shopify_order_reimport", "11111111-1111-4111-8111-111111111111"),
 					buildRun("ga4_session_enrichment_backfill", "22222222-2222-4222-8222-222222222222"),
 					buildRun("campaign_metadata_api_refresh", "33333333-3333-4333-8333-333333333333"),
-					buildRun("order_attribution_backfill", "44444444-4444-4444-8444-444444444444"),
+					buildRun("order_attribution_backfill", "44444444-4444-4444-8444-444444444444", {
+						status: "dead_lettered",
+						errorCode: "recovery_job_attempts_exhausted",
+						errorMessage: "Recovery job exhausted retry attempts",
+					}),
 				],
 			});
 		}
@@ -158,6 +163,8 @@ test("recovery jobs view launches all exposed jobs through recovery APIs and sho
 			assert.match(text, /Campaign metadata refresh/);
 			assert.match(text, /Campaign metadata history/);
 			assert.match(text, /Order attribution backfill/);
+			assert.match(text, /dead lettered/);
+			assert.match(text, /recovery_job_attempts_exhausted/);
 
 			await launchCard(mounted.container, "Shopify order import");
 			await launchCard(mounted.container, "GA4 session enrichment");

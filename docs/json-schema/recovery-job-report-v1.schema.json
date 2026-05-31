@@ -33,7 +33,7 @@
     },
     "status": {
       "type": "string",
-      "enum": ["queued", "running", "succeeded", "partial_failure", "failed", "cancelled"]
+      "enum": ["queued", "running", "succeeded", "partial_failure", "failed", "cancelled", "dead_lettered"]
     },
     "startedAt": { "type": ["string", "null"], "format": "date-time" },
     "completedAt": { "type": ["string", "null"], "format": "date-time" },

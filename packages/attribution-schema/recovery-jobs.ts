@@ -25,6 +25,7 @@ export const RECOVERY_JOB_STATUSES = [
 	"partial_failure",
 	"failed",
 	"cancelled",
+	"dead_lettered",
 ] as const;
 export const RECOVERY_AD_PLATFORMS = ["google_ads", "meta_ads"] as const;
 export const RECOVERY_METADATA_ENTITY_TYPES = ["campaign", "adset", "ad"] as const;

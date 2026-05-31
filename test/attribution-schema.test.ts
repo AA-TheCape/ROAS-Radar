@@ -336,7 +336,7 @@ test("recovery job contracts reject invalid windows and classify failure retryab
 		schemaVersion: 1,
 		jobId: "run-2",
 		jobType: "ga4_fallback_unattributed_recovery",
-		status: "partial_failure",
+		status: "dead_lettered",
 		startedAt: "2026-05-01T00:00:00Z",
 		completedAt: "2026-05-01T00:05:00Z",
 		dryRun: false,
@@ -371,6 +371,7 @@ test("recovery job contracts reject invalid windows and classify failure retryab
 		],
 	});
 
+	assert.equal(report.status, "dead_lettered");
 	assert.equal(report.failures[0].retryable, true);
 	assert.equal(report.failures[1].retryable, false);
 	assert.throws(

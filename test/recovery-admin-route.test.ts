@@ -581,6 +581,7 @@ test("manual recovery admin route lists run history with filters", async () => {
 		assert.equal(body.runs.length, 1);
 		assert.equal(body.runs[0].id, "11111111-1111-4111-8111-111111111111");
 		assert.equal(body.runs[0].jobType, "ga4_fallback_unattributed_recovery");
+		assert.equal(body.runs[0].status, "dead_lettered");
 		assert.equal(body.runs[0].recordsProcessed, 9);
 		assert.equal(body.runs[0].sideEffectsSuppressed, 7);
 		assert.equal(body.runs[0].errorMessage, "One record failed");
