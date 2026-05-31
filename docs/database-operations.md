@@ -180,6 +180,6 @@ Attribution QA raw evidence and embedded QA snapshots are pruned by the schedule
 The cleanup contract is:
 
 1. delete expired `attribution_raw_evidence` rows in batches using `retained_until`
-2. remove only the expired `qaSnapshot` key from `shopify_orders.attribution_snapshot` when `attribution_snapshot_updated_at` is outside the retention window
+2. remove only the expired `qaSnapshot` key from `shopify_orders.attribution_snapshot` when `attribution_snapshot_updated_at` is older than the configured retention window
 3. leave the operational attribution summary fields in `shopify_orders.attribution_snapshot` intact
 4. emit `attribution_qa_retention_batch_completed` and `attribution_qa_retention_completed` structured logs with deleted/pruned counts

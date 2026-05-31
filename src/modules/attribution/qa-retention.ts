@@ -15,6 +15,7 @@ type AttributionQaRetentionOptions = {
 
 export type AttributionQaRetentionResult = {
 	cutoffAt: string;
+	snapshotCutoffAt: string;
 	retentionDays: number;
 	batchSize: number;
 	maxBatches: number;
@@ -37,9 +38,11 @@ function normalizePositiveInteger(
 }
 
 function resolveCutoffAt(asOf: Date | undefined): Date {
-	// The stored timestamps already include the retention window. Cleanup uses
-	// the job's as-of time directly so the window is not subtracted twice.
 	return asOf ? new Date(asOf) : new Date();
+}
+
+function resolveSnapshotCutoffAt(asOf: Date, retentionDays: number): Date {
+	return new Date(asOf.getTime() - retentionDays * 24 * 60 * 60 * 1000);
 }
 
 async function deleteExpiredRawEvidence(
@@ -69,7 +72,7 @@ async function deleteExpiredRawEvidence(
 
 async function pruneExpiredQaSnapshots(
 	client: PoolClient,
-	cutoffAt: Date,
+	snapshotCutoffAt: Date,
 	batchSize: number,
 ): Promise<number> {
 	const result = await client.query(
@@ -90,7 +93,7 @@ async function pruneExpiredQaSnapshots(
 			FROM expired_snapshots
 			WHERE orders.id = expired_snapshots.id
 		`,
-		[cutoffAt, batchSize],
+		[snapshotCutoffAt, batchSize],
 	);
 
 	return result.rowCount ?? 0;
@@ -112,6 +115,7 @@ export async function runAttributionQaRetention(
 		env.ATTRIBUTION_QA_RETENTION_MAX_BATCHES,
 	);
 	const cutoffAt = resolveCutoffAt(options.asOf);
+	const snapshotCutoffAt = resolveSnapshotCutoffAt(cutoffAt, retentionDays);
 	const emitLogs = options.emitLogs ?? true;
 
 	let batchesRun = 0;
@@ -126,7 +130,7 @@ export async function runAttributionQaRetention(
 		);
 		const prunedSnapshotsInBatch = await pruneExpiredQaSnapshots(
 			client,
-			cutoffAt,
+			snapshotCutoffAt,
 			batchSize,
 		);
 
@@ -154,6 +158,7 @@ export async function runAttributionQaRetention(
 				service: process.env.K_SERVICE ?? "roas-radar-attribution-qa-retention",
 				batchNumber,
 				cutoffAt: cutoffAt.toISOString(),
+				snapshotCutoffAt: snapshotCutoffAt.toISOString(),
 				retentionDays,
 				batchSize,
 				deletedRawEvidenceInBatch: batchResult.deletedRawEvidenceInBatch,
@@ -167,6 +172,7 @@ export async function runAttributionQaRetention(
 
 	const result: AttributionQaRetentionResult = {
 		cutoffAt: cutoffAt.toISOString(),
+		snapshotCutoffAt: snapshotCutoffAt.toISOString(),
 		retentionDays,
 		batchSize,
 		maxBatches,
