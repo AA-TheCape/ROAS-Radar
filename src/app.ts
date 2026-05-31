@@ -13,6 +13,7 @@ import { assertGa4BigQueryIngestionConfig } from './modules/attribution/ga4-bigq
 import { createGoogleAdsAdminRouter, createGoogleAdsPublicRouter } from './modules/google-ads/index.js';
 import { createMetaAdsAdminRouter, createMetaAdsPublicRouter } from './modules/meta-ads/index.js';
 import { createMetaOrderValueRouter } from './modules/reporting/meta-order-value.js';
+import { createRecoveryAdminRouter } from './modules/recovery/admin.js';
 import { createReportingRouter } from './modules/reporting/index.js';
 import { createSettingsRouter } from './modules/settings/index.js';
 import { createShopifyAdminRouter, createShopifyPublicRouter, createShopifyWebhookRouter } from './modules/shopify/index.js';
@@ -104,6 +105,7 @@ export function createApp() {
   app.use('/api/admin/identity', createIdentityAdminRouter());
   app.use('/api/admin/users', createUserAdminRouter());
   app.use('/api/admin/attribution', createAttributionAdminRouter());
+  app.use('/api/admin/recovery', createRecoveryAdminRouter());
   app.use('/shopify', createShopifyPublicRouter());
   app.use('/api/admin/shopify', createShopifyAdminRouter());
   app.use('/meta-ads', createMetaAdsPublicRouter());

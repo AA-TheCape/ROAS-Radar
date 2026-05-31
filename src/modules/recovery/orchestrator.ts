@@ -1137,6 +1137,15 @@ export class RecoveryJobOrchestrator<TRecord> {
 		let done = false;
 
 		while (!done) {
+			const latestRun = await this.store.getRun(run.id);
+			if (latestRun?.status === "cancelled") {
+				return {
+					run: latestRun,
+					pagesProcessed,
+					recordsProcessed,
+				};
+			}
+
 			const context = this.buildContext(run, workerId, now);
 			const page = await this.definition.fetchPage(context);
 			if (page.records.length > 0) {
@@ -1164,6 +1173,15 @@ export class RecoveryJobOrchestrator<TRecord> {
 				now,
 			);
 			done = page.done;
+		}
+
+		const latestRun = await this.store.getRun(run.id);
+		if (latestRun?.status === "cancelled") {
+			return {
+				run: latestRun,
+				pagesProcessed,
+				recordsProcessed,
+			};
 		}
 
 		const terminalStatus =

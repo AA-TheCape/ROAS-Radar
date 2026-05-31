@@ -6,6 +6,7 @@ import {
 	type RecoveryCheckpoint,
 	type RecoveryExecutionResult,
 	type RecoveryJobDefinition,
+	PostgresRecoveryJobStore,
 	type RecoveryRecordResult,
 	type RecoveryStartResult,
 	createRecoveryJobOrchestrator,
@@ -716,4 +717,32 @@ export async function runShopifyAttributionRecovery(
 		},
 		options.workerId ?? "shopify-attribution-recovery",
 	);
+}
+
+function readStoredPageSize(value: unknown): number | undefined {
+	if (
+		typeof value === "number" &&
+		Number.isInteger(value) &&
+		value > 0
+	) {
+		return value;
+	}
+
+	return undefined;
+}
+
+export async function executeShopifyAttributionRecoveryRun(
+	runId: string,
+	workerId = "shopify-attribution-recovery",
+	now = new Date(),
+): Promise<RecoveryExecutionResult> {
+	const store = new PostgresRecoveryJobStore();
+	const run = await store.getRun(runId);
+	const pageSize = readStoredPageSize(run?.inputParameters.pageSize);
+	const orchestrator = createRecoveryJobOrchestrator(
+		buildRecoveryDefinition(pageSize),
+		store,
+	);
+
+	return orchestrator.execute(runId, workerId, now);
 }

@@ -6,6 +6,7 @@ import {
 	type RecoveryCheckpoint,
 	type RecoveryExecutionResult,
 	type RecoveryJobDefinition,
+	PostgresRecoveryJobStore,
 	type RecoveryRecordResult,
 	type RecoveryStartResult,
 	createRecoveryJobOrchestrator,
@@ -843,6 +844,37 @@ export async function runGa4FallbackRecovery(
 		},
 		options.workerId ?? "ga4-fallback-recovery",
 	);
+}
+
+function readStoredPositiveInteger(value: unknown): number | undefined {
+	if (
+		typeof value === "number" &&
+		Number.isInteger(value) &&
+		value > 0
+	) {
+		return value;
+	}
+
+	return undefined;
+}
+
+export async function executeGa4FallbackRecoveryRun(
+	runId: string,
+	workerId = "ga4-fallback-recovery",
+	now = new Date(),
+): Promise<RecoveryExecutionResult> {
+	const store = new PostgresRecoveryJobStore();
+	const run = await store.getRun(runId);
+	const pageSize = readStoredPositiveInteger(run?.inputParameters.pageSize);
+	const lookbackDays = readStoredPositiveInteger(
+		run?.inputParameters.lookbackDays,
+	);
+	const orchestrator = createRecoveryJobOrchestrator(
+		buildRecoveryDefinition(pageSize, lookbackDays),
+		store,
+	);
+
+	return orchestrator.execute(runId, workerId, now);
 }
 
 export const __ga4FallbackRecoveryTestUtils = {
