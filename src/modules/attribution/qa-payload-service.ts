@@ -33,6 +33,8 @@ type QaOrderRow = AttributionQaSnapshotOrder & {
 };
 
 const SENSITIVE_URL_QUERY_KEYS = new Set([
+  '_ga',
+  '_gl',
   'access_token',
   'auth_token',
   'cart_token',
@@ -40,28 +42,41 @@ const SENSITIVE_URL_QUERY_KEYS = new Set([
   'client_id',
   'client_secret',
   'code',
+  'customer_id',
   'email',
   'email_hash',
   'fbclid',
+  'ga_client_id',
+  'ga_session_id',
+  'ga_user_id',
   'gclid',
+  'gclsrc',
   'gbraid',
   'id_token',
   'msclkid',
   'password',
   'refresh_token',
+  'shopify_customer_id',
   'token',
   'ttclid',
+  'utm_id',
   'wbraid'
 ]);
 
 const SENSITIVE_OBJECT_KEY_EXACT_MATCHES = new Set([
+  '_ga',
+  '_gl',
   'fbclid',
   'gclid',
+  'gclsrc',
   'gbraid',
   'msclkid',
   'ttclid',
   'wbraid'
 ]);
+
+const SENSITIVE_URL_QUERY_PATTERN =
+  /(^|[?&])((?:_ga|_gl|access_token|auth_token|cart_token|checkout_token|client_id|client_secret|code|customer_id|email|email_hash|fbclid|ga_client_id|ga_session_id|ga_user_id|gclid|gclsrc|gbraid|id_token|msclkid|password|refresh_token|shopify_customer_id|token|ttclid|utm_id|wbraid)=)[^&#\s]+/gi;
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
@@ -85,17 +100,24 @@ function redactedHint(value: string | null | undefined): string | null {
 }
 
 function isSensitiveObjectKey(key: string): boolean {
-  const normalized = key.toLowerCase();
+  const normalized = key.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase().replace(/[-\s]/g, '_');
   return (
     normalized.includes('token') ||
     normalized.includes('email') ||
     normalized.includes('password') ||
     normalized.includes('secret') ||
+    normalized.includes('clickid') ||
     normalized.includes('click_id') ||
+    normalized.includes('customer_id') ||
+    normalized.includes('checkout_id') ||
     normalized.includes('client_id') ||
     normalized.includes('session_id') ||
+    normalized.includes('user_id') ||
     normalized.includes('user_key') ||
+    normalized.includes('identity_id') ||
+    normalized.includes('journey_id') ||
     normalized.startsWith('ga4_') ||
+    normalized.startsWith('ga_') ||
     SENSITIVE_OBJECT_KEY_EXACT_MATCHES.has(normalized)
   );
 }
@@ -112,11 +134,20 @@ function redactSensitiveUrlQueryValues(value: string): string {
     }
     return changed ? url.toString() : value;
   } catch {
-    return value.replace(
-      /([?&](?:access_token|auth_token|cart_token|checkout_token|client_id|client_secret|code|email|email_hash|fbclid|gclid|gbraid|id_token|msclkid|password|refresh_token|token|ttclid|wbraid)=)[^&#\s]+/gi,
-      '$1[REDACTED]'
-    );
+    return value.replace(SENSITIVE_URL_QUERY_PATTERN, '$1$2[REDACTED]');
   }
+}
+
+function redactSensitiveObjectValue(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return redactedHint(value) ?? '[REDACTED]';
+  }
+
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  return '[REDACTED]';
 }
 
 export function redactSensitiveQaValue(value: unknown): unknown {
@@ -136,9 +167,17 @@ export function redactSensitiveQaValue(value: unknown): unknown {
   return Object.fromEntries(
     Object.entries(record).map(([key, item]) => [
       key,
-      isSensitiveObjectKey(key) ? redactedHint(String(item ?? '')) : redactSensitiveQaValue(item)
+      isSensitiveObjectKey(key) ? redactSensitiveObjectValue(item) : redactSensitiveQaValue(item)
     ])
   );
+}
+
+export function redactSensitiveQaText(value: string | null | undefined): string | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  return redactSensitiveUrlQueryValues(value);
 }
 
 function redactCandidateSourceKey(value: string): string {
@@ -155,9 +194,22 @@ function redactCandidateSourceKey(value: string): string {
   return `${prefix}:${redactedHint(value.slice(separatorIndex + 1)) ?? '[REDACTED]'}`;
 }
 
+function sanitizeCandidateMarketingFields(
+  candidate: AttributionQaPayloadV1['candidates']['deterministic_first_party'][number]
+) {
+  return {
+    source: redactSensitiveQaText(candidate.source),
+    medium: redactSensitiveQaText(candidate.medium),
+    campaign: redactSensitiveQaText(candidate.campaign),
+    content: redactSensitiveQaText(candidate.content),
+    term: redactSensitiveQaText(candidate.term)
+  };
+}
+
 function sanitizeNonGa4Candidate(candidate: AttributionQaPayloadV1['candidates']['deterministic_first_party'][number]) {
   return {
     ...candidate,
+    ...sanitizeCandidateMarketingFields(candidate),
     source_key: redactCandidateSourceKey(candidate.source_key),
     session_id: null,
     source_touch_event_id: null,
@@ -176,6 +228,7 @@ export function sanitizeAttributionQaPayload(payload: AttributionQaPayloadV1): A
 
     return {
       ...candidate,
+      ...sanitizeCandidateMarketingFields(candidate),
       source_key: redactedId,
       touchpoint_id: redactedId,
       session_id: null,

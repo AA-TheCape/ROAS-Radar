@@ -227,9 +227,9 @@ test('order attribution QA debug route returns redacted schema payload and group
           occurred_at_utc: '2026-04-10T11:00:00.000Z',
           source: 'google',
           medium: 'cpc',
-          campaign: 'ga4-brand',
-          content: null,
-          term: null,
+          campaign: 'https://store.example/campaign?gclid=QA-PAYLOAD-GA4-CAMPAIGN-GCLID',
+          content: 'content?ga_client_id=QA-PAYLOAD-GA4-CONTENT-CLIENT',
+          term: 'term&utm_id=QA-PAYLOAD-GA4-UTM-ID',
           click_id_type: 'gclid',
           click_id_value: 'GA4-GCLID-SECRET',
           match_source: 'ga4_fallback',
@@ -330,7 +330,18 @@ test('order attribution QA debug route returns redacted schema payload and group
             raw_payload: {
               landing_site: 'https://store.example/?gclid=RAW-GCLID',
               checkout_token: 'raw-checkout-token-secret',
-              email_hash: 'fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210'
+              email_hash: 'fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210',
+              customer_id: 'raw-shopify-customer-id',
+              nested: {
+                cart_token: 'nested-cart-token-secret',
+                links: [
+                  'gclid=NESTED-SHOPIFY-QUERY-GCLID&checkout_token=NESTED-SHOPIFY-CHECKOUT',
+                  {
+                    email: 'nested-shopify-email@example.com',
+                    shopify_customer_id: 'nested-shopify-customer'
+                  }
+                ]
+              }
             },
             payload_size_bytes: 64,
             payload_hash: 'a'.repeat(64),
@@ -355,11 +366,28 @@ test('order attribution QA debug route returns redacted schema payload and group
             error_message: null,
             normalized_metadata: {
               ga4_client_id: 'raw-ga4-client-id',
-              referrer: 'https://store.example/?email_hash=raw-email-hash'
+              referrer: 'https://store.example/?email_hash=raw-email-hash',
+              nested: {
+                ga_session_id: 'raw-nested-ga-session-id',
+                urls: [
+                  'https://example.com/path?_ga=RAW-NESTED-GA&client_id=RAW-NESTED-CLIENT-ID',
+                  {
+                    user_id: 'raw-nested-user-id',
+                    clickid: 'raw-nested-clickid'
+                  }
+                ]
+              }
             },
             raw_payload: {
               gclid: 'RAW-TOUCH-GCLID',
-              url: 'https://store.example/products/widget?fbclid=RAW-FBCLID&discount=SAVE10'
+              url: 'https://store.example/products/widget?fbclid=RAW-FBCLID&discount=SAVE10',
+              gaClientId: 'RAW-TOUCH-GA-CLIENT-CAMEL',
+              payloads: [
+                {
+                  page_location: 'https://store.example/?wbraid=RAW-ARRAY-WBRAID&promo=keep',
+                  ga_user_id: 'RAW-ARRAY-GA-USER'
+                }
+              ]
             },
             payload_size_bytes: 32,
             payload_hash: 'b'.repeat(64),
@@ -387,9 +415,9 @@ test('order attribution QA debug route returns redacted schema payload and group
             customer_identity_id: null,
             source: 'google',
             medium: 'cpc',
-            campaign: 'ga4-brand',
-            content: null,
-            term: null,
+            campaign: 'https://store.example/ga4?gclid=GA4-CAMPAIGN-GCLID',
+            content: 'https://store.example/content?client_id=GA4-CONTENT-CLIENT-ID',
+            term: 'query?utm_id=GA4-TERM-UTM-ID',
             click_id_type: 'gclid',
             click_id_value: 'GA4-GCLID-SECRET',
             session_has_required_fields: true,
@@ -430,23 +458,51 @@ test('order attribution QA debug route returns redacted schema payload and group
     assert.equal(body.payload.order.identifiers.email_hash, null);
     assert.equal(body.payload.candidates.ga4_fallback[0].source_key, 'ga4_fallback_candidate_1');
     assert.equal(body.payload.candidates.ga4_fallback[0].click_id_value, null);
+    assert.match(body.payload.candidates.ga4_fallback[0].campaign, /redacted/i);
+    assert.match(body.payload.candidates.ga4_fallback[0].content, /redacted/i);
+    assert.match(body.payload.candidates.ga4_fallback[0].term, /redacted/i);
     assert.equal(body.rawShopifyHints[0].rawPayload.landing_site, 'https://store.example/?gclid=%5BREDACTED%5D');
     assert.match(body.rawShopifyHints[0].rawPayload.checkout_token, /\[REDACTED\]/);
     assert.match(body.rawShopifyHints[0].rawPayload.email_hash, /\[REDACTED\]/);
+    assert.match(body.rawShopifyHints[0].rawPayload.customer_id, /\[REDACTED\]/);
+    assert.match(body.rawShopifyHints[0].rawPayload.nested.cart_token, /\[REDACTED\]/);
+    assert.equal(
+      body.rawShopifyHints[0].rawPayload.nested.links[0],
+      'gclid=[REDACTED]&checkout_token=[REDACTED]'
+    );
+    assert.match(body.rawShopifyHints[0].rawPayload.nested.links[1].email, /\[REDACTED\]/);
+    assert.match(body.rawShopifyHints[0].rawPayload.nested.links[1].shopify_customer_id, /\[REDACTED\]/);
     assert.match(body.rawTouchpoints[0].sessionId, /\[REDACTED\]/);
+    assert.match(body.rawTouchpoints[0].sourceRecordId, /\[REDACTED\]/);
     assert.match(body.rawTouchpoints[0].rawPayload.gclid, /\[REDACTED\]/);
     assert.equal(
       body.rawTouchpoints[0].rawPayload.url,
       'https://store.example/products/widget?fbclid=%5BREDACTED%5D&discount=SAVE10'
     );
+    assert.match(body.rawTouchpoints[0].rawPayload.gaClientId, /\[REDACTED\]/);
+    assert.equal(
+      body.rawTouchpoints[0].rawPayload.payloads[0].page_location,
+      'https://store.example/?wbraid=%5BREDACTED%5D&promo=keep'
+    );
+    assert.match(body.rawTouchpoints[0].rawPayload.payloads[0].ga_user_id, /\[REDACTED\]/);
     assert.match(body.rawTouchpoints[0].normalizedMetadata.ga4_client_id, /\[REDACTED\]/);
     assert.equal(body.rawTouchpoints[0].normalizedMetadata.referrer, 'https://store.example/?email_hash=%5BREDACTED%5D');
+    assert.match(body.rawTouchpoints[0].normalizedMetadata.nested.ga_session_id, /\[REDACTED\]/);
+    assert.equal(
+      body.rawTouchpoints[0].normalizedMetadata.nested.urls[0],
+      'https://example.com/path?_ga=%5BREDACTED%5D&client_id=%5BREDACTED%5D'
+    );
+    assert.match(body.rawTouchpoints[0].normalizedMetadata.nested.urls[1].user_id, /\[REDACTED\]/);
+    assert.match(body.rawTouchpoints[0].normalizedMetadata.nested.urls[1].clickid, /\[REDACTED\]/);
     assert.match(body.ga4FallbackCandidate.candidateKey, /\[REDACTED\]/);
     assert.match(body.ga4FallbackCandidate.ga4UserKey, /\[REDACTED\]/);
     assert.match(body.ga4FallbackCandidate.ga4ClientId, /\[REDACTED\]/);
     assert.match(body.ga4FallbackCandidate.ga4SessionId, /\[REDACTED\]/);
     assert.match(body.ga4FallbackCandidate.emailHash, /\[REDACTED\]/);
     assert.match(body.ga4FallbackCandidate.clickIdValue, /\[REDACTED\]/);
+    assert.equal(body.ga4FallbackCandidate.campaign, 'https://store.example/ga4?gclid=%5BREDACTED%5D');
+    assert.equal(body.ga4FallbackCandidate.content, 'https://store.example/content?client_id=%5BREDACTED%5D');
+    assert.equal(body.ga4FallbackCandidate.term, 'query?utm_id=[REDACTED]');
     const serialized = JSON.stringify(body);
     assert.doesNotMatch(serialized, /checkout-token-secret/);
     assert.doesNotMatch(serialized, /cart-token-secret/);
@@ -462,6 +518,26 @@ test('order attribution QA debug route returns redacted schema payload and group
     assert.doesNotMatch(serialized, /ga4-client-secret/);
     assert.doesNotMatch(serialized, /ga4-session-secret/);
     assert.doesNotMatch(serialized, /GA4-GCLID-SECRET/);
+    assert.doesNotMatch(serialized, /QA-PAYLOAD-GA4-CAMPAIGN-GCLID/);
+    assert.doesNotMatch(serialized, /QA-PAYLOAD-GA4-CONTENT-CLIENT/);
+    assert.doesNotMatch(serialized, /QA-PAYLOAD-GA4-UTM-ID/);
+    assert.doesNotMatch(serialized, /raw-shopify-customer-id/);
+    assert.doesNotMatch(serialized, /nested-cart-token-secret/);
+    assert.doesNotMatch(serialized, /NESTED-SHOPIFY-QUERY-GCLID/);
+    assert.doesNotMatch(serialized, /NESTED-SHOPIFY-CHECKOUT/);
+    assert.doesNotMatch(serialized, /nested-shopify-email@example\.com/);
+    assert.doesNotMatch(serialized, /nested-shopify-customer/);
+    assert.doesNotMatch(serialized, /raw-nested-ga-session-id/);
+    assert.doesNotMatch(serialized, /RAW-NESTED-GA/);
+    assert.doesNotMatch(serialized, /RAW-NESTED-CLIENT-ID/);
+    assert.doesNotMatch(serialized, /raw-nested-user-id/);
+    assert.doesNotMatch(serialized, /raw-nested-clickid/);
+    assert.doesNotMatch(serialized, /RAW-TOUCH-GA-CLIENT-CAMEL/);
+    assert.doesNotMatch(serialized, /RAW-ARRAY-WBRAID/);
+    assert.doesNotMatch(serialized, /RAW-ARRAY-GA-USER/);
+    assert.doesNotMatch(serialized, /GA4-CAMPAIGN-GCLID/);
+    assert.doesNotMatch(serialized, /GA4-CONTENT-CLIENT-ID/);
+    assert.doesNotMatch(serialized, /GA4-TERM-UTM-ID/);
     assert.equal(capturedQueries.some((entry) => entry.text.includes('FROM attribution_raw_evidence')), true);
   } finally {
     pool.query = originalPoolQuery as typeof pool.query;

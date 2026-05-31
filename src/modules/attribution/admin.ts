@@ -14,6 +14,7 @@ import { attachAuthContext, requireAdmin, type AuthContext } from '../auth/index
 import { enqueueOrderAttributionBackfillRun, getOrderAttributionBackfillRun } from './backfill-run-store.js';
 import {
   getAttributionQaPayloadForOrder,
+  redactSensitiveQaText,
   redactSensitiveQaValue,
   sanitizeAttributionQaPayload
 } from './qa-payload-service.js';
@@ -293,13 +294,16 @@ async function loadGa4FallbackDebugCandidate(input: {
 }
 
 function mapRawEvidence(row: RawEvidenceRow) {
+  const sourceRecordId =
+    row.evidence_type === 'tracking_touchpoint' ? (redactedHint(row.source_record_id) ?? '[REDACTED]') : row.source_record_id;
+
   return {
     id: row.id,
     runId: row.run_id,
     orderId: row.order_id,
     evidenceType: row.evidence_type,
     sourceTable: row.source_table,
-    sourceRecordId: row.source_record_id,
+    sourceRecordId,
     touchpointId: redactedHint(row.touchpoint_id),
     sessionId: redactedHint(row.session_id),
     ingestionSource: row.ingestion_source,
@@ -332,11 +336,11 @@ function mapGa4FallbackDebugCandidate(row: Ga4FallbackDebugCandidateRow | null) 
     transactionId: row.transaction_id,
     emailHash: redactedHint(row.email_hash),
     customerIdentityId: redactedHint(row.customer_identity_id),
-    source: row.source,
-    medium: row.medium,
-    campaign: row.campaign,
-    content: row.content,
-    term: row.term,
+    source: redactSensitiveQaText(row.source),
+    medium: redactSensitiveQaText(row.medium),
+    campaign: redactSensitiveQaText(row.campaign),
+    content: redactSensitiveQaText(row.content),
+    term: redactSensitiveQaText(row.term),
     clickIdType: row.click_id_type,
     clickIdValue: redactedHint(row.click_id_value),
     sessionHasRequiredFields: row.session_has_required_fields,
