@@ -37,6 +37,8 @@ SMOKE_TEST_END_DATE=${SMOKE_TEST_END_DATE:-${SMOKE_TEST_DATE:-$(date -u +%F)}}
 SMOKE_TEST_START_DATE=${SMOKE_TEST_START_DATE:-$SMOKE_TEST_END_DATE}
 REPORTING_PATH=${SMOKE_TEST_REPORTING_PATH:-/api/reporting/meta-order-value}
 REPORTING_QUERY="startDate=$SMOKE_TEST_START_DATE&endDate=$SMOKE_TEST_END_DATE&limit=${SMOKE_TEST_REPORTING_LIMIT:-5}"
+CONFIDENCE_SMOKE_PATH=${SMOKE_TEST_CONFIDENCE_PATH:-/api/reporting/orders}
+CONFIDENCE_SMOKE_QUERY="startDate=$SMOKE_TEST_START_DATE&endDate=$SMOKE_TEST_END_DATE&limit=${SMOKE_TEST_CONFIDENCE_LIMIT:-5}"
 
 API_URL=$(gcloud run services describe "$API_SERVICE_NAME" \
   --project="$GCP_PROJECT_ID" \
@@ -67,54 +69,98 @@ validate_meta_order_value_response() {
   RESPONSE_START_DATE="$2"
   RESPONSE_END_DATE="$3"
 
-  python3 - "$RESPONSE_FILE" "$RESPONSE_START_DATE" "$RESPONSE_END_DATE" <<'PY'
-import json
-import sys
+  node - "$RESPONSE_FILE" "$RESPONSE_START_DATE" "$RESPONSE_END_DATE" <<'JS'
+const [responseFile, expectedStartDate, expectedEndDate] = process.argv.slice(2);
+const fs = await import('node:fs/promises');
+const payload = JSON.parse(await fs.readFile(responseFile, 'utf8'));
 
-response_file, expected_start_date, expected_end_date = sys.argv[1:4]
+if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+  throw new Error('response body must be a JSON object');
+}
 
-with open(response_file, encoding="utf-8") as handle:
-    payload = json.load(handle)
+const scope = payload.scope;
+if (!scope || typeof scope !== 'object' || !Number.isInteger(scope.organizationId) || scope.organizationId <= 0) {
+  throw new Error('response scope.organizationId must be a positive integer');
+}
 
-if not isinstance(payload, dict):
-    raise SystemExit("response body must be a JSON object")
-
-scope = payload.get("scope")
+const dateRange = payload.range;
 if (
-    not isinstance(scope, dict)
-    or not isinstance(scope.get("organizationId"), int)
-    or scope["organizationId"] <= 0
-):
-    raise SystemExit("response scope.organizationId must be a positive integer")
+  !dateRange ||
+  typeof dateRange !== 'object' ||
+  dateRange.startDate !== expectedStartDate ||
+  dateRange.endDate !== expectedEndDate
+) {
+  throw new Error('response range does not match smoke-test query');
+}
 
-date_range = payload.get("range")
+const pagination = payload.pagination;
 if (
-    not isinstance(date_range, dict)
-    or date_range.get("startDate") != expected_start_date
-    or date_range.get("endDate") != expected_end_date
-):
-    raise SystemExit("response range does not match smoke-test query")
+  !pagination ||
+  typeof pagination !== 'object' ||
+  !Number.isInteger(pagination.limit) ||
+  !Number.isInteger(pagination.offset)
+) {
+  throw new Error('response pagination is missing required integers');
+}
 
-pagination = payload.get("pagination")
-if (
-    not isinstance(pagination, dict)
-    or not isinstance(pagination.get("limit"), int)
-    or not isinstance(pagination.get("offset"), int)
-):
-    raise SystemExit("response pagination is missing required integers")
+const totals = payload.totals;
+if (!totals || typeof totals !== 'object' || Array.isArray(totals)) {
+  throw new Error('response totals object is required');
+}
 
-totals = payload.get("totals")
-if not isinstance(totals, dict):
-    raise SystemExit("response totals object is required")
+if (!Array.isArray(payload.rows)) {
+  throw new Error('response rows must be an array');
+}
 
-if not isinstance(payload.get("rows"), list):
-    raise SystemExit("response rows must be an array")
+for (const key of ['attributedRevenue', 'purchaseCount', 'spend', 'roas']) {
+  const value = totals[key];
+  if (value !== null && typeof value !== 'number') {
+    throw new Error(`response totals.${key} must be numeric or null`);
+  }
+}
+JS
+}
 
-for key in ("attributedRevenue", "purchaseCount", "spend", "roas"):
-    value = totals.get(key)
-    if value is not None and not isinstance(value, (int, float)):
-        raise SystemExit(f"response totals.{key} must be numeric or null")
-PY
+validate_confidence_orders_response() {
+  RESPONSE_FILE="$1"
+
+  node - "$RESPONSE_FILE" <<'JS'
+const [responseFile] = process.argv.slice(2);
+const fs = await import('node:fs/promises');
+const payload = JSON.parse(await fs.readFile(responseFile, 'utf8'));
+
+if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+  throw new Error('confidence smoke response body must be a JSON object');
+}
+
+if (!Array.isArray(payload.rows)) {
+  throw new Error('confidence smoke response rows must be an array');
+}
+
+payload.rows.forEach((row, index) => {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) {
+    throw new Error(`confidence smoke row ${index} must be an object`);
+  }
+
+  if (!Object.hasOwn(row, 'confidenceScore')) {
+    throw new Error(`confidence smoke row ${index} is missing confidenceScore`);
+  }
+
+  const confidenceScore = row.confidenceScore;
+  if (
+    confidenceScore !== null &&
+    (typeof confidenceScore !== 'number' || confidenceScore < 0 || confidenceScore > 1)
+  ) {
+    throw new Error(`confidence smoke row ${index} has an invalid confidenceScore`);
+  }
+
+  for (const key of ['attributionSource', 'matchingMethod', 'lastAttributionRunAt']) {
+    if (!Object.hasOwn(row, key)) {
+      throw new Error(`confidence smoke row ${index} is missing ${key}`);
+    }
+  }
+});
+JS
 }
 
 echo "Smoke testing API health for $ENVIRONMENT"
@@ -140,6 +186,15 @@ curl --fail --silent --show-error \
   "$API_URL$REPORTING_PATH?$REPORTING_QUERY" >"$RESPONSE_FILE"
 
 validate_meta_order_value_response "$RESPONSE_FILE" "$SMOKE_TEST_START_DATE" "$SMOKE_TEST_END_DATE"
+
+if [ "${SMOKE_TEST_VALIDATE_CONFIDENCE:-true}" = "true" ]; then
+  echo "Smoke testing attribution confidence reporting route for $ENVIRONMENT"
+  curl --fail --silent --show-error \
+    -H "Authorization: Bearer $REPORTING_API_TOKEN" \
+    "$API_URL$CONFIDENCE_SMOKE_PATH?$CONFIDENCE_SMOKE_QUERY" >"$RESPONSE_FILE"
+
+  validate_confidence_orders_response "$RESPONSE_FILE"
+fi
 
 echo "Smoke testing dashboard entrypoint for $ENVIRONMENT"
 curl --fail --silent --show-error "$DASHBOARD_URL/" >/dev/null

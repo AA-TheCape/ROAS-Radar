@@ -47,6 +47,26 @@ For staged releases, prefer:
 
 Do not sign off staging or continue to production unless the smoke evidence includes the authenticated Meta order value response contract check.
 
+## Confidence Scoring Rollout
+
+Use this sequence for the confidence-scoring schema and service release. The migration is additive for deployed services: old revisions continue to read the legacy attribution columns and snapshots while the new revision writes and exposes `confidenceScore`, `attributionSource`, `matchingMethod`, and `lastAttributionRunAt`.
+
+1. Confirm `npm run db:migrate:check`, `npm run test:attribution`, and `npm --prefix dashboard run build` pass against the release image source.
+2. Deploy staging through `RUN_STAGING_ROLLBACK_DRILL=true sh infra/cloud-run/promote.sh staging`.
+3. Keep compatibility mode during transition by leaving the previous API, worker, and dashboard revisions available in the deploy metadata. Do not run rollback SQL during this phase; the schema expansion is intentionally backward-compatible.
+4. Validate staging smoke output includes `/api/reporting/orders` and confirms bounded `confidenceScore` values plus `attributionSource`, `matchingMethod`, and `lastAttributionRunAt` keys when rows are present.
+5. Validate the dashboard order table renders and can sort by Confidence for the same bounded date window.
+6. Promote production with `RUN_STAGING_ROLLBACK_DRILL=true sh infra/cloud-run/promote.sh production` so production promotion is blocked unless the staging rollback drill has already succeeded.
+7. Re-run `sh infra/cloud-run/smoke-test.sh production` and retain the production smoke output as the post-deploy API evidence.
+8. For 24 hours after production deployment, monitor `roas_order_attribution_confidence_backfill_progress`, API latency, and attribution worker backlog before treating the compatibility window as closed.
+
+Rollback path:
+
+1. If the confidence API/UI check fails but `/readyz` is healthy, route services back to the previous revisions with `sh infra/cloud-run/rollback.sh <environment> <deploy-metadata-file> previous`.
+2. Re-run `sh infra/cloud-run/smoke-test.sh <environment>` after rollback. The smoke helper remains valid because previous revisions are compatible with the expanded schema.
+3. Pause only the order-attribution materialization scheduler if confidence writes are producing bad metadata while other services remain healthy: `gcloud scheduler jobs pause <order-attribution-materialization-scheduler> --project=<project> --location=<region>`.
+4. Use `db/rollbacks/0046_add_order_attribution_confidence_metadata.down.sql` only after traffic is pinned to a revision that does not reference the new columns and after confirming no new revision, worker, or job uses confidence metadata.
+
 ## Meta Scheduler Controls
 
 - `META_ADS_ORDER_VALUE_SCHEDULER_PAUSED` controls whether deploys leave the hourly Meta order-value scheduler active or paused.

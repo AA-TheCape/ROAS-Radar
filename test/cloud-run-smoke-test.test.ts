@@ -10,7 +10,7 @@ function writeExecutable(filePath: string, contents: string) {
   chmodSync(filePath, 0o755);
 }
 
-function createSmokeFixture(mode: 'success' | 'malformed-authenticated-response') {
+function createSmokeFixture(mode: 'success' | 'malformed-authenticated-response' | 'malformed-confidence-response') {
   const tempDir = mkdtempSync(path.join(os.tmpdir(), 'roas-radar-smoke-test-'));
   const scriptDir = path.join(tempDir, 'infra', 'cloud-run');
   const envDir = path.join(scriptDir, 'environments');
@@ -132,6 +132,15 @@ case "$URL" in
     printf '%s' '{"scope":{"organizationId":77},"range":{"startDate":"2026-04-29","endDate":"2026-04-30"},"pagination":{"limit":5,"offset":0,"returned":1,"totalRows":1,"hasMore":false},"totals":{"attributedRevenue":0,"purchaseCount":0,"spend":0,"roas":null},"rows":[]}'
     exit 0
     ;;
+  https://api.example.test/api/reporting/orders*)
+    if [ "$SMOKE_FIXTURE_MODE" = 'malformed-confidence-response' ]; then
+      printf '%s' '{"rows":[{"shopifyOrderId":"1001"}]}'
+      exit 0
+    fi
+
+    printf '%s' '{"rows":[{"shopifyOrderId":"1001","confidenceScore":0.9,"attributionSource":"checkout_token","matchingMethod":"matched_by_checkout_token","lastAttributionRunAt":"2026-04-29T12:00:00.000Z"}]}'
+    exit 0
+    ;;
   *)
     echo "unexpected curl url: $URL" >&2
     exit 1
@@ -189,6 +198,10 @@ test('cloud run smoke test validates unauthenticated and authenticated Meta orde
       curlLog,
       /present\|https:\/\/api\.example\.test\/api\/reporting\/meta-order-value\?startDate=2026-04-29&endDate=2026-04-30&limit=5/
     );
+    assert.match(
+      curlLog,
+      /present\|https:\/\/api\.example\.test\/api\/reporting\/orders\?startDate=2026-04-29&endDate=2026-04-30&limit=5/
+    );
   } finally {
     fixture.cleanup();
   }
@@ -205,6 +218,22 @@ test('cloud run smoke test fails when the authenticated Meta order value respons
 
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /scope\.organizationId/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('cloud run smoke test fails when the confidence reporting response shape is invalid', () => {
+  const fixture = createSmokeFixture('malformed-confidence-response');
+
+  try {
+    const result = spawnSync('sh', [fixture.scriptPath, 'fixture'], {
+      env: fixture.env,
+      encoding: 'utf8'
+    });
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /confidenceScore/);
   } finally {
     fixture.cleanup();
   }
