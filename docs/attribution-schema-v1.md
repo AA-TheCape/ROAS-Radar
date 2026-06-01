@@ -413,6 +413,7 @@ Current mapping:
 
 Rules:
 
+- canonical scoring semantics live in `docs/confidence-scoring-contract-v1.md`
 - GA4 fallback always maps to `confidence_label = 'low'`
 - unattributed always maps to `confidence_label = 'none'`
 - readers should prefer the explicit label when available rather than recomputing custom buckets
@@ -508,4 +509,5 @@ A new schema version is usually not required when:
 - [Shopify App Setup](shopify-app-setup.md)
 - [Visitor Identity Stitching](visitor-identity-stitching.md)
 - [Analytics Playbook](analytics-playbook.md)
+- [Confidence Scoring Contract V1](confidence-scoring-contract-v1.md)
 - [GA4 Fallback Attribution Contract v1](ga4-fallback-attribution-contract-v1.md)

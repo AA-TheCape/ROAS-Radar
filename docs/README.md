@@ -7,7 +7,7 @@
 1. Read [Implementation Guide](implementation-guide.md) for local setup, service topology, validation flow, and troubleshooting.
 2. Read [Attribution Schema V1](attribution-schema-v1.md) for canonical field names, normalization rules, DB mappings, and Shopify attribute keys.
 3. Read [Raw Payload Persistence Contract](raw-payload-persistence-contract.md) before changing Shopify, Meta Ads, or Google Ads raw-source ingestion behavior.
-4. Read [Operational Attribution Contracts](operational-attribution-contracts.md) for resolver precedence, Shopify writeback, retention, and recovery semantics.
+4. Read [Operational Attribution Contracts](operational-attribution-contracts.md) and [Confidence Scoring Contract V1](confidence-scoring-contract-v1.md) for resolver precedence, confidence scoring, Shopify writeback, retention, and recovery semantics.
 5. Read [Recovery Job Framework](recovery-job-framework.md) before adding automatic backfill or recovery jobs.
 6. Read [Attribution QA Payload Schema V1](attribution-qa-payload-schema-v1.md) before changing per-order attribution QA exports or fixtures.
 
@@ -38,6 +38,7 @@
 - [Deterministic Attribution Behavior](deterministic-attribution-behavior.md): Meta-only deterministic attribution behavior, API-only verification, reporting modes, known limitations, and support guidance.
 - [Meta Deterministic View Attribution Contract V1](meta-deterministic-view-attribution-contract-v1.md): approved aggregate-only Meta API deterministic view/impression attribution design, 7-day window, quarantine rules, and non-mixing requirements.
 - [Reporting API Contract](reporting-api-contract.md): reporting response versioning, campaign label enrichment, reporting modes, and layer-separation requirements.
+- [Confidence Scoring Contract V1](confidence-scoring-contract-v1.md): versioned confidence score and label semantics shared by backend writers, reporting APIs, dashboards, and analytics readers.
 - [Shopify App Setup](shopify-app-setup.md): Shopify app install flow, OAuth, and webhook provisioning.
 - [Visitor Identity Stitching](visitor-identity-stitching.md): deterministic identity-linking behavior for Shopify customers, orders, and tracked sessions.
 - [Analytics Playbook](analytics-playbook.md): reporting, attribution, and analytics operating model.

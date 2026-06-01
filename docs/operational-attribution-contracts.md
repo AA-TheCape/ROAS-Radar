@@ -5,6 +5,7 @@ This document is the operator-facing contract for the attribution pipeline. It s
 ## Source documents
 
 - `docs/attribution-schema-v1.md`
+- `docs/confidence-scoring-contract-v1.md`
 - `docs/last-non-direct-touch-approval-matrix.md`
 - `docs/ga4-fallback-attribution-contract-v1.md`
 - `docs/runbooks/attribution-completeness.md`
@@ -40,6 +41,8 @@ These rules apply across:
 - reporting and API response shapes that expose the winner or timeline
 
 ## Confidence contract
+
+The canonical versioned confidence scoring contract is `docs/confidence-scoring-contract-v1.md`.
 
 - deterministic exact matches: `high`
 - deterministic stitched identity: `medium`
