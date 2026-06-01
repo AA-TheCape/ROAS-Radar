@@ -28,6 +28,8 @@ type StoredRecord = {
 	attemptCount: number;
 };
 
+const MEMORY_RECOVERY_HEARTBEAT_TIMEOUT_MS = 300_000;
+
 class MemoryRecoveryStore implements Store {
 	runs = new Map<string, Run>();
 	records = new Map<string, StoredRecord>();
@@ -108,7 +110,17 @@ class MemoryRecoveryStore implements Store {
 	async claimRun(runId: string, workerId: string, now: Date) {
 		this.claimCalls.push(runId);
 		const run = this.mustRun(runId);
-		if (run.status !== "queued" && run.status !== "running") {
+		const lastHeartbeatAt = run.lastHeartbeatAt
+			? new Date(run.lastHeartbeatAt).getTime()
+			: null;
+		const heartbeatExpired =
+			lastHeartbeatAt !== null &&
+			lastHeartbeatAt <= now.getTime() - MEMORY_RECOVERY_HEARTBEAT_TIMEOUT_MS;
+		const claimable =
+			run.status === "queued" ||
+			(run.status === "running" &&
+				(run.claimedBy === workerId || run.claimedBy === null || heartbeatExpired));
+		if (!claimable) {
 			throw new Error(`Recovery run ${runId} is not claimable`);
 		}
 		const updated: Run = {
@@ -178,12 +190,14 @@ class MemoryRecoveryStore implements Store {
 
 	async updateCheckpoint(
 		runId: string,
+		workerId: string,
 		_checkpointName: string,
 		checkpoint: Run["checkpoint"],
 		recordsProcessed: number,
 		now: Date,
 	) {
 		const run = this.mustRun(runId);
+		this.assertHeld(run, workerId, "checkpoint update");
 		const updated: Run = {
 			...run,
 			checkpoint,
@@ -196,10 +210,12 @@ class MemoryRecoveryStore implements Store {
 
 	async incrementRunCounters(
 		runId: string,
+		workerId: string,
 		counters: Parameters<Store["incrementRunCounters"]>[1],
 		now: Date,
 	) {
 		const run = this.mustRun(runId);
+		this.assertHeld(run, workerId, "counter update");
 		const updated: Run = {
 			...run,
 			recordsDiscovered:
@@ -224,11 +240,13 @@ class MemoryRecoveryStore implements Store {
 
 	async finalizeRun(
 		runId: string,
+		workerId: string,
 		status: Extract<Run["status"], "succeeded" | "partial_failure" | "failed">,
 		error: Parameters<Store["finalizeRun"]>[2],
 		now: Date,
 	) {
 		const run = this.mustRun(runId);
+		this.assertHeld(run, workerId, "completion");
 		const updated: Run = {
 			...run,
 			status,
@@ -255,6 +273,12 @@ class MemoryRecoveryStore implements Store {
 		const record = this.records.get(recordId);
 		assert.ok(record, `expected record ${recordId}`);
 		return record;
+	}
+
+	private assertHeld(run: Run, workerId: string, operation: string): void {
+		if (run.status !== "running" || run.claimedBy !== workerId) {
+			throw new Error(`Recovery run ${run.id} ${operation} was not accepted`);
+		}
 	}
 }
 
@@ -295,6 +319,105 @@ test("recovery orchestrator blocks overlapping active runs", async () => {
 	if (!second.started) {
 		assert.equal(second.conflict.id, first.run.id);
 	}
+});
+
+test("legacy recovery store rejects duplicate active claims and stale finalizers", async () => {
+	const store = new MemoryRecoveryStore();
+	const created = await store.createOrGetRun({
+		jobType: "demo",
+		mode: "manual",
+		initiatedBy: "operator",
+		dryRun: false,
+		timeRangeStart: "2026-05-01T00:00:00.000Z",
+		timeRangeEnd: "2026-05-10T00:00:00.000Z",
+		idempotencyKey: "duplicate-claim",
+		concurrencyKey: "range:duplicate-claim",
+		scopeKey: "global",
+		resumeFromRunId: null,
+		rerunOfRunId: null,
+		inputParameters: {},
+		checkpoint: {},
+		now: new Date("2026-05-01T00:00:00.000Z"),
+	});
+
+	const run = await store.claimRun(
+		created.run.id,
+		"worker-active",
+		new Date("2026-05-01T00:01:00.000Z"),
+	);
+
+	await assert.rejects(
+		store.claimRun(
+			run.id,
+			"worker-duplicate",
+			new Date("2026-05-01T00:02:00.000Z"),
+		),
+		/not claimable/,
+	);
+	await assert.rejects(
+		store.finalizeRun(
+			run.id,
+			"worker-duplicate",
+			"succeeded",
+			null,
+			new Date("2026-05-01T00:03:00.000Z"),
+		),
+		/completion was not accepted/,
+	);
+
+	assert.equal(store.runs.get(run.id)?.claimedBy, "worker-active");
+	assert.equal(store.runs.get(run.id)?.status, "running");
+});
+
+test("legacy recovery store allows explicit stale claim recovery", async () => {
+	const store = new MemoryRecoveryStore();
+	const created = await store.createOrGetRun({
+		jobType: "demo",
+		mode: "manual",
+		initiatedBy: "operator",
+		dryRun: false,
+		timeRangeStart: "2026-05-01T00:00:00.000Z",
+		timeRangeEnd: "2026-05-10T00:00:00.000Z",
+		idempotencyKey: "stale-claim",
+		concurrencyKey: "range:stale-claim",
+		scopeKey: "global",
+		resumeFromRunId: null,
+		rerunOfRunId: null,
+		inputParameters: {},
+		checkpoint: {},
+		now: new Date("2026-05-01T00:00:00.000Z"),
+	});
+
+	const firstClaim = await store.claimRun(
+		created.run.id,
+		"worker-stale",
+		new Date("2026-05-01T00:01:00.000Z"),
+	);
+	const recovered = await store.claimRun(
+		firstClaim.id,
+		"worker-recovery",
+		new Date("2026-05-01T00:07:00.001Z"),
+	);
+	await assert.rejects(
+		store.finalizeRun(
+			firstClaim.id,
+			"worker-stale",
+			"succeeded",
+			null,
+			new Date("2026-05-01T00:08:00.000Z"),
+		),
+		/completion was not accepted/,
+	);
+	const finalized = await store.finalizeRun(
+		recovered.id,
+		"worker-recovery",
+		"succeeded",
+		null,
+		new Date("2026-05-01T00:09:00.000Z"),
+	);
+
+	assert.equal(recovered.claimedBy, "worker-recovery");
+	assert.equal(finalized.status, "succeeded");
 });
 
 test("recovery orchestrator paginates, checkpoints, and suppresses side effects in dry run", async () => {

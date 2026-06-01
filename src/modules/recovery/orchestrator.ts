@@ -199,6 +199,7 @@ export type RecoveryJobStore = {
 	): Promise<void>;
 	updateCheckpoint(
 		runId: string,
+		workerId: string,
 		checkpointName: string,
 		checkpoint: RecoveryCheckpoint,
 		recordsProcessed: number,
@@ -206,11 +207,13 @@ export type RecoveryJobStore = {
 	): Promise<RecoveryRun>;
 	incrementRunCounters(
 		runId: string,
+		workerId: string,
 		counters: Partial<RecoveryRunCounters>,
 		now: Date,
 	): Promise<RecoveryRun>;
 	finalizeRun(
 		runId: string,
+		workerId: string,
 		status: Extract<RecoveryRunStatus, "succeeded" | "partial_failure" | "failed">,
 		error: NormalizedRecoveryError | null,
 		now: Date,
@@ -251,6 +254,11 @@ type RecoveryRunRow = {
 	last_heartbeat_at: Date | null;
 	error_code: string | null;
 	error_message: string | null;
+};
+
+type RecoveryRunClaimRow = RecoveryRunRow & {
+	lock_expires_at: Date | null;
+	heartbeat_timeout_seconds: number;
 };
 
 type RecoveryRecordRow = {
@@ -658,6 +666,35 @@ export class PostgresRecoveryJobStore implements RecoveryJobStore {
 
 	async claimRun(runId: string, workerId: string, now: Date): Promise<RecoveryRun> {
 		return withTransaction(async (client) => {
+			const currentResult = await client.query<RecoveryRunClaimRow>(
+				`
+					SELECT ${runColumns}, lock_expires_at, heartbeat_timeout_seconds
+					FROM recovery_job_runs
+					WHERE id = $1
+					FOR UPDATE
+					LIMIT 1
+				`,
+				[runId],
+			);
+			const current = currentResult.rows[0];
+			if (!current) {
+				throw new Error(`Recovery run ${runId} is not claimable`);
+			}
+
+			const heartbeatExpired = current.lock_expires_at
+				? current.lock_expires_at < now
+				: (current.last_heartbeat_at ?? current.started_at ?? current.queued_at).getTime() <=
+					now.getTime() - current.heartbeat_timeout_seconds * 1_000;
+			const canClaim =
+				current.status === "queued" ||
+				(current.status === "running" &&
+					(current.claimed_by === workerId ||
+						current.claimed_by === null ||
+						heartbeatExpired));
+			if (!canClaim) {
+				throw new Error(`Recovery run ${runId} is not claimable`);
+			}
+
 			const result = await client.query<RecoveryRunRow>(
 				`
 					UPDATE recovery_job_runs
@@ -667,11 +704,11 @@ export class PostgresRecoveryJobStore implements RecoveryJobStore {
 						completed_at = NULL,
 						claimed_by = $3,
 						last_heartbeat_at = $2,
+						lock_expires_at = $2 + (heartbeat_timeout_seconds || ' seconds')::interval,
 						error_code = NULL,
 						error_message = NULL,
 						updated_at = $2
 					WHERE id = $1
-						AND status IN ('queued', 'running')
 					RETURNING ${runColumns}
 				`,
 				[runId, now, workerId],
@@ -682,8 +719,8 @@ export class PostgresRecoveryJobStore implements RecoveryJobStore {
 				throw new Error(`Recovery run ${runId} is not claimable`);
 			}
 
-			if (row.status === "running") {
-				await this.insertStatusEvent(client, runId, "queued", "running", workerId, "claimed", {});
+			if (current.status !== "running" || current.claimed_by !== workerId) {
+				await this.insertStatusEvent(client, runId, current.status, "running", workerId, "claimed", {});
 			}
 
 			return mapRunRow(row);
@@ -879,6 +916,7 @@ export class PostgresRecoveryJobStore implements RecoveryJobStore {
 
 	async updateCheckpoint(
 		runId: string,
+		workerId: string,
 		checkpointName: string,
 		checkpoint: RecoveryCheckpoint,
 		recordsProcessed: number,
@@ -916,17 +954,23 @@ export class PostgresRecoveryJobStore implements RecoveryJobStore {
 						last_heartbeat_at = $4,
 						updated_at = $4
 					WHERE id = $1
+						AND status = 'running'
+						AND claimed_by = $5
 					RETURNING ${runColumns}
 				`,
-				[runId, JSON.stringify(checkpoint), recordsProcessed, now],
+				[runId, JSON.stringify(checkpoint), recordsProcessed, now, workerId],
 			);
 
+			if (!result.rows[0]) {
+				throw new Error(`Recovery run ${runId} checkpoint update was not accepted`);
+			}
 			return mapRunRow(result.rows[0]);
 		});
 	}
 
 	async incrementRunCounters(
 		runId: string,
+		workerId: string,
 		counters: Partial<RecoveryRunCounters>,
 		now: Date,
 	): Promise<RecoveryRun> {
@@ -944,8 +988,11 @@ export class PostgresRecoveryJobStore implements RecoveryJobStore {
 					side_effects_succeeded = side_effects_succeeded + $9,
 					side_effects_suppressed = side_effects_suppressed + $10,
 					last_heartbeat_at = $11,
+					lock_expires_at = $11 + (heartbeat_timeout_seconds || ' seconds')::interval,
 					updated_at = $11
 				WHERE id = $1
+					AND status = 'running'
+					AND claimed_by = $12
 				RETURNING ${runColumns}
 			`,
 			[
@@ -960,24 +1007,40 @@ export class PostgresRecoveryJobStore implements RecoveryJobStore {
 				counters.sideEffectsSucceeded ?? 0,
 				counters.sideEffectsSuppressed ?? 0,
 				now,
+				workerId,
 			],
 		);
 
+		if (!result.rows[0]) {
+			throw new Error(`Recovery run ${runId} counter update was not accepted`);
+		}
 		return mapRunRow(result.rows[0]);
 	}
 
 	async finalizeRun(
 		runId: string,
+		workerId: string,
 		status: Extract<RecoveryRunStatus, "succeeded" | "partial_failure" | "failed">,
 		error: NormalizedRecoveryError | null,
 		now: Date,
 	): Promise<RecoveryRun> {
 		return withTransaction(async (client) => {
 			const previous = await client.query<Pick<RecoveryRunRow, "status">>(
-				"SELECT status FROM recovery_job_runs WHERE id = $1 LIMIT 1",
-				[runId],
+				`
+					SELECT status
+					FROM recovery_job_runs
+					WHERE id = $1
+						AND status = 'running'
+						AND claimed_by = $2
+					FOR UPDATE
+					LIMIT 1
+				`,
+				[runId, workerId],
 			);
 			const previousStatus = previous.rows[0]?.status ?? null;
+			if (!previousStatus) {
+				throw new Error(`Recovery run ${runId} completion was not accepted`);
+			}
 			const result = await client.query<RecoveryRunRow>(
 				`
 					UPDATE recovery_job_runs
@@ -985,18 +1048,26 @@ export class PostgresRecoveryJobStore implements RecoveryJobStore {
 						status = $2,
 						completed_at = $3,
 						last_heartbeat_at = $3,
+						lock_expires_at = NULL,
 						error_code = $4,
 						error_message = $5,
 						updated_at = $3
 					WHERE id = $1
+						AND status = 'running'
+						AND claimed_by = $6
 					RETURNING ${runColumns}
 				`,
-				[runId, status, now, error?.code ?? null, error?.message ?? null],
+				[runId, status, now, error?.code ?? null, error?.message ?? null, workerId],
 			);
 
-			await this.insertStatusEvent(client, runId, previousStatus, status, "recovery-orchestrator", error?.message ?? "finalized", error?.details ?? {});
+			const row = result.rows[0];
+			if (!row) {
+				throw new Error(`Recovery run ${runId} completion was not accepted`);
+			}
 
-			return mapRunRow(result.rows[0]);
+			await this.insertStatusEvent(client, runId, previousStatus, status, workerId, error?.message ?? "finalized", error?.details ?? {});
+
+			return mapRunRow(row);
 		});
 	}
 
@@ -1182,6 +1253,7 @@ export class RecoveryJobOrchestrator<TRecord> {
 				if (page.records.length > 0) {
 					run = await this.store.incrementRunCounters(
 						run.id,
+						workerId,
 						{
 							recordsDiscovered: page.records.length,
 							recordsClaimed: page.records.length,
@@ -1200,6 +1272,7 @@ export class RecoveryJobOrchestrator<TRecord> {
 				pagesProcessed += 1;
 				run = await this.store.updateCheckpoint(
 					run.id,
+					workerId,
 					"default",
 					page.checkpoint,
 					page.records.length,
@@ -1258,7 +1331,7 @@ export class RecoveryJobOrchestrator<TRecord> {
 					recordsProcessed,
 				};
 			}
-			const finalized = await this.store.finalizeRun(run.id, terminalStatus, null, now);
+			const finalized = await this.store.finalizeRun(run.id, workerId, terminalStatus, null, now);
 
 			emitRecoveryRunLifecycleLog({
 				stage: "completed",
@@ -1278,6 +1351,7 @@ export class RecoveryJobOrchestrator<TRecord> {
 			const failedRun = managesCompletion
 				? await this.store.finalizeRun(
 						run.id,
+						workerId,
 						"failed",
 						normalizedError,
 						new Date(),
@@ -1380,6 +1454,7 @@ export class RecoveryJobOrchestrator<TRecord> {
 			);
 			await this.store.incrementRunCounters(
 				context.run.id,
+				context.workerId,
 				{
 					recordsSkipped: 1,
 					sideEffectsSuppressed: 1,
@@ -1405,6 +1480,7 @@ export class RecoveryJobOrchestrator<TRecord> {
 					);
 					await this.store.incrementRunCounters(
 						context.run.id,
+						context.workerId,
 						{
 							recordsSkipped: 1,
 						},
@@ -1420,6 +1496,7 @@ export class RecoveryJobOrchestrator<TRecord> {
 					);
 					await this.store.incrementRunCounters(
 						context.run.id,
+						context.workerId,
 						{
 							recordsSucceeded: 1,
 							sideEffectsAttempted: sideEffectAttempted ? 1 : 0,
@@ -1471,6 +1548,7 @@ export class RecoveryJobOrchestrator<TRecord> {
 					await this.store.markRecordFailed(storedRecord.id, normalizedError, now);
 					await this.store.incrementRunCounters(
 						context.run.id,
+						context.workerId,
 						{
 							recordsFailed: 1,
 						},
@@ -1492,6 +1570,7 @@ export class RecoveryJobOrchestrator<TRecord> {
 				);
 				await this.store.incrementRunCounters(
 					context.run.id,
+					context.workerId,
 					{
 						recordsRetried: 1,
 					},

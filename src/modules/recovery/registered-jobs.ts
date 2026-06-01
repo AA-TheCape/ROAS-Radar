@@ -239,13 +239,14 @@ async function executeSingleRecoveryRun(
 		if (result.recordsProcessed !== undefined || result.checkpoint !== undefined) {
 			run = await store.updateCheckpoint(
 				run.id,
+				input.workerId,
 				"default",
 				result.checkpoint ?? {},
 				result.recordsProcessed ?? 0,
 				new Date(),
 			);
 		}
-		run = await store.incrementRunCounters(run.id, result.counters, new Date());
+		run = await store.incrementRunCounters(run.id, input.workerId, result.counters, new Date());
 		if (!managesCompletion) {
 			return {
 				run: {
@@ -256,7 +257,7 @@ async function executeSingleRecoveryRun(
 				recordsProcessed: result.recordsProcessed ?? run.recordsProcessed,
 			};
 		}
-		run = await store.finalizeRun(run.id, result.status, null, new Date());
+		run = await store.finalizeRun(run.id, input.workerId, result.status, null, new Date());
 
 		return {
 			run,
@@ -269,6 +270,7 @@ async function executeSingleRecoveryRun(
 		}
 		const failed = await store.finalizeRun(
 			run.id,
+			input.workerId,
 			"failed",
 			normalizeError(error, `${run.jobType}_failed`),
 			new Date(),
