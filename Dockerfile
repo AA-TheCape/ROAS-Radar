@@ -2,6 +2,8 @@ FROM node:22-bookworm-slim AS deps
 WORKDIR /app
 
 COPY package.json package-lock.json ./
+# The root postinstall installs dashboard dev dependencies, which are not needed
+# for the API image and are not present in this Docker build layer.
 RUN npm ci --ignore-scripts
 
 FROM deps AS build
