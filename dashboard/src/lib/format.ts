@@ -43,6 +43,19 @@ export function formatPercent(value: number | null | undefined): string {
 	return `${(value * 100).toFixed(value < 0.1 ? 2 : 1)}%`;
 }
 
+export function formatConfidenceScore(
+	value: number | null | undefined,
+): string {
+	if (value == null || !Number.isFinite(value)) {
+		return "N/A";
+	}
+
+	return new Intl.NumberFormat("en-US", {
+		minimumFractionDigits: 2,
+		maximumFractionDigits: 2,
+	}).format(value);
+}
+
 const DEFAULT_REPORTING_TIMEZONE = "America/Los_Angeles";
 
 export function formatDateLabel(

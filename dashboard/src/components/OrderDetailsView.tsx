@@ -6,7 +6,12 @@ import {
   formatAttributionTierLabel,
   getAttributionTierDescription
 } from '../lib/attributionTier';
-import { formatCurrency, formatDateTimeLabel, formatNumber } from '../lib/format';
+import {
+	formatConfidenceScore,
+	formatCurrency,
+	formatDateTimeLabel,
+	formatNumber,
+} from '../lib/format';
 import { AttributionTierBadge } from './AttributionTierBadge';
 import {
 	type SortState,
@@ -362,12 +367,20 @@ export default function OrderDetailsView({
                   <dd>{formatOptionalValue(order?.attributionSource)}</dd>
                 </div>
                 <div>
+                  <dt>Matching method</dt>
+                  <dd>{formatContractValue(order?.matchingMethod)}</dd>
+                </div>
+                <div>
                   <dt>Matched at</dt>
                   <dd>{formatOptionalDateTime(order?.attributionMatchedAt, reportingTimezone)}</dd>
                 </div>
                 <div>
                   <dt>Confidence score</dt>
-                  <dd>{formatOptionalValue(order?.confidenceScore)}</dd>
+                  <dd>{order ? formatConfidenceScore(order.confidenceScore) : 'Not available'}</dd>
+                </div>
+                <div>
+                  <dt>Last attribution run</dt>
+                  <dd>{formatOptionalDateTime(order?.lastAttributionRunAt, reportingTimezone)}</dd>
                 </div>
                 <div>
                   <dt>Resolved session ID</dt>
