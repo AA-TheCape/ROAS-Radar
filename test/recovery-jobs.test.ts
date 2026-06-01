@@ -578,6 +578,67 @@ test("registered recovery worker queue polls, claims, and completes queued work"
 	assert.equal(store.runs.get(enqueued.run.id)?.claimedBy, "worker-1");
 });
 
+test("registered recovery worker routes adapter failures through shared retry and dead-letter lifecycle", async () => {
+	const { createRecoveryJobExecutor } = await getRecoveryJobsModule();
+	const { createRegisteredRecoveryJobDefinitions, processRegisteredRecoveryJobs } =
+		await import("../src/modules/recovery-jobs/registered.js");
+	const store = new MemoryRecoveryJobStore();
+	const observedManagesCompletion: Array<boolean | undefined> = [];
+	const executor = createRecoveryJobExecutor(
+		createRegisteredRecoveryJobDefinitions({
+			executeRegisteredRun: async (_run, _workerId, _now, options) => {
+				observedManagesCompletion.push(options?.managesCompletion);
+				throw {
+					code: "registered_upstream_timeout",
+					message: "Registered dependency timed out",
+					details: { dependency: "shopify" },
+					retryable: true,
+				};
+			},
+		}),
+		store,
+	);
+
+	const enqueued = await executor.enqueue({
+		jobType: "shopify_attribution_hint_recovery",
+		mode: "automatic",
+		initiatedBy: "scheduler",
+		dryRun: false,
+		timeRangeStart: "2026-05-01T00:00:00.000Z",
+		timeRangeEnd: "2026-05-01T23:59:59.999Z",
+		maxAttempts: 2,
+	});
+
+	const retry = await processRegisteredRecoveryJobs({
+		workerId: "registered-worker-1",
+		limit: 1,
+		executor,
+	});
+	const retryRun = store.runs.get(enqueued.run.id);
+	assert.equal(retry.claimed, 1);
+	assert.equal(retry.completed, 0);
+	assert.equal(retry.deadLettered, 0);
+	assert.equal(retryRun?.status, "queued");
+	assert.equal(retryRun?.attemptCount, 1);
+	assert.equal(retryRun?.errorCode, "registered_upstream_timeout");
+	assert.deepEqual(retryRun?.lastErrorDetails, { dependency: "shopify" });
+
+	const deadLetter = await processRegisteredRecoveryJobs({
+		workerId: "registered-worker-2",
+		limit: 1,
+		executor,
+	});
+	const deadLetterRun = store.runs.get(enqueued.run.id);
+	assert.equal(deadLetter.claimed, 1);
+	assert.equal(deadLetter.completed, 0);
+	assert.equal(deadLetter.deadLettered, 1);
+	assert.equal(deadLetterRun?.status, "dead_lettered");
+	assert.equal(deadLetterRun?.attemptCount, 2);
+	assert.equal(deadLetterRun?.errorCode, "registered_upstream_timeout");
+	assert.ok(deadLetterRun?.deadLetteredAt);
+	assert.deepEqual(observedManagesCompletion, [false, false]);
+});
+
 test("registered recovery worker recovers expired heartbeats before claiming work", async () => {
 	const { createRecoveryJobExecutor } = await getRecoveryJobsModule();
 	const { processRegisteredRecoveryJobs } = await import(

@@ -836,6 +836,7 @@ export async function executeGa4FallbackRecoveryRun(
 	runId: string,
 	workerId = "ga4-fallback-recovery",
 	now = new Date(),
+	options: { managesCompletion?: boolean } = {},
 ): Promise<RecoveryExecutionResult> {
 	const store = new PostgresRecoveryJobStore();
 	const run = await store.getRun(runId);
@@ -848,7 +849,7 @@ export async function executeGa4FallbackRecoveryRun(
 		store,
 	);
 
-	return orchestrator.execute(runId, workerId, now);
+	return orchestrator.execute(runId, workerId, now, options);
 }
 
 export const __ga4FallbackRecoveryTestUtils = {

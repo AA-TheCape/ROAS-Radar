@@ -739,6 +739,7 @@ export async function executeShopifyAttributionRecoveryRun(
 	runId: string,
 	workerId = "shopify-attribution-recovery",
 	now = new Date(),
+	options: { managesCompletion?: boolean } = {},
 ): Promise<RecoveryExecutionResult> {
 	const store = new PostgresRecoveryJobStore();
 	const run = await store.getRun(runId);
@@ -748,5 +749,5 @@ export async function executeShopifyAttributionRecoveryRun(
 		store,
 	);
 
-	return orchestrator.execute(runId, workerId, now);
+	return orchestrator.execute(runId, workerId, now, options);
 }

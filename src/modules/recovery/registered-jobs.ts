@@ -61,6 +61,7 @@ type ExecuteSingleRunInput = {
 	workerId: string;
 	now: Date;
 	store?: PostgresRecoveryJobStore;
+	managesCompletion?: boolean;
 	execute: (run: RecoveryRun) => Promise<{
 		status: "succeeded" | "partial_failure";
 		report: RecoveryCheckpoint;
@@ -68,6 +69,10 @@ type ExecuteSingleRunInput = {
 		recordsProcessed?: number;
 		checkpoint?: RecoveryCheckpoint;
 	}>;
+};
+
+export type ExecuteRegisteredRecoveryRunOptions = {
+	managesCompletion?: boolean;
 };
 
 const registeredJobMetadata: RegisteredRecoveryJobMetadata[] = [
@@ -226,6 +231,7 @@ async function executeSingleRecoveryRun(
 	input: ExecuteSingleRunInput,
 ): Promise<RecoveryExecutionResult> {
 	const store = input.store ?? new PostgresRecoveryJobStore();
+	const managesCompletion = input.managesCompletion ?? true;
 	let run = await store.claimRun(input.runId, input.workerId, input.now);
 
 	try {
@@ -240,6 +246,16 @@ async function executeSingleRecoveryRun(
 			);
 		}
 		run = await store.incrementRunCounters(run.id, result.counters, new Date());
+		if (!managesCompletion) {
+			return {
+				run: {
+					...run,
+					status: result.status,
+				},
+				pagesProcessed: 1,
+				recordsProcessed: result.recordsProcessed ?? run.recordsProcessed,
+			};
+		}
 		run = await store.finalizeRun(run.id, result.status, null, new Date());
 
 		return {
@@ -248,6 +264,9 @@ async function executeSingleRecoveryRun(
 			recordsProcessed: result.recordsProcessed ?? run.recordsProcessed,
 		};
 	} catch (error) {
+		if (!managesCompletion) {
+			throw error;
+		}
 		const failed = await store.finalizeRun(
 			run.id,
 			"failed",
@@ -267,11 +286,13 @@ async function executeCampaignMetadataHistoryBackfill(
 	runId: string,
 	workerId: string,
 	now: Date,
+	options: ExecuteRegisteredRecoveryRunOptions = {},
 ): Promise<RecoveryExecutionResult> {
 	return executeSingleRecoveryRun({
 		runId,
 		workerId,
 		now,
+		managesCompletion: options.managesCompletion,
 		execute: async (run) => {
 			const { startDate, endDate } = getCampaignDateRange(run);
 			const report = await backfillCampaignMetadataHistory({
@@ -315,11 +336,13 @@ async function executeShopifyOrderReimport(
 	runId: string,
 	workerId: string,
 	now: Date,
+	options: ExecuteRegisteredRecoveryRunOptions = {},
 ): Promise<RecoveryExecutionResult> {
 	return executeSingleRecoveryRun({
 		runId,
 		workerId,
 		now,
+		managesCompletion: options.managesCompletion,
 		execute: async (run) => {
 			const startDate =
 				getString(run.inputParameters, "startDate") ?? dateOnly(run.timeRangeStart);
@@ -383,11 +406,13 @@ async function executeCampaignMetadataApiRefresh(
 	runId: string,
 	workerId: string,
 	now: Date,
+	options: ExecuteRegisteredRecoveryRunOptions = {},
 ): Promise<RecoveryExecutionResult> {
 	return executeSingleRecoveryRun({
 		runId,
 		workerId,
 		now,
+		managesCompletion: options.managesCompletion,
 		execute: async (run) => {
 			const { startDate, endDate } = getCampaignDateRange(run);
 			const report = await refreshCampaignMetadataFromApis({
@@ -452,11 +477,13 @@ async function executeGa4SessionEnrichmentBackfill(
 	workerId: string,
 	now: Date,
 	config?: Ga4BigQueryIngestionConfig,
+	options: ExecuteRegisteredRecoveryRunOptions = {},
 ): Promise<RecoveryExecutionResult> {
 	return executeSingleRecoveryRun({
 		runId,
 		workerId,
 		now,
+		managesCompletion: options.managesCompletion,
 		execute: async (run) => {
 			const effectiveConfig = config ?? assertGa4BigQueryIngestionConfig();
 			if (!effectiveConfig.enabled) {
@@ -539,11 +566,13 @@ async function executeOrderAttributionBackfill(
 	runId: string,
 	workerId: string,
 	now: Date,
+	options: ExecuteRegisteredRecoveryRunOptions = {},
 ): Promise<RecoveryExecutionResult> {
 	return executeSingleRecoveryRun({
 		runId,
 		workerId,
 		now,
+		managesCompletion: options.managesCompletion,
 		execute: async (run) => {
 			const report = await backfillRecentOrdersWithRecoveredAttribution({
 				requestedBy: run.initiatedBy,
@@ -615,22 +644,29 @@ export async function executeRegisteredRecoveryRun(
 	run: Pick<RecoveryRun, "id" | "jobType">,
 	workerId: string,
 	now = new Date(),
+	options: ExecuteRegisteredRecoveryRunOptions = {},
 ): Promise<RecoveryExecutionResult> {
 	switch (run.jobType) {
 		case SHOPIFY_ORDER_REIMPORT_JOB_TYPE:
-			return executeShopifyOrderReimport(run.id, workerId, now);
+			return executeShopifyOrderReimport(run.id, workerId, now, options);
 		case SHOPIFY_ATTRIBUTION_RECOVERY_JOB_TYPE:
-			return executeShopifyAttributionRecoveryRun(run.id, workerId, now);
+			return executeShopifyAttributionRecoveryRun(run.id, workerId, now, options);
 		case GA4_FALLBACK_RECOVERY_JOB_TYPE:
-			return executeGa4FallbackRecoveryRun(run.id, workerId, now);
+			return executeGa4FallbackRecoveryRun(run.id, workerId, now, options);
 		case CAMPAIGN_METADATA_API_REFRESH_JOB_TYPE:
-			return executeCampaignMetadataApiRefresh(run.id, workerId, now);
+			return executeCampaignMetadataApiRefresh(run.id, workerId, now, options);
 		case CAMPAIGN_METADATA_HISTORY_BACKFILL_JOB_TYPE:
-			return executeCampaignMetadataHistoryBackfill(run.id, workerId, now);
+			return executeCampaignMetadataHistoryBackfill(run.id, workerId, now, options);
 		case GA4_SESSION_ENRICHMENT_BACKFILL_JOB_TYPE:
-			return executeGa4SessionEnrichmentBackfill(run.id, workerId, now);
+			return executeGa4SessionEnrichmentBackfill(
+				run.id,
+				workerId,
+				now,
+				undefined,
+				options,
+			);
 		case ORDER_ATTRIBUTION_BACKFILL_JOB_TYPE:
-			return executeOrderAttributionBackfill(run.id, workerId, now);
+			return executeOrderAttributionBackfill(run.id, workerId, now, options);
 		default:
 			throw new Error(`Unsupported recovery job type: ${run.jobType}`);
 	}

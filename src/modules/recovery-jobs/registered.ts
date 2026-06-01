@@ -2,6 +2,7 @@ import { logInfo } from "../../observability/index.js";
 import {
 	executeRegisteredRecoveryRun,
 	getRegisteredRecoveryJobTypes,
+	type ExecuteRegisteredRecoveryRunOptions,
 } from "../recovery/registered-jobs.js";
 import {
 	createRecoveryJobExecutor,
@@ -11,18 +12,30 @@ import {
 	type RecoveryJobStore,
 } from "./index.js";
 
-export function createRegisteredRecoveryJobDefinitions(): RecoveryJobDefinition[] {
+type RegisteredRecoveryRunExecutor = (
+	run: { id: string; jobType: string },
+	workerId: string,
+	now?: Date,
+	options?: ExecuteRegisteredRecoveryRunOptions,
+) => ReturnType<typeof executeRegisteredRecoveryRun>;
+
+export function createRegisteredRecoveryJobDefinitions(input: {
+	executeRegisteredRun?: RegisteredRecoveryRunExecutor;
+} = {}): RecoveryJobDefinition[] {
+	const executeRegisteredRun =
+		input.executeRegisteredRun ?? executeRegisteredRecoveryRun;
 	return getRegisteredRecoveryJobTypes().map((metadata) => ({
 		jobType: metadata.jobType,
-		managesCompletion: true,
 		run: async (context) => {
 			await context.heartbeat();
-			const result = await executeRegisteredRecoveryRun(
+			const result = await executeRegisteredRun(
 				{
 					id: context.run.id,
 					jobType: context.run.jobType,
 				},
 				context.workerId,
+				new Date(),
+				{ managesCompletion: false },
 			);
 			await context.heartbeat().catch(() => undefined);
 			return {

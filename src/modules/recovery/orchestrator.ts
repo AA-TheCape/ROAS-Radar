@@ -1136,7 +1136,13 @@ export class RecoveryJobOrchestrator<TRecord> {
 		return { started: true, run, reusedExistingRun: !created };
 	}
 
-	async execute(runId: string, workerId: string, now = new Date()): Promise<RecoveryExecutionResult> {
+	async execute(
+		runId: string,
+		workerId: string,
+		now = new Date(),
+		options: { managesCompletion?: boolean } = {},
+	): Promise<RecoveryExecutionResult> {
+		const managesCompletion = options.managesCompletion ?? true;
 		let run = await this.store.claimRun(runId, workerId, now);
 		let pagesProcessed = 0;
 		let recordsProcessed = 0;
@@ -1233,6 +1239,25 @@ export class RecoveryJobOrchestrator<TRecord> {
 				run.recordsFailed > 0 || run.recordsRetried > 0
 					? "partial_failure"
 					: "succeeded";
+			if (!managesCompletion) {
+				const completedRun: RecoveryRun = {
+					...run,
+					status: terminalStatus,
+				};
+				emitRecoveryRunLifecycleLog({
+					stage: "completed",
+					run: completedRun,
+					workerId,
+					pagesProcessed,
+					durationMs: Number(process.hrtime.bigint() - runStartedAt) / 1_000_000,
+				});
+
+				return {
+					run: completedRun,
+					pagesProcessed,
+					recordsProcessed,
+				};
+			}
 			const finalized = await this.store.finalizeRun(run.id, terminalStatus, null, now);
 
 			emitRecoveryRunLifecycleLog({
@@ -1250,7 +1275,19 @@ export class RecoveryJobOrchestrator<TRecord> {
 			};
 		} catch (error) {
 			const normalizedError = normalizeRecoveryError(error);
-			const failedRun = await this.store.finalizeRun(run.id, "failed", normalizedError, new Date());
+			const failedRun = managesCompletion
+				? await this.store.finalizeRun(
+						run.id,
+						"failed",
+						normalizedError,
+						new Date(),
+					)
+				: {
+						...run,
+						status: "failed" as const,
+						errorCode: normalizedError.code,
+						errorMessage: normalizedError.message,
+					};
 			emitRecoveryRunLifecycleLog({
 				stage: "failed",
 				run: failedRun,
