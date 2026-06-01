@@ -641,7 +641,10 @@ async function persistAttribution(
         reprocess_version,
         model_version,
         match_source,
-        confidence_label
+        confidence_label,
+        attribution_source_id,
+        matching_method_id,
+        last_attribution_run_at
       )
       VALUES (
         $1,
@@ -660,7 +663,10 @@ async function persistAttribution(
         1,
         $13,
         $14,
-        $15
+        $15,
+        COALESCE((SELECT id FROM attribution_sources WHERE code = $16), 9),
+        COALESCE((SELECT id FROM matching_methods WHERE code = $11), 11),
+        $12
       )
       ON CONFLICT (shopify_order_id)
       DO UPDATE SET
@@ -678,7 +684,10 @@ async function persistAttribution(
         attributed_at = EXCLUDED.attributed_at,
         model_version = EXCLUDED.model_version,
         match_source = EXCLUDED.match_source,
-        confidence_label = EXCLUDED.confidence_label
+        confidence_label = EXCLUDED.confidence_label,
+        attribution_source_id = EXCLUDED.attribution_source_id,
+        matching_method_id = EXCLUDED.matching_method_id,
+        last_attribution_run_at = EXCLUDED.last_attribution_run_at
     `,
     [
       order.shopify_order_id,
@@ -695,7 +704,8 @@ async function persistAttribution(
       matchedAt,
       ATTRIBUTION_MODEL_VERSION,
       matchSource,
-      confidenceLabel
+      confidenceLabel,
+      orderAttributionAudit.source
     ]
   );
 
@@ -708,7 +718,11 @@ async function persistAttribution(
           attribution_source = $3,
           attribution_matched_at = $4,
           attribution_reason = $5,
-          attribution_snapshot = $6::jsonb,
+          attribution_source_id = COALESCE((SELECT id FROM attribution_sources WHERE code = $3), 9),
+          matching_method_id = COALESCE((SELECT id FROM matching_methods WHERE code = $5), 11),
+          attribution_confidence_score = $6,
+          last_attribution_run_at = $4,
+          attribution_snapshot = $7::jsonb,
           attribution_snapshot_updated_at = $4
         WHERE shopify_order_id = $1
       `,
@@ -718,6 +732,7 @@ async function persistAttribution(
         orderAttributionAudit.source,
         orderAttributionAudit.matchedAt,
         orderAttributionAudit.reason,
+        journey.confidenceScore,
         JSON.stringify(attributionSnapshot)
       ]
     );
