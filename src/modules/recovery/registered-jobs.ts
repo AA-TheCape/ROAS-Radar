@@ -2,32 +2,7 @@ import {
 	RECOVERY_SOURCE_PRECEDENCE,
 	type RecoveryJobType as ContractRecoveryJobType,
 } from "../../../packages/attribution-schema/index.js";
-import {
-	backfillCampaignMetadataHistory,
-	refreshCampaignMetadataFromApis,
-} from "../ad-platform-metadata-refresh/index.js";
-import { backfillRecentOrdersWithRecoveredAttribution } from "../attribution/backfill.js";
-import {
-	GA4_SESSION_ATTRIBUTION_PIPELINE,
-} from "../attribution/ga4-session-attribution.js";
-import {
-	assertGa4BigQueryIngestionConfig,
-	type Ga4BigQueryIngestionConfig,
-} from "../attribution/ga4-bigquery-config.js";
-import { createGa4BigQueryExecutor } from "../attribution/ga4-bigquery-executor.js";
-import {
-	listHourlyRange,
-	processGa4SessionAttributionHourlyJobs,
-} from "../attribution/ga4-ingestion-jobs.js";
-import {
-	GA4_FALLBACK_RECOVERY_JOB_TYPE,
-	executeGa4FallbackRecoveryRun,
-} from "../attribution/ga4-fallback-recovery.js";
-import {
-	SHOPIFY_ATTRIBUTION_RECOVERY_JOB_TYPE,
-	executeShopifyAttributionRecoveryRun,
-} from "../attribution/shopify-hint-recovery.js";
-import { reimportShopifyOrdersForDateRange } from "../shopify/index.js";
+import type { Ga4BigQueryIngestionConfig } from "../attribution/ga4-bigquery-config.js";
 import {
 	PostgresRecoveryJobStore,
 	type NormalizedRecoveryError,
@@ -45,6 +20,9 @@ export const GA4_SESSION_ENRICHMENT_BACKFILL_JOB_TYPE =
 	"ga4_session_enrichment_backfill";
 export const ORDER_ATTRIBUTION_BACKFILL_JOB_TYPE = "order_attribution_backfill";
 export const SHOPIFY_ORDER_REIMPORT_JOB_TYPE = "shopify_order_reimport";
+export const GA4_FALLBACK_RECOVERY_JOB_TYPE = "ga4_fallback_unattributed_recovery";
+export const SHOPIFY_ATTRIBUTION_RECOVERY_JOB_TYPE =
+	"shopify_attribution_hint_recovery";
 
 export type RegisteredRecoveryJobType =
 	| ContractRecoveryJobType
@@ -296,6 +274,9 @@ async function executeCampaignMetadataHistoryBackfill(
 		now,
 		managesCompletion: options.managesCompletion,
 		execute: async (run) => {
+			const { backfillCampaignMetadataHistory } = await import(
+				"../ad-platform-metadata-refresh/index.js"
+			);
 			const { startDate, endDate } = getCampaignDateRange(run);
 			const report = await backfillCampaignMetadataHistory({
 				requestedBy: run.initiatedBy,
@@ -346,6 +327,9 @@ async function executeShopifyOrderReimport(
 		now,
 		managesCompletion: options.managesCompletion,
 		execute: async (run) => {
+			const { reimportShopifyOrdersForDateRange } = await import(
+				"../shopify/index.js"
+			);
 			const startDate =
 				getString(run.inputParameters, "startDate") ?? dateOnly(run.timeRangeStart);
 			const endDate =
@@ -416,6 +400,9 @@ async function executeCampaignMetadataApiRefresh(
 		now,
 		managesCompletion: options.managesCompletion,
 		execute: async (run) => {
+			const { refreshCampaignMetadataFromApis } = await import(
+				"../ad-platform-metadata-refresh/index.js"
+			);
 			const { startDate, endDate } = getCampaignDateRange(run);
 			const report = await refreshCampaignMetadataFromApis({
 				requestedBy: run.initiatedBy,
@@ -487,6 +474,17 @@ async function executeGa4SessionEnrichmentBackfill(
 		now,
 		managesCompletion: options.managesCompletion,
 		execute: async (run) => {
+			const { assertGa4BigQueryIngestionConfig } = await import(
+				"../attribution/ga4-bigquery-config.js"
+			);
+			const { createGa4BigQueryExecutor } = await import(
+				"../attribution/ga4-bigquery-executor.js"
+			);
+			const { GA4_SESSION_ATTRIBUTION_PIPELINE } = await import(
+				"../attribution/ga4-session-attribution.js"
+			);
+			const { listHourlyRange, processGa4SessionAttributionHourlyJobs } =
+				await import("../attribution/ga4-ingestion-jobs.js");
 			const effectiveConfig = config ?? assertGa4BigQueryIngestionConfig();
 			if (!effectiveConfig.enabled) {
 				throw new Error("GA4 BigQuery ingestion is disabled");
@@ -576,6 +574,9 @@ async function executeOrderAttributionBackfill(
 		now,
 		managesCompletion: options.managesCompletion,
 		execute: async (run) => {
+			const { backfillRecentOrdersWithRecoveredAttribution } = await import(
+				"../attribution/backfill.js"
+			);
 			const report = await backfillRecentOrdersWithRecoveredAttribution({
 				requestedBy: run.initiatedBy,
 				workerId,
@@ -651,10 +652,18 @@ export async function executeRegisteredRecoveryRun(
 	switch (run.jobType) {
 		case SHOPIFY_ORDER_REIMPORT_JOB_TYPE:
 			return executeShopifyOrderReimport(run.id, workerId, now, options);
-		case SHOPIFY_ATTRIBUTION_RECOVERY_JOB_TYPE:
+		case SHOPIFY_ATTRIBUTION_RECOVERY_JOB_TYPE: {
+			const { executeShopifyAttributionRecoveryRun } = await import(
+				"../attribution/shopify-hint-recovery.js"
+			);
 			return executeShopifyAttributionRecoveryRun(run.id, workerId, now, options);
-		case GA4_FALLBACK_RECOVERY_JOB_TYPE:
+		}
+		case GA4_FALLBACK_RECOVERY_JOB_TYPE: {
+			const { executeGa4FallbackRecoveryRun } = await import(
+				"../attribution/ga4-fallback-recovery.js"
+			);
 			return executeGa4FallbackRecoveryRun(run.id, workerId, now, options);
+		}
 		case CAMPAIGN_METADATA_API_REFRESH_JOB_TYPE:
 			return executeCampaignMetadataApiRefresh(run.id, workerId, now, options);
 		case CAMPAIGN_METADATA_HISTORY_BACKFILL_JOB_TYPE:

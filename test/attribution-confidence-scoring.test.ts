@@ -64,6 +64,20 @@ test('buildAttributionConfidenceMetadata returns persistable confidence metadata
   });
 });
 
+test('buildAttributionConfidenceMetadata normalizes identity journey matching method', () => {
+  const lastAttributionRunAt = new Date('2026-01-02T03:04:05.000Z');
+  const metadata = buildAttributionConfidenceMetadata({
+    journey: {
+      confidenceScore: 0.6,
+      attributionReason: 'matched_by_identity_journey'
+    },
+    attributionSourceCode: 'customer_identity',
+    lastAttributionRunAt
+  });
+
+  assert.equal(metadata.matchingMethodCode, 'matched_by_customer_identity');
+});
+
 const attributionFingerprint = {
   sessionId: '11111111-1111-4111-8111-111111111111',
   attributedSource: 'google',

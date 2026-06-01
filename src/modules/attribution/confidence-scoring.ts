@@ -70,10 +70,16 @@ export function buildAttributionConfidenceMetadata(input: {
   attributionSourceCode: string;
   lastAttributionRunAt: Date;
 }): AttributionConfidenceMetadata {
+  const matchingMethodCode =
+    input.attributionSourceCode === 'customer_identity' &&
+    input.journey.attributionReason === 'matched_by_identity_journey'
+      ? 'matched_by_customer_identity'
+      : input.journey.attributionReason || 'unknown';
+
   return {
     confidenceScore: boundConfidenceScore(input.journey.confidenceScore),
     attributionSourceCode: input.attributionSourceCode,
-    matchingMethodCode: input.journey.attributionReason || 'unknown',
+    matchingMethodCode,
     confidenceContractVersion: ATTRIBUTION_CONFIDENCE_CONTRACT_VERSION,
     lastAttributionRunAt: input.lastAttributionRunAt
   };

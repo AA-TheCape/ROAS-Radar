@@ -182,6 +182,7 @@ async function insertProtectedOrderLink(sessionId: string, shopifyOrderId: strin
         attribution_model,
         link_type,
         attribution_reason,
+        created_at,
         retained_until,
         is_primary
       )
@@ -191,6 +192,7 @@ async function insertProtectedOrderLink(sessionId: string, shopifyOrderId: strin
         'last_touch',
         'deterministic',
         'matched_by_landing_session',
+        '2026-03-02T12:00:00.000Z',
         '2026-06-10T00:00:00.000Z',
         true
       )

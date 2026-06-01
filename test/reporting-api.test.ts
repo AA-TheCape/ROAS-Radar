@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
-import test from 'node:test';
+import test, { after } from 'node:test';
 
 process.env.DATABASE_URL ??= 'postgres://postgres:postgres@localhost:5432/roas_radar_test';
 process.env.REPORTING_API_TOKEN = 'test-reporting-token';
@@ -12,6 +12,11 @@ const { pool } = poolModule;
 const { closeServer, createServer } = serverModule;
 const originalPoolQuery = pool.query.bind(pool);
 const REPORTING_SCHEMA_VERSION = '2026-05-27';
+
+after(async () => {
+  pool.query = originalPoolQuery as typeof pool.query;
+  await pool.end();
+});
 
 function buildHeaders(): Record<string, string> {
   return {

@@ -37,13 +37,15 @@ ALTER TABLE shopify_orders
   VALIDATE CONSTRAINT shopify_orders_attribution_confidence_score_chk,
   VALIDATE CONSTRAINT shopify_orders_attribution_confidence_contract_version_chk,
   VALIDATE CONSTRAINT shopify_orders_attribution_source_id_fkey,
-  VALIDATE CONSTRAINT shopify_orders_matching_method_id_fkey;
+  VALIDATE CONSTRAINT shopify_orders_matching_method_id_fkey,
+  VALIDATE CONSTRAINT shopify_orders_attribution_source_method_pair_fkey;
 
 ALTER TABLE attribution_results
   VALIDATE CONSTRAINT attribution_results_confidence_score_chk,
   VALIDATE CONSTRAINT attribution_results_confidence_contract_version_chk,
   VALIDATE CONSTRAINT attribution_results_attribution_source_id_fkey,
-  VALIDATE CONSTRAINT attribution_results_matching_method_id_fkey;
+  VALIDATE CONSTRAINT attribution_results_matching_method_id_fkey,
+  VALIDATE CONSTRAINT attribution_results_attribution_source_method_pair_fkey;
 
 ALTER TABLE attribution_order_credits
   VALIDATE CONSTRAINT attribution_order_credits_confidence_contract_version_chk;

@@ -8,6 +8,7 @@ DROP INDEX IF EXISTS shopify_orders_matching_method_run_idx;
 DROP INDEX IF EXISTS shopify_orders_attribution_source_run_idx;
 
 ALTER TABLE attribution_results
+  DROP CONSTRAINT IF EXISTS attribution_results_attribution_source_method_pair_fkey,
   DROP CONSTRAINT IF EXISTS attribution_results_matching_method_id_fkey,
   DROP CONSTRAINT IF EXISTS attribution_results_attribution_source_id_fkey,
   DROP CONSTRAINT IF EXISTS attribution_results_confidence_score_chk,
@@ -22,6 +23,7 @@ ALTER TABLE attribution_order_credits
   DROP COLUMN IF EXISTS confidence_contract_version;
 
 ALTER TABLE shopify_orders
+  DROP CONSTRAINT IF EXISTS shopify_orders_attribution_source_method_pair_fkey,
   DROP CONSTRAINT IF EXISTS shopify_orders_matching_method_id_fkey,
   DROP CONSTRAINT IF EXISTS shopify_orders_attribution_source_id_fkey,
   DROP CONSTRAINT IF EXISTS shopify_orders_attribution_confidence_score_chk,

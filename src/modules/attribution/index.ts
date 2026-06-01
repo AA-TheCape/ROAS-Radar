@@ -18,6 +18,7 @@ import {
   executeAttributionModels,
   type AttributionCredit
 } from './engine.js';
+import { resolveActiveAttributionLookupPair } from './attribution-lookups.js';
 import {
   attributionConfidenceFingerprintChanged,
   boundConfidenceScore,
@@ -708,6 +709,10 @@ async function persistAttribution(
     timeline: journey.touchpoints.map(serializeResolvedTouchpoint),
     qaSnapshot
   };
+  const lookupPair = await resolveActiveAttributionLookupPair(client, {
+    attributionSourceCode: confidenceMetadata.attributionSourceCode,
+    matchingMethodCode: confidenceMetadata.matchingMethodCode
+  });
 
   await client.query('DELETE FROM attribution_order_credits WHERE shopify_order_id = $1', [order.shopify_order_id]);
 
@@ -831,9 +836,9 @@ async function persistAttribution(
         $13,
         $14,
         $15,
-        (SELECT id FROM attribution_sources WHERE code = $16 AND is_active = true),
-        (SELECT id FROM matching_methods WHERE code = $11 AND is_active = true),
+        $16,
         $17,
+        $18,
         $12
       )
       ON CONFLICT (shopify_order_id)
@@ -874,7 +879,8 @@ async function persistAttribution(
       ATTRIBUTION_MODEL_VERSION,
       matchSource,
       confidenceLabel,
-      confidenceMetadata.attributionSourceCode,
+      lookupPair.attributionSourceId,
+      lookupPair.matchingMethodId,
       confidenceMetadata.confidenceContractVersion
     ]
   );
@@ -888,8 +894,8 @@ async function persistAttribution(
           attribution_source = $3,
           attribution_matched_at = $4,
           attribution_reason = $5,
-          attribution_source_id = (SELECT id FROM attribution_sources WHERE code = $3 AND is_active = true),
-          matching_method_id = (SELECT id FROM matching_methods WHERE code = $5 AND is_active = true),
+          attribution_source_id = $9,
+          matching_method_id = $10,
           attribution_confidence_score = $6,
           attribution_confidence_contract_version = $8,
           last_attribution_run_at = $4,
@@ -905,7 +911,9 @@ async function persistAttribution(
         orderAttributionAudit.reason,
         confidenceMetadata.confidenceScore,
         JSON.stringify(attributionSnapshot),
-        confidenceMetadata.confidenceContractVersion
+        confidenceMetadata.confidenceContractVersion,
+        lookupPair.attributionSourceId,
+        lookupPair.matchingMethodId
       ]
     );
     emitAttributionQaSnapshotWriteLog({

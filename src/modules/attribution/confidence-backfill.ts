@@ -268,7 +268,8 @@ export async function executeOrderAttributionConfidenceBackfillBatch(
           ON sources.code = metadata.source_code
           AND sources.is_active = true
         JOIN matching_methods methods
-          ON methods.code = metadata.method_code
+          ON methods.attribution_source_id = sources.id
+          AND methods.code = metadata.method_code
           AND methods.is_active = true
       ),
       order_updates AS (

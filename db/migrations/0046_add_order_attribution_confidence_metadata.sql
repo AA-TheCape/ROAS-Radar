@@ -25,6 +25,7 @@ ALTER TABLE attribution_results
 ALTER TABLE shopify_orders
   ALTER COLUMN attribution_source_id SET DEFAULT 9,
   ALTER COLUMN matching_method_id SET DEFAULT 11,
+  ALTER COLUMN attribution_confidence_score SET DEFAULT 0,
   ALTER COLUMN attribution_confidence_contract_version SET DEFAULT 'v1';
 
 ALTER TABLE attribution_order_credits
@@ -33,17 +34,26 @@ ALTER TABLE attribution_order_credits
 ALTER TABLE shopify_orders
   DROP CONSTRAINT IF EXISTS shopify_orders_attribution_confidence_score_chk,
   DROP CONSTRAINT IF EXISTS shopify_orders_attribution_confidence_contract_version_chk,
+  DROP CONSTRAINT IF EXISTS shopify_orders_attribution_source_method_pair_fkey,
   DROP CONSTRAINT IF EXISTS shopify_orders_attribution_source_id_fkey,
   DROP CONSTRAINT IF EXISTS shopify_orders_matching_method_id_fkey;
 
 ALTER TABLE attribution_results
   DROP CONSTRAINT IF EXISTS attribution_results_confidence_score_chk,
   DROP CONSTRAINT IF EXISTS attribution_results_confidence_contract_version_chk,
+  DROP CONSTRAINT IF EXISTS attribution_results_attribution_source_method_pair_fkey,
   DROP CONSTRAINT IF EXISTS attribution_results_attribution_source_id_fkey,
   DROP CONSTRAINT IF EXISTS attribution_results_matching_method_id_fkey;
 
 ALTER TABLE attribution_order_credits
   DROP CONSTRAINT IF EXISTS attribution_order_credits_confidence_contract_version_chk;
+
+ALTER TABLE matching_methods
+  DROP CONSTRAINT IF EXISTS matching_methods_attribution_source_id_id_key;
+
+ALTER TABLE matching_methods
+  ADD CONSTRAINT matching_methods_attribution_source_id_id_key
+  UNIQUE (attribution_source_id, id);
 
 ALTER TABLE shopify_orders
   ADD CONSTRAINT shopify_orders_attribution_confidence_score_chk
@@ -59,7 +69,10 @@ ALTER TABLE shopify_orders
   ADD CONSTRAINT shopify_orders_attribution_source_id_fkey
   FOREIGN KEY (attribution_source_id) REFERENCES attribution_sources(id) ON DELETE RESTRICT NOT VALID,
   ADD CONSTRAINT shopify_orders_matching_method_id_fkey
-  FOREIGN KEY (matching_method_id) REFERENCES matching_methods(id) ON DELETE RESTRICT NOT VALID;
+  FOREIGN KEY (matching_method_id) REFERENCES matching_methods(id) ON DELETE RESTRICT NOT VALID,
+  ADD CONSTRAINT shopify_orders_attribution_source_method_pair_fkey
+  FOREIGN KEY (attribution_source_id, matching_method_id)
+  REFERENCES matching_methods(attribution_source_id, id) ON DELETE RESTRICT NOT VALID;
 
 ALTER TABLE attribution_results
   ADD CONSTRAINT attribution_results_confidence_score_chk
@@ -72,7 +85,10 @@ ALTER TABLE attribution_results
   ADD CONSTRAINT attribution_results_attribution_source_id_fkey
   FOREIGN KEY (attribution_source_id) REFERENCES attribution_sources(id) ON DELETE RESTRICT NOT VALID,
   ADD CONSTRAINT attribution_results_matching_method_id_fkey
-  FOREIGN KEY (matching_method_id) REFERENCES matching_methods(id) ON DELETE RESTRICT NOT VALID;
+  FOREIGN KEY (matching_method_id) REFERENCES matching_methods(id) ON DELETE RESTRICT NOT VALID,
+  ADD CONSTRAINT attribution_results_attribution_source_method_pair_fkey
+  FOREIGN KEY (attribution_source_id, matching_method_id)
+  REFERENCES matching_methods(attribution_source_id, id) ON DELETE RESTRICT NOT VALID;
 
 ALTER TABLE attribution_order_credits
   ADD CONSTRAINT attribution_order_credits_confidence_contract_version_chk

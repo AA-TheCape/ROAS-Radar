@@ -4,8 +4,10 @@ import test from 'node:test';
 import {
   backfillOrderAttributionConfidenceMetadata,
   buildEmptyOrderAttributionConfidenceBackfillProgress,
+  executeOrderAttributionConfidenceBackfillBatch,
   parseOrderAttributionConfidenceBackfillProgress
 } from '../src/modules/attribution/confidence-backfill.js';
+import type { PoolClient } from 'pg';
 
 test('parseOrderAttributionConfidenceBackfillProgress normalizes resumable progress', () => {
   assert.deepEqual(parseOrderAttributionConfidenceBackfillProgress({}), buildEmptyOrderAttributionConfidenceBackfillProgress());
@@ -146,4 +148,43 @@ test('backfillOrderAttributionConfidenceMetadata records exhausted retry failure
       }),
     /persistent database failure/
   );
+});
+
+test('executeOrderAttributionConfidenceBackfillBatch resolves methods through their attribution source', async () => {
+  const queries: Array<{ sql: string; params: unknown[] }> = [];
+  const client = {
+    query: async (sql: string, params: unknown[]) => {
+      queries.push({ sql, params });
+
+      return {
+        rows: [
+          {
+            scanned_orders: '2',
+            updated_orders: '1',
+            updated_results: '1',
+            fallback_rows: '1',
+            last_order_row_id: '42'
+          }
+        ]
+      };
+    }
+  } as unknown as PoolClient;
+
+  const result = await executeOrderAttributionConfidenceBackfillBatch(client, {
+    afterOrderRowId: '40',
+    batchSize: 2,
+    dryRun: false
+  });
+
+  assert.deepEqual(result, {
+    scannedOrders: 2,
+    updatedOrders: 1,
+    updatedResults: 1,
+    fallbackRows: 1,
+    lastOrderRowId: '42'
+  });
+  assert.deepEqual(queries[0].params, ['40', 2, false]);
+  assert.match(queries[0].sql, /JOIN matching_methods methods\s+ON methods\.attribution_source_id = sources\.id/);
+  assert.match(queries[0].sql, /WHEN raw_method_code = 'matched_by_identity_journey' THEN 'matched_by_customer_identity'/);
+  assert.match(queries[0].sql, /ELSE 'unknown'/);
 });

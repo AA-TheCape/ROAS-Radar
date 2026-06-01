@@ -243,10 +243,12 @@ test('migration 0046 expands confidence metadata without historical backfill, va
           'shopify_orders_attribution_confidence_contract_version_chk',
           'shopify_orders_attribution_source_id_fkey',
           'shopify_orders_matching_method_id_fkey',
+          'shopify_orders_attribution_source_method_pair_fkey',
           'attribution_results_confidence_score_chk',
           'attribution_results_confidence_contract_version_chk',
           'attribution_results_attribution_source_id_fkey',
-          'attribution_results_matching_method_id_fkey'
+          'attribution_results_matching_method_id_fkey',
+          'attribution_results_attribution_source_method_pair_fkey'
         )
           AND convalidated = true
       `
@@ -379,12 +381,12 @@ test('confidence metadata contract is applied only after resumable backfill comp
       [
         {
           shopifyOrderId: 'order-confidence-migration-fallback',
-          orderSource: 'unattributed',
-          orderMethod: 'unknown',
+          orderSource: 'checkout_token',
+          orderMethod: 'matched_by_checkout_token',
           orderConfidenceScore: '0.35',
           orderLastRun: '2026-04-12T10:07:30.000Z',
-          resultSource: 'unattributed',
-          resultMethod: 'unknown',
+          resultSource: 'checkout_token',
+          resultMethod: 'matched_by_checkout_token',
           resultLastRun: '2026-04-12T10:07:30.000Z'
         },
         {
@@ -435,6 +437,28 @@ test('confidence metadata contract is applied only after resumable backfill comp
         WHERE shopify_order_id = 'order-confidence-migration-known'
       `,
       /attribution_results_matching_method_id_fkey/
+    );
+    await assertRejectsConstraint(
+      pool,
+      `
+        UPDATE shopify_orders
+        SET
+          attribution_source_id = 2,
+          matching_method_id = 1
+        WHERE shopify_order_id = 'order-confidence-migration-known'
+      `,
+      /shopify_orders_attribution_source_method_pair_fkey/
+    );
+    await assertRejectsConstraint(
+      pool,
+      `
+        UPDATE attribution_results
+        SET
+          attribution_source_id = 2,
+          matching_method_id = 1
+        WHERE shopify_order_id = 'order-confidence-migration-known'
+      `,
+      /attribution_results_attribution_source_method_pair_fkey/
     );
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);
