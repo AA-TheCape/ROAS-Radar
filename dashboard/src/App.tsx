@@ -118,6 +118,7 @@ const MetaOrderValueView = lazy(() => import('./components/MetaOrderValueView'))
 const OrderDetailsView = lazy(() => import('./components/OrderDetailsView'));
 const SettingsAdminView = lazy(() => import('./components/SettingsAdminView'));
 const IdentityGraphHealthView = lazy(() => import('./components/IdentityGraphHealthView'));
+const RecoveryJobsView = lazy(() => import('./components/RecoveryJobsView'));
 
 type AsyncSection<T> = {
 	data: T | null;
@@ -188,7 +189,7 @@ type SettingsForm = {
 	reportingTimezone: string;
 };
 
-type AppPage = 'dashboard' | 'attribution' | 'meta-order-value' | 'identity-health' | 'settings' | 'order-details';
+type AppPage = 'dashboard' | 'attribution' | 'meta-order-value' | 'identity-health' | 'recovery' | 'settings' | 'order-details';
 
 const AUTHENTICATED_NAV_ITEMS: AppShellNavItem[] = [
   {
@@ -210,6 +211,11 @@ const AUTHENTICATED_NAV_ITEMS: AppShellNavItem[] = [
     key: 'identity-health',
     label: 'Identity health',
     description: 'Merge activity, conflict drill-down, unlinked session pressure, and identity graph backfill status.'
+  },
+  {
+    key: 'recovery',
+    label: 'Recovery',
+    description: 'Manual dry-run-first controls for recovery jobs, backfills, and run history.'
   },
   {
     key: 'settings',
@@ -1730,7 +1736,7 @@ function App() {
         context: 'shopify-backfill',
         loading: null,
         error: null,
-        message: `Backfilled ${response.importedOrders} Shopify orders for ${response.startDate} to ${response.endDate} (${response.processedOrders} imported, ${response.duplicatedOrders} already present).`
+        message: `Reimported ${response.importedOrders} Shopify orders for ${response.startDate} to ${response.endDate} (${response.ordersInserted} inserted, ${response.ordersUpdated} upserted, ${response.payloadsRefreshed} payloads refreshed, ${response.payloadsUnchanged} unchanged).`
       });
     } catch (error) {
       setActionFeedback({
@@ -2049,7 +2055,7 @@ function App() {
         return;
       }
 
-      if (key === 'identity-health' && !authState.user?.isAdmin) {
+      if ((key === 'identity-health' || key === 'recovery') && !authState.user?.isAdmin) {
         return;
       }
 
@@ -2150,7 +2156,7 @@ function App() {
       ? [
           ...(isAdmin
             ? AUTHENTICATED_NAV_ITEMS
-            : AUTHENTICATED_NAV_ITEMS.filter((item) => item.key !== 'identity-health')),
+            : AUTHENTICATED_NAV_ITEMS.filter((item) => !['identity-health', 'recovery'].includes(item.key))),
           {
             key: 'order-details',
             label: 'Order details',
@@ -2160,7 +2166,7 @@ function App() {
         ]
       : isAdmin
         ? AUTHENTICATED_NAV_ITEMS
-        : AUTHENTICATED_NAV_ITEMS.filter((item) => item.key !== 'identity-health');
+        : AUTHENTICATED_NAV_ITEMS.filter((item) => !['identity-health', 'recovery'].includes(item.key));
   const breadcrumbs: AppShellBreadcrumb[] =
     currentPage === 'dashboard'
       ? [
@@ -2181,6 +2187,11 @@ function App() {
         ? [
             { label: 'Authenticated app' },
             { label: 'Identity health', current: true }
+          ]
+      : currentPage === 'recovery'
+        ? [
+            { label: 'Authenticated app' },
+            { label: 'Recovery', current: true }
           ]
       : currentPage === 'settings'
         ? [
@@ -2359,6 +2370,19 @@ function App() {
             overviewSection={identityHealthOverview}
             conflictsSection={identityHealthConflicts}
           />
+        </Suspense>
+      ) : null}
+
+      {currentPage === 'recovery' ? (
+        <Suspense
+          fallback={
+            <AuthenticatedViewFallback
+              title="Recovery"
+              description="Loading manual recovery controls and run history."
+            />
+          }
+        >
+          <RecoveryJobsView reportingTimezone={reportingTimezone} />
         </Suspense>
       ) : null}
 

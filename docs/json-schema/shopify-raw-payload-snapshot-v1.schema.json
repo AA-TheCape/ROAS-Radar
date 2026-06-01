@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ShopifyRawPayloadSnapshotV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "snapshotId",
+    "shopDomain",
+    "shopifyOrderId",
+    "capturedAt",
+    "payloadVersion",
+    "payloadSha256",
+    "storageUri",
+    "rawPayload",
+    "normalized"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1, "type": "integer" },
+    "snapshotId": { "type": "string", "minLength": 1 },
+    "shopDomain": { "type": "string", "minLength": 1 },
+    "shopifyOrderId": { "type": "string", "minLength": 1 },
+    "capturedAt": { "type": "string", "format": "date-time" },
+    "payloadVersion": { "type": "integer", "minimum": 1 },
+    "payloadSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "storageUri": { "type": ["string", "null"] },
+    "rawPayload": { "type": "object", "additionalProperties": true },
+    "normalized": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "orderName",
+        "processedAt",
+        "createdAtShopify",
+        "currencyCode",
+        "totalPrice",
+        "subtotalPrice",
+        "landingSite",
+        "referringSite",
+        "checkoutToken",
+        "cartToken",
+        "customerId",
+        "sourceName"
+      ],
+      "properties": {
+        "orderName": { "type": ["string", "null"] },
+        "processedAt": { "type": ["string", "null"], "format": "date-time" },
+        "createdAtShopify": { "type": ["string", "null"], "format": "date-time" },
+        "currencyCode": { "type": ["string", "null"] },
+        "totalPrice": { "type": ["string", "null"] },
+        "subtotalPrice": { "type": ["string", "null"] },
+        "landingSite": { "type": ["string", "null"] },
+        "referringSite": { "type": ["string", "null"] },
+        "checkoutToken": { "type": ["string", "null"] },
+        "cartToken": { "type": ["string", "null"] },
+        "customerId": { "type": ["string", "null"] },
+        "sourceName": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

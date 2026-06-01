@@ -188,11 +188,11 @@ export function resolveGa4BigQueryIngestionConfig(
 	);
 	const adsDataset = validatePattern(
 		normalizeRequiredString(
-			source.GOOGLE_ADS_TRANSFER_DATASET,
-			"GOOGLE_ADS_TRANSFER_DATASET",
+			source.GOOGLE_ADS_TRANSFER_BIGQUERY_DATASET,
+			"GOOGLE_ADS_TRANSFER_BIGQUERY_DATASET",
 		),
 		DATASET_PATTERN,
-		"GOOGLE_ADS_TRANSFER_DATASET",
+		"GOOGLE_ADS_TRANSFER_BIGQUERY_DATASET",
 	);
 	const adsTablePattern = validatePattern(
 		normalizeRequiredString(

@@ -322,7 +322,10 @@ test('Google Ads metadata sync upserts entity names without duplicate rows acros
     assert.deepEqual(firstRefresh, {
       attempted: 1,
       refreshed: 1,
-      skipped: 0
+      skipped: 0,
+      failed: 0,
+      recordCount: 4,
+      failures: []
     });
     assert.deepEqual(await loadMetadataRows(), [
       {
@@ -372,7 +375,10 @@ test('Google Ads metadata sync upserts entity names without duplicate rows acros
     assert.deepEqual(secondRefresh, {
       attempted: 1,
       refreshed: 1,
-      skipped: 0
+      skipped: 0,
+      failed: 0,
+      recordCount: 4,
+      failures: []
     });
     const metadataRows = await loadMetadataRows();
     assert.equal(metadataRows.length, 4);
@@ -424,7 +430,10 @@ test('Google Ads metadata sync upserts entity names without duplicate rows acros
     assert.deepEqual(thirdRefresh, {
       attempted: 1,
       refreshed: 1,
-      skipped: 0
+      skipped: 0,
+      failed: 0,
+      recordCount: 4,
+      failures: []
     });
     assert.deepEqual(await loadMetadataRows(), metadataRows);
   } finally {

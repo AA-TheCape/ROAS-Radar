@@ -1,5 +1,10 @@
 import type { AttributionTouchpoint } from './engine.js';
 import {
+  attributionEvidenceSourcePrecedence,
+  attributionOriginPrecedence,
+  mapResolvedIngestionSourceToAttributionOrigin
+} from './precedence.js';
+import {
   CLICK_LOOKBACK_WINDOW_DAYS,
   hasClickId,
   isDirectTouchpoint as isCanonicalDirectTouchpoint,
@@ -76,23 +81,13 @@ export type TieredAttributionResolverInput = {
   }>;
 };
 
-const INGESTION_SOURCE_PRECEDENCE: Record<DeterministicIngestionSource, number> = {
-  landing_session_id: 0,
-  checkout_token: 1,
-  cart_token: 2,
-  customer_identity: 3
-};
-
 function ingestionSourcePrecedence(source: ResolvedIngestionSource): number {
-  if (source === 'shopify_marketing_hint') {
-    return Number.MAX_SAFE_INTEGER - 1;
-  }
+  const originRank =
+    1_000 -
+    attributionOriginPrecedence(mapResolvedIngestionSourceToAttributionOrigin(source));
+  const sourceRank = attributionEvidenceSourcePrecedence(source);
 
-  if (source === 'ga4_fallback') {
-    return Number.MAX_SAFE_INTEGER;
-  }
-
-  return INGESTION_SOURCE_PRECEDENCE[source];
+  return originRank * 10 + sourceRank;
 }
 
 function compareDatesDescending(left: Date, right: Date): number {

@@ -1,4 +1,7 @@
-import { backfillCampaignMetadataHistory } from '../modules/ad-platform-metadata-refresh/index.js';
+import {
+  backfillCampaignMetadataHistory,
+  refreshCampaignMetadataFromApis
+} from '../modules/ad-platform-metadata-refresh/index.js';
 
 function readFlag(name: string): string | null {
   const prefixed = `--${name}`;
@@ -42,7 +45,43 @@ function parseOptionalPositiveInteger(name: string): number | undefined {
   return parsed;
 }
 
+function parseListFlag(name: string): string[] {
+  const value = readFlag(name)?.trim();
+
+  if (!value) {
+    return [];
+  }
+
+  return value
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
 async function run(): Promise<void> {
+  const mode = readFlag('mode')?.trim() || 'history';
+
+  if (mode === 'api-refresh') {
+    const report = await refreshCampaignMetadataFromApis({
+      requestedBy: requireFlag('requested-by'),
+      workerId: readFlag('worker-id')?.trim() || 'campaign-metadata-api-refresh',
+      startDate: readFlag('start-date')?.trim() || null,
+      endDate: readFlag('end-date')?.trim() || null,
+      campaignIds: parseListFlag('campaign-ids'),
+      platforms: parseListFlag('platforms') as Array<'google_ads' | 'meta_ads'>,
+      dryRun: parseBooleanFlag('dry-run'),
+      runId: readFlag('run-id')?.trim() || null,
+      maxAttempts: parseOptionalPositiveInteger('max-attempts')
+    });
+
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    return;
+  }
+
+  if (mode !== 'history') {
+    throw new Error(`Unsupported --mode value: ${mode}`);
+  }
+
   const report = await backfillCampaignMetadataHistory({
     requestedBy: requireFlag('requested-by'),
     workerId: readFlag('worker-id')?.trim() || 'campaign-metadata-backfill',

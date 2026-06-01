@@ -5,7 +5,7 @@ process.env.DATABASE_URL ??= 'postgres://postgres:postgres@127.0.0.1:5432/roas_r
 
 const [
   { pool },
-  { backfillCampaignMetadataHistory },
+  { backfillCampaignMetadataHistory, refreshCampaignMetadataFromApis },
   { buildCampaignResolutionGroupKey, resolveCampaignDisplayMetadata },
   { resetE2EDatabase }
 ] =
@@ -259,6 +259,131 @@ test('campaign metadata backfill upserts latest names, reports unresolved ids, a
     assert.equal(persistedRun.rows[0]?.status, 'completed');
     assert.equal(persistedRun.rows[0]?.dry_run, false);
     assert.equal(persistedRun.rows[0]?.report.runId, report.runId);
+  } finally {
+    await resetE2EDatabase();
+  }
+});
+
+test('campaign metadata API refresh records partial API outages without losing successful platform progress', async () => {
+  await resetE2EDatabase();
+
+  try {
+    await seedHistoricalSpend();
+
+    const googleCalls: Array<Record<string, unknown>> = [];
+    const metaCalls: Array<Record<string, unknown>> = [];
+    const report = await refreshCampaignMetadataFromApis({
+      requestedBy: 'integration-test',
+      workerId: 'campaign-metadata-api-refresh-test',
+      startDate: '2026-04-10',
+      endDate: '2026-04-11',
+      platforms: ['google_ads', 'meta_ads'],
+      maxAttempts: 2,
+      refreshGoogleAdsMetadataConnections: async (options) => {
+        googleCalls.push({
+          accountIds: options?.accountIds,
+          campaignIdsByAccount: options?.campaignIdsByAccount,
+          continueOnError: options?.continueOnError,
+          maxAttempts: options?.maxAttempts
+        });
+
+        return {
+          attempted: 1,
+          refreshed: 1,
+          skipped: 0,
+          failed: 0,
+          recordCount: 3,
+          failures: []
+        };
+      },
+      refreshMetaAdsMetadataConnections: async (options) => {
+        metaCalls.push({
+          accountIds: options?.accountIds,
+          campaignIdsByAccount: options?.campaignIdsByAccount,
+          continueOnError: options?.continueOnError,
+          maxAttempts: options?.maxAttempts
+        });
+
+        return {
+          attempted: 1,
+          refreshed: 0,
+          skipped: 0,
+          failed: 1,
+          recordCount: 0,
+          failures: [
+            {
+              connectionId: 1,
+              accountId: 'acct-meta',
+              attempts: 2,
+              error: 'Meta Ads API 503'
+            }
+          ]
+        };
+      }
+    });
+
+    assert.equal(report.status, 'failed');
+    assert.equal(report.totalCampaignReferences, 2);
+    assert.deepEqual(googleCalls, [
+      {
+        accountIds: ['acct-google'],
+        campaignIdsByAccount: { 'acct-google': ['cmp_google_1'] },
+        continueOnError: true,
+        maxAttempts: 2
+      }
+    ]);
+    assert.deepEqual(metaCalls, [
+      {
+        accountIds: ['acct-meta'],
+        campaignIdsByAccount: { 'acct-meta': ['cmp_meta_1'] },
+        continueOnError: true,
+        maxAttempts: 2
+      }
+    ]);
+    assert.deepEqual(report.platformProgress, [
+      {
+        platform: 'google_ads',
+        attempted: 1,
+        refreshed: 1,
+        skipped: 0,
+        failed: 0,
+        recordCount: 3,
+        failures: []
+      },
+      {
+        platform: 'meta_ads',
+        attempted: 1,
+        refreshed: 0,
+        skipped: 0,
+        failed: 1,
+        recordCount: 0,
+        failures: [
+          {
+            connectionId: 1,
+            accountId: 'acct-meta',
+            attempts: 2,
+            error: 'Meta Ads API 503'
+          }
+        ]
+      }
+    ]);
+
+    const persistedRun = await pool.query<{
+      status: string;
+      error_code: string | null;
+      report: { platformProgress: unknown[] };
+    }>(
+      `
+        SELECT status, error_code, report
+        FROM campaign_metadata_backfill_runs
+        WHERE id = $1::uuid
+      `,
+      [report.runId]
+    );
+
+    assert.equal(persistedRun.rows[0]?.status, 'failed');
+    assert.equal(persistedRun.rows[0]?.error_code, 'partial_api_refresh_failure');
+    assert.deepEqual(persistedRun.rows[0]?.report.platformProgress, report.platformProgress);
   } finally {
     await resetE2EDatabase();
   }

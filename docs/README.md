@@ -6,9 +6,10 @@
 
 1. Read [Implementation Guide](implementation-guide.md) for local setup, service topology, validation flow, and troubleshooting.
 2. Read [Attribution Schema V1](attribution-schema-v1.md) for canonical field names, normalization rules, DB mappings, and Shopify attribute keys.
-3. Read [Attribution QA Payload Schema V1](attribution-qa-payload-schema-v1.md) before changing per-order attribution QA exports or fixtures.
-4. Read [Raw Payload Persistence Contract](raw-payload-persistence-contract.md) before changing Shopify, Meta Ads, or Google Ads raw-source ingestion behavior.
-5. Read [Operational Attribution Contracts](operational-attribution-contracts.md) for resolver precedence, Shopify writeback, retention, and recovery semantics.
+3. Read [Raw Payload Persistence Contract](raw-payload-persistence-contract.md) before changing Shopify, Meta Ads, or Google Ads raw-source ingestion behavior.
+4. Read [Operational Attribution Contracts](operational-attribution-contracts.md) for resolver precedence, Shopify writeback, retention, and recovery semantics.
+5. Read [Recovery Job Framework](recovery-job-framework.md) before adding automatic backfill or recovery jobs.
+6. Read [Attribution QA Payload Schema V1](attribution-qa-payload-schema-v1.md) before changing per-order attribution QA exports or fixtures.
 
 ### Analysts
 
@@ -24,6 +25,7 @@
 - Use [Attribution Completeness](runbooks/attribution-completeness.md), [Attribution QA Tooling](runbooks/attribution-qa-tooling.md), [Ingestion Failures](runbooks/ingestion-failures.md), and [Attribution Worker Backlog](runbooks/attribution-worker-backlog.md) for incident response.
 - Use [Deterministic Attribution Behavior](deterministic-attribution-behavior.md) when Clicks, Deterministic Views, Meta view-through, or combined comparison totals need explanation.
 - Use [Cloud Run Pipelines](runbooks/cloud-run-pipelines.md) for Cloud Run deploy, scheduler, IAM, and rollback operations.
+- Use [Production Manual Backfill And Recovery](runbooks/production-manual-backfill-recovery.md) before any production manual backfill, recovery, or dead-letter replay.
 
 ## Core References
 
@@ -32,6 +34,7 @@
 - [Attribution QA Payload Schema V1](attribution-qa-payload-schema-v1.md): per-order QA payload contract, outcome invariants, candidate groups, and success/no-match fixture guidance.
 - [Raw Payload Persistence Contract](raw-payload-persistence-contract.md): exact-as-received JSONB contract for Shopify, Meta Ads, and Google Ads raw-source ingestion surfaces.
 - [Operational Attribution Contracts](operational-attribution-contracts.md): resolver precedence, Shopify writeback lifecycle, retention rules, and incident-routing links.
+- [Recovery Job Framework](recovery-job-framework.md): automatic recovery job lifecycle, shared contracts, committed JSON Schemas, and source precedence rules.
 - [Deterministic Attribution Behavior](deterministic-attribution-behavior.md): Meta-only deterministic attribution behavior, API-only verification, reporting modes, known limitations, and support guidance.
 - [Meta Deterministic View Attribution Contract V1](meta-deterministic-view-attribution-contract-v1.md): approved aggregate-only Meta API deterministic view/impression attribution design, 7-day window, quarantine rules, and non-mixing requirements.
 - [Reporting API Contract](reporting-api-contract.md): reporting response versioning, campaign label enrichment, reporting modes, and layer-separation requirements.
@@ -53,6 +56,7 @@
 - [Ingestion Failures](runbooks/ingestion-failures.md): failed ingestion triage and remediation.
 - [API Latency](runbooks/api-latency.md): API latency investigation and recovery.
 - [Cloud Run Pipelines](runbooks/cloud-run-pipelines.md): staged deploy verification, scheduler validation, least-privilege IAM, and rollback steps.
+- [Production Manual Backfill And Recovery](runbooks/production-manual-backfill-recovery.md): production readiness gates, dry-run-first commands, validation queries, recovery paths, and on-call handoff sign-off.
 - Use [Meta Order Value Ingestion](runbooks/meta-order-value-ingestion.md) when Meta attributed-revenue syncs fail, flatline, or emit null-spike anomalies.
 - [Meta Order Value Ingestion](runbooks/meta-order-value-ingestion.md): Meta attributed-revenue sync failure, zero-ingestion, and null-spike triage.
 - [Meta Deterministic Ingestion](runbooks/meta-deterministic-ingestion.md): Meta deterministic view/impression scheduler, sync operations, anomaly triage, verification, bounded backfill, emergency controls, and QA checks.

@@ -18,7 +18,8 @@ type SerializedError = {
 type DeadLetterSourceTable =
 	| "shopify_order_writeback_jobs"
 	| "attribution_jobs"
-	| "ga4_bigquery_hourly_jobs";
+	| "ga4_bigquery_hourly_jobs"
+	| "recovery_job_runs";
 
 type DeadLetterRow = {
 	id: number;
@@ -315,6 +316,30 @@ async function requeueSourceRecord(
           AND hour_start = $2::timestamptz
       `,
 			[deadLetter.source_queue_key, deadLetter.source_record_id],
+		);
+		return result.rowCount ? "replayed" : "skipped";
+	}
+
+	if (
+		(deadLetter.source_table as DeadLetterSourceTable) === "recovery_job_runs"
+	) {
+		const result = await client.query(
+			`
+        UPDATE recovery_job_runs
+        SET
+          status = 'queued',
+          available_at = now(),
+          claimed_by = NULL,
+          completed_at = NULL,
+          lock_expires_at = NULL,
+          dead_lettered_at = NULL,
+          error_code = NULL,
+          error_message = NULL,
+          updated_at = now()
+        WHERE id = $1::uuid
+          AND status = 'dead_lettered'
+      `,
+			[deadLetter.source_record_id],
 		);
 		return result.rowCount ? "replayed" : "skipped";
 	}

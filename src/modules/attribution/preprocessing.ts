@@ -17,18 +17,10 @@ import {
 } from '../../../packages/attribution-schema/index.js';
 import { buildCanonicalTouchpointDimensions } from '../marketing-dimensions/index.js';
 import { extractShopifyHintAttribution, type ShopifyAttributionHintPayload } from '../shopify/attribution-hints.js';
+import { attributionEvidenceSourcePrecedence, compareAttributionEvidenceSources } from './precedence.js';
 
 const CLICK_LOOKBACK_WINDOW_MS = 28 * 24 * 60 * 60 * 1000;
 const VIEW_LOOKBACK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
-
-const EVIDENCE_SOURCE_PRECEDENCE: Record<AttributionEvidenceSource, number> = {
-  landing_session_id: 0,
-  checkout_token: 1,
-  cart_token: 2,
-  customer_identity: 3,
-  shopify_marketing_hint: 4,
-  ga4_fallback: 5
-};
 
 const CLICK_EVENT_HINTS = new Set([
   'ad_click',
@@ -474,10 +466,9 @@ function compareCanonicalTouchpointOrder(left: AttributionTouchpointInputV1, rig
     return left.touchpoint_occurred_at_utc.localeCompare(right.touchpoint_occurred_at_utc);
   }
 
-  const leftEvidence = EVIDENCE_SOURCE_PRECEDENCE[left.evidence_source];
-  const rightEvidence = EVIDENCE_SOURCE_PRECEDENCE[right.evidence_source];
-  if (leftEvidence !== rightEvidence) {
-    return leftEvidence - rightEvidence;
+  const evidenceComparison = compareAttributionEvidenceSources(left.evidence_source, right.evidence_source);
+  if (evidenceComparison !== 0) {
+    return evidenceComparison;
   }
 
   if (left.engagement_type !== right.engagement_type) {
@@ -865,7 +856,7 @@ function buildFirstTouchCandidate(
   return {
     orderId: order.shopifyOrderId,
     touchpoint,
-    evidenceRank: EVIDENCE_SOURCE_PRECEDENCE[evidence.evidenceSource],
+    evidenceRank: attributionEvidenceSourcePrecedence(evidence.evidenceSource),
     clickIdPresent: Boolean(touchpoint.click_id_value),
     metadataCompleteness: countMetadataFields(touchpoint)
   };
@@ -950,7 +941,7 @@ function buildEventCandidate(
   return {
     orderId: order.shopifyOrderId,
     touchpoint,
-    evidenceRank: EVIDENCE_SOURCE_PRECEDENCE[evidence.evidenceSource],
+    evidenceRank: attributionEvidenceSourcePrecedence(evidence.evidenceSource),
     clickIdPresent: Boolean(touchpoint.click_id_value),
     metadataCompleteness: countMetadataFields(touchpoint)
   };
@@ -1005,7 +996,7 @@ function buildHintCandidate(
   return {
     orderId: order.shopifyOrderId,
     touchpoint,
-    evidenceRank: EVIDENCE_SOURCE_PRECEDENCE.shopify_marketing_hint,
+    evidenceRank: attributionEvidenceSourcePrecedence('shopify_marketing_hint'),
     clickIdPresent: Boolean(touchpoint.click_id_value),
     metadataCompleteness: countMetadataFields(touchpoint)
   };

@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RecoveryJobReportV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "jobId",
+    "jobType",
+    "status",
+    "startedAt",
+    "completedAt",
+    "dryRun",
+    "sourcePrecedence",
+    "counters",
+    "artifacts",
+    "failures"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1, "type": "integer" },
+    "jobId": { "type": "string", "minLength": 1 },
+    "jobType": {
+      "type": "string",
+      "enum": [
+        "shopify_attribution_hint_recovery",
+        "ga4_fallback_unattributed_recovery",
+        "ga4_session_enrichment_backfill",
+        "campaign_metadata_api_refresh",
+        "campaign_metadata_history_backfill",
+        "shopify_order_reimport",
+        "order_attribution_backfill"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["queued", "running", "succeeded", "partial_failure", "failed", "cancelled", "dead_lettered"]
+    },
+    "startedAt": { "type": ["string", "null"], "format": "date-time" },
+    "completedAt": { "type": ["string", "null"], "format": "date-time" },
+    "dryRun": { "type": "boolean" },
+    "sourcePrecedence": {
+      "type": "array",
+      "prefixItems": [
+        { "const": "shopify" },
+        { "const": "ga4" },
+        { "const": "ad_platforms" }
+      ],
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "counters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recordsDiscovered",
+        "recordsProcessed",
+        "recordsSucceeded",
+        "recordsFailed",
+        "recordsSkipped",
+        "sideEffectsAttempted",
+        "sideEffectsSucceeded",
+        "sideEffectsSuppressed"
+      ],
+      "properties": {
+        "recordsDiscovered": { "type": "integer", "minimum": 0 },
+        "recordsProcessed": { "type": "integer", "minimum": 0 },
+        "recordsSucceeded": { "type": "integer", "minimum": 0 },
+        "recordsFailed": { "type": "integer", "minimum": 0 },
+        "recordsSkipped": { "type": "integer", "minimum": 0 },
+        "sideEffectsAttempted": { "type": "integer", "minimum": 0 },
+        "sideEffectsSucceeded": { "type": "integer", "minimum": 0 },
+        "sideEffectsSuppressed": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "artifacts": { "type": "array" },
+    "failures": { "type": "array" }
+  }
+}

@@ -10,8 +10,46 @@ const {
   emitAttributionQaSnapshotWriteLog,
   emitCampaignMetadataFreshnessSnapshotLog,
   emitCampaignMetadataResolutionCoverageLog,
-  emitCampaignMetadataSyncJobLifecycleLog
+  emitCampaignMetadataSyncJobLifecycleLog,
+  emitRecoveryRecordFailureLog,
+  emitRecoveryRunChunkLog,
+  emitRecoveryRunLifecycleLog
 } = await import('../src/observability/index.js');
+
+const recoveryRun = {
+  id: '123e4567-e89b-12d3-a456-426614174000',
+  jobType: 'shopify_attribution_recovery',
+  status: 'partial_failure',
+  mode: 'automatic',
+  initiatedBy: 'scheduler',
+  dryRun: false,
+  timeRangeStart: '2026-05-01T00:00:00.000Z',
+  timeRangeEnd: '2026-05-02T00:00:00.000Z',
+  idempotencyKey: 'recovery:key',
+  concurrencyKey: 'range:key',
+  scopeKey: 'shopify-attribution-hints',
+  resumeFromRunId: null,
+  rerunOfRunId: null,
+  inputParameters: {},
+  checkpoint: { offset: 10 },
+  recordsDiscovered: 12,
+  recordsClaimed: 12,
+  recordsProcessed: 10,
+  recordsSucceeded: 7,
+  recordsFailed: 2,
+  recordsSkipped: 1,
+  recordsRetried: 1,
+  sideEffectsAttempted: 7,
+  sideEffectsSucceeded: 7,
+  sideEffectsSuppressed: 1,
+  claimedBy: 'worker-1',
+  queuedAt: '2026-05-01T00:00:00.000Z',
+  startedAt: '2026-05-01T00:00:05.000Z',
+  completedAt: '2026-05-01T00:02:05.000Z',
+  lastHeartbeatAt: '2026-05-01T00:02:05.000Z',
+  errorCode: null,
+  errorMessage: null
+} as const;
 
 test.after(() => {
   if (originalKService === undefined) {
@@ -214,6 +252,71 @@ test('campaign metadata sync lifecycle logs emit success payloads and alertable 
         : null
     }
   });
+});
+
+test('recovery telemetry logs include run counters, chunk duration, trace correlation, and actionable failure context', async () => {
+  const { entries } = await captureStructuredLogs(() => {
+    emitRecoveryRunLifecycleLog({
+      stage: 'completed',
+      run: recoveryRun,
+      workerId: 'worker-1',
+      pagesProcessed: 2,
+      durationMs: 120000
+    });
+    emitRecoveryRunChunkLog({
+      run: recoveryRun,
+      workerId: 'worker-1',
+      pageNumber: 2,
+      recordsDiscovered: 5,
+      recordsProcessed: 4,
+      done: true,
+      durationMs: 3000,
+      checkpoint: { offset: 10 }
+    });
+    emitRecoveryRecordFailureLog({
+      run: recoveryRun,
+      workerId: 'worker-1',
+      recordId: '99',
+      recordType: 'shopify_order',
+      recordKey: 'gid://shopify/Order/1',
+      attemptNumber: 3,
+      retryable: false,
+      nextAttemptAt: null,
+      error: {
+        code: 'shopify_write_failed',
+        message: 'Shopify write failed',
+        details: { status: 429 }
+      }
+    });
+  });
+
+  assert.equal(entries.length, 3);
+  assert.equal(entries[0]?.event, 'recovery_run_lifecycle');
+  assert.equal(entries[0]?.runId, recoveryRun.id);
+  assert.equal(entries[0]?.jobType, recoveryRun.jobType);
+  assert.equal(entries[0]?.processedCount, 10);
+  assert.equal(entries[0]?.updatedCount, 7);
+  assert.equal(entries[0]?.skippedCount, 1);
+  assert.equal(entries[0]?.failedCount, 2);
+  assert.equal(entries[0]?.durationMs, 120000);
+  assert.equal(entries[0]?.recoveryTraceId, '123e4567e89b12d3a456426614174000');
+
+  assert.equal(entries[1]?.event, 'recovery_run_chunk_processed');
+  assert.equal(entries[1]?.pageNumber, 2);
+  assert.equal(entries[1]?.recordsDiscovered, 5);
+  assert.equal(entries[1]?.recordsProcessed, 4);
+  assert.equal(entries[1]?.durationMs, 3000);
+
+  assert.equal(entries[2]?.event, 'recovery_record_failure');
+  assert.equal(entries[2]?.severity, 'ERROR');
+  assert.equal(entries[2]?.errorCode, 'shopify_write_failed');
+  assert.equal(entries[2]?.retryable, false);
+  assert.equal(entries[2]?.alertable, true);
+  assert.deepEqual(entries[2]?.errorDetails, { status: 429 });
+  assert.match(
+    (entries[2]?.actionContext as { inspectRunFilter?: string }).inspectRunFilter ?? '',
+    /recovery_run_lifecycle/
+  );
 });
 
 test('attribution QA snapshot write logs include order correlation and payload size metrics', async () => {

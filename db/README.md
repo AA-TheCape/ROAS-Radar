@@ -41,6 +41,14 @@ The Meta order-value aggregate table added in `0040_add_meta_order_value_aggrega
 
 - `db/rollbacks/0040_add_meta_order_value_aggregates.down.sql`
 
+The recovery job registry added in `0045_add_recovery_run_registry.sql` can be rolled back with:
+
+- `db/rollbacks/0045_add_recovery_run_registry.down.sql`
+
+The shared recovery job queue fields added in `0048_add_shared_recovery_job_queue.sql` can be rolled back with:
+
+- `db/rollbacks/0048_add_shared_recovery_job_queue.down.sql`
+
 ## Session Attribution Capture Schema
 
 Migration `0019_add_session_attribution_capture_tables.sql` adds three additive tables for canonical first-party capture persistence:
@@ -85,3 +93,23 @@ To verify the primary lookup indexes and reporting filters used by the new schem
 ```sh
 npm run db:verify-attribution-v1-query-plans
 ```
+
+## Recovery Job Registry
+
+Migration `0045_add_recovery_run_registry.sql` adds generic run tracking for automatic backfill and recovery workflows:
+
+- `recovery_job_runs`: run registry with job type, time range, initiator, mode, dry-run flag, counters, checkpoints, heartbeat fields, and resume/rerun links
+- `recovery_job_records`: per-record processing status with attempt tracking and a unique `side_effect_key` for idempotent resume/rerun behavior
+- `recovery_job_checkpoints`: named cursors and high-water marks for resumable scans
+- `recovery_job_errors`: run and record-scoped error audit log
+- `recovery_job_status_events`: status transition audit trail
+
+The registry includes descending timestamp indexes and job/status/initiator composites intended for last-30-days operational lookups.
+
+Migration `0048_add_shared_recovery_job_queue.sql` extends the registry with worker queue semantics:
+
+- queue claim ordering through `priority` and `available_at`
+- run-level attempt limits and retry backoff state
+- heartbeat expiration through `lock_expires_at`
+- `dead_lettered` terminal state and replay through `event_dead_letters`
+- durable completion reports in `recovery_job_completion_reports`

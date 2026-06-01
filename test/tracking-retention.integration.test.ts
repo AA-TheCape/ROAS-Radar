@@ -191,7 +191,7 @@ async function insertProtectedOrderLink(sessionId: string, shopifyOrderId: strin
         'last_touch',
         'deterministic',
         'matched_by_landing_session',
-        '2026-06-01T00:00:00.000Z',
+        '2026-06-02T00:00:00.000Z',
         true
       )
     `,

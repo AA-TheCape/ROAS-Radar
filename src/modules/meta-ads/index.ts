@@ -156,6 +156,22 @@ type MetaMetadataRecord = {
   lastSeenAt: Date;
 };
 
+type MetaAdsMetadataRefreshFailure = {
+  connectionId: number;
+  accountId: string;
+  attempts: number;
+  error: string;
+};
+
+type MetaAdsMetadataRefreshResult = {
+  attempted: number;
+  refreshed: number;
+  skipped: number;
+  failed: number;
+  recordCount: number;
+  failures: MetaAdsMetadataRefreshFailure[];
+};
+
 type MetaAdsTokenResponse = {
   access_token: string;
   token_type?: string;
@@ -1557,6 +1573,26 @@ async function loadActiveMetaAdsConnections(): Promise<MetaAdsMetadataConnection
   return result.rows;
 }
 
+function normalizeMetaCampaignIds(campaignIds: string[] | undefined): string[] {
+  const normalizedIds = new Set<string>();
+
+  for (const campaignId of campaignIds ?? []) {
+    const normalized = normalizeString(campaignId);
+
+    if (!normalized) {
+      continue;
+    }
+
+    if (!/^\d+$/.test(normalized)) {
+      throw new MetaAdsHttpError(400, 'invalid_meta_campaign_id', 'Meta campaign ids must contain digits only');
+    }
+
+    normalizedIds.add(normalized);
+  }
+
+  return [...normalizedIds].sort();
+}
+
 async function acquireMetadataRefreshLock(platform: string, accountId: string): Promise<boolean> {
   const result = await query<{ acquired: boolean }>(
     "SELECT pg_try_advisory_lock(hashtext($1), hashtext($2)) AS acquired",
@@ -1633,7 +1669,10 @@ export async function refreshMetaAdsMetadataForConnection(
   connection: MetaAdsMetadataConnection,
   now = new Date(),
   workerId = 'meta-ads-metadata-refresh',
-  requestedBy?: string
+  requestedBy?: string,
+  options?: {
+    campaignIds?: string[];
+  }
 ): Promise<{ skipped: boolean; recordCount: number }> {
   const acquired = await acquireMetadataRefreshLock('meta_ads', connection.ad_account_id);
 
@@ -1652,11 +1691,18 @@ export async function refreshMetaAdsMetadataForConnection(
   });
 
   try {
-    const [campaignRows, adsetRows, adRows] = await Promise.all([
-      fetchMetaCollection(connection, 'campaigns'),
-      fetchMetaCollection(connection, 'adsets'),
-      fetchMetaCollection(connection, 'ads')
-    ]);
+    const campaignIds = normalizeMetaCampaignIds(options?.campaignIds);
+    const campaignIdSet = new Set(campaignIds);
+    const [rawCampaignRows, adsetRows, adRows] =
+      campaignIds.length > 0
+        ? [await fetchMetaCollection(connection, 'campaigns'), [], []]
+        : await Promise.all([
+            fetchMetaCollection(connection, 'campaigns'),
+            fetchMetaCollection(connection, 'adsets'),
+            fetchMetaCollection(connection, 'ads')
+          ]);
+    const campaignRows =
+      campaignIds.length > 0 ? rawCampaignRows.filter((row) => row.id && campaignIdSet.has(row.id)) : rawCampaignRows;
 
     const records = buildMetaAdsMetadataRecords({
       accountId: connection.ad_account_id,
@@ -1700,30 +1746,79 @@ export async function refreshActiveMetaAdsMetadataConnections(options?: {
   now?: Date;
   workerId?: string;
   requestedBy?: string;
-}): Promise<{ attempted: number; refreshed: number; skipped: number }> {
-  const connections = await loadActiveMetaAdsConnections();
+  accountIds?: string[];
+  campaignIds?: string[];
+  campaignIdsByAccount?: Record<string, string[]>;
+  maxAttempts?: number;
+  continueOnError?: boolean;
+}): Promise<MetaAdsMetadataRefreshResult> {
+  const accountIds = new Set((options?.accountIds ?? []).map((accountId) => accountId.trim()).filter(Boolean));
+  const connections = (await loadActiveMetaAdsConnections()).filter(
+    (connection) => accountIds.size === 0 || accountIds.has(connection.ad_account_id)
+  );
   let refreshed = 0;
   let skipped = 0;
+  let failed = 0;
+  let recordCount = 0;
+  const failures: MetaAdsMetadataRefreshFailure[] = [];
+  const maxAttempts = Math.max(1, options?.maxAttempts ?? 1);
 
   for (const connection of connections) {
-    const result = await refreshMetaAdsMetadataForConnection(
-      connection,
-      options?.now ?? new Date(),
-      options?.workerId ?? 'meta-ads-metadata-refresh',
-      options?.requestedBy
-    );
+    let lastError: unknown;
+    let result: { skipped: boolean; recordCount: number } | null = null;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        result = await refreshMetaAdsMetadataForConnection(
+          connection,
+          options?.now ?? new Date(),
+          options?.workerId ?? 'meta-ads-metadata-refresh',
+          options?.requestedBy,
+          {
+            campaignIds: options?.campaignIdsByAccount?.[connection.ad_account_id] ?? options?.campaignIds
+          }
+        );
+        break;
+      } catch (error) {
+        lastError = error;
+
+        if (attempt < maxAttempts) {
+          await delay(attempt * 500);
+        }
+      }
+    }
+
+    if (!result) {
+      failed += 1;
+      failures.push({
+        connectionId: connection.id,
+        accountId: connection.ad_account_id,
+        attempts: maxAttempts,
+        error: lastError instanceof Error ? lastError.message : String(lastError)
+      });
+
+      if (!options?.continueOnError) {
+        throw lastError;
+      }
+
+      continue;
+    }
 
     if (result.skipped) {
       skipped += 1;
     } else {
       refreshed += 1;
+      recordCount += result.recordCount;
     }
   }
 
   return {
     attempted: connections.length,
     refreshed,
-    skipped
+    skipped,
+    failed,
+    recordCount,
+    failures
   };
 }
 
