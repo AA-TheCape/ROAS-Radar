@@ -21,6 +21,7 @@ import {
   executeAttributionModels,
   type AttributionCredit
 } from './engine.js';
+import { buildAttributionConfidenceMetadata } from './confidence-scoring.js';
 import {
   buildAttributionConfidenceLabel,
   buildAttributionMatchSource,
@@ -500,8 +501,13 @@ async function persistAttribution(
 
   const matchedAt = new Date();
   const orderAttributionAudit = buildOrderAttributionAuditRecord(journey, matchedAt);
+  const confidenceMetadata = buildAttributionConfidenceMetadata({
+    journey,
+    attributionSourceCode: orderAttributionAudit.source,
+    lastAttributionRunAt: matchedAt
+  });
   const matchSource = buildAttributionMatchSource(journey);
-  const confidenceLabel = buildAttributionConfidenceLabel(journey.confidenceScore);
+  const confidenceLabel = buildAttributionConfidenceLabel(confidenceMetadata.confidenceScore);
   const current = await fetchCurrentAttribution(client, order.shopify_order_id);
   const shouldApply = shouldApplyAttributionUpdate({
     current: current
@@ -542,7 +548,7 @@ async function persistAttribution(
     attributionReason: journey.attributionReason,
     orderOccurredAtUtc: journey.orderOccurredAtUtc?.toISOString() ?? null,
     normalizationFailures: journey.normalizationFailures,
-    confidenceScore: journey.confidenceScore,
+    confidenceScore: confidenceMetadata.confidenceScore,
     winner: journey.winner ? serializeResolvedTouchpoint(journey.winner) : null,
     timeline: journey.touchpoints.map(serializeResolvedTouchpoint),
     qaSnapshot
@@ -699,13 +705,13 @@ async function persistAttribution(
       normalizeNullableString(primaryCredit?.term),
       normalizeNullableString(primaryCredit?.clickIdType),
       normalizeNullableString(primaryCredit?.clickIdValue),
-      journey.confidenceScore,
+      confidenceMetadata.confidenceScore,
       primaryCredit?.attributionReason ?? journey.attributionReason,
-      matchedAt,
+      confidenceMetadata.lastAttributionRunAt,
       ATTRIBUTION_MODEL_VERSION,
       matchSource,
       confidenceLabel,
-      orderAttributionAudit.source
+      confidenceMetadata.attributionSourceCode
     ]
   );
 
@@ -730,9 +736,9 @@ async function persistAttribution(
         order.shopify_order_id,
         orderAttributionAudit.tier,
         orderAttributionAudit.source,
-        orderAttributionAudit.matchedAt,
+        confidenceMetadata.lastAttributionRunAt,
         orderAttributionAudit.reason,
-        journey.confidenceScore,
+        confidenceMetadata.confidenceScore,
         JSON.stringify(attributionSnapshot)
       ]
     );
@@ -762,7 +768,7 @@ async function persistAttribution(
     orderOccurredAtUtc: journey.orderOccurredAtUtc,
     tier: journey.tier,
     attributionReason: journey.attributionReason,
-    confidenceScore: journey.confidenceScore,
+    confidenceScore: confidenceMetadata.confidenceScore,
     pipeline: 'order_backfill',
     touchpoints: journey.touchpoints,
     winner: journey.winner,
