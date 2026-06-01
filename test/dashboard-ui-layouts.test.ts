@@ -687,6 +687,30 @@ test("order details empty state stays explicit when no drill-in selection is act
 	}
 });
 
+test("order details renders attribution confidence lookup metadata", async () => {
+	const { default: OrderDetailsView } = await loadDashboardModule<
+		typeof import("../dashboard/src/components/OrderDetailsView")
+	>("dashboard/src/components/OrderDetailsView.tsx");
+
+	const mounted = await mountUi(
+		h(OrderDetailsView, createOrderDetailsProps()),
+		{ width: 1280, height: 900 },
+	);
+
+	try {
+		const text = mounted.container.textContent ?? "";
+		assert.match(text, /Attribution source/);
+		assert.match(text, /landing_session_id/);
+		assert.match(text, /Matching method/);
+		assert.match(text, /matched_by_landing_session/);
+		assert.match(text, /Confidence score/);
+		assert.match(text, /Last attribution run/);
+		assert.match(text, /Apr 20, 11:00 AM/);
+	} finally {
+		mounted.cleanup();
+	}
+});
+
 test("settings admin view keeps user management gated for non-admin access", async () => {
 	const { default: SettingsAdminView } = await loadDashboardModule<
 		typeof import("../dashboard/src/components/SettingsAdminView")
