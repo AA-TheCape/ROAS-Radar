@@ -167,16 +167,7 @@ export async function executeOrderAttributionConfidenceBackfillBatch(
           orders.id,
           orders.shopify_order_id
         FROM shopify_orders orders
-        LEFT JOIN attribution_results results
-          ON results.shopify_order_id = orders.shopify_order_id
         WHERE orders.id > $1::bigint
-          AND (
-            results.id IS NOT NULL
-            OR orders.attribution_tier IS NOT NULL
-            OR orders.attribution_source IS NOT NULL
-            OR orders.attribution_reason IS NOT NULL
-            OR orders.attribution_snapshot IS NOT NULL
-          )
         ORDER BY orders.id ASC
         LIMIT $2
       ),
@@ -315,8 +306,17 @@ export async function executeOrderAttributionConfidenceBackfillBatch(
             OR results.matching_method_id IS DISTINCT FROM metadata.matching_method_id
             OR results.confidence_contract_version IS DISTINCT FROM 'v1'
             OR results.last_attribution_run_at IS DISTINCT FROM metadata.last_attribution_run_at
-          )
+        )
         RETURNING results.id
+      ),
+      credit_updates AS (
+        UPDATE attribution_order_credits credits
+        SET confidence_contract_version = 'v1'
+        FROM candidates
+        WHERE $3::boolean = false
+          AND credits.shopify_order_id = candidates.shopify_order_id
+          AND credits.confidence_contract_version IS DISTINCT FROM 'v1'
+        RETURNING credits.id
       )
       SELECT
         (SELECT COUNT(*) FROM candidates)::text AS scanned_orders,

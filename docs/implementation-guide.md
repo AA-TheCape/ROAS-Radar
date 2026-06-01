@@ -90,7 +90,9 @@ The operational contract for resolver precedence, Shopify writeback, reconciliat
 Lookup-backed attribution metadata is created by migrations before the worker runs:
 
 - `db/migrations/0045_add_attribution_lookup_tables.sql` seeds stable `attribution_sources` and `matching_methods` IDs and codes.
-- `db/migrations/0046_add_order_attribution_confidence_metadata.sql` adds source/method foreign keys, confidence contract versions, and `last_attribution_run_at` columns to order and result tables, then backfills existing rows.
+- `db/migrations/0046_add_order_attribution_confidence_metadata.sql` is the expand migration. It adds nullable source/method foreign keys, confidence contract versions, and `last_attribution_run_at` columns with `NOT VALID` constraints only. It does not backfill historical rows, validate constraints, enforce `NOT NULL`, or build large indexes.
+- `db/operations/0046_add_order_attribution_confidence_indexes.sql` creates the large lookup indexes with `CREATE INDEX CONCURRENTLY` and must be run with `psql`, not through `src/db/migrate.ts`.
+- `db/operations/0046_contract_order_attribution_confidence_metadata.sql` validates constraints and applies `NOT NULL` only after `attribution:backfill-confidence` has completed and zero incomplete rows remain.
 
 At runtime, the attribution worker derives the winner once, then persists the same metadata across canonical order-level surfaces:
 
@@ -102,7 +104,7 @@ At runtime, the attribution worker derives the winner once, then persists the sa
 
 Reporting APIs expose the metadata as camelCase response fields. Order list and detail routes expose `attributionSource`, `matchingMethod`, `confidenceScore`, and `lastAttributionRunAt`; attribution result and explainability routes expose the same persisted winner metadata for audit and debugging.
 
-Recompute this metadata when resolver output, fallback eligibility, identity stitching, click-ID normalization, lookup IDs, or confidence score mappings change. Use `npm run attribution:backfill-confidence -- --dry-run` first when the winner is correct but the metadata columns are stale, then run the write-enabled pass. If the winner itself is wrong, queue order attribution backfill first and run confidence backfill only after the winning path is repaired.
+Recompute this metadata when resolver output, fallback eligibility, identity stitching, click-ID normalization, lookup IDs, or confidence score mappings change. Use `npm run attribution:backfill-confidence -- --dry-run` first when the winner is correct but the metadata columns are stale, then run the write-enabled pass. If the winner itself is wrong, queue order attribution backfill first and run confidence backfill only after the winning path is repaired. During initial rollout, this backfill is also the historical data migration between the expand and contract phases.
 
 ### React dashboard
 
