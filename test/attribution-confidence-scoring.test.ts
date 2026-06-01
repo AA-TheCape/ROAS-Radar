@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  attributionConfidenceFingerprintChanged,
   boundConfidenceScore,
   buildAttributionConfidenceMetadata,
   confidenceScoreForWinner
@@ -47,4 +48,42 @@ test('buildAttributionConfidenceMetadata returns persistable confidence metadata
     matchingMethodCode: 'matched_by_checkout_token',
     lastAttributionRunAt
   });
+});
+
+const attributionFingerprint = {
+  sessionId: '11111111-1111-4111-8111-111111111111',
+  attributedSource: 'google',
+  attributedMedium: 'cpc',
+  attributedCampaign: 'brand',
+  attributedContent: null,
+  attributedTerm: null,
+  attributedClickIdType: 'gclid',
+  attributedClickIdValue: 'gclid-1',
+  confidenceScore: 1,
+  attributionReason: 'matched_by_landing_session',
+  modelVersion: 1,
+  matchSource: 'deterministic_first_party',
+  attributionSourceCode: 'landing_session_id',
+  matchingMethodCode: 'matched_by_landing_session'
+};
+
+test('attributionConfidenceFingerprintChanged ignores unchanged attribution fields', () => {
+  assert.equal(attributionConfidenceFingerprintChanged(attributionFingerprint, { ...attributionFingerprint }), false);
+});
+
+test('attributionConfidenceFingerprintChanged detects source and method changes', () => {
+  assert.equal(
+    attributionConfidenceFingerprintChanged(attributionFingerprint, {
+      ...attributionFingerprint,
+      attributionSourceCode: 'checkout_token'
+    }),
+    true
+  );
+  assert.equal(
+    attributionConfidenceFingerprintChanged(attributionFingerprint, {
+      ...attributionFingerprint,
+      matchingMethodCode: 'matched_by_checkout_token'
+    }),
+    true
+  );
 });

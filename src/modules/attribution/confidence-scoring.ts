@@ -18,6 +18,27 @@ export type AttributionConfidenceMetadata = {
   lastAttributionRunAt: Date;
 };
 
+export type AttributionConfidenceFingerprint = {
+  sessionId: string | null;
+  attributedSource: string | null;
+  attributedMedium: string | null;
+  attributedCampaign: string | null;
+  attributedContent: string | null;
+  attributedTerm: string | null;
+  attributedClickIdType: string | null;
+  attributedClickIdValue: string | null;
+  confidenceScore: number;
+  attributionReason: string;
+  modelVersion: number;
+  matchSource: string;
+  attributionSourceCode: string;
+  matchingMethodCode: string;
+};
+
+export type PersistedAttributionConfidenceState = AttributionConfidenceFingerprint & {
+  lastAttributionRunAt: Date | null;
+};
+
 export function boundConfidenceScore(value: number | null | undefined, fallback = 0): number {
   const candidate = typeof value === 'number' && Number.isFinite(value) ? value : fallback;
   const bounded = Math.min(Math.max(candidate, 0), 1);
@@ -51,4 +72,17 @@ export function buildAttributionConfidenceMetadata(input: {
     matchingMethodCode: input.journey.attributionReason || 'unknown',
     lastAttributionRunAt: input.lastAttributionRunAt
   };
+}
+
+export function attributionConfidenceFingerprintChanged(
+  previous: AttributionConfidenceFingerprint | null | undefined,
+  next: AttributionConfidenceFingerprint
+): boolean {
+  if (!previous) {
+    return true;
+  }
+
+  const keys = Object.keys(next) as Array<keyof AttributionConfidenceFingerprint>;
+
+  return keys.some((key) => previous[key] !== next[key]);
 }

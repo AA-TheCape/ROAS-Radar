@@ -18,7 +18,13 @@ import {
   executeAttributionModels,
   type AttributionCredit
 } from './engine.js';
-import { buildAttributionConfidenceMetadata } from './confidence-scoring.js';
+import {
+  attributionConfidenceFingerprintChanged,
+  boundConfidenceScore,
+  buildAttributionConfidenceMetadata,
+  type AttributionConfidenceFingerprint,
+  type PersistedAttributionConfidenceState
+} from './confidence-scoring.js';
 import {
   buildAttributionConfidenceLabel,
   buildAttributionMatchSource,
@@ -115,6 +121,19 @@ type SyntheticAttributionInput = {
   attributionReason: string;
   confidenceScore?: number | null;
 };
+
+type PersistedAttributionTouchpoint = Pick<
+  AttributionCredit,
+  | 'sessionId'
+  | 'source'
+  | 'medium'
+  | 'campaign'
+  | 'content'
+  | 'term'
+  | 'clickIdType'
+  | 'clickIdValue'
+  | 'attributionReason'
+>;
 
 type ProcessAttributionQueueOptions = {
   workerId: string;
@@ -468,18 +487,7 @@ function selectPrimaryCredit(credits: AttributionCredit[]): AttributionCredit | 
 function selectPersistedPrimaryTouchpoint(
   outputs: Record<(typeof ATTRIBUTION_MODELS)[number], AttributionCredit[]>,
   journey: ResolvedJourney
-): Pick<
-  AttributionCredit,
-  | 'sessionId'
-  | 'source'
-  | 'medium'
-  | 'campaign'
-  | 'content'
-  | 'term'
-  | 'clickIdType'
-  | 'clickIdValue'
-  | 'attributionReason'
-> | null {
+): PersistedAttributionTouchpoint | null {
   const persistedCredit =
     selectPrimaryCredit(outputs.last_non_direct) ??
     selectPrimaryCredit(outputs.hinted_fallback_only);
@@ -505,6 +513,107 @@ function selectPersistedPrimaryTouchpoint(
   };
 }
 
+async function fetchPersistedAttributionConfidenceState(
+  client: PoolClient,
+  shopifyOrderId: string
+): Promise<PersistedAttributionConfidenceState | null> {
+  const result = await client.query<{
+    session_id: string | null;
+    attributed_source: string | null;
+    attributed_medium: string | null;
+    attributed_campaign: string | null;
+    attributed_content: string | null;
+    attributed_term: string | null;
+    attributed_click_id_type: string | null;
+    attributed_click_id_value: string | null;
+    confidence_score: string;
+    attribution_reason: string;
+    model_version: number;
+    match_source: string;
+    attribution_source_code: string | null;
+    matching_method_code: string | null;
+    last_attribution_run_at: Date | null;
+  }>(
+    `
+      SELECT
+        results.session_id::text AS session_id,
+        results.attributed_source,
+        results.attributed_medium,
+        results.attributed_campaign,
+        results.attributed_content,
+        results.attributed_term,
+        results.attributed_click_id_type,
+        results.attributed_click_id_value,
+        results.confidence_score::text,
+        results.attribution_reason,
+        results.model_version,
+        results.match_source,
+        sources.code AS attribution_source_code,
+        methods.code AS matching_method_code,
+        results.last_attribution_run_at
+      FROM attribution_results results
+      LEFT JOIN attribution_sources sources
+        ON sources.id = results.attribution_source_id
+      LEFT JOIN matching_methods methods
+        ON methods.id = results.matching_method_id
+      WHERE results.shopify_order_id = $1
+      LIMIT 1
+    `,
+    [shopifyOrderId]
+  );
+
+  const row = result.rows[0];
+
+  if (!row) {
+    return null;
+  }
+
+  return {
+    sessionId: row.session_id,
+    attributedSource: row.attributed_source,
+    attributedMedium: row.attributed_medium,
+    attributedCampaign: row.attributed_campaign,
+    attributedContent: row.attributed_content,
+    attributedTerm: row.attributed_term,
+    attributedClickIdType: row.attributed_click_id_type,
+    attributedClickIdValue: row.attributed_click_id_value,
+    confidenceScore: boundConfidenceScore(Number(row.confidence_score)),
+    attributionReason: row.attribution_reason,
+    modelVersion: row.model_version,
+    matchSource: row.match_source,
+    attributionSourceCode: row.attribution_source_code ?? 'unattributed',
+    matchingMethodCode: row.matching_method_code ?? 'unknown',
+    lastAttributionRunAt: row.last_attribution_run_at
+  };
+}
+
+function buildAttributionConfidenceFingerprint(input: {
+  primaryCredit: PersistedAttributionTouchpoint | null;
+  journey: ResolvedJourney;
+  confidenceScore: number;
+  matchSource: string;
+  attributionSourceCode: string;
+}): AttributionConfidenceFingerprint {
+  const attributionReason = input.primaryCredit?.attributionReason ?? input.journey.attributionReason;
+
+  return {
+    sessionId: input.primaryCredit?.sessionId ?? null,
+    attributedSource: normalizeNullableString(input.primaryCredit?.source),
+    attributedMedium: normalizeNullableString(input.primaryCredit?.medium),
+    attributedCampaign: normalizeNullableString(input.primaryCredit?.campaign),
+    attributedContent: normalizeNullableString(input.primaryCredit?.content),
+    attributedTerm: normalizeNullableString(input.primaryCredit?.term),
+    attributedClickIdType: normalizeNullableString(input.primaryCredit?.clickIdType),
+    attributedClickIdValue: normalizeNullableString(input.primaryCredit?.clickIdValue),
+    confidenceScore: input.confidenceScore,
+    attributionReason,
+    modelVersion: ATTRIBUTION_MODEL_VERSION,
+    matchSource: input.matchSource,
+    attributionSourceCode: input.attributionSourceCode,
+    matchingMethodCode: attributionReason
+  };
+}
+
 async function persistAttribution(
   client: PoolClient,
   order: OrderRow,
@@ -522,14 +631,32 @@ async function persistAttribution(
 
   const primaryCredit = selectPersistedPrimaryTouchpoint(outputs, journey);
 
+  const persistedConfidenceState = await fetchPersistedAttributionConfidenceState(client, order.shopify_order_id);
   const matchedAt = new Date();
   const orderAttributionAudit = buildOrderAttributionAuditRecord(journey, matchedAt);
-  const confidenceMetadata = buildAttributionConfidenceMetadata({
+  const proposedConfidenceMetadata = buildAttributionConfidenceMetadata({
     journey,
     attributionSourceCode: orderAttributionAudit.source,
     lastAttributionRunAt: matchedAt
   });
   const matchSource = buildAttributionMatchSource(journey);
+  const confidenceFingerprint = buildAttributionConfidenceFingerprint({
+    primaryCredit,
+    journey,
+    confidenceScore: proposedConfidenceMetadata.confidenceScore,
+    matchSource,
+    attributionSourceCode: proposedConfidenceMetadata.attributionSourceCode
+  });
+  const attributionChanged = attributionConfidenceFingerprintChanged(persistedConfidenceState, confidenceFingerprint);
+  const confidenceMetadata =
+    attributionChanged || !persistedConfidenceState?.lastAttributionRunAt
+      ? proposedConfidenceMetadata
+      : {
+          confidenceScore: persistedConfidenceState.confidenceScore,
+          attributionSourceCode: persistedConfidenceState.attributionSourceCode,
+          matchingMethodCode: persistedConfidenceState.matchingMethodCode,
+          lastAttributionRunAt: persistedConfidenceState.lastAttributionRunAt
+        };
   const confidenceLabel = buildAttributionConfidenceLabel(confidenceMetadata.confidenceScore);
   const current = await fetchCurrentAttribution(client, order.shopify_order_id);
   const shouldApply = shouldApplyAttributionUpdate({
