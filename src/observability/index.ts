@@ -216,6 +216,45 @@ type AttributionQaPayloadFetchLogInput = {
   error?: unknown;
 };
 
+type AttributionRunOrderOutcomeLogInput = {
+  attributionRunId: string;
+  orderId: string;
+  outcome: 'recomputed' | 'skipped' | 'failed';
+  processedOrderCount: number;
+  recomputedOrderCount: number;
+  skippedOrderCount: number;
+  failedOrderCount: number;
+  modelCount?: number;
+  creditCount?: number;
+  primaryModelKey?: string | null;
+  primaryAllocationStatus?: string | null;
+  primaryConfidenceLabel?: string | null;
+  lookupResolutionErrorCount?: number;
+  lookupResolutionErrorCodes?: string[];
+  orderOccurredAtUtc?: Date | string | null;
+};
+
+type AttributionRunLookupResolutionErrorLogInput = {
+  attributionRunId: string;
+  orderId: string;
+  reasonCode: string;
+  orderOccurredAtUtc?: Date | string | null;
+};
+
+type AttributionConfidenceBackfillProgressLogInput = {
+  workerId: string;
+  dryRun: boolean;
+  stage: 'started' | 'batch_processed' | 'completed' | 'failed';
+  scannedOrders: number;
+  updatedOrders: number;
+  updatedResults: number;
+  skippedOrders: number;
+  fallbackRows: number;
+  failedBatches: number;
+  batchesProcessed: number;
+  lastOrderRowId: string | null;
+};
+
 const requestContextStorage = new AsyncLocalStorage<RequestContext>();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -229,6 +268,14 @@ function normalizeString(value: unknown): string | undefined {
 
   const normalized = value.trim();
   return normalized ? normalized : undefined;
+}
+
+function normalizeTimestamp(value: Date | string | null | undefined): string | null {
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  return normalizeString(value) ?? null;
 }
 
 function getGoogleCloudProjectId(): string | undefined {
@@ -1020,6 +1067,71 @@ export function emitMetaMetadataRawIdFallbackLog(input: MetaMetadataRawIdFallbac
   });
 }
 
+export function emitAttributionRunOrderOutcomeLog(input: AttributionRunOrderOutcomeLogInput): void {
+  const fields: SerializableFields = {
+    service: process.env.K_SERVICE ?? 'roas-radar-attribution-worker',
+    attributionRunId: input.attributionRunId,
+    orderId: input.orderId,
+    outcome: input.outcome,
+    processedOrderCount: input.processedOrderCount,
+    recomputedOrderCount: input.recomputedOrderCount,
+    skippedOrderCount: input.skippedOrderCount,
+    failedOrderCount: input.failedOrderCount,
+    modelCount: input.modelCount ?? null,
+    creditCount: input.creditCount ?? null,
+    primaryModelKey: input.primaryModelKey ?? null,
+    primaryAllocationStatus: input.primaryAllocationStatus ?? null,
+    primaryConfidenceLabel: input.primaryConfidenceLabel ?? null,
+    lookupResolutionErrorCount: input.lookupResolutionErrorCount ?? 0,
+    lookupResolutionErrorCodes: input.lookupResolutionErrorCodes ?? [],
+    orderOccurredAtUtc: normalizeTimestamp(input.orderOccurredAtUtc)
+  };
+
+  if (input.outcome === 'failed') {
+    logWarning('attribution_run_order_outcome', fields);
+    return;
+  }
+
+  logInfo('attribution_run_order_outcome', fields);
+}
+
+export function emitAttributionRunLookupResolutionErrorLog(input: AttributionRunLookupResolutionErrorLogInput): void {
+  logWarning('attribution_run_lookup_resolution_error', {
+    service: process.env.K_SERVICE ?? 'roas-radar-attribution-worker',
+    attributionRunId: input.attributionRunId,
+    orderId: input.orderId,
+    reasonCode: input.reasonCode,
+    orderOccurredAtUtc: normalizeTimestamp(input.orderOccurredAtUtc),
+    alertable: true
+  });
+}
+
+export function emitAttributionConfidenceBackfillProgressLog(
+  input: AttributionConfidenceBackfillProgressLogInput
+): void {
+  const lookupResolutionErrorRate = input.scannedOrders > 0 ? input.fallbackRows / input.scannedOrders : 0;
+  const skippedVsRecomputedRatio = input.updatedOrders > 0 ? input.skippedOrders / input.updatedOrders : input.skippedOrders;
+
+  logInfo('order_attribution_confidence_backfill_progress', {
+    service: process.env.K_SERVICE ?? 'roas-radar-attribution-worker',
+    workerId: input.workerId,
+    dryRun: input.dryRun,
+    stage: input.stage,
+    scannedOrders: input.scannedOrders,
+    updatedOrders: input.updatedOrders,
+    updatedResults: input.updatedResults,
+    skippedOrders: input.skippedOrders,
+    recomputedOrders: input.updatedOrders,
+    fallbackRows: input.fallbackRows,
+    lookupResolutionErrorCount: input.fallbackRows,
+    lookupResolutionErrorRate,
+    skippedVsRecomputedRatio,
+    failedBatches: input.failedBatches,
+    batchesProcessed: input.batchesProcessed,
+    lastOrderRowId: input.lastOrderRowId
+  });
+}
+
 export function buildAttributionBacklogLog(snapshot: AttributionBacklogSnapshot): string {
   return JSON.stringify({
     severity: 'INFO',
@@ -1045,5 +1157,8 @@ export const __observabilityTestUtils = {
   emitCampaignMetadataFreshnessSnapshotLog,
   emitCampaignMetadataSyncJobLifecycleLog,
   emitMetaMetadataLookupSummaryLog,
-  emitMetaMetadataRawIdFallbackLog
+  emitMetaMetadataRawIdFallbackLog,
+  emitAttributionRunOrderOutcomeLog,
+  emitAttributionRunLookupResolutionErrorLog,
+  emitAttributionConfidenceBackfillProgressLog
 };

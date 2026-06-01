@@ -1,7 +1,7 @@
 import type { PoolClient } from 'pg';
 
 import { withTransaction } from '../../db/pool.js';
-import { logError, logInfo } from '../../observability/index.js';
+import { emitAttributionConfidenceBackfillProgressLog, logError, logInfo } from '../../observability/index.js';
 
 const DEFAULT_BATCH_SIZE = 500;
 const DEFAULT_MAX_RETRIES = 3;
@@ -361,6 +361,19 @@ export async function backfillOrderAttributionConfidenceMetadata(
     maxRetries,
     afterOrderRowId: progress.cursor.lastOrderRowId
   });
+  emitAttributionConfidenceBackfillProgressLog({
+    workerId: options.workerId,
+    dryRun,
+    stage: 'started',
+    scannedOrders: progress.scannedOrders,
+    updatedOrders: progress.updatedOrders,
+    updatedResults: progress.updatedResults,
+    skippedOrders: Math.max(0, progress.scannedOrders - progress.updatedOrders),
+    fallbackRows: progress.fallbackRows,
+    failedBatches: progress.failedBatches,
+    batchesProcessed: progress.cursor.batchesProcessed,
+    lastOrderRowId: progress.cursor.lastOrderRowId
+  });
 
   while (!progress.cursor.completed) {
     let batch: ConfidenceBackfillBatchResult | null = null;
@@ -400,6 +413,19 @@ export async function backfillOrderAttributionConfidenceMetadata(
             failedBatches: progress.failedBatches,
             afterOrderRowId: progress.cursor.lastOrderRowId
           });
+          emitAttributionConfidenceBackfillProgressLog({
+            workerId: options.workerId,
+            dryRun,
+            stage: 'failed',
+            scannedOrders: progress.scannedOrders,
+            updatedOrders: progress.updatedOrders,
+            updatedResults: progress.updatedResults,
+            skippedOrders: Math.max(0, progress.scannedOrders - progress.updatedOrders),
+            fallbackRows: progress.fallbackRows,
+            failedBatches: progress.failedBatches,
+            batchesProcessed: progress.cursor.batchesProcessed,
+            lastOrderRowId: progress.cursor.lastOrderRowId
+          });
 
           if (publishProgress) {
             await publishProgress();
@@ -437,6 +463,19 @@ export async function backfillOrderAttributionConfidenceMetadata(
       lastOrderRowId: batch.lastOrderRowId,
       batchesProcessed: progress.cursor.batchesProcessed
     });
+    emitAttributionConfidenceBackfillProgressLog({
+      workerId: options.workerId,
+      dryRun,
+      stage: 'batch_processed',
+      scannedOrders: progress.scannedOrders,
+      updatedOrders: progress.updatedOrders,
+      updatedResults: progress.updatedResults,
+      skippedOrders: Math.max(0, progress.scannedOrders - progress.updatedOrders),
+      fallbackRows: progress.fallbackRows,
+      failedBatches: progress.failedBatches,
+      batchesProcessed: progress.cursor.batchesProcessed,
+      lastOrderRowId: progress.cursor.lastOrderRowId
+    });
 
     if (publishProgress) {
       await publishProgress();
@@ -455,6 +494,19 @@ export async function backfillOrderAttributionConfidenceMetadata(
     ...report,
     documentedFallback:
       'Rows whose legacy attribution source or method cannot be inferred are assigned attribution source unattributed and matching method unknown.'
+  });
+  emitAttributionConfidenceBackfillProgressLog({
+    workerId: options.workerId,
+    dryRun,
+    stage: 'completed',
+    scannedOrders: report.scannedOrders,
+    updatedOrders: report.updatedOrders,
+    updatedResults: report.updatedResults,
+    skippedOrders: Math.max(0, report.scannedOrders - report.updatedOrders),
+    fallbackRows: report.fallbackRows,
+    failedBatches: report.failedBatches,
+    batchesProcessed: report.cursor.batchesProcessed,
+    lastOrderRowId: report.cursor.lastOrderRowId
   });
 
   return report;

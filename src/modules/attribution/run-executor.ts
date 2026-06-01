@@ -2,6 +2,10 @@ import type { PoolClient } from 'pg';
 
 import { env } from '../../config/env.js';
 import { withTransaction } from '../../db/pool.js';
+import {
+  emitAttributionRunLookupResolutionErrorLog,
+  emitAttributionRunOrderOutcomeLog
+} from '../../observability/index.js';
 import { buildRawPayloadStorageMetadata } from '../../shared/raw-payload-storage.js';
 import {
   assertNoDeterministicViewImpressionOrderAttribution,
@@ -223,11 +227,36 @@ async function persistBatch(
     const order = dataset.orders[0];
     if (!order) {
       failedOrderIds.push(orderId);
+      emitAttributionRunLookupResolutionErrorLog({
+        attributionRunId: run.id,
+        orderId,
+        reasonCode: 'order_not_found'
+      });
+      emitAttributionRunOrderOutcomeLog({
+        attributionRunId: run.id,
+        orderId,
+        outcome: 'skipped',
+        processedOrderCount: 1,
+        recomputedOrderCount: 0,
+        skippedOrderCount: 1,
+        failedOrderCount: 0,
+        lookupResolutionErrorCount: 1,
+        lookupResolutionErrorCodes: ['order_not_found']
+      });
       continue;
     }
 
     const orderTouchpoints = dataset.touchpoints;
     const orderFailures = dataset.failures.filter((failure) => failure.orderId === orderId).map((failure) => failure.reasonCode);
+
+    for (const reasonCode of orderFailures) {
+      emitAttributionRunLookupResolutionErrorLog({
+        attributionRunId: run.id,
+        orderId,
+        reasonCode,
+        orderOccurredAtUtc: order.order_occurred_at_utc
+      });
+    }
 
     await client.query('DELETE FROM attribution_order_inputs WHERE run_id = $1::uuid AND order_id = $2', [run.id, orderId]);
 
@@ -665,6 +694,32 @@ async function persistBatch(
     });
 
     succeededOrderIds.push(orderId);
+    const primaryModelKey = ATTRIBUTION_MODELS[0] ?? null;
+    const primarySummary = primaryModelKey ? execution.summariesByModel[primaryModelKey] : null;
+    const primaryCredit = primaryModelKey ? execution.creditsByModel[primaryModelKey]?.find((credit) => credit.isPrimary) : null;
+
+    emitAttributionRunOrderOutcomeLog({
+      attributionRunId: run.id,
+      orderId,
+      outcome: 'recomputed',
+      processedOrderCount: 1,
+      recomputedOrderCount: 1,
+      skippedOrderCount: 0,
+      failedOrderCount: 0,
+      modelCount: ATTRIBUTION_MODELS.length,
+      creditCount: Object.values(execution.creditsByModel).reduce((total, credits) => total + credits.length, 0),
+      primaryModelKey,
+      primaryAllocationStatus: primarySummary?.allocationStatus ?? null,
+      primaryConfidenceLabel: primaryCredit
+        ? buildConfidenceLabel(
+            orderTouchpoints.find((touchpoint) => touchpoint.touchpoint_id === primaryCredit.touchpointId) ??
+              orderTouchpoints[0]
+          )
+        : null,
+      lookupResolutionErrorCount: orderFailures.length,
+      lookupResolutionErrorCodes: orderFailures,
+      orderOccurredAtUtc: order.order_occurred_at_utc
+    });
   }
 
   return {
