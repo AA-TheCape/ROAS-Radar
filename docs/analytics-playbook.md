@@ -19,6 +19,7 @@ Use this sequence when validating the dashboard or answering analytics questions
 2. Use this playbook for what each reporting table means, how attribution models differ, and why orders can move between channels.
 3. Use `docs/attribution-schema-v1.md` when a mismatch looks like a field-naming, normalization, or Shopify-attribute problem.
 4. Use `docs/operational-attribution-contracts.md` when a mismatch looks like resolver precedence, writeback, reconciliation, retention, or dead-letter behavior.
+5. Use `docs/confidence-scoring-contract-v1.md` and `docs/runbooks/attribution-confidence-scoring.md` when a mismatch involves attribution source, matching method, confidence score, confidence label, or `lastAttributionRunAt`.
 
 Practical rule:
 
@@ -176,12 +177,17 @@ Key fields:
 - `processed_at`, `created_at_shopify`, `updated_at_shopify`, `ingested_at`
 - `landing_session_id`, `checkout_token`, `cart_token`
 - `customer_identity_id`: deterministic identity attached during stitching
+- `attribution_source_id`, `matching_method_id`: lookup-backed metadata for the persisted order winner
+- `attribution_confidence_score`, `attribution_confidence_contract_version`
+- `last_attribution_run_at`: timestamp of the attribution run that wrote the current winner metadata
 - `raw_payload`: original webhook body
 
 Interpretation notes:
 
 - order reporting time uses `processed_at`, then `created_at_shopify`, then `ingested_at`
 - `landing_session_id`, `checkout_token`, and `cart_token` are the strongest deterministic evidence fields used by attribution
+- lookup IDs are internal storage fields; APIs expose the corresponding source and matching-method codes
+- `last_attribution_run_at` is about attribution metadata freshness, not Shopify order recency
 
 ### `attribution_results`
 
@@ -197,6 +203,9 @@ Key fields:
 - `attributed_click_id_type`, `attributed_click_id_value`
 - `confidence_score`
 - `confidence_label`
+- `attribution_source_id`, `matching_method_id`
+- `confidence_contract_version`
+- `last_attribution_run_at`
 - `attribution_reason`
 - `attributed_at`
 
@@ -204,6 +213,7 @@ Interpretation notes:
 
 - this table stores the primary `last_touch` result used for single-row order summaries
 - `match_source` is the durable provenance field for how the primary result was sourced
+- source and matching method IDs should identify the same winner as `match_source`, `attribution_reason`, and `confidence_score`
 - analysts comparing models should use `attribution_order_credits` and `daily_reporting_metrics`, not just `attribution_results`
 
 ### `attribution_order_credits`
@@ -221,6 +231,7 @@ Key fields:
 - `revenue_credit`
 - `is_primary`
 - `confidence_label`
+- `confidence_contract_version`
 - `attribution_reason`
 
 Interpretation notes:
@@ -598,6 +609,19 @@ It is not a measure of channel performance, campaign quality, or model superiori
 - `low`: `0.55`, `0.40`, `0.35`, `0.25`
 - `none`: `0.00`
 
+### Confidence metadata lifecycle
+
+Attribution source and matching method lookup IDs are created by database migrations, then used by the worker when it persists attribution. Analysts normally see codes, not numeric IDs:
+
+- `attributionSource`: source code such as `landing_session_id`, `checkout_token`, `shopify_hint_fallback`, `ga4_fallback`, or `unattributed`
+- `matchingMethod`: method code such as `matched_by_landing_session`, `matched_by_checkout_token`, `shopify_hint_derived`, or `ga4_fallback_derived`
+- `confidenceScore`: the v1 score for the same winning path
+- `lastAttributionRunAt`: when the current winner metadata was written
+
+The same winner metadata is persisted to `shopify_orders` and `attribution_results`. If those tables disagree for the same order, treat it as operational drift rather than an analytics interpretation issue.
+
+Confidence metadata is recomputed when the attribution winner or winner fingerprint changes. Common causes are order attribution backfills, Shopify hint recovery, GA4 fallback rollout changes, identity stitching changes, click-ID or UTM normalization fixes, and confidence-contract updates. If the winner is correct but lookup IDs, score, contract version, or `lastAttributionRunAt` are stale, operators use the confidence backfill described in `docs/runbooks/attribution-confidence-scoring.md`. If the winner is wrong, order attribution backfill must run before confidence backfill.
+
 ### Summary, campaigns, timeseries, and orders endpoints read different shapes
 
 `GET /api/reporting/summary`
@@ -618,7 +642,7 @@ It is not a measure of channel performance, campaign quality, or model superiori
 `GET /api/reporting/orders`
 
 - returns one row per order using the primary credit row for the selected model
-- exposes the persisted order-level attribution audit fields as the canonical contract, including `attributionTier`, `attributionTierLabel`, `attributionTierDescription`, `attributionSource`, `attributionMatchedAt`, `attributionReason`, `confidenceScore`, and canonical winner `sessionId`
+- exposes the persisted order-level attribution audit fields as the canonical contract, including `attributionTier`, `attributionTierLabel`, `attributionTierDescription`, `attributionSource`, `matchingMethod`, `attributionMatchedAt`, `attributionReason`, `confidenceScore`, `lastAttributionRunAt`, and canonical winner `sessionId`
 - also exposes `primaryCreditAttributionReason` for the selected model as a secondary debugging field
 - useful for debugging why a particular order appears under a channel or campaign
 
@@ -643,6 +667,7 @@ When a dashboard value looks wrong, ask these questions in order:
 - Is the issue a field capture or normalization question? If so, use `docs/attribution-schema-v1.md`.
 - Is the issue a resolver, Shopify writeback, retry, or reconciliation question? If so, use `docs/operational-attribution-contracts.md`.
 - Is the issue isolated to Deterministic Views? If so, use `docs/runbooks/meta-deterministic-ingestion.md`.
+- Is the issue a stale or inconsistent `attributionSource`, `matchingMethod`, `confidenceScore`, or `lastAttributionRunAt` value? If so, use `docs/runbooks/attribution-confidence-scoring.md`.
 
 ## Identity Stitching Impact
 

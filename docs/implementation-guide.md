@@ -10,14 +10,15 @@ Use this sequence when you are new to the repository and want the shortest path 
 2. Skim this guide through `Local Setup` so you know which services to start and which env vars matter.
 3. Read `docs/attribution-schema-v1.md` before changing capture fields, Shopify attribute keys, or normalization logic.
 4. Read `docs/raw-payload-persistence-contract.md` before changing Shopify, Meta Ads, or Google Ads raw-source payload storage.
-5. Read `docs/operational-attribution-contracts.md` before changing resolver precedence, Shopify writeback, retention, or recovery flows.
+5. Read `docs/operational-attribution-contracts.md` and `docs/confidence-scoring-contract-v1.md` before changing resolver precedence, lookup-backed attribution metadata, confidence scoring, Shopify writeback, retention, or recovery flows.
 6. Read `docs/analytics-playbook.md` and `docs/reporting-metrics.md` before changing dashboard-facing metrics or attribution interpretation.
+7. Use `docs/runbooks/attribution-confidence-scoring.md` when a change can require recomputing source IDs, matching method IDs, confidence score, confidence contract version, or `lastAttributionRunAt`.
 
 If you only need a starting point for one area:
 
 - capture and ingestion: `src/modules/tracking/index.ts` plus `docs/attribution-schema-v1.md`
 - Shopify ingestion and writeback: `src/modules/shopify/index.ts`, `src/modules/shopify/writeback.ts`, `docs/raw-payload-persistence-contract.md`, and `docs/operational-attribution-contracts.md`
-- attribution resolution: `src/modules/attribution/index.ts`, `src/modules/attribution/resolver.ts`, and `docs/last-non-direct-touch-approval-matrix.md`
+- attribution resolution and confidence lifecycle: `src/modules/attribution/index.ts`, `src/modules/attribution/resolver.ts`, `src/modules/attribution/confidence-backfill.ts`, `docs/last-non-direct-touch-approval-matrix.md`, `docs/confidence-scoring-contract-v1.md`, and `docs/runbooks/attribution-confidence-scoring.md`
 - ad sync ingestion: `src/modules/meta-ads/index.ts`, `src/modules/google-ads/index.ts`, and `docs/raw-payload-persistence-contract.md`
 - dashboard and reporting: `src/modules/reporting/index.ts`, `dashboard/`, `docs/analytics-playbook.md`, and `docs/reporting-metrics.md`
 
@@ -74,7 +75,7 @@ The attribution logic lives in:
 - `src/modules/attribution/index.ts`: queueing, journey resolution, persistence, aggregate refresh
 - `src/modules/attribution/engine.ts`: multi-model credit allocation
 
-The worker claims jobs from `attribution_jobs`, resolves the winning journey, persists `attribution_results` plus `attribution_order_credits`, and refreshes reporting aggregates. The matching order is:
+The worker claims jobs from `attribution_jobs`, resolves the winning journey, persists `attribution_results` plus `attribution_order_credits`, writes order-level attribution metadata back to `shopify_orders`, and refreshes reporting aggregates. The matching order is:
 
 1. `landing_session_id`
 2. `checkout_token`
@@ -82,7 +83,26 @@ The worker claims jobs from `attribution_jobs`, resolves the winning journey, pe
 4. stitched customer identity / email fallback
 5. unattributed fallback
 
-The operational contract for resolver precedence, Shopify writeback, reconciliation, and retention is documented in `docs/operational-attribution-contracts.md`.
+The operational contract for resolver precedence, Shopify writeback, reconciliation, and retention is documented in `docs/operational-attribution-contracts.md`. The confidence score and label contract is documented in `docs/confidence-scoring-contract-v1.md`.
+
+### Attribution metadata lifecycle
+
+Lookup-backed attribution metadata is created by migrations before the worker runs:
+
+- `db/migrations/0045_add_attribution_lookup_tables.sql` seeds stable `attribution_sources` and `matching_methods` IDs and codes.
+- `db/migrations/0046_add_order_attribution_confidence_metadata.sql` adds source/method foreign keys, confidence contract versions, and `last_attribution_run_at` columns to order and result tables, then backfills existing rows.
+
+At runtime, the attribution worker derives the winner once, then persists the same metadata across canonical order-level surfaces:
+
+- `attribution_results.attribution_source_id` and `shopify_orders.attribution_source_id` point to the winning source code such as `landing_session_id`, `checkout_token`, `shopify_hint_fallback`, `ga4_fallback`, or `unattributed`.
+- `attribution_results.matching_method_id` and `shopify_orders.matching_method_id` point to the matching reason such as `matched_by_checkout_token`, `shopify_hint_derived`, or `ga4_fallback_derived`.
+- `attribution_results.confidence_score` and `shopify_orders.attribution_confidence_score` store the bounded v1 score for that winner.
+- `confidence_contract_version` and `attribution_confidence_contract_version` stay at `v1` until a new versioned scoring contract is introduced.
+- `last_attribution_run_at` records the attribution run timestamp that wrote the current source, method, score, winner, and reason fingerprint.
+
+Reporting APIs expose the metadata as camelCase response fields. Order list and detail routes expose `attributionSource`, `matchingMethod`, `confidenceScore`, and `lastAttributionRunAt`; attribution result and explainability routes expose the same persisted winner metadata for audit and debugging.
+
+Recompute this metadata when resolver output, fallback eligibility, identity stitching, click-ID normalization, lookup IDs, or confidence score mappings change. Use `npm run attribution:backfill-confidence -- --dry-run` first when the winner is correct but the metadata columns are stale, then run the write-enabled pass. If the winner itself is wrong, queue order attribution backfill first and run confidence backfill only after the winning path is repaired.
 
 ### React dashboard
 
@@ -444,6 +464,7 @@ Responsibilities:
 - resolve journey evidence from sessions, events, and identity links
 - compute credit outputs across all attribution models
 - persist `attribution_results` and `attribution_order_credits`
+- keep `shopify_orders` lookup IDs, confidence score, confidence contract version, and `last_attribution_run_at` aligned with the winning attribution result
 - refresh `daily_reporting_metrics`
 - emit backlog and outcome logs for monitoring
 
@@ -534,6 +555,7 @@ npm run test:integration
 
 - jobs are created and processed end to end
 - attribution credits are persisted deterministically
+- order and result confidence metadata are persisted with active attribution source and matching method lookup codes
 - every supported attribution model returns the expected revenue split
 - first-touch, last-touch, and rule-based weighted outputs differ in the expected way
 
@@ -641,6 +663,7 @@ Use these docs when local symptoms match production behavior:
 - Ingestion failures: `docs/runbooks/ingestion-failures.md`
 - Attribution backlog: `docs/runbooks/attribution-worker-backlog.md`
 - API latency: `docs/runbooks/api-latency.md`
+- Attribution confidence scoring and metadata backfill: `docs/runbooks/attribution-confidence-scoring.md`
 - Database operations: `docs/database-operations.md`
 - Operational attribution contracts: `docs/operational-attribution-contracts.md`
 - Attribution Schema V1 reference: `docs/attribution-schema-v1.md`
@@ -659,6 +682,7 @@ When the local dashboard is loading but the numbers look wrong, use this map bef
 - field naming, null handling, and canonical Shopify keys: `docs/attribution-schema-v1.md`
 - exact raw-source JSONB persistence rules for external ingestion: `docs/raw-payload-persistence-contract.md`
 - writeback, reconciliation, retention, and dead-letter behavior: `docs/operational-attribution-contracts.md`
+- attribution source/matching method IDs, confidence score, or `lastAttributionRunAt` drift: `docs/runbooks/attribution-confidence-scoring.md`
 
 ## Recommended Engineer Workflow
 
@@ -670,3 +694,4 @@ When making changes to tracking, Shopify ingestion, attribution, or reporting:
 4. If the change affects dashboard behavior, run `npm --prefix dashboard run dev` and verify the corresponding view.
 5. If the change affects Cloud Run deployment shape or secrets, re-read `infra/cloud-run/README.md` before merging.
 6. If the change affects Shopify, Meta Ads, or Google Ads raw-source persistence, update `docs/raw-payload-persistence-contract.md` and the nearby ingestion-module reference in the same PR.
+7. If the change affects attribution source codes, matching method codes, confidence scoring, fallback precedence, or winner fingerprints, update `docs/confidence-scoring-contract-v1.md`, `docs/operational-attribution-contracts.md`, and `docs/runbooks/attribution-confidence-scoring.md` with the migration and backfill plan.

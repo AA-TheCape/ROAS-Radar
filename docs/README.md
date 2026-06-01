@@ -10,6 +10,7 @@
 4. Read [Operational Attribution Contracts](operational-attribution-contracts.md) and [Confidence Scoring Contract V1](confidence-scoring-contract-v1.md) for resolver precedence, confidence scoring, Shopify writeback, retention, and recovery semantics.
 5. Read [Recovery Job Framework](recovery-job-framework.md) before adding automatic backfill or recovery jobs.
 6. Read [Attribution QA Payload Schema V1](attribution-qa-payload-schema-v1.md) before changing per-order attribution QA exports or fixtures.
+7. Use [Attribution Confidence Scoring Runbook](runbooks/attribution-confidence-scoring.md) when lookup-backed attribution metadata, confidence scores, or `lastAttributionRunAt` drift from persisted results.
 
 ### Analysts
 
@@ -24,6 +25,7 @@
 - Use [Operational Attribution Contracts](operational-attribution-contracts.md) when you need resolver, writeback, retention, or dead-letter behavior.
 - Use [Attribution Completeness](runbooks/attribution-completeness.md), [Attribution QA Tooling](runbooks/attribution-qa-tooling.md), [Ingestion Failures](runbooks/ingestion-failures.md), and [Attribution Worker Backlog](runbooks/attribution-worker-backlog.md) for incident response.
 - Use [Deterministic Attribution Behavior](deterministic-attribution-behavior.md) when Clicks, Deterministic Views, Meta view-through, or combined comparison totals need explanation.
+- Use [Attribution Confidence Scoring Runbook](runbooks/attribution-confidence-scoring.md) when attribution source IDs, matching method IDs, confidence scores, confidence contract versions, or `lastAttributionRunAt` disagree between order and result surfaces.
 - Use [Cloud Run Pipelines](runbooks/cloud-run-pipelines.md) for Cloud Run deploy, scheduler, IAM, and rollback operations.
 - Use [Production Manual Backfill And Recovery](runbooks/production-manual-backfill-recovery.md) before any production manual backfill, recovery, or dead-letter replay.
 
@@ -53,6 +55,7 @@
 
 - [Attribution Completeness](runbooks/attribution-completeness.md): capture-rate, session-id, dual-write, writeback, and resolver incident response.
 - [Attribution QA Tooling](runbooks/attribution-qa-tooling.md): QA payload, admin debug, raw evidence retention, and snapshot write alert response.
+- [Attribution Confidence Scoring](runbooks/attribution-confidence-scoring.md): lookup table health, confidence drift, stale `lastAttributionRunAt`, order/result consistency, and confidence backfill repair.
 - [Attribution Worker Backlog](runbooks/attribution-worker-backlog.md): worker lag investigation and recovery steps.
 - [Ingestion Failures](runbooks/ingestion-failures.md): failed ingestion triage and remediation.
 - [API Latency](runbooks/api-latency.md): API latency investigation and recovery.
