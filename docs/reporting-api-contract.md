@@ -123,3 +123,27 @@ No removal date is scheduled for the flat `campaignDisplayName` compatibility fi
 - New consumers should read `campaignLabel`.
 - Existing consumers may continue reading the flat fields without change.
 - A future removal would require a new documented schema version and an explicit migration window.
+
+## Order Attribution Metadata
+
+Order read endpoints expose persisted attribution metadata additively on top of the existing order payloads.
+
+Affected endpoints:
+
+- `GET /api/reporting/orders`
+- `GET /api/reporting/orders/{shopifyOrderId}`
+
+Additive fields:
+
+- `attributionSource`: `string | null`; lookup-backed attribution source code such as `landing_session_id`, `checkout_token`, `shopify_marketing_hint`, `ga4_fallback`, or `unattributed`
+- `confidenceScore`: `number | null`; persisted attribution confidence score, constrained to `0 <= score <= 1`
+- `matchingMethod`: `string | null`; lookup-backed matching method code such as `matched_by_checkout_token`, `shopify_hint_derived`, `ga4_fallback_derived`, `unattributed`, or `unknown`
+- `lastAttributionRunAt`: `string | null`; ISO-8601 timestamp for the latest attribution run that wrote order metadata
+
+Existing fields, including `attributionMatchedAt`, `attributionReason`, `attributionTier`, and snapshot fields on the detail endpoint, remain unchanged.
+
+Attribution write paths reject invalid metadata instead of coercing it:
+
+- confidence scores outside `0..1` are invalid
+- `attributionSource` must resolve to an active `attribution_sources.code`
+- `matchingMethod` must resolve to an active `matching_methods.code`

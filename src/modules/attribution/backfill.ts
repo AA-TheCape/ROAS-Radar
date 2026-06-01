@@ -797,8 +797,8 @@ async function persistAttribution(
         $13,
         $14,
         $15,
-        COALESCE((SELECT id FROM attribution_sources WHERE code = $16), 9),
-        COALESCE((SELECT id FROM matching_methods WHERE code = $11), 11),
+        (SELECT id FROM attribution_sources WHERE code = $16 AND is_active = true),
+        (SELECT id FROM matching_methods WHERE code = $11 AND is_active = true),
         $12
       )
       ON CONFLICT (shopify_order_id)
@@ -851,8 +851,8 @@ async function persistAttribution(
           attribution_source = $3,
           attribution_matched_at = $4,
           attribution_reason = $5,
-          attribution_source_id = COALESCE((SELECT id FROM attribution_sources WHERE code = $3), 9),
-          matching_method_id = COALESCE((SELECT id FROM matching_methods WHERE code = $5), 11),
+          attribution_source_id = (SELECT id FROM attribution_sources WHERE code = $3 AND is_active = true),
+          matching_method_id = (SELECT id FROM matching_methods WHERE code = $5 AND is_active = true),
           attribution_confidence_score = $6,
           last_attribution_run_at = $4,
           attribution_snapshot = $7::jsonb,

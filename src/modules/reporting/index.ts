@@ -217,8 +217,12 @@ type OrderAttributionRow = {
   total_price: string | number;
   attribution_tier: string | null;
   attribution_source: string | null;
+  attribution_source_code: string | null;
+  matching_method_code: string | null;
   order_attribution_reason: string | null;
   attribution_matched_at: Date | null;
+  attribution_confidence_score: string | number | null;
+  last_attribution_run_at: Date | null;
   attribution_snapshot: unknown;
   attributed_source: string | null;
   attributed_medium: string | null;
@@ -246,8 +250,12 @@ type OrderDetailsRow = {
   source_name: string | null;
   attribution_tier: string | null;
   attribution_source: string | null;
+  attribution_source_code: string | null;
+  matching_method_code: string | null;
   attribution_matched_at: Date | null;
   attribution_reason: string | null;
+  attribution_confidence_score: string | number | null;
+  last_attribution_run_at: Date | null;
   attribution_snapshot: unknown;
   attribution_snapshot_updated_at: Date | null;
   ingested_at: Date;
@@ -519,6 +527,31 @@ function extractOrderAttributionMetadata(snapshot: unknown): OrderAttributionMet
       clickIdValue: readNullableString(winnerRecord?.clickIdValue)
     }
   };
+}
+
+function readOrderConfidenceScore(
+  persistedScore: string | number | null,
+  lastAttributionRunAt: Date | null,
+  snapshotScore: number | null
+): number | null {
+  if (persistedScore === null || persistedScore === undefined) {
+    return snapshotScore;
+  }
+
+  const parsed = Number(persistedScore);
+  if (!Number.isFinite(parsed)) {
+    return snapshotScore;
+  }
+
+  return lastAttributionRunAt || snapshotScore !== null ? parsed : null;
+}
+
+function readAttributionLookupCode(
+  legacyCode: string | null,
+  lookupCode: string | null,
+  lastAttributionRunAt: Date | null
+): string | null {
+  return legacyCode ?? (lastAttributionRunAt ? lookupCode : null);
 }
 
 function normalizeAttributionTier(value: string | null | undefined): ReportingAttributionTier {
@@ -1096,14 +1129,22 @@ export function createReportingRouter(): Router {
             o.total_price,
             o.attribution_tier,
             o.attribution_source,
+            sources.code AS attribution_source_code,
+            methods.code AS matching_method_code,
             o.attribution_reason AS order_attribution_reason,
             o.attribution_matched_at,
+            o.attribution_confidence_score::text AS attribution_confidence_score,
+            o.last_attribution_run_at,
             o.attribution_snapshot,
             c.attributed_source,
             c.attributed_medium,
             c.attributed_campaign,
             c.attribution_reason AS primary_credit_attribution_reason
           FROM shopify_orders o
+          LEFT JOIN attribution_sources sources
+            ON sources.id = o.attribution_source_id
+          LEFT JOIN matching_methods methods
+            ON methods.id = o.matching_method_id
           LEFT JOIN LATERAL (
             SELECT
               attributed_source,
@@ -1154,9 +1195,19 @@ export function createReportingRouter(): Router {
             attributionTier,
             attributionTierLabel: ATTRIBUTION_TIER_LABELS[attributionTier],
             attributionTierDescription: ATTRIBUTION_TIER_DESCRIPTIONS[attributionTier],
-            attributionSource: row.attribution_source,
+            attributionSource: readAttributionLookupCode(
+              row.attribution_source,
+              row.attribution_source_code,
+              row.last_attribution_run_at
+            ),
+            matchingMethod: readAttributionLookupCode(null, row.matching_method_code, row.last_attribution_run_at),
             attributionMatchedAt: row.attribution_matched_at?.toISOString() ?? null,
-            confidenceScore: metadata.confidenceScore,
+            confidenceScore: readOrderConfidenceScore(
+              row.attribution_confidence_score,
+              row.last_attribution_run_at,
+              metadata.confidenceScore
+            ),
+            lastAttributionRunAt: row.last_attribution_run_at?.toISOString() ?? null,
             sessionId: metadata.winner.sessionId
           };
         })
@@ -1195,14 +1246,22 @@ export function createReportingRouter(): Router {
             o.source_name,
             o.attribution_tier,
             o.attribution_source,
+            sources.code AS attribution_source_code,
+            methods.code AS matching_method_code,
             o.attribution_matched_at,
             o.attribution_reason,
+            o.attribution_confidence_score::text AS attribution_confidence_score,
+            o.last_attribution_run_at,
             o.attribution_snapshot,
             o.attribution_snapshot_updated_at,
             o.ingested_at,
             o.attribution_snapshot,
             o.raw_payload
           FROM shopify_orders o
+          LEFT JOIN attribution_sources sources
+            ON sources.id = o.attribution_source_id
+          LEFT JOIN matching_methods methods
+            ON methods.id = o.matching_method_id
           WHERE o.shopify_order_id = $1
           LIMIT 1
         `,
@@ -1300,10 +1359,20 @@ export function createReportingRouter(): Router {
           attributionTier: normalizeAttributionTier(order.attribution_tier),
           attributionTierLabel: ATTRIBUTION_TIER_LABELS[normalizeAttributionTier(order.attribution_tier)],
           attributionTierDescription: ATTRIBUTION_TIER_DESCRIPTIONS[normalizeAttributionTier(order.attribution_tier)],
-          attributionSource: order.attribution_source,
+          attributionSource: readAttributionLookupCode(
+            order.attribution_source,
+            order.attribution_source_code,
+            order.last_attribution_run_at
+          ),
+          matchingMethod: readAttributionLookupCode(null, order.matching_method_code, order.last_attribution_run_at),
           attributionMatchedAt: order.attribution_matched_at?.toISOString() ?? null,
           attributionReason: order.attribution_reason ?? 'unattributed',
-          confidenceScore: metadata.confidenceScore,
+          confidenceScore: readOrderConfidenceScore(
+            order.attribution_confidence_score,
+            order.last_attribution_run_at,
+            metadata.confidenceScore
+          ),
+          lastAttributionRunAt: order.last_attribution_run_at?.toISOString() ?? null,
           sessionId: metadata.winner.sessionId,
           attributedSource: metadata.winner.source,
           attributedMedium: metadata.winner.medium,

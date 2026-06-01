@@ -879,8 +879,10 @@ test('reporting orders only returns online store Shopify orders', async () => {
           attributionTierDescription:
             'No eligible first-party, Shopify hint, or GA4 fallback match qualified, or the required timing data could not be normalized.',
           attributionSource: null,
+          matchingMethod: null,
           attributionMatchedAt: null,
           confidenceScore: null,
+          lastAttributionRunAt: null,
           sessionId: null
         }
       ]
