@@ -125,8 +125,9 @@ test("shouldApplyAttributionUpdate covers every origin conflict permutation", ()
 			const currentPrecedence = attributionOriginPrecedence(currentOrigin);
 			const proposedPrecedence = attributionOriginPrecedence(proposedOrigin);
 			const expected =
-				proposedOrigin !== "unattributed" &&
-				proposedPrecedence > currentPrecedence;
+				proposedOrigin === "unattributed"
+					? currentOrigin === "unknown"
+					: proposedPrecedence > currentPrecedence;
 
 			assert.equal(
 				shouldApplyAttributionUpdate({ current, proposed }),

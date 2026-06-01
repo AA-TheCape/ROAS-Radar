@@ -198,7 +198,7 @@ export function shouldApplyAttributionUpdate(input: {
 	proposed: AttributionUpdateCandidate;
 }): boolean {
 	if (input.proposed.origin === "unattributed") {
-		return !input.current;
+		return !input.current || input.current.origin === "unknown";
 	}
 
 	if (!input.current) {
