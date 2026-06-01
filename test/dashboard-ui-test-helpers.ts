@@ -814,6 +814,8 @@ export function createOrderDetailsProps(
             revenueCredit: 195,
             isPrimary: true,
             attributionReason: 'matched checkout token',
+            matchSource: 'checkout_token',
+            confidenceLabel: 'high',
             createdAt: '2026-04-20T18:31:00.000Z',
             modelVersion: 2
           },
@@ -833,6 +835,8 @@ export function createOrderDetailsProps(
             revenueCredit: 97.5,
             isPrimary: false,
             attributionReason: 'modeled credit',
+            matchSource: 'landing_session_id',
+            confidenceLabel: 'high',
             createdAt: '2026-04-20T18:31:00.000Z',
             modelVersion: 2
           }

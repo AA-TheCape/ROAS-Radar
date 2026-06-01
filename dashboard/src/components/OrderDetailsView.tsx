@@ -6,8 +6,8 @@ import {
   formatAttributionTierLabel,
   getAttributionTierDescription
 } from '../lib/attributionTier';
+import { getConfidenceDisplay } from '../lib/confidence';
 import {
-	formatConfidenceScore,
 	formatCurrency,
 	formatDateTimeLabel,
 	formatNumber,
@@ -103,7 +103,7 @@ function formatContractValue(value: string | null | undefined): string {
 
 function readSnapshotWinner(
 	snapshot: unknown,
-): { matchSource?: string; confidenceLabel?: string } | null {
+): { matchSource?: string } | null {
 	if (!snapshot || typeof snapshot !== "object") {
 		return null;
 	}
@@ -113,7 +113,7 @@ function readSnapshotWinner(
 		return null;
 	}
 
-	return winner as { matchSource?: string; confidenceLabel?: string };
+	return winner as { matchSource?: string };
 }
 
 function MetricCard({
@@ -173,6 +173,7 @@ export default function OrderDetailsView({
 	const lineItems = data?.lineItems ?? [];
 	const attributionCredits = data?.attributionCredits ?? [];
 	const snapshotWinner = readSnapshotWinner(order?.attributionSnapshot);
+	const confidenceDisplay = getConfidenceDisplay(order);
 	const [lineItemSearch, setLineItemSearch] = useState("");
 	const [lineItemSort, setLineItemSort] = useState<
 		SortState<"title" | "sku" | "quantity" | "price" | "vendor">
@@ -376,7 +377,11 @@ export default function OrderDetailsView({
                 </div>
                 <div>
                   <dt>Confidence score</dt>
-                  <dd>{order ? formatConfidenceScore(order.confidenceScore) : 'Not available'}</dd>
+                  <dd>{confidenceDisplay.label}</dd>
+                </div>
+                <div>
+                  <dt>Confidence state</dt>
+                  <dd>{confidenceDisplay.detail}</dd>
                 </div>
                 <div>
                   <dt>Last attribution run</dt>
@@ -501,8 +506,8 @@ export default function OrderDetailsView({
 								<dd>{formatContractValue(snapshotWinner?.matchSource)}</dd>
 							</div>
 							<div>
-								<dt>Winner confidence</dt>
-								<dd>{formatContractValue(snapshotWinner?.confidenceLabel)}</dd>
+								<dt>Order confidence</dt>
+								<dd>{confidenceDisplay.label}</dd>
 							</div>
 						</DetailList>
 					</DetailCard>

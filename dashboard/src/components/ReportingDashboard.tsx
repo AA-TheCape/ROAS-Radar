@@ -13,9 +13,9 @@ import {
   ATTRIBUTION_TIER_VALUES,
   formatAttributionTierLabel
 } from '../lib/attributionTier';
+import { getConfidenceDisplay } from '../lib/confidence';
 import {
   formatCompactCurrency,
-  formatConfidenceScore,
   formatCurrency,
   formatDateLabel,
   formatDateTimeLabel,
@@ -1534,7 +1534,7 @@ const ReportingDashboard = memo(function ReportingDashboard({
         source: (row) => `${row.source ?? ''} ${row.medium ?? ''}`,
         campaign: (row) => row.campaign ?? '',
         totalPrice: (row) => row.totalPrice,
-        confidenceScore: (row) => row.confidenceScore ?? -1,
+        confidenceScore: (row) => row.confidenceScore ?? (row.lastAttributionRunAt ? -1 : -2),
         lastAttributionRunAt: (row) => row.lastAttributionRunAt ?? ''
       }),
     [filteredOrders, orderSort]
@@ -2023,8 +2023,8 @@ const ReportingDashboard = memo(function ReportingDashboard({
                       <TableCell>{formatDateTimeLabel(row.processedAt, reportingTimezone)}</TableCell>
                       <TableCell>
                         <PrimaryCell className="gap-0.5">
-                          <strong>{row.source ?? 'Unattributed'}</strong>
-                          <span>{row.medium ?? (row.attributionTier === 'unattributed' ? 'No attributed medium' : 'No medium')}</span>
+                          <strong>{row.source ?? (getConfidenceDisplay(row).state === 'pending' ? 'Pending' : 'Unattributed')}</strong>
+                          <span>{row.medium ?? (getConfidenceDisplay(row).state === 'pending' ? 'Awaiting attribution run' : row.attributionTier === 'unattributed' ? 'No attributed medium' : 'No medium')}</span>
                         </PrimaryCell>
                       </TableCell>
                       <TableCell>
@@ -2033,9 +2033,14 @@ const ReportingDashboard = memo(function ReportingDashboard({
                           <span>{row.attributionSource ?? 'No persisted source'}</span>
                         </PrimaryCell>
                       </TableCell>
-                      <TableCell>{row.campaign ?? (row.attributionTier === 'unattributed' ? 'No attributed campaign' : 'No campaign')}</TableCell>
+                      <TableCell>{row.campaign ?? (getConfidenceDisplay(row).state === 'pending' ? 'Pending' : row.attributionTier === 'unattributed' ? 'No attributed campaign' : 'No campaign')}</TableCell>
                       <TableCell>{formatCurrency(row.totalPrice)}</TableCell>
-                      <TableCell>{formatConfidenceScore(row.confidenceScore)}</TableCell>
+                      <TableCell>
+                        <PrimaryCell className="gap-0.5">
+                          <strong>{getConfidenceDisplay(row).label}</strong>
+                          <span>{getConfidenceDisplay(row).detail}</span>
+                        </PrimaryCell>
+                      </TableCell>
                       <TableCell>{row.matchingMethod?.replace(/_/g, ' ') ?? 'Not available'}</TableCell>
                       <TableCell>{formatDateTimeLabel(row.lastAttributionRunAt, reportingTimezone)}</TableCell>
                       <TableCell>

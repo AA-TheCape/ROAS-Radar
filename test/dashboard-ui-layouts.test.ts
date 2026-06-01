@@ -167,6 +167,8 @@ test("reporting dashboard search and order drill-in stay wired for high-traffic 
     assert.match(mounted.container.textContent ?? '', /Order attribution rows/);
     assert.match(mounted.container.textContent ?? '', /Deterministic first-party/);
     assert.match(mounted.container.textContent ?? '', /Unattributed/);
+    assert.match(mounted.container.textContent ?? '', /Pending/);
+    assert.match(mounted.container.textContent ?? '', /Awaiting attribution run/);
 
 		const orderButton = mounted.container.querySelector(
 			'button[aria-label="Open order details for Shopify order 1105"]',

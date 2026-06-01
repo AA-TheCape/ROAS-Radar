@@ -1419,6 +1419,8 @@ export function createReportingRouter(): Router {
           revenueCredit: Number(row.revenue_credit),
           isPrimary: row.is_primary,
           attributionReason: row.attribution_reason,
+          matchSource: row.match_source,
+          confidenceLabel: row.confidence_label,
           createdAt: row.created_at.toISOString(),
           modelVersion: row.model_version
         }))
