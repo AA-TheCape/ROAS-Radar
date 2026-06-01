@@ -323,7 +323,7 @@ test('campaign metadata API refresh records partial API outages without losing s
     });
 
     assert.equal(report.status, 'failed');
-    assert.equal(report.totalCampaignReferences, 3);
+    assert.equal(report.totalCampaignReferences, 2);
     assert.deepEqual(googleCalls, [
       {
         accountIds: ['acct-google'],

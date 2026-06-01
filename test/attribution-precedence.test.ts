@@ -137,6 +137,27 @@ test("shouldApplyAttributionUpdate covers every origin conflict permutation", ()
 	}
 });
 
+test("shouldApplyAttributionUpdate persists an initial unattributed fallback", () => {
+	assert.equal(
+		shouldApplyAttributionUpdate({
+			current: null,
+			proposed: candidate(
+				"unattributed",
+				attribution({
+					sessionId: null,
+					source: null,
+					medium: null,
+					campaign: null,
+					clickIdType: null,
+					clickIdValue: null,
+					attributionReason: "unattributed",
+				}),
+			),
+		}),
+		true,
+	);
+});
+
 test("shouldApplyAttributionUpdate uses stable same-origin tie-break behavior", () => {
 	assert.equal(
 		shouldApplyAttributionUpdate({
