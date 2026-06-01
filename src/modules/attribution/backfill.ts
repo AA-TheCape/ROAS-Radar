@@ -509,6 +509,7 @@ async function fetchPersistedAttributionConfidenceState(
     match_source: string;
     attribution_source_code: string | null;
     matching_method_code: string | null;
+    confidence_contract_version: string | null;
     last_attribution_run_at: Date | null;
   }>(
     `
@@ -527,6 +528,7 @@ async function fetchPersistedAttributionConfidenceState(
         results.match_source,
         sources.code AS attribution_source_code,
         methods.code AS matching_method_code,
+        results.confidence_contract_version,
         results.last_attribution_run_at
       FROM attribution_results results
       LEFT JOIN attribution_sources sources
@@ -560,6 +562,7 @@ async function fetchPersistedAttributionConfidenceState(
     matchSource: row.match_source,
     attributionSourceCode: row.attribution_source_code ?? 'unattributed',
     matchingMethodCode: row.matching_method_code ?? 'unknown',
+    confidenceContractVersion: row.confidence_contract_version ?? 'v1',
     lastAttributionRunAt: row.last_attribution_run_at
   };
 }
@@ -587,7 +590,8 @@ function buildAttributionConfidenceFingerprint(input: {
     modelVersion: ATTRIBUTION_MODEL_VERSION,
     matchSource: input.matchSource,
     attributionSourceCode: input.attributionSourceCode,
-    matchingMethodCode: attributionReason
+    matchingMethodCode: attributionReason,
+    confidenceContractVersion: 'v1'
   };
 }
 
@@ -632,6 +636,7 @@ async function persistAttribution(
           confidenceScore: persistedConfidenceState.confidenceScore,
           attributionSourceCode: persistedConfidenceState.attributionSourceCode,
           matchingMethodCode: persistedConfidenceState.matchingMethodCode,
+          confidenceContractVersion: persistedConfidenceState.confidenceContractVersion,
           lastAttributionRunAt: persistedConfidenceState.lastAttributionRunAt
         };
   const confidenceLabel = buildAttributionConfidenceLabel(confidenceMetadata.confidenceScore);
@@ -706,7 +711,8 @@ async function persistAttribution(
             attribution_reason,
             model_version,
             match_source,
-            confidence_label
+            confidence_label,
+            confidence_contract_version
           )
           VALUES (
             $1,
@@ -727,7 +733,8 @@ async function persistAttribution(
             $16,
             $17,
             $18,
-            $19
+            $19,
+            $20
           )
         `,
         [
@@ -749,7 +756,8 @@ async function persistAttribution(
           credit.attributionReason,
           ATTRIBUTION_MODEL_VERSION,
           matchSource,
-          confidenceLabel
+          confidenceLabel,
+          confidenceMetadata.confidenceContractVersion
         ]
       );
     }
@@ -777,6 +785,7 @@ async function persistAttribution(
         confidence_label,
         attribution_source_id,
         matching_method_id,
+        confidence_contract_version,
         last_attribution_run_at
       )
       VALUES (
@@ -799,6 +808,7 @@ async function persistAttribution(
         $15,
         (SELECT id FROM attribution_sources WHERE code = $16 AND is_active = true),
         (SELECT id FROM matching_methods WHERE code = $11 AND is_active = true),
+        $17,
         $12
       )
       ON CONFLICT (shopify_order_id)
@@ -820,6 +830,7 @@ async function persistAttribution(
         confidence_label = EXCLUDED.confidence_label,
         attribution_source_id = EXCLUDED.attribution_source_id,
         matching_method_id = EXCLUDED.matching_method_id,
+        confidence_contract_version = EXCLUDED.confidence_contract_version,
         last_attribution_run_at = EXCLUDED.last_attribution_run_at
     `,
     [
@@ -838,7 +849,8 @@ async function persistAttribution(
       ATTRIBUTION_MODEL_VERSION,
       matchSource,
       confidenceLabel,
-      confidenceMetadata.attributionSourceCode
+      confidenceMetadata.attributionSourceCode,
+      confidenceMetadata.confidenceContractVersion
     ]
   );
 
@@ -854,6 +866,7 @@ async function persistAttribution(
           attribution_source_id = (SELECT id FROM attribution_sources WHERE code = $3 AND is_active = true),
           matching_method_id = (SELECT id FROM matching_methods WHERE code = $5 AND is_active = true),
           attribution_confidence_score = $6,
+          attribution_confidence_contract_version = $8,
           last_attribution_run_at = $4,
           attribution_snapshot = $7::jsonb,
           attribution_snapshot_updated_at = $4
@@ -866,7 +879,8 @@ async function persistAttribution(
         confidenceMetadata.lastAttributionRunAt,
         orderAttributionAudit.reason,
         confidenceMetadata.confidenceScore,
-        JSON.stringify(attributionSnapshot)
+        JSON.stringify(attributionSnapshot),
+        confidenceMetadata.confidenceContractVersion
       ]
     );
     emitAttributionQaSnapshotWriteLog({

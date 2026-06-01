@@ -9,6 +9,7 @@ This contract applies to confidence fields attached to resolved Shopify order at
 - `attribution_results.confidence_score`
 - `attribution_results.confidence_label`
 - `attribution_order_credits.confidence_label`
+- `attribution_order_credits.confidence_contract_version`
 - `shopify_orders.attribution_confidence_score`
 - reporting and API response fields exposed as `confidenceScore`
 
@@ -16,7 +17,7 @@ This contract does not score channel quality, campaign performance, revenue reli
 
 ## Score Values
 
-Scores are bounded decimals in the inclusive range `0 <= score <= 1`. Writers must clamp explicit candidate scores into that range and round persisted values to no more than four decimal places.
+Scores are bounded decimals in the inclusive range `0 <= score <= 1`. Writers must clamp explicit candidate scores into that range and round persisted values to exactly the two-decimal contract precision.
 
 | Winning path | `match_source` or source code | `attribution_reason` | Score | Label |
 | --- | --- | --- | ---: | --- |
@@ -63,6 +64,9 @@ Backend attribution writers must persist the same bounded confidence score for t
 
 - `attribution_results.confidence_score`
 - `shopify_orders.attribution_confidence_score`
+- `shopify_orders.attribution_confidence_contract_version`
+- `attribution_results.confidence_contract_version`
+- `attribution_order_credits.confidence_contract_version`
 - winner snapshots stored in `shopify_orders.attribution_snapshot` when the snapshot includes confidence
 
 `attribution_results.attribution_source_id`, `attribution_results.matching_method_id`, `shopify_orders.attribution_source_id`, and `shopify_orders.matching_method_id` must identify the same winner used to select the confidence score.

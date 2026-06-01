@@ -135,7 +135,7 @@ Affected endpoints:
 
 Additive fields:
 
-- `attributionSource`: `string | null`; lookup-backed attribution source code such as `landing_session_id`, `checkout_token`, `shopify_marketing_hint`, `ga4_fallback`, or `unattributed`
+- `attributionSource`: `string | null`; lookup-backed attribution source code such as `landing_session_id`, `checkout_token`, `shopify_hint_fallback`, `ga4_fallback`, or `unattributed`
 - `confidenceScore`: `number | null`; persisted attribution confidence score, constrained to `0 <= score <= 1`
 - `matchingMethod`: `string | null`; lookup-backed matching method code such as `matched_by_checkout_token`, `shopify_hint_derived`, `ga4_fallback_derived`, `unattributed`, or `unknown`
 - `lastAttributionRunAt`: `string | null`; ISO-8601 timestamp for the latest attribution run that wrote order metadata

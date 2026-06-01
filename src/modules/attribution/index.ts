@@ -532,6 +532,7 @@ async function fetchPersistedAttributionConfidenceState(
     match_source: string;
     attribution_source_code: string | null;
     matching_method_code: string | null;
+    confidence_contract_version: string | null;
     last_attribution_run_at: Date | null;
   }>(
     `
@@ -550,6 +551,7 @@ async function fetchPersistedAttributionConfidenceState(
         results.match_source,
         sources.code AS attribution_source_code,
         methods.code AS matching_method_code,
+        results.confidence_contract_version,
         results.last_attribution_run_at
       FROM attribution_results results
       LEFT JOIN attribution_sources sources
@@ -583,6 +585,7 @@ async function fetchPersistedAttributionConfidenceState(
     matchSource: row.match_source,
     attributionSourceCode: row.attribution_source_code ?? 'unattributed',
     matchingMethodCode: row.matching_method_code ?? 'unknown',
+    confidenceContractVersion: row.confidence_contract_version ?? 'v1',
     lastAttributionRunAt: row.last_attribution_run_at
   };
 }
@@ -610,7 +613,8 @@ function buildAttributionConfidenceFingerprint(input: {
     modelVersion: ATTRIBUTION_MODEL_VERSION,
     matchSource: input.matchSource,
     attributionSourceCode: input.attributionSourceCode,
-    matchingMethodCode: attributionReason
+    matchingMethodCode: attributionReason,
+    confidenceContractVersion: 'v1'
   };
 }
 
@@ -655,6 +659,7 @@ async function persistAttribution(
           confidenceScore: persistedConfidenceState.confidenceScore,
           attributionSourceCode: persistedConfidenceState.attributionSourceCode,
           matchingMethodCode: persistedConfidenceState.matchingMethodCode,
+          confidenceContractVersion: persistedConfidenceState.confidenceContractVersion,
           lastAttributionRunAt: persistedConfidenceState.lastAttributionRunAt
         };
   const confidenceLabel = buildAttributionConfidenceLabel(confidenceMetadata.confidenceScore);
@@ -731,7 +736,8 @@ async function persistAttribution(
             attribution_reason,
             model_version,
             match_source,
-            confidence_label
+            confidence_label,
+            confidence_contract_version
           )
           VALUES (
             $1,
@@ -752,7 +758,8 @@ async function persistAttribution(
             $16,
             $17,
             $18,
-            $19
+            $19,
+            $20
           )
         `,
         [
@@ -774,7 +781,8 @@ async function persistAttribution(
           credit.attributionReason,
           ATTRIBUTION_MODEL_VERSION,
           matchSource,
-          confidenceLabel
+          confidenceLabel,
+          confidenceMetadata.confidenceContractVersion
         ]
       );
     }
@@ -802,6 +810,7 @@ async function persistAttribution(
         confidence_label,
         attribution_source_id,
         matching_method_id,
+        confidence_contract_version,
         last_attribution_run_at
       )
       VALUES (
@@ -824,6 +833,7 @@ async function persistAttribution(
         $15,
         (SELECT id FROM attribution_sources WHERE code = $16 AND is_active = true),
         (SELECT id FROM matching_methods WHERE code = $11 AND is_active = true),
+        $17,
         $12
       )
       ON CONFLICT (shopify_order_id)
@@ -845,6 +855,7 @@ async function persistAttribution(
         confidence_label = EXCLUDED.confidence_label,
         attribution_source_id = EXCLUDED.attribution_source_id,
         matching_method_id = EXCLUDED.matching_method_id,
+        confidence_contract_version = EXCLUDED.confidence_contract_version,
         last_attribution_run_at = EXCLUDED.last_attribution_run_at
     `,
     [
@@ -863,7 +874,8 @@ async function persistAttribution(
       ATTRIBUTION_MODEL_VERSION,
       matchSource,
       confidenceLabel,
-      confidenceMetadata.attributionSourceCode
+      confidenceMetadata.attributionSourceCode,
+      confidenceMetadata.confidenceContractVersion
     ]
   );
 
@@ -879,6 +891,7 @@ async function persistAttribution(
           attribution_source_id = (SELECT id FROM attribution_sources WHERE code = $3 AND is_active = true),
           matching_method_id = (SELECT id FROM matching_methods WHERE code = $5 AND is_active = true),
           attribution_confidence_score = $6,
+          attribution_confidence_contract_version = $8,
           last_attribution_run_at = $4,
           attribution_snapshot = $7::jsonb,
           attribution_snapshot_updated_at = $4
@@ -891,7 +904,8 @@ async function persistAttribution(
         confidenceMetadata.lastAttributionRunAt,
         orderAttributionAudit.reason,
         confidenceMetadata.confidenceScore,
-        JSON.stringify(attributionSnapshot)
+        JSON.stringify(attributionSnapshot),
+        confidenceMetadata.confidenceContractVersion
       ]
     );
     emitAttributionQaSnapshotWriteLog({
@@ -1038,7 +1052,7 @@ export async function applySyntheticAttributionForOrder(
       clickIdType: normalizedClickIdType,
       clickIdValue: normalizedClickIdValue,
       attributionReason: input.attributionReason,
-      ingestionSource: 'customer_identity',
+      ingestionSource: input.matchSource === 'ga4_fallback' ? 'ga4_fallback' : 'shopify_marketing_hint',
       isDirect: isDirectTouchpoint({
         source: normalizedSource,
         medium: normalizedMedium,
@@ -1050,10 +1064,33 @@ export async function applySyntheticAttributionForOrder(
       isForced: true
     };
 
-    const confidenceScore = input.confidenceScore ?? 0.35;
+    const syntheticTier = input.matchSource === 'ga4_fallback' ? 'ga4_fallback' : 'deterministic_shopify_hint';
+    const confidenceScore =
+      input.confidenceScore ??
+      (input.matchSource === 'ga4_fallback' ? (normalizedClickIdValue ? 0.35 : 0.25) : normalizedClickIdValue ? 0.55 : 0.4);
+    const syntheticCandidate = {
+      sourceClass: syntheticTier,
+      sourceKey: `synthetic:${shopifyOrderId}:${orderOccurredAt.toISOString()}`,
+      sessionId: null,
+      sourceTouchEventId: null,
+      ingestionSource: syntheticTier === 'ga4_fallback' ? 'ga4_fallback' : 'shopify_marketing_hint',
+      occurredAtUtc: touchpoint.occurredAt,
+      source: touchpoint.source,
+      medium: touchpoint.medium,
+      campaign: touchpoint.campaign,
+      content: touchpoint.content,
+      term: touchpoint.term,
+      clickIdType: touchpoint.clickIdType,
+      clickIdValue: touchpoint.clickIdValue,
+      attributionReason: touchpoint.attributionReason,
+      confidenceScore,
+      isDirect: touchpoint.isDirect,
+      isSynthetic: true
+    } as const;
+
     await persistAttribution(db, order, {
       journey: {
-        tier: 'deterministic_first_party',
+        tier: syntheticTier,
         touchpoints: [touchpoint],
         winner: touchpoint,
         confidenceScore,
@@ -1068,29 +1105,9 @@ export async function applySyntheticAttributionForOrder(
           : order.created_at_shopify
             ? 'created_at_shopify'
             : 'ingested_at',
-        deterministicFirstParty: [
-          {
-            sourceClass: 'deterministic_first_party',
-            sourceKey: `synthetic:${shopifyOrderId}:${orderOccurredAt.toISOString()}`,
-            sessionId: null,
-            sourceTouchEventId: null,
-            ingestionSource: 'customer_identity',
-            occurredAtUtc: touchpoint.occurredAt,
-            source: touchpoint.source,
-            medium: touchpoint.medium,
-            campaign: touchpoint.campaign,
-            content: touchpoint.content,
-            term: touchpoint.term,
-            clickIdType: touchpoint.clickIdType,
-            clickIdValue: touchpoint.clickIdValue,
-            attributionReason: touchpoint.attributionReason,
-            confidenceScore,
-            isDirect: touchpoint.isDirect,
-            isSynthetic: true
-          }
-        ],
-        shopifyHint: [],
-        ga4Fallback: [],
+        deterministicFirstParty: [],
+        shopifyHint: syntheticTier === 'deterministic_shopify_hint' ? [syntheticCandidate] : [],
+        ga4Fallback: syntheticTier === 'ga4_fallback' ? [syntheticCandidate] : [],
         normalizationFailures: []
       }
     });

@@ -1073,7 +1073,7 @@ test('confidence metadata only advances when attribution-relevant fields change'
 
     await processOrder('order-confidence-diff-1');
     const initialMetadata = await fetchConfidenceMetadata('order-confidence-diff-1');
-    assert.equal(initialMetadata.order_confidence_score, '0.9000');
+    assert.equal(initialMetadata.order_confidence_score, '0.90');
     assert.equal(initialMetadata.result_confidence_score, '0.90');
     assert.equal(initialMetadata.result_attribution_reason, 'matched_by_cart_token');
 
@@ -1106,7 +1106,7 @@ test('confidence metadata only advances when attribution-relevant fields change'
     );
     await processOrder('order-confidence-diff-1');
     const changedMetadata = await fetchConfidenceMetadata('order-confidence-diff-1');
-    assert.equal(changedMetadata.order_confidence_score, '1.0000');
+    assert.equal(changedMetadata.order_confidence_score, '1.00');
     assert.equal(changedMetadata.result_confidence_score, '1.00');
     assert.equal(changedMetadata.result_attribution_reason, 'matched_by_checkout_token');
     assert.notEqual(

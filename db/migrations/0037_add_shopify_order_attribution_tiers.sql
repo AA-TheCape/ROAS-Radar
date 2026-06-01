@@ -21,11 +21,11 @@ WITH derived_attribution AS (
       ELSE 'ga4_fallback'
     END AS attribution_tier,
     CASE
-      WHEN results.attribution_reason = 'shopify_hint_derived' THEN 'shopify_marketing_hint'
+      WHEN results.attribution_reason = 'shopify_hint_derived' THEN 'shopify_hint_fallback'
       WHEN results.attribution_reason = 'matched_by_landing_session' THEN 'landing_session_id'
       WHEN results.attribution_reason = 'matched_by_checkout_token' THEN 'checkout_token'
       WHEN results.attribution_reason = 'matched_by_cart_token' THEN 'cart_token'
-      WHEN results.attribution_reason = 'matched_by_customer_identity' THEN 'stitched_identity_journey'
+      WHEN results.attribution_reason = 'matched_by_customer_identity' THEN 'customer_identity'
       WHEN results.attribution_reason = 'unattributed' THEN 'unattributed'
       ELSE 'ga4_fallback'
     END AS attribution_source,

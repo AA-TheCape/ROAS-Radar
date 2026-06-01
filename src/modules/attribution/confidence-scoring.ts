@@ -1,6 +1,8 @@
 import type { ResolvedAttributionTouchpoint, ResolvedIngestionSource, ResolvedJourney } from './resolver.js';
 
-const CONFIDENCE_DECIMAL_PLACES = 4;
+export const ATTRIBUTION_CONFIDENCE_CONTRACT_VERSION = 'v1';
+
+const CONFIDENCE_DECIMAL_PLACES = 2;
 
 const DEFAULT_SOURCE_CONFIDENCE: Record<ResolvedIngestionSource, number> = {
   landing_session_id: 1,
@@ -15,6 +17,7 @@ export type AttributionConfidenceMetadata = {
   confidenceScore: number;
   attributionSourceCode: string;
   matchingMethodCode: string;
+  confidenceContractVersion: typeof ATTRIBUTION_CONFIDENCE_CONTRACT_VERSION;
   lastAttributionRunAt: Date;
 };
 
@@ -33,6 +36,7 @@ export type AttributionConfidenceFingerprint = {
   matchSource: string;
   attributionSourceCode: string;
   matchingMethodCode: string;
+  confidenceContractVersion: string;
 };
 
 export type PersistedAttributionConfidenceState = AttributionConfidenceFingerprint & {
@@ -70,6 +74,7 @@ export function buildAttributionConfidenceMetadata(input: {
     confidenceScore: boundConfidenceScore(input.journey.confidenceScore),
     attributionSourceCode: input.attributionSourceCode,
     matchingMethodCode: input.journey.attributionReason || 'unknown',
+    confidenceContractVersion: ATTRIBUTION_CONFIDENCE_CONTRACT_VERSION,
     lastAttributionRunAt: input.lastAttributionRunAt
   };
 }

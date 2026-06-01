@@ -416,7 +416,7 @@ test('attribution tier precedence persists once per order and is exposed consist
     {
       shopify_order_id: shopifyHintOrderId,
       attribution_tier: 'deterministic_shopify_hint',
-      attribution_source: 'shopify_marketing_hint',
+      attribution_source: 'shopify_hint_fallback',
       attribution_reason: 'shopify_hint_derived'
     },
     {
@@ -480,7 +480,7 @@ test('attribution tier precedence persists once per order and is exposed consist
         attributionTierLabel: 'Deterministic Shopify hint',
         attributionTierDescription:
           'Recovered synthetically from Shopify marketing hints after first-party resolution failed.',
-        attributionSource: 'shopify_marketing_hint',
+        attributionSource: 'shopify_hint_fallback',
         attributionMatchedAt: '<dynamic>',
         confidenceScore: 0.55,
         sessionId: null
@@ -540,7 +540,7 @@ test('attribution tier precedence persists once per order and is exposed consist
           attributionTierLabel: 'Deterministic Shopify hint',
           attributionTierDescription:
             'Recovered synthetically from Shopify marketing hints after first-party resolution failed.',
-          attributionSource: 'shopify_marketing_hint',
+          attributionSource: 'shopify_hint_fallback',
           attributionMatchedAt: (ordersResponse.body.rows as Array<Record<string, unknown>>)[1].attributionMatchedAt,
           confidenceScore: 0.55,
           sessionId: null
@@ -593,7 +593,7 @@ test('attribution tier precedence persists once per order and is exposed consist
           attributionTierLabel: 'Deterministic Shopify hint',
           attributionTierDescription:
             'Recovered synthetically from Shopify marketing hints after first-party resolution failed.',
-          attributionSource: 'shopify_marketing_hint',
+          attributionSource: 'shopify_hint_fallback',
           attributionMatchedAt: (filteredOrdersResponse.body.rows as Array<Record<string, unknown>>)[0].attributionMatchedAt,
           confidenceScore: 0.55,
           sessionId: null
@@ -614,7 +614,7 @@ test('attribution tier precedence persists once per order and is exposed consist
     const shopifyHintDetails = await requestJson(server, `/api/reporting/orders/${shopifyHintOrderId}`);
     assert.equal(shopifyHintDetails.response.status, 200);
     assert.equal(shopifyHintDetails.body.order?.attributionTier, 'deterministic_shopify_hint');
-    assert.equal(shopifyHintDetails.body.order?.attributionSource, 'shopify_marketing_hint');
+    assert.equal(shopifyHintDetails.body.order?.attributionSource, 'shopify_hint_fallback');
     assert.equal(shopifyHintDetails.body.order?.attributionReason, 'shopify_hint_derived');
     assert.equal(shopifyHintDetails.body.order?.sessionId, null);
     assert.equal(shopifyHintDetails.body.order?.attributedSource, 'meta');

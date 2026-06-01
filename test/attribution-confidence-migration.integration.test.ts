@@ -217,7 +217,7 @@ test('migration 0046 backfills confidence lookup metadata and enforces score and
           shopifyOrderId: 'order-confidence-migration-fallback',
           orderSource: 'unattributed',
           orderMethod: 'unknown',
-          orderConfidenceScore: '0.3500',
+          orderConfidenceScore: '0.35',
           orderLastRun: '2026-04-12T10:07:30.000Z',
           resultSource: 'unattributed',
           resultMethod: 'unknown',
@@ -227,7 +227,7 @@ test('migration 0046 backfills confidence lookup metadata and enforces score and
           shopifyOrderId: 'order-confidence-migration-known',
           orderSource: 'checkout_token',
           orderMethod: 'matched_by_checkout_token',
-          orderConfidenceScore: '1.0000',
+          orderConfidenceScore: '1.00',
           orderLastRun: '2026-04-12T10:07:30.000Z',
           resultSource: 'checkout_token',
           resultMethod: 'matched_by_checkout_token',
@@ -240,7 +240,7 @@ test('migration 0046 backfills confidence lookup metadata and enforces score and
       pool,
       `
         UPDATE shopify_orders
-        SET attribution_confidence_score = 1.0001
+        SET attribution_confidence_score = 1.01
         WHERE shopify_order_id = 'order-confidence-migration-known'
       `,
       /shopify_orders_attribution_confidence_score_chk/

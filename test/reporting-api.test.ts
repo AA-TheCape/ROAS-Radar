@@ -1260,7 +1260,7 @@ test('reporting orders returns order-level attribution details for debugging', a
           matching_method_code: 'matched_by_checkout_token',
           order_attribution_reason: 'matched_by_checkout_token',
           attribution_matched_at: new Date('2026-04-10T13:01:00.000Z'),
-          attribution_confidence_score: '1.0000',
+          attribution_confidence_score: '1.00',
           last_attribution_run_at: new Date('2026-04-10T13:01:00.000Z'),
           attribution_snapshot: {
             confidenceScore: 1,
@@ -1351,7 +1351,7 @@ test('reporting order details expose attribution tier metadata additively', asyn
             matching_method_code: 'matched_by_landing_session',
             attribution_matched_at: new Date('2026-04-10T13:01:00.000Z'),
             attribution_reason: 'matched_by_landing_session',
-            attribution_confidence_score: '1.0000',
+            attribution_confidence_score: '1.00',
             last_attribution_run_at: new Date('2026-04-10T13:01:00.000Z'),
             attribution_snapshot: {
               confidenceScore: 1,

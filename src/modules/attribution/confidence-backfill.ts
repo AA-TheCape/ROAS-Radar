@@ -208,7 +208,7 @@ export async function executeOrderAttributionConfidenceBackfillBatch(
               0
             ),
             1
-          )::numeric(5, 4) AS confidence_score
+          )::numeric(5, 2) AS confidence_score
         FROM candidates
         JOIN shopify_orders orders
           ON orders.id = candidates.id
@@ -223,8 +223,8 @@ export async function executeOrderAttributionConfidenceBackfillBatch(
             WHEN raw_method_code = 'matched_by_checkout_token' THEN 'checkout_token'
             WHEN raw_method_code = 'matched_by_cart_token' THEN 'cart_token'
             WHEN raw_method_code = 'matched_by_customer_identity' THEN 'customer_identity'
-            WHEN raw_method_code = 'matched_by_identity_journey' THEN 'stitched_identity_journey'
-            WHEN raw_method_code IN ('shopify_hint_derived', 'synthetic_hint') THEN 'shopify_marketing_hint'
+            WHEN raw_method_code = 'matched_by_identity_journey' THEN 'customer_identity'
+            WHEN raw_method_code IN ('shopify_hint_derived', 'synthetic_hint') THEN 'shopify_hint_fallback'
             WHEN raw_method_code IN ('ga4_fallback_derived', 'ga4_fallback_match') THEN 'ga4_fallback'
             WHEN raw_method_code = 'unattributed' THEN 'unattributed'
             WHEN raw_source_code IN (
@@ -232,13 +232,11 @@ export async function executeOrderAttributionConfidenceBackfillBatch(
               'checkout_token',
               'cart_token',
               'customer_identity',
-              'stitched_identity_journey',
-              'shopify_marketing_hint',
               'shopify_hint_fallback',
               'ga4_fallback',
               'unattributed'
             ) THEN raw_source_code
-            WHEN raw_source_code = 'deterministic_shopify_hint' THEN 'shopify_marketing_hint'
+            WHEN raw_source_code IN ('deterministic_shopify_hint', 'shopify_marketing_hint') THEN 'shopify_hint_fallback'
             WHEN raw_source_code = 'ga4_fallback_match' THEN 'ga4_fallback'
             ELSE 'unattributed'
           END AS source_code,
@@ -248,14 +246,14 @@ export async function executeOrderAttributionConfidenceBackfillBatch(
               'matched_by_checkout_token',
               'matched_by_cart_token',
               'matched_by_customer_identity',
-              'matched_by_identity_journey',
               'shopify_hint_derived',
               'ga4_fallback_derived',
               'ga4_fallback_match',
               'unattributed',
-              'synthetic_hint',
               'unknown'
             ) THEN raw_method_code
+            WHEN raw_method_code = 'matched_by_identity_journey' THEN 'matched_by_customer_identity'
+            WHEN raw_method_code = 'synthetic_hint' THEN 'shopify_hint_derived'
             WHEN raw_source_code = 'unattributed' THEN 'unattributed'
             ELSE 'unknown'
           END AS method_code
@@ -288,6 +286,7 @@ export async function executeOrderAttributionConfidenceBackfillBatch(
           attribution_source_id = metadata.attribution_source_id,
           matching_method_id = metadata.matching_method_id,
           attribution_confidence_score = metadata.confidence_score,
+          attribution_confidence_contract_version = 'v1',
           last_attribution_run_at = metadata.last_attribution_run_at
         FROM resolved_metadata metadata
         WHERE $3::boolean = false
@@ -296,6 +295,7 @@ export async function executeOrderAttributionConfidenceBackfillBatch(
             orders.attribution_source_id IS DISTINCT FROM metadata.attribution_source_id
             OR orders.matching_method_id IS DISTINCT FROM metadata.matching_method_id
             OR orders.attribution_confidence_score IS DISTINCT FROM metadata.confidence_score
+            OR orders.attribution_confidence_contract_version IS DISTINCT FROM 'v1'
             OR orders.last_attribution_run_at IS DISTINCT FROM metadata.last_attribution_run_at
           )
         RETURNING orders.id
@@ -305,6 +305,7 @@ export async function executeOrderAttributionConfidenceBackfillBatch(
         SET
           attribution_source_id = metadata.attribution_source_id,
           matching_method_id = metadata.matching_method_id,
+          confidence_contract_version = 'v1',
           last_attribution_run_at = metadata.last_attribution_run_at
         FROM resolved_metadata metadata
         WHERE $3::boolean = false
@@ -312,6 +313,7 @@ export async function executeOrderAttributionConfidenceBackfillBatch(
           AND (
             results.attribution_source_id IS DISTINCT FROM metadata.attribution_source_id
             OR results.matching_method_id IS DISTINCT FROM metadata.matching_method_id
+            OR results.confidence_contract_version IS DISTINCT FROM 'v1'
             OR results.last_attribution_run_at IS DISTINCT FROM metadata.last_attribution_run_at
           )
         RETURNING results.id

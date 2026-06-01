@@ -76,11 +76,11 @@ VALUES
   (3, 3, 'matched_by_cart_token', 'Matched by cart token', true),
   (4, 4, 'matched_by_customer_identity', 'Matched by customer identity', true),
   (5, 5, 'matched_by_identity_journey', 'Matched by identity journey', true),
-  (6, 6, 'shopify_hint_derived', 'Shopify hint derived', true),
+  (6, 7, 'shopify_hint_derived', 'Shopify hint derived', true),
   (7, 8, 'ga4_fallback_derived', 'GA4 fallback derived', true),
   (8, 8, 'ga4_fallback_match', 'GA4 fallback match', true),
   (9, 9, 'unattributed', 'Unattributed', true),
-  (10, 6, 'synthetic_hint', 'Synthetic hint', true),
+  (10, 7, 'synthetic_hint', 'Synthetic hint', true),
   (11, 9, 'unknown', 'Unknown', true)
 ON CONFLICT (id) DO UPDATE
 SET
