@@ -25,7 +25,9 @@ import type {
 	CampaignRow,
 	OrderRow,
 	ReportingFilters,
+	ReportingMode,
 	SpendDetailChannelGroup,
+	SummaryResponse,
 	SummaryTotals,
 	TimeseriesGroupBy,
 	TimeseriesPoint,
@@ -108,7 +110,7 @@ type ReportingDashboardProps = {
 	) => void;
 	onClearFilters: () => void;
 	summaryCards: SummaryCardData[];
-	summarySection: DashboardSection<SummaryTotals>;
+	summarySection: DashboardSection<SummaryResponse>;
 	campaignsSection: DashboardSection<CampaignRow[]>;
 	timeseriesSection: DashboardSection<TimeseriesPoint[]>;
 	ordersSection: DashboardSection<OrderRow[]>;
@@ -120,6 +122,33 @@ const GROUP_BY_OPTIONS: Array<{ value: TimeseriesGroupBy; label: string }> = [
 	{ value: "day", label: "Daily" },
 	{ value: "source", label: "By source" },
 	{ value: "campaign", label: "By campaign" },
+];
+
+const REPORTING_LAYER_OPTIONS: Array<{
+	value: ReportingMode;
+	label: string;
+	description: string;
+}> = [
+	{
+		value: "combined",
+		label: "Comparison",
+		description: "Non-canonical comparison sum of clicks plus Meta API-verified deterministic view totals.",
+	},
+	{
+		value: "clicks",
+		label: "Clicks",
+		description: "Orders credited through click-based reporting inputs.",
+	},
+	{
+		value: "deterministic_views",
+		label: "Meta views",
+		description: "Deterministic view/impression signals verified by Meta API v1.",
+	},
+	{
+		value: "meta_view_through",
+		label: "View-through",
+		description: "Meta API impression-time purchase revenue, purchases, and ROAS.",
+	},
 ];
 
 type CampaignSortKey =
@@ -273,6 +302,111 @@ const SummaryCard = memo(function SummaryCard({
 				<MetricCopy className="mt-0 max-w-[24ch]">{detail}</MetricCopy>
 			</div>
 		</Card>
+	);
+});
+
+function formatReportingModeLabel(mode: ReportingMode | undefined) {
+	return (
+		REPORTING_LAYER_OPTIONS.find((option) => option.value === mode)?.label ??
+		"Combined"
+	);
+}
+
+function formatLayerDetail(totals: SummaryTotals, countLabel = "orders") {
+	const roasLabel =
+		totals.roas == null ? "ROAS pending spend" : `${formatNumber(totals.roas)} ROAS`;
+	return `${formatNumber(totals.orders)} ${countLabel}, ${formatCurrency(totals.revenue)}, ${roasLabel}`;
+}
+
+const LayerBreakdownPanel = memo(function LayerBreakdownPanel({
+	summary,
+}: {
+	summary: SummaryResponse;
+}) {
+	const activeMode = summary.reportingMode;
+	const layerCards: Array<{
+		key: ReportingMode;
+		label: string;
+		totals: SummaryTotals;
+		scope: string;
+		countLabel?: string;
+	}> = [
+		{
+			key: "combined",
+			label: summary.comparisonTotals.combined.label,
+			totals: summary.comparisonTotals.combined.totals,
+			scope:
+				summary.comparisonTotals.combined.description,
+		},
+		{
+			key: "clicks",
+			label: summary.layers.clicks.label,
+			totals: summary.layers.clicks.totals,
+			scope: summary.layers.clicks.description,
+		},
+		{
+			key: "deterministic_views",
+			label: summary.layers.deterministicViews.label,
+			totals: summary.layers.deterministicViews.totals,
+			scope: summary.layers.deterministicViews.description,
+		},
+		{
+			key: "meta_view_through",
+			label: summary.layers.metaViewThrough.label,
+			totals: summary.layers.metaViewThrough.totals,
+			scope: summary.layers.metaViewThrough.description,
+			countLabel: "purchases",
+		},
+	];
+
+	return (
+		<Panel
+			title="Layer breakdown"
+			description="Default totals stay click-only. Use the layer control to inspect clicks, deterministic views, Meta API view-through, or the non-canonical comparison total."
+		>
+			<div className="grid gap-4 lg:grid-cols-4">
+				{layerCards.map((card) => (
+						<Card
+							key={card.key}
+							padding="compact"
+							className={`border-line/70 bg-white/90 ${activeMode === card.key ? "ring-2 ring-brand/35" : ""}`}
+						>
+							<div className="flex items-start justify-between gap-3" title={card.scope}>
+							<div>
+								<Eyebrow>
+									{activeMode === card.key ? "Active layer" : "Available layer"}
+								</Eyebrow>
+								<p className="mt-3 font-display text-title text-ink">
+									{card.label}
+								</p>
+							</div>
+							<Badge
+								tone={
+									card.key === "deterministic_views" || card.key === "meta_view_through"
+										? "teal"
+										: card.key === "combined"
+											? "brand"
+											: "neutral"
+								}
+							>
+								{card.key === "deterministic_views"
+									? "Meta v1"
+									: card.key === "meta_view_through"
+										? "Meta API"
+									: formatReportingModeLabel(card.key)}
+							</Badge>
+						</div>
+						<p className="mt-4 font-display text-display text-ink">
+							{formatCurrency(card.totals.revenue)}
+						</p>
+						<p className="mt-2 text-body text-ink-muted">
+							{formatLayerDetail(card.totals, card.countLabel)}
+						</p>
+						<p className="mt-3 text-caption text-ink-soft">{card.scope}</p>
+					</Card>
+				))}
+			</div>
+		</Panel>
 	);
 });
 
@@ -558,6 +692,7 @@ const DashboardControlPanel = memo(function DashboardControlPanel({
     () => `${formatDateLabel(filters.startDate, reportingTimezone)} to ${formatDateLabel(filters.endDate, reportingTimezone)}`,
     [filters.endDate, filters.startDate, reportingTimezone]
   );
+  const activeReportingMode = filters.reportingMode ?? 'clicks';
 
 	useEffect(() => {
 		if (previousDateRangeKeyRef.current === dateRangeKey) {
@@ -638,8 +773,9 @@ const DashboardControlPanel = memo(function DashboardControlPanel({
 				</div>
 
         <div className="grid gap-3 xl:grid-cols-[minmax(0,1.8fr)_minmax(18rem,auto)] xl:items-end">
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
-            <Field label="Start date" htmlFor="start-date">
+          <div className="grid gap-3">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+              <Field label="Start date" htmlFor="start-date">
               <Input
                 id="start-date"
                 type="date"
@@ -713,6 +849,42 @@ const DashboardControlPanel = memo(function DashboardControlPanel({
                 ))}
               </Select>
             </Field>
+            </div>
+
+            <div className="grid gap-2 rounded-card border border-line/60 bg-white/75 px-3 py-3 shadow-inset-soft">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-label uppercase text-ink-muted">Summary layer</p>
+                  <p className="mt-1 text-[0.86rem] text-ink-soft">
+                    Click attribution is the canonical default. Meta views are API-verified deterministic signals for Meta v1; comparison is non-canonical.
+                  </p>
+                </div>
+                <Badge tone={activeReportingMode === 'deterministic_views' ? 'teal' : 'brand'}>
+                  {formatReportingModeLabel(activeReportingMode)}
+                </Badge>
+              </div>
+              <fieldset className="flex flex-wrap gap-2">
+                <legend className="sr-only">Summary layer</legend>
+                {REPORTING_LAYER_OPTIONS.map((option) => (
+                  <Button
+                    key={option.value}
+                    type="button"
+                    tone={activeReportingMode === option.value ? 'primary' : 'secondary'}
+                    className="min-h-[34px] px-3 py-1 text-label"
+                    aria-pressed={activeReportingMode === option.value}
+                    title={option.description}
+                    onClick={() =>
+                      onFiltersChange({
+                        ...filters,
+                        reportingMode: option.value
+                      })
+                    }
+                  >
+                    {option.label}
+                  </Button>
+                ))}
+              </fieldset>
+            </div>
           </div>
 
 					<div className="grid gap-3 rounded-card border border-line/60 bg-white/75 px-3 py-3 shadow-inset-soft">
@@ -1160,7 +1332,7 @@ const ReportingDashboard = memo(function ReportingDashboard({
 				filters={filters}
 				groupBy={groupBy}
 				reportingTimezone={reportingTimezone}
-				summary={summarySection.data}
+				summary={summarySection.data?.totals ?? null}
 				campaigns={campaigns}
 				points={timeseriesPoints}
 				orderCount={orders.length}
@@ -1188,6 +1360,15 @@ const ReportingDashboard = memo(function ReportingDashboard({
 						<SummaryCard key={card.label} {...card} />
 					))}
 				</div>
+			</SectionState>
+
+			<SectionState
+				loading={summarySection.loading}
+				error={summarySection.error}
+				empty={!summarySection.data}
+				emptyLabel="No summary layer totals were returned for this filter range."
+			>
+				<LayerBreakdownPanel summary={summarySection.data as SummaryResponse} />
 			</SectionState>
 
 			<TimeseriesTrendPanel

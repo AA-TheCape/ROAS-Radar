@@ -1,10 +1,18 @@
 import type { PoolClient } from 'pg';
 
 import { withTransaction } from '../../db/pool.js';
-import { emitAttributionResolverOutcomeLog, logError } from '../../observability/index.js';
+import {
+  emitAttributionQaSnapshotWriteLog,
+  emitAttributionResolverOutcomeLog,
+  logError
+} from '../../observability/index.js';
 import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
 import { formatDateInTimezone, getReportingTimezone } from '../settings/index.js';
-import { collectDeterministicFirstPartyCandidates, extractAttributionCandidatesForOrder } from './candidate-extraction.js';
+import {
+  collectDeterministicFirstPartyCandidates,
+  extractAttributionCandidatesForOrder,
+  type AttributionCandidateExtractionResult
+} from './candidate-extraction.js';
 import {
   ATTRIBUTION_MODELS,
   executeAttributionModels,
@@ -15,6 +23,7 @@ import {
   buildAttributionMatchSource,
   buildOrderAttributionAuditRecord
 } from './order-attribution-audit.js';
+import { buildAttributionQaSnapshot } from './qa-snapshot.js';
 import {
   confidenceScoreForWinner,
   dedupeDeterministicCandidates,
@@ -41,6 +50,9 @@ const MAX_RETRY_DELAY_SECONDS = 1_800;
 
 type OrderRow = {
   shopify_order_id: string;
+  name: string | null;
+  currency_code: string | null;
+  subtotal_price: string | null;
   total_price: string;
   processed_at: Date | null;
   created_at_shopify: Date | null;
@@ -48,6 +60,7 @@ type OrderRow = {
   landing_session_id: string | null;
   checkout_token: string | null;
   cart_token: string | null;
+  shopify_customer_id: string | null;
   email_hash: string | null;
   customer_identity_id: string | null;
   identity_journey_id: string | null;
@@ -69,6 +82,11 @@ type CurrentAttributionRow = {
   order_attribution_tier: string | null;
   order_attribution_source: string | null;
   order_attribution_reason: string | null;
+};
+
+type ResolvedAttributionJourney = {
+  journey: ResolvedJourney;
+  candidateEvaluation: AttributionCandidateExtractionResult;
 };
 
 type ClaimedAttributionJob = {
@@ -298,16 +316,20 @@ async function fetchOrder(client: PoolClient, shopifyOrderId: string): Promise<O
     `
       SELECT
         shopify_order_id,
-        total_price::text,
+        shopify_order_number AS name,
+        currency_code,
+        subtotal_price::text AS subtotal_price,
+        total_price::text AS total_price,
         processed_at,
         created_at_shopify,
         ingested_at,
-        landing_session_id::text,
+        landing_session_id::text AS landing_session_id,
         checkout_token,
         cart_token,
+        shopify_customer_id,
         email_hash,
-        customer_identity_id::text,
-        identity_journey_id::text,
+        customer_identity_id::text AS customer_identity_id,
+        identity_journey_id::text AS identity_journey_id,
         source_name,
         raw_payload
       FROM shopify_orders
@@ -416,8 +438,8 @@ function buildProposedAttributionComparable(
   };
 }
 
-async function resolveAttributionJourney(client: PoolClient, order: OrderRow): Promise<ResolvedJourney> {
-  const candidates = await extractAttributionCandidatesForOrder(client, {
+async function resolveAttributionJourney(client: PoolClient, order: OrderRow): Promise<ResolvedAttributionJourney> {
+  const candidateEvaluation = await extractAttributionCandidatesForOrder(client, {
     shopifyOrderId: order.shopify_order_id,
     processedAt: order.processed_at,
     createdAtShopify: order.created_at_shopify,
@@ -432,7 +454,10 @@ async function resolveAttributionJourney(client: PoolClient, order: OrderRow): P
     rawPayload: order.raw_payload
   });
 
-  return resolveAttributionTier(candidates);
+  return {
+    journey: resolveAttributionTier(candidateEvaluation),
+    candidateEvaluation
+  };
 }
 
 function selectPrimaryCredit(credits: AttributionCredit[]): AttributionCredit | undefined {
@@ -479,7 +504,12 @@ function selectPersistedPrimaryTouchpoint(
   };
 }
 
-async function persistAttribution(client: PoolClient, order: OrderRow, journey: ResolvedJourney): Promise<boolean> {
+async function persistAttribution(
+  client: PoolClient,
+  order: OrderRow,
+  resolved: ResolvedAttributionJourney
+): Promise<boolean> {
+  const { journey, candidateEvaluation } = resolved;
   const orderOccurredAt = journey.orderOccurredAtUtc ?? resolveOrderOccurredAt(order);
   const execution = executeAttributionModels(journey.touchpoints, {
     orderOccurredAt,
@@ -522,6 +552,24 @@ async function persistAttribution(client: PoolClient, order: OrderRow, journey: 
   if (!shouldApply) {
     return false;
   }
+
+  const qaSnapshot = buildAttributionQaSnapshot({
+    order,
+    candidates: candidateEvaluation,
+    journey,
+    execution,
+    generatedAt: matchedAt
+  });
+  const attributionSnapshot = {
+    tier: journey.tier,
+    attributionReason: journey.attributionReason,
+    orderOccurredAtUtc: journey.orderOccurredAtUtc?.toISOString() ?? null,
+    normalizationFailures: journey.normalizationFailures,
+    confidenceScore: journey.confidenceScore,
+    winner: journey.winner ? serializeResolvedTouchpoint(journey.winner) : null,
+    timeline: journey.touchpoints.map(serializeResolvedTouchpoint),
+    qaSnapshot
+  };
 
   await client.query('DELETE FROM attribution_order_credits WHERE shopify_order_id = $1', [order.shopify_order_id]);
 
@@ -676,35 +724,48 @@ async function persistAttribution(client: PoolClient, order: OrderRow, journey: 
     ]
   );
 
-  await client.query(
-    `
-      UPDATE shopify_orders
-      SET
-        attribution_tier = $2,
-        attribution_source = $3,
-        attribution_matched_at = $4,
-        attribution_reason = $5,
-        attribution_snapshot = $6::jsonb,
-        attribution_snapshot_updated_at = $4
-      WHERE shopify_order_id = $1
-    `,
-    [
-      order.shopify_order_id,
-      orderAttributionAudit.tier,
-      orderAttributionAudit.source,
-      orderAttributionAudit.matchedAt,
-      orderAttributionAudit.reason,
-      JSON.stringify({
-        tier: journey.tier,
-        attributionReason: journey.attributionReason,
-        orderOccurredAtUtc: journey.orderOccurredAtUtc?.toISOString() ?? null,
-        normalizationFailures: journey.normalizationFailures,
-        confidenceScore: journey.confidenceScore,
-        winner: journey.winner ? serializeResolvedTouchpoint(journey.winner) : null,
-        timeline: journey.touchpoints.map(serializeResolvedTouchpoint)
-      })
-    ]
-  );
+  try {
+    await client.query(
+      `
+        UPDATE shopify_orders
+        SET
+          attribution_tier = $2,
+          attribution_source = $3,
+          attribution_matched_at = $4,
+          attribution_reason = $5,
+          attribution_snapshot = $6::jsonb,
+          attribution_snapshot_updated_at = $4
+        WHERE shopify_order_id = $1
+      `,
+      [
+        order.shopify_order_id,
+        orderAttributionAudit.tier,
+        orderAttributionAudit.source,
+        orderAttributionAudit.matchedAt,
+        orderAttributionAudit.reason,
+        JSON.stringify(attributionSnapshot)
+      ]
+    );
+    emitAttributionQaSnapshotWriteLog({
+      orderId: order.shopify_order_id,
+      pipeline: 'realtime_queue',
+      status: 'success',
+      attributionTier: journey.tier,
+      matchSource,
+      payload: qaSnapshot
+    });
+  } catch (error) {
+    emitAttributionQaSnapshotWriteLog({
+      orderId: order.shopify_order_id,
+      pipeline: 'realtime_queue',
+      status: 'failure',
+      attributionTier: journey.tier,
+      matchSource,
+      payload: qaSnapshot,
+      error
+    });
+    throw error;
+  }
 
   emitAttributionResolverOutcomeLog({
     shopifyOrderId: order.shopify_order_id,
@@ -758,9 +819,10 @@ async function processClaimedJob(client: PoolClient, job: ClaimedAttributionJob,
     return;
   }
 
-  const journey = await resolveAttributionJourney(client, order);
+  const resolved = await resolveAttributionJourney(client, order);
+  const { journey } = resolved;
 
-  await persistAttribution(client, order, journey);
+  await persistAttribution(client, order, resolved);
 
   const metricDate = formatDateInTimezone(resolveOrderOccurredAt(order), await getReportingTimezone(client));
   await refreshDailyReportingMetrics(client, [metricDate]);
@@ -840,14 +902,49 @@ export async function applySyntheticAttributionForOrder(
       isForced: true
     };
 
+    const confidenceScore = input.confidenceScore ?? 0.35;
     await persistAttribution(db, order, {
-      tier: 'deterministic_first_party',
-      touchpoints: [touchpoint],
-      winner: touchpoint,
-      confidenceScore: input.confidenceScore ?? 0.35,
-      attributionReason: input.attributionReason,
-      orderOccurredAtUtc: orderOccurredAt,
-      normalizationFailures: []
+      journey: {
+        tier: 'deterministic_first_party',
+        touchpoints: [touchpoint],
+        winner: touchpoint,
+        confidenceScore,
+        attributionReason: input.attributionReason,
+        orderOccurredAtUtc: orderOccurredAt,
+        normalizationFailures: []
+      },
+      candidateEvaluation: {
+        orderOccurredAtUtc: orderOccurredAt,
+        orderTimestampSource: order.processed_at
+          ? 'processed_at'
+          : order.created_at_shopify
+            ? 'created_at_shopify'
+            : 'ingested_at',
+        deterministicFirstParty: [
+          {
+            sourceClass: 'deterministic_first_party',
+            sourceKey: `synthetic:${shopifyOrderId}:${orderOccurredAt.toISOString()}`,
+            sessionId: null,
+            sourceTouchEventId: null,
+            ingestionSource: 'customer_identity',
+            occurredAtUtc: touchpoint.occurredAt,
+            source: touchpoint.source,
+            medium: touchpoint.medium,
+            campaign: touchpoint.campaign,
+            content: touchpoint.content,
+            term: touchpoint.term,
+            clickIdType: touchpoint.clickIdType,
+            clickIdValue: touchpoint.clickIdValue,
+            attributionReason: touchpoint.attributionReason,
+            confidenceScore,
+            isDirect: touchpoint.isDirect,
+            isSynthetic: true
+          }
+        ],
+        shopifyHint: [],
+        ga4Fallback: [],
+        normalizationFailures: []
+      }
     });
 
     const metricDate = formatDateInTimezone(orderOccurredAt, await getReportingTimezone(db));

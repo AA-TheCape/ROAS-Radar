@@ -258,7 +258,10 @@ test('Meta Ads metadata sync upserts entity names without duplicate rows across 
     assert.deepEqual(firstRefresh, {
       attempted: 1,
       refreshed: 1,
-      skipped: 0
+      skipped: 0,
+      failed: 0,
+      recordCount: 4,
+      failures: []
     });
     assert.deepEqual(await loadMetadataRows(), [
       {
@@ -332,7 +335,10 @@ test('Meta Ads metadata sync upserts entity names without duplicate rows across 
     assert.deepEqual(secondRefresh, {
       attempted: 1,
       refreshed: 1,
-      skipped: 0
+      skipped: 0,
+      failed: 0,
+      recordCount: 4,
+      failures: []
     });
     assert.deepEqual(await loadMetadataRows(), [
       {

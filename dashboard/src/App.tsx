@@ -38,6 +38,7 @@ import {
 	type AttributionChannelTotalsResponse,
 	type AttributionExplainabilityResponse,
 	type AttributionFilters,
+	type AttributionQaDebugResponse,
 	type AttributionResultRow,
 	type AuthUser,
 	type CampaignRow,
@@ -54,6 +55,7 @@ import {
 	type OrderDetailsResponse,
 	type OrderRow,
 	type ReportingFilters,
+	type SummaryResponse,
 	type ShopifyAttributionRecoveryResponse,
 	type ShopifyBackfillResponse,
 	type ShopifyConnectionResponse,
@@ -69,6 +71,7 @@ import {
 	fetchAppSettings,
 	fetchAttributionChannelTotals,
 	fetchAttributionExplainability,
+	fetchAttributionQaPayload,
 	fetchCampaigns,
 	fetchCurrentUser,
 	fetchGoogleAdsStatus,
@@ -95,6 +98,7 @@ import {
 	syncMetaAds,
 	syncShopifyWebhooks,
 	updateAppSettings,
+	updateMetaAdsDeterministicSync,
 	updateGoogleAdsConfig,
 	updateMetaAdsConfig,
 } from "./lib/api";
@@ -109,6 +113,7 @@ import { isAttributionTier } from "./lib/attributionTier";
 
 const ReportingDashboard = lazy(() => import('./components/ReportingDashboard'));
 const AttributionDashboard = lazy(() => import('./components/AttributionDashboard'));
+const AttributionQaToolingView = lazy(() => import('./components/AttributionQaToolingView'));
 const MetaOrderValueView = lazy(() => import('./components/MetaOrderValueView'));
 const OrderDetailsView = lazy(() => import('./components/OrderDetailsView'));
 const SettingsAdminView = lazy(() => import('./components/SettingsAdminView'));
@@ -122,7 +127,7 @@ type AsyncSection<T> = {
 };
 
 type DashboardState = {
-	summary: AsyncSection<SummaryTotals>;
+	summary: AsyncSection<SummaryResponse>;
 	campaigns: AsyncSection<CampaignRow[]>;
 	timeseries: AsyncSection<TimeseriesPoint[]>;
 	orders: AsyncSection<OrderRow[]>;
@@ -343,8 +348,14 @@ function normalizeReportingFilters(
 	return filters;
 }
 
-const DASHBOARD_QUERY_PARAM_KEYS = ['startDate', 'endDate', 'source', 'campaign', 'attributionModel', 'attributionTier', 'groupBy'] as const;
+const DASHBOARD_QUERY_PARAM_KEYS = ['startDate', 'endDate', 'source', 'campaign', 'attributionModel', 'reportingMode', 'attributionTier', 'groupBy'] as const;
 const REPORTING_FILTER_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const REPORTING_MODES = new Set<NonNullable<ReportingFilters['reportingMode']>>([
+  'combined',
+  'clicks',
+  'deterministic_views',
+  'meta_view_through'
+]);
 const ATTRIBUTION_MODELS = new Set<
 	NonNullable<ReportingFilters["attributionModel"]>
 >([
@@ -359,6 +370,7 @@ const ATTRIBUTION_MODELS = new Set<
 export function createDefaultReportingFilters(reportingTimezone = DEFAULT_REPORTING_TIMEZONE): ReportingFilters {
   return {
     ...buildRange(30, reportingTimezone),
+    reportingMode: 'clicks',
     source: '',
     campaign: '',
     attributionTier: ''
@@ -394,6 +406,17 @@ function isAttributionModel(
 	);
 }
 
+function isReportingMode(
+	value: string | null,
+): value is NonNullable<ReportingFilters["reportingMode"]> {
+	return Boolean(
+		value &&
+			REPORTING_MODES.has(
+				value as NonNullable<ReportingFilters["reportingMode"]>,
+			),
+	);
+}
+
 export function readDashboardStateFromSearch(
 	search: string,
 	reportingTimezone = DEFAULT_REPORTING_TIMEZONE,
@@ -408,6 +431,7 @@ export function readDashboardStateFromSearch(
   const source = params.get('source');
   const campaign = params.get('campaign');
   const attributionModel = params.get('attributionModel');
+  const reportingMode = params.get('reportingMode');
   const attributionTier = params.get('attributionTier');
   const groupBy = params.get('groupBy');
 
@@ -418,6 +442,7 @@ export function readDashboardStateFromSearch(
       source: source ?? '',
       campaign: campaign ?? '',
       attributionModel: isAttributionModel(attributionModel) ? attributionModel : undefined,
+      reportingMode: isReportingMode(reportingMode) ? reportingMode : defaults.reportingMode,
       attributionTier: isAttributionTier(attributionTier) ? attributionTier : ''
     }),
     groupBy: isTimeseriesGroupBy(groupBy) ? groupBy : DEFAULT_GROUP_BY
@@ -448,6 +473,10 @@ export function applyDashboardStateToSearch(
 
 	if (filters.attributionModel?.trim()) {
 		params.set("attributionModel", filters.attributionModel.trim());
+	}
+
+	if (filters.reportingMode?.trim() && filters.reportingMode !== 'clicks') {
+		params.set("reportingMode", filters.reportingMode.trim());
 	}
 
   if (filters.attributionTier?.trim()) {
@@ -567,7 +596,7 @@ function useDashboardData(
 				if (!cancelled) {
 					setState((current) => ({
 						...current,
-						summary: createResolvedSection(response.totals),
+						summary: createResolvedSection(response),
 					}));
 				}
 			})
@@ -716,6 +745,13 @@ function App() {
   });
   const [usersSection, setUsersSection] = useState<AsyncSection<AuthUser[]>>(createLoadingSection());
   const [orderDetailsSection, setOrderDetailsSection] = useState<AsyncSection<OrderDetailsResponse>>({
+    data: null,
+    loading: false,
+    error: null
+  });
+  const [attributionQaPayloadSection, setAttributionQaPayloadSection] = useState<
+    AsyncSection<AttributionQaDebugResponse>
+  >({
     data: null,
     loading: false,
     error: null
@@ -1175,6 +1211,11 @@ function App() {
           loading: false,
           error: null
         });
+        setAttributionQaPayloadSection({
+          data: null,
+          loading: false,
+          error: null
+        });
         setSelectedOrderId(null);
         setAttributionState({
           results: {
@@ -1198,24 +1239,63 @@ function App() {
   }, []);
 
   const openOrderDetails = useCallback(async (shopifyOrderId: string) => {
+    const canLoadAdminQa = authState.user?.isAdmin === true;
     setCurrentPage('order-details');
     setSelectedOrderId(shopifyOrderId);
     setOrderDetailsSection(createLoadingSection());
+    setAttributionQaPayloadSection(canLoadAdminQa ? createLoadingSection() : {
+      data: null,
+      loading: false,
+      error: null
+    });
 
-    try {
-      const response = await fetchOrderDetails(shopifyOrderId);
-      setOrderDetailsSection(createResolvedSection(response));
-    } catch (error) {
+    const [orderDetailsResult, qaPayloadResult] = await Promise.allSettled([
+      fetchOrderDetails(shopifyOrderId),
+      canLoadAdminQa ? fetchAttributionQaPayload(shopifyOrderId) : Promise.resolve(null)
+    ]);
+
+    if (orderDetailsResult.status === 'fulfilled') {
+      setOrderDetailsSection(createResolvedSection(orderDetailsResult.value));
+    } else {
       setOrderDetailsSection(
-        createErroredSection(error instanceof Error ? error.message : 'Failed to load order details')
+        createErroredSection(
+          orderDetailsResult.reason instanceof Error
+            ? orderDetailsResult.reason.message
+            : 'Failed to load order details'
+        )
       );
     }
-  }, []);
+
+    if (!canLoadAdminQa) {
+      setAttributionQaPayloadSection({
+        data: null,
+        loading: false,
+        error: null
+      });
+    } else if (qaPayloadResult.status === 'fulfilled' && qaPayloadResult.value) {
+      setAttributionQaPayloadSection(createResolvedSection(qaPayloadResult.value));
+    } else if (qaPayloadResult.status === 'rejected') {
+      setAttributionQaPayloadSection(
+        createErroredSection(
+          qaPayloadResult.reason instanceof Error
+            ? qaPayloadResult.reason.message
+            : 'Failed to load attribution QA payload'
+        )
+      );
+    } else {
+      setAttributionQaPayloadSection(createErroredSection('Failed to load attribution QA payload'));
+    }
+  }, [authState.user?.isAdmin]);
 
   const closeOrderDetails = useCallback(() => {
     setCurrentPage('dashboard');
     setSelectedOrderId(null);
     setOrderDetailsSection({
+      data: null,
+      loading: false,
+      error: null
+    });
+    setAttributionQaPayloadSection({
       data: null,
       loading: false,
       error: null
@@ -1283,35 +1363,40 @@ function App() {
   const summaryCards = useMemo(() => {
     const totals = dashboard.summary.data;
     const rangeLabel = `${formatDateLabel(filters.startDate, reportingTimezone)} to ${formatDateLabel(filters.endDate, reportingTimezone)}`;
+    const countLabel = totals?.reportingMode === 'meta_view_through' ? 'Purchases' : 'Orders';
+    const countDetail =
+      totals?.reportingMode === 'meta_view_through'
+        ? 'Meta API view-through'
+        : `${formatPercent(totals?.totals.conversionRate)} conversion`;
 
     return [
       {
         label: 'Visits',
-        value: formatNumber(totals?.visits),
+        value: formatNumber(totals?.totals.visits),
         detail: rangeLabel
       },
       {
-        label: 'Orders',
-        value: formatNumber(totals?.orders),
-        detail: `${formatPercent(totals?.conversionRate)} conversion`
+        label: countLabel,
+        value: formatNumber(totals?.totals.orders),
+        detail: countDetail
       },
       {
         label: 'Revenue',
-        value: formatCurrency(totals?.revenue),
-        detail: totals?.roas == null ? 'ROAS pending spend data' : `${formatNumber(totals.roas)} ROAS`
+        value: formatCurrency(totals?.totals.revenue),
+        detail: totals?.totals.roas == null ? 'ROAS pending spend data' : `${formatNumber(totals.totals.roas)} ROAS`
       },
       {
         label: 'Spend',
-        value: formatCurrency(totals?.spend),
+        value: formatCurrency(totals?.totals.spend),
         detail: rangeLabel
       },
       {
         label: 'AOV',
         value:
-          totals && totals.orders > 0
-            ? formatCurrency(totals.revenue / totals.orders)
+          totals && totals.totals.orders > 0
+            ? formatCurrency(totals.totals.revenue / totals.totals.orders)
             : formatCurrency(null),
-        detail: `${formatNumber(totals?.orders)} attributed orders`
+        detail: `${formatNumber(totals?.totals.orders)} attributed orders`
       }
     ];
   }, [dashboard.summary.data, filters.endDate, filters.startDate, reportingTimezone]);
@@ -1793,6 +1878,40 @@ function App() {
     }
   }
 
+  async function handleMetaDeterministicSyncToggle(enabled: boolean) {
+    const connection = metaConnection.data?.connection;
+    setActionFeedback({
+      context: 'meta-deterministic-sync',
+      loading: 'meta-deterministic-sync',
+      error: null,
+      message: null
+    });
+
+    try {
+      if (!connection) {
+        throw new Error('Connect Meta Ads before changing deterministic sync.');
+      }
+
+      await updateMetaAdsDeterministicSync(connection.id, enabled);
+      await loadConnections();
+      setActionFeedback({
+        context: 'meta-deterministic-sync',
+        loading: null,
+        error: null,
+        message: enabled
+          ? 'Enabled deterministic Meta view/impression sync.'
+          : 'Disabled deterministic Meta view/impression sync.'
+      });
+    } catch (error) {
+      setActionFeedback({
+        context: 'meta-deterministic-sync',
+        loading: null,
+        error: error instanceof Error ? error.message : 'Failed to update deterministic Meta sync',
+        message: null
+      });
+    }
+  }
+
   async function handleGoogleConfigSave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setActionFeedback({
@@ -2185,7 +2304,7 @@ function App() {
         <section className="grid gap-section">
           <Panel
             title="Order details"
-            description="Everything currently stored for this Shopify order, including line items, attribution credits, and raw payload."
+            description="Everything currently stored for this Shopify order, including line items, attribution QA, attribution credits, and raw payload."
             wide
           >
             <Suspense
@@ -2202,6 +2321,28 @@ function App() {
               />
             </Suspense>
           </Panel>
+          {isAdmin ? (
+            <Panel
+              title="Attribution QA tooling"
+              description="Per-order QA payload view for candidate matching, winner rationale, diagnostics, raw evidence, and GA4 fallback details."
+              wide
+            >
+              <Suspense
+                fallback={
+                  <SectionState loading empty={false} error={null} emptyLabel="">
+                    <div />
+                  </SectionState>
+                }
+              >
+                <AttributionQaToolingView
+                  selectedOrderId={selectedOrderId}
+                  reportingTimezone={reportingTimezone}
+                  qaPayloadSection={attributionQaPayloadSection}
+                  onLookupOrder={(shopifyOrderId) => void openOrderDetails(shopifyOrderId)}
+                />
+              </Suspense>
+            </Panel>
+          ) : null}
         </section>
       ) : null}
 
@@ -2301,6 +2442,7 @@ function App() {
             }}
             onMetaConnect={handleMetaConnect}
             onMetaSync={handleMetaSync}
+            onMetaDeterministicSyncToggle={handleMetaDeterministicSyncToggle}
             onGoogleSync={handleGoogleSync}
             onGoogleReconcile={handleGoogleReconcile}
           />

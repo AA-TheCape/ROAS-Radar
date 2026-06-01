@@ -1,0 +1,31 @@
+{
+  "name": "roas_attribution_qa_fetch_latency_ms",
+  "description": "Distribution of public and admin Attribution QA payload fetch latencies.",
+  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"attribution_qa_payload_fetch\"",
+  "valueExtractor": "EXTRACT(jsonPayload.durationMs)",
+  "labelExtractors": {
+    "service": "EXTRACT(jsonPayload.service)",
+    "endpoint": "EXTRACT(jsonPayload.endpoint)",
+    "status": "EXTRACT(jsonPayload.status)",
+    "status_class": "EXTRACT(jsonPayload.statusClass)",
+    "source": "EXTRACT(jsonPayload.source)"
+  },
+  "metricDescriptor": {
+    "metricKind": "DELTA",
+    "valueType": "DISTRIBUTION",
+    "unit": "ms",
+    "displayName": "ROAS Radar Attribution QA Fetch Latency",
+    "labels": [
+      { "key": "service", "valueType": "STRING", "description": "Service emitting the QA fetch event." },
+      { "key": "endpoint", "valueType": "STRING", "description": "Public QA payload or admin QA debug endpoint." },
+      { "key": "status", "valueType": "STRING", "description": "Fetch outcome." },
+      { "key": "status_class", "valueType": "STRING", "description": "HTTP status class." },
+      { "key": "source", "valueType": "STRING", "description": "Persisted snapshot or generated-on-read payload source." }
+    ]
+  },
+  "bucketOptions": {
+    "explicitBuckets": {
+      "bounds": [25, 50, 100, 250, 500, 1000, 2500, 5000]
+    }
+  }
+}

@@ -3,6 +3,7 @@ import type {
 	AttributionExplainRecordV1,
 	AttributionLookbackRule,
 	AttributionModelKey,
+	AttributionQaPayloadV1,
 	AttributionResultRecordV1,
 	AttributionTouchpointInputV1,
 	OrderAttributionBackfillEnqueueResponse,
@@ -32,6 +33,7 @@ export type AttributionTier =
 export type ReportingFilters = {
   startDate: string;
   endDate: string;
+  reportingMode?: ReportingMode;
   attributionTier?: AttributionTier | '';
   attributionModel?:
     | 'first_touch'
@@ -43,6 +45,8 @@ export type ReportingFilters = {
   source?: string;
   campaign?: string;
 };
+
+export type ReportingMode = 'combined' | 'clicks' | 'deterministic_views' | 'meta_view_through';
 
 export type AttributionFilters = {
   startDate: string;
@@ -62,12 +66,32 @@ export type SummaryTotals = {
 	roas: number | null;
 };
 
+export type SummaryLayer<TTotals = SummaryTotals> = {
+	label: string;
+	canonical: boolean;
+	description: string;
+	totals: TTotals;
+};
+
 export type SummaryResponse = {
 	range: {
 		startDate: string;
 		endDate: string;
 	};
+	reportingMode: ReportingMode;
+	reportingModeLabel: string;
+	totalsLabel: string;
+	totalsCanonical: boolean;
+	totalsDescription: string;
 	totals: SummaryTotals;
+	comparisonTotals: {
+		combined: SummaryLayer;
+	};
+	layers: {
+		clicks: SummaryLayer;
+		deterministicViews: SummaryLayer;
+		metaViewThrough: SummaryLayer;
+	};
 };
 
 export type CampaignRow = {
@@ -348,6 +372,90 @@ export type OrderDetailsResponse = {
 	attributionCredits: OrderDetailAttributionCredit[];
 };
 
+export type AttributionQaPayloadSource =
+  | 'persisted_snapshot'
+  | 'generated_on_read';
+
+export type AttributionQaPayloadResponse = {
+  orderId: string;
+  source: AttributionQaPayloadSource;
+  payload: AttributionQaPayloadV1;
+};
+
+export type AttributionQaEvidenceState =
+  | 'available'
+  | 'missing'
+  | 'expired_or_pruned';
+
+export type AttributionQaRawEvidenceRecord = {
+  id: string;
+  runId: string;
+  orderId: string;
+  evidenceType: 'shopify_hint' | 'tracking_touchpoint';
+  sourceTable: string;
+  sourceRecordId: string;
+  touchpointId: string | null;
+  sessionId: string | null;
+  ingestionSource: string | null;
+  eventType: string | null;
+  occurredAtUtc: string | null;
+  capturedAtUtc: string | null;
+  evidenceStatus: 'valid' | 'malformed';
+  errorCode: string | null;
+  errorMessage: string | null;
+  normalizedMetadata: Record<string, unknown>;
+  rawPayload: unknown;
+  payloadSizeBytes: number;
+  payloadHash: string;
+  createdAtUtc: string;
+  retainedUntil: string;
+};
+
+export type AttributionQaGa4FallbackCandidate = {
+  candidateKey: string;
+  occurredAt: string;
+  ga4UserKey: string;
+  ga4ClientId: string | null;
+  ga4SessionId: string | null;
+  transactionId: string | null;
+  emailHash: string | null;
+  customerIdentityId: string | null;
+  source: string | null;
+  medium: string | null;
+  campaign: string | null;
+  content: string | null;
+  term: string | null;
+  clickIdType: string | null;
+  clickIdValue: string | null;
+  sessionHasRequiredFields: boolean;
+  sourceExportHour: string;
+  sourceDataset: string;
+  sourceTableType: string;
+  retainedUntil: string;
+  createdAt: string;
+  updatedAt: string;
+  matchedOn: string;
+};
+
+export type AttributionQaDebugResponse = AttributionQaPayloadResponse & {
+  selectedRunId: string | null;
+  selectedRunReason:
+    | 'explicit_run_id'
+    | 'latest_run_for_order'
+    | 'no_persisted_attribution_run';
+  generatedAtUtc: string;
+  evidenceState: {
+    attributionRun: AttributionQaEvidenceState;
+    rawEvidence: AttributionQaEvidenceState;
+    rawShopifyHints: AttributionQaEvidenceState;
+    rawTouchpoints: AttributionQaEvidenceState;
+    ga4FallbackCandidate: AttributionQaEvidenceState;
+  };
+  rawShopifyHints: AttributionQaRawEvidenceRecord[];
+  rawTouchpoints: AttributionQaRawEvidenceRecord[];
+  ga4FallbackCandidate: AttributionQaGa4FallbackCandidate | null;
+};
+
 export type AttributionResultRow = {
   record: AttributionResultRecordV1;
   orderOccurredAtUtc: string;
@@ -496,6 +604,8 @@ export type MetaAdsConnection = {
 	status: string;
 	account_name: string | null;
 	account_currency: string | null;
+	deterministic_view_impression_sync_enabled: boolean;
+	deterministic_view_impression_last_planned_for: string | null;
 };
 
 export type MetaAdsConfigSummary = {
@@ -511,6 +621,11 @@ export type MetaAdsConfigSummary = {
 export type MetaAdsStatusResponse = {
 	config: MetaAdsConfigSummary;
 	connection: MetaAdsConnection | null;
+};
+
+export type MetaAdsDeterministicSyncResponse = {
+	ok: true;
+	connection: MetaAdsConnection;
 };
 
 export type MetaAdsConfigPayload = {
@@ -894,6 +1009,10 @@ function buildSearchParams(
 		params.set("attributionModel", filters.attributionModel.trim());
 	}
 
+	if (filters.reportingMode?.trim()) {
+		params.set("reportingMode", filters.reportingMode.trim());
+	}
+
   if (filters.attributionTier?.trim()) {
     params.set('attributionTier', filters.attributionTier.trim());
   }
@@ -1118,6 +1237,12 @@ export function fetchOrderDetails(shopifyOrderId: string) {
 	);
 }
 
+export function fetchAttributionQaPayload(shopifyOrderId: string) {
+  return requestJson<AttributionQaDebugResponse>(
+    `/api/admin/attribution/orders/${encodeURIComponent(shopifyOrderId)}/qa-debug`
+  );
+}
+
 export function fetchAttributionResults(
   filters: AttributionFilters,
   modelKey: AttributionModelKey,
@@ -1221,6 +1346,19 @@ export function syncMetaAds(startDate: string, endDate: string) {
 		method: "POST",
 		body: { startDate, endDate },
 	});
+}
+
+export function updateMetaAdsDeterministicSync(
+	connectionId: number,
+	enabled: boolean,
+) {
+	return requestJson<MetaAdsDeterministicSyncResponse>(
+		`/api/admin/meta-ads/connections/${connectionId}/deterministic-view-impression-sync`,
+		{
+			method: "PUT",
+			body: { enabled },
+		},
+	);
 }
 
 export function fetchGoogleAdsStatus() {

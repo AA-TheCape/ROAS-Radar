@@ -1,4 +1,31 @@
-New warning alert:
-- `ROAS Radar __ENVIRONMENT__ Campaign Metadata Resolution Hit Rate`
-
-Triggers when campaign-level resolution hit rate drops below 85% for 15 minutes.
+{
+  "displayName": "ROAS Radar __ENVIRONMENT__ Campaign Metadata Resolution Hit Rate",
+  "documentation": {
+    "content": "Campaign metadata resolution hit rate dropped below the operating threshold. Review `campaign_metadata_resolution_coverage` logs and unresolved entity samples. Runbook: __RUNBOOK_URL_ATTRIBUTION__",
+    "mimeType": "text/markdown"
+  },
+  "combiner": "OR",
+  "enabled": true,
+  "severity": "WARNING",
+  "notificationChannels": "__ALERT_NOTIFICATION_CHANNELS__",
+  "conditions": [
+    {
+      "displayName": "Campaign metadata resolved rate below 85% for 15 minutes",
+      "conditionThreshold": {
+        "filter": "metric.type=\"logging.googleapis.com/user/roas_campaign_metadata_resolution_rate\" resource.type=\"cloud_run_revision\"",
+        "comparison": "COMPARISON_LT",
+        "thresholdValue": 0.85,
+        "duration": "900s",
+        "aggregations": [
+          {
+            "alignmentPeriod": "900s",
+            "perSeriesAligner": "ALIGN_PERCENTILE_05"
+          }
+        ],
+        "trigger": {
+          "count": 1
+        }
+      }
+    }
+  ]
+}

@@ -7,6 +7,9 @@ type Env = {
   API_ALLOWED_ORIGINS: string[];
   APP_SESSION_TTL_HOURS: number;
   ATTRIBUTION_JOB_BATCH_SIZE: number;
+  ATTRIBUTION_QA_RETENTION_BATCH_SIZE: number;
+  ATTRIBUTION_QA_RETENTION_DAYS: number;
+  ATTRIBUTION_QA_RETENTION_MAX_BATCHES: number;
   ATTRIBUTION_STALE_SCAN_BATCH_SIZE: number;
   ATTRIBUTION_WORKER_LOOP: boolean;
   ATTRIBUTION_WORKER_POLL_INTERVAL_MS: number;
@@ -18,6 +21,8 @@ type Env = {
   DATA_QUALITY_CONFLICTING_SHOPIFY_ALERT_THRESHOLD: number;
   DATA_QUALITY_DUPLICATE_CANONICAL_ALERT_THRESHOLD: number;
   DATA_QUALITY_HASH_ANOMALY_ALERT_THRESHOLD: number;
+  DATA_QUALITY_META_DETERMINISTIC_ABSOLUTE_TOLERANCE: number;
+  DATA_QUALITY_META_DETERMINISTIC_RELATIVE_TOLERANCE: number;
   DATA_QUALITY_ORPHAN_SESSION_ALERT_THRESHOLD: number;
   DATA_QUALITY_REPORTING_ANOMALY_ALERT_THRESHOLD: number;
   DATA_QUALITY_SAMPLE_LIMIT: number;
@@ -64,6 +69,9 @@ type Env = {
   META_ADS_APP_SCOPES: string[];
   META_ADS_APP_SECRET: string;
   META_ADS_ENCRYPTION_KEY: string;
+  META_ADS_DETERMINISTIC_SYNC_ENABLED: boolean;
+  META_ADS_DETERMINISTIC_SYNC_INITIAL_LOOKBACK_DAYS: number;
+  META_ADS_DETERMINISTIC_SYNC_LOOKBACK_DAYS: number;
   META_ADS_ORDER_VALUE_ANOMALY_MIN_ROWS: number;
   META_ADS_ORDER_VALUE_NULL_SPIKE_MIN_RATIO: number;
   META_ADS_ORDER_VALUE_NULL_SPIKE_RATIO_DELTA: number;
@@ -176,6 +184,9 @@ const parsers: { [TKey in keyof Env]: EnvParser<Env[TKey]> } = {
   API_ALLOWED_ORIGINS: (name) => parseStringList(name, []),
   APP_SESSION_TTL_HOURS: (name) => parseInteger(name, 168),
   ATTRIBUTION_JOB_BATCH_SIZE: (name) => parseInteger(name, 50),
+  ATTRIBUTION_QA_RETENTION_BATCH_SIZE: (name) => parseInteger(name, 500),
+  ATTRIBUTION_QA_RETENTION_DAYS: (name) => parseInteger(name, 30),
+  ATTRIBUTION_QA_RETENTION_MAX_BATCHES: (name) => parseInteger(name, 100),
   ATTRIBUTION_STALE_SCAN_BATCH_SIZE: (name) => parseInteger(name, 100),
   ATTRIBUTION_WORKER_LOOP: (name) => parseBoolean(name, true),
   ATTRIBUTION_WORKER_POLL_INTERVAL_MS: (name) => parseInteger(name, 30000),
@@ -187,6 +198,8 @@ const parsers: { [TKey in keyof Env]: EnvParser<Env[TKey]> } = {
   DATA_QUALITY_CONFLICTING_SHOPIFY_ALERT_THRESHOLD: (name) => parseInteger(name, 0),
   DATA_QUALITY_DUPLICATE_CANONICAL_ALERT_THRESHOLD: (name) => parseInteger(name, 0),
   DATA_QUALITY_HASH_ANOMALY_ALERT_THRESHOLD: (name) => parseInteger(name, 0),
+  DATA_QUALITY_META_DETERMINISTIC_ABSOLUTE_TOLERANCE: (name) => parseInteger(name, 0),
+  DATA_QUALITY_META_DETERMINISTIC_RELATIVE_TOLERANCE: (name) => parseNumber(name, 0.001),
   DATA_QUALITY_ORPHAN_SESSION_ALERT_THRESHOLD: (name) => parseInteger(name, 0),
   DATA_QUALITY_REPORTING_ANOMALY_ALERT_THRESHOLD: (name) => parseInteger(name, 0),
   DATA_QUALITY_SAMPLE_LIMIT: (name) => parseInteger(name, 25),
@@ -233,6 +246,9 @@ const parsers: { [TKey in keyof Env]: EnvParser<Env[TKey]> } = {
   META_ADS_APP_SCOPES: (name) => parseStringList(name, []),
   META_ADS_APP_SECRET: (name) => parseString(name, ''),
   META_ADS_ENCRYPTION_KEY: (name) => parseString(name, ''),
+  META_ADS_DETERMINISTIC_SYNC_ENABLED: (name) => parseBoolean(name, true),
+  META_ADS_DETERMINISTIC_SYNC_INITIAL_LOOKBACK_DAYS: (name) => parseInteger(name, 30),
+  META_ADS_DETERMINISTIC_SYNC_LOOKBACK_DAYS: (name) => parseInteger(name, 7),
   META_ADS_ORDER_VALUE_ANOMALY_MIN_ROWS: (name) => parseInteger(name, 5),
   META_ADS_ORDER_VALUE_NULL_SPIKE_MIN_RATIO: (name) => parseNumber(name, 0.5),
   META_ADS_ORDER_VALUE_NULL_SPIKE_RATIO_DELTA: (name) => parseNumber(name, 0.3),

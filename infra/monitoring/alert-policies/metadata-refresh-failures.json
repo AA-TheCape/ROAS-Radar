@@ -1,4 +1,31 @@
-Replaced placeholder content with a real alert policy:
-- `ROAS Radar __ENVIRONMENT__ Campaign Metadata Sync Failures`
-
-Triggers when failed metadata sync lifecycle events are present over 15 minutes.
+{
+  "displayName": "ROAS Radar __ENVIRONMENT__ Campaign Metadata Sync Failures",
+  "documentation": {
+    "content": "Campaign metadata sync jobs are failing. Inspect `campaign_metadata_sync_job_lifecycle` logs by worker and platform. Runbook: __RUNBOOK_URL_ATTRIBUTION__",
+    "mimeType": "text/markdown"
+  },
+  "combiner": "OR",
+  "enabled": true,
+  "severity": "WARNING",
+  "notificationChannels": "__ALERT_NOTIFICATION_CHANNELS__",
+  "conditions": [
+    {
+      "displayName": "Campaign metadata sync failures exceed 0 in 15 minutes",
+      "conditionThreshold": {
+        "filter": "metric.type=\"logging.googleapis.com/user/roas_metadata_refresh_jobs\" resource.type=\"cloud_run_revision\" metric.labels.stage=\"failed\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 0,
+        "duration": "900s",
+        "aggregations": [
+          {
+            "alignmentPeriod": "900s",
+            "perSeriesAligner": "ALIGN_SUM"
+          }
+        ],
+        "trigger": {
+          "count": 1
+        }
+      }
+    }
+  ]
+}

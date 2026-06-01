@@ -1,0 +1,27 @@
+{
+  "name": "roas_combined_report_model_output_freshness_hours",
+  "description": "Distribution of deterministic model output age observed by the combined report summary API.",
+  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"combined_report_api_health\" AND jsonPayload.status=\"success\"",
+  "valueExtractor": "EXTRACT(jsonPayload.modelOutputFreshnessHours)",
+  "labelExtractors": {
+    "service": "EXTRACT(jsonPayload.service)",
+    "reporting_mode": "EXTRACT(jsonPayload.reportingMode)",
+    "path": "EXTRACT(jsonPayload.path)"
+  },
+  "metricDescriptor": {
+    "metricKind": "DELTA",
+    "valueType": "DISTRIBUTION",
+    "unit": "h",
+    "displayName": "ROAS Radar Combined Report Model Output Freshness",
+    "labels": [
+      { "key": "service", "valueType": "STRING", "description": "Service emitting combined report telemetry." },
+      { "key": "reporting_mode", "valueType": "STRING", "description": "Requested reporting mode." },
+      { "key": "path", "valueType": "STRING", "description": "Combined report API path." }
+    ]
+  },
+  "bucketOptions": {
+    "explicitBuckets": {
+      "bounds": [1, 3, 6, 12, 24, 48, 72, 168]
+    }
+  }
+}

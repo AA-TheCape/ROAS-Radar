@@ -7,9 +7,11 @@ process.env.REPORTING_API_TOKEN = 'test-reporting-token';
 
 const poolModule = await import('../src/db/pool.js');
 const serverModule = await import('../src/server.js');
+const schemaModule = await import('../packages/attribution-schema/index.js');
 
 const { pool } = poolModule;
 const { closeServer, createServer } = serverModule;
+const { attributionQaPayloadV1SuccessFixture } = schemaModule;
 const originalPoolQuery = pool.query.bind(pool);
 
 async function requestJson(
@@ -43,6 +45,296 @@ test('attribution read routes require authentication', async () => {
       error: 'unauthorized',
       message: 'Authentication required'
     });
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
+test('attribution order QA payload returns the persisted schema-validated snapshot', async () => {
+  pool.query = (async (text: string, params?: unknown[]) => {
+    if (text.includes('SELECT') && text.includes('FROM shopify_orders')) {
+      assert.equal(params?.[0], 'order-qa-1');
+      return {
+        rows: [
+          {
+            shopify_order_id: 'order-qa-1',
+            name: '#QA1',
+            currency_code: 'USD',
+            subtotal_price: '90.00',
+            total_price: '100.00',
+            processed_at: new Date('2026-04-10T12:00:00.000Z'),
+            created_at_shopify: null,
+            ingested_at: new Date('2026-04-10T12:01:00.000Z'),
+            landing_session_id: '123e4567-e89b-42d3-a456-426614174000',
+            checkout_token: null,
+            cart_token: null,
+            shopify_customer_id: null,
+            email_hash: null,
+            customer_identity_id: null,
+            identity_journey_id: null,
+            source_name: 'web',
+            raw_payload: { name: '#QA1' },
+            attribution_snapshot: {
+              qaSnapshot: {
+                ...attributionQaPayloadV1SuccessFixture,
+                order: {
+                  ...attributionQaPayloadV1SuccessFixture.order,
+                  order_id: 'order-qa-1',
+                  order_name: '#QA1'
+                }
+              }
+            }
+          }
+        ]
+      };
+    }
+
+    return { rows: [] };
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(server, '/api/attribution/orders/order-qa-1/qa-payload');
+
+    assert.equal(response.status, 200);
+    assert.equal(body.orderId, 'order-qa-1');
+    assert.equal(body.source, 'persisted_snapshot');
+    assert.equal(body.payload.schema_version, 1);
+    assert.equal(body.payload.order.order_id, 'order-qa-1');
+    assert.equal(body.payload.outcome.status, 'success');
+
+    const serialized = JSON.stringify(body);
+    assert.doesNotMatch(serialized, /checkout-456/);
+    assert.doesNotMatch(serialized, /cart-789/);
+    assert.doesNotMatch(serialized, /aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/);
+    assert.doesNotMatch(serialized, /GCLID-123/);
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
+test('attribution order QA payload can be generated on read from order candidates', async () => {
+  pool.query = (async (text: string, params?: unknown[]) => {
+    if (text.includes('SELECT') && text.includes('FROM shopify_orders')) {
+      assert.equal(params?.[0], 'order-qa-generated');
+      return {
+        rows: [
+          {
+            shopify_order_id: 'order-qa-generated',
+            name: '#QA2',
+            currency_code: 'USD',
+            subtotal_price: '60.00',
+            total_price: '75.00',
+            processed_at: new Date('2026-04-10T12:00:00.000Z'),
+            created_at_shopify: null,
+            ingested_at: new Date('2026-04-10T12:01:00.000Z'),
+            landing_session_id: null,
+            checkout_token: null,
+            cart_token: null,
+            shopify_customer_id: null,
+            email_hash: null,
+            customer_identity_id: null,
+            identity_journey_id: null,
+            source_name: 'web',
+            raw_payload: {
+              name: '#QA2',
+              landing_site: 'https://store.example/products/widget?utm_source=facebook&utm_medium=paid_social&utm_campaign=spring&fbclid=FB123'
+            },
+            attribution_snapshot: null
+          }
+        ]
+      };
+    }
+
+    if (text.includes('FROM ga4_fallback_candidates')) {
+      return { rows: [] };
+    }
+
+    return { rows: [] };
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(server, '/api/attribution/orders/order-qa-generated/qa-payload');
+
+    assert.equal(response.status, 200);
+    assert.equal(body.orderId, 'order-qa-generated');
+    assert.equal(body.source, 'generated_on_read');
+    assert.equal(body.payload.order.order_id, 'order-qa-generated');
+    assert.equal(body.payload.outcome.status, 'success');
+    assert.equal(body.payload.outcome.attribution_tier, 'deterministic_shopify_hint');
+    assert.equal(body.payload.candidates.shopify_hint.length, 1);
+    assert.equal(body.payload.candidates.shopify_hint[0].selected, true);
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
+test('attribution order QA payload includes sanitized GA4 fallback candidates generated on read', async () => {
+  pool.query = (async (text: string, params?: unknown[]) => {
+    if (text.includes('SELECT') && text.includes('FROM shopify_orders')) {
+      assert.equal(params?.[0], 'order-qa-ga4');
+      return {
+        rows: [
+          {
+            shopify_order_id: 'order-qa-ga4',
+            name: '#QA-GA4',
+            currency_code: 'USD',
+            subtotal_price: '110.00',
+            total_price: '125.00',
+            processed_at: new Date('2026-04-10T12:00:00.000Z'),
+            created_at_shopify: null,
+            ingested_at: new Date('2026-04-10T12:01:00.000Z'),
+            landing_session_id: null,
+            checkout_token: 'checkout-token-secret',
+            cart_token: 'cart-token-secret',
+            shopify_customer_id: null,
+            email_hash: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            customer_identity_id: null,
+            identity_journey_id: null,
+            source_name: 'web',
+            raw_payload: {
+              landing_site:
+                'https://store.example/products/widget?password=url-secret&utm_source=direct'
+            },
+            attribution_snapshot: null
+          }
+        ]
+      };
+    }
+
+    if (text.includes('FROM tracking_events') || text.includes('FROM tracking_sessions')) {
+      return { rows: [] };
+    }
+
+    if (text.includes('FROM ga4_fallback_candidates')) {
+      assert.equal(params?.[1], 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
+      assert.equal(params?.[2], 'order-qa-ga4');
+      return {
+        rows: [
+          {
+            candidate_key: 'ga4-client-123-session-456',
+            occurred_at: new Date('2026-04-10T11:00:00.000Z'),
+            ga4_user_key: 'ga4-user-secret',
+            ga4_client_id: 'ga4-client-123',
+            ga4_session_id: 'ga4-session-456',
+            transaction_id: 'order-qa-ga4',
+            email_hash: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            customer_identity_id: null,
+            source: 'google',
+            medium: 'cpc',
+            campaign: 'ga4-brand',
+            content: 'hero',
+            term: 'widget',
+            click_id_type: 'gclid',
+            click_id_value: 'GA4-GCLID-SECRET',
+            session_has_required_fields: true,
+            source_export_hour: new Date('2026-04-10T11:00:00.000Z'),
+            source_dataset: 'analytics_123',
+            source_table_type: 'events',
+            retained_until: new Date('2026-05-15T11:00:00.000Z'),
+            matched_on: 'email_hash'
+          }
+        ]
+      };
+    }
+
+    return { rows: [] };
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(server, '/api/attribution/orders/order-qa-ga4/qa-payload');
+
+    assert.equal(response.status, 200);
+    assert.equal(body.source, 'generated_on_read');
+    assert.equal(body.payload.outcome.status, 'success');
+    assert.equal(body.payload.outcome.attribution_tier, 'ga4_fallback');
+    assert.equal(body.payload.candidates.ga4_fallback.length, 1);
+    assert.equal(body.payload.candidates.ga4_fallback[0].selected, true);
+    assert.equal(body.payload.candidates.ga4_fallback[0].source_key, 'ga4_fallback_candidate_1');
+    assert.equal(body.payload.candidates.ga4_fallback[0].click_id_value, null);
+    assert.equal(body.payload.order.identifiers.checkout_token, null);
+    assert.equal(body.payload.order.identifiers.cart_token, null);
+    assert.equal(body.payload.order.identifiers.email_hash, null);
+
+    const serialized = JSON.stringify(body);
+    assert.doesNotMatch(serialized, /checkout-token-secret/);
+    assert.doesNotMatch(serialized, /cart-token-secret/);
+    assert.doesNotMatch(serialized, /bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/);
+    assert.doesNotMatch(serialized, /ga4-client-123/);
+    assert.doesNotMatch(serialized, /ga4-session-456/);
+    assert.doesNotMatch(serialized, /GA4-GCLID-SECRET/);
+    assert.doesNotMatch(serialized, /url-secret/);
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
+test('attribution order QA payload returns sanitized no-match diagnostics generated on read', async () => {
+  pool.query = (async (text: string, params?: unknown[]) => {
+    if (text.includes('SELECT') && text.includes('FROM shopify_orders')) {
+      assert.equal(params?.[0], 'order-qa-no-match');
+      return {
+        rows: [
+          {
+            shopify_order_id: 'order-qa-no-match',
+            name: '#QA-NO-MATCH',
+            currency_code: 'USD',
+            subtotal_price: '25.00',
+            total_price: '30.00',
+            processed_at: new Date('2026-04-10T12:00:00.000Z'),
+            created_at_shopify: null,
+            ingested_at: new Date('2026-04-10T12:01:00.000Z'),
+            landing_session_id: null,
+            checkout_token: null,
+            cart_token: null,
+            shopify_customer_id: null,
+            email_hash: null,
+            customer_identity_id: null,
+            identity_journey_id: null,
+            source_name: 'web',
+            raw_payload: { landing_site: 'https://store.example/products/widget?token=query-secret' },
+            attribution_snapshot: null
+          }
+        ]
+      };
+    }
+
+    if (text.includes('FROM ga4_fallback_candidates')) {
+      return { rows: [] };
+    }
+
+    return { rows: [] };
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(server, '/api/attribution/orders/order-qa-no-match/qa-payload');
+
+    assert.equal(response.status, 200);
+    assert.equal(body.source, 'generated_on_read');
+    assert.equal(body.payload.outcome.status, 'no_match');
+    assert.equal(body.payload.outcome.match_source, 'unattributed');
+    assert.equal(body.payload.outcome.confidence_score, 0);
+    assert.equal(body.payload.candidates.deterministic_first_party.length, 0);
+    assert.equal(body.payload.candidates.shopify_hint.length, 0);
+    assert.equal(body.payload.candidates.ga4_fallback.length, 0);
+    assert.equal(body.payload.credits.length, 0);
+    assert.ok(
+      body.payload.diagnostics.normalization_failures.some(
+        (failure: { reason: string }) => failure.reason === 'missing_landing_session_id'
+      )
+    );
+    assert.doesNotMatch(JSON.stringify(body), /query-secret/);
   } finally {
     pool.query = originalPoolQuery as typeof pool.query;
     await closeServer(server);

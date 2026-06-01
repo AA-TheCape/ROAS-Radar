@@ -6,7 +6,7 @@
 	"scripts": {
 		"dev": "vite",
 		"build": "tsc -b && vite build",
-		"lint": "biome lint .",
+		"lint": "biome lint src index.html package.json postcss.config.cjs server.mjs tailwind.config.js tsconfig.json tsconfig.node.json vite.config.ts",
 		"preview": "vite preview",
 		"start": "node server.mjs",
 		"typecheck": "tsc -b"
@@ -23,6 +23,7 @@
 		"zod": "^3.24.1"
 	},
 	"devDependencies": {
+		"@biomejs/biome": "^1.9.4",
 		"@types/react": "^18.3.12",
 		"@types/react-dom": "^18.3.1",
 		"@vitejs/plugin-react": "^4.7.0",

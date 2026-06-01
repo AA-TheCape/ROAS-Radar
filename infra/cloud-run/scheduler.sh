@@ -3,7 +3,7 @@
 set -eu
 
 if [ "$#" -ne 3 ]; then
-  echo "usage: $0 <environment> <meta-ads|meta-order-value|google-ads|ga4-ingestion|retention|data-quality|identity-graph-backfill|order-attribution-materialization> <status|pause|resume>" >&2
+  echo "usage: $0 <environment> <meta-ads|meta-order-value|meta-deterministic|google-ads|ga4-ingestion|retention|attribution-qa-retention|data-quality|identity-graph-backfill|order-attribution-materialization> <status|pause|resume>" >&2
   exit 1
 fi
 
@@ -39,6 +39,9 @@ case "$PIPELINE" in
   meta-order-value)
     JOB_NAME="$META_ADS_ORDER_VALUE_SCHEDULER_JOB_NAME"
     ;;
+  meta-deterministic)
+    JOB_NAME="$META_ADS_DETERMINISTIC_SCHEDULER_JOB_NAME"
+    ;;
   google-ads)
     JOB_NAME="$GOOGLE_ADS_SCHEDULER_JOB_NAME"
     ;;
@@ -47,6 +50,9 @@ case "$PIPELINE" in
     ;;
   retention)
     JOB_NAME="$RETENTION_SCHEDULER_JOB_NAME"
+    ;;
+  attribution-qa-retention)
+    JOB_NAME="$ATTRIBUTION_QA_RETENTION_SCHEDULER_JOB_NAME"
     ;;
   data-quality)
     JOB_NAME="$DATA_QUALITY_SCHEDULER_JOB_NAME"

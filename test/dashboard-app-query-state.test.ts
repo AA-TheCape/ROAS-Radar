@@ -45,6 +45,68 @@ function jsonResponse(body: unknown, status = 200) {
 	});
 }
 
+function createSummaryResponse(startDate: string | null, endDate: string | null) {
+	const totals = {
+		visits: 1200,
+		orders: 48,
+		revenue: 5210.5,
+		spend: 0,
+		conversionRate: 0.04,
+		roas: null,
+	};
+	const zeroTotals = {
+		visits: 0,
+		orders: 0,
+		revenue: 0,
+		spend: 0,
+		conversionRate: 0,
+		roas: null,
+	};
+
+	return {
+		range: {
+			startDate,
+			endDate,
+		},
+		reportingMode: "clicks",
+		reportingModeLabel: "Clicks",
+		totalsLabel: "Click-attributed totals",
+		totalsCanonical: true,
+		totalsDescription:
+			"Canonical totals from click-attributed orders.",
+		totals,
+		comparisonTotals: {
+			combined: {
+				label: "Combined",
+				canonical: false,
+				description:
+					"Comparison totals combining click and view-through attribution.",
+				totals,
+			},
+		},
+		layers: {
+			clicks: {
+				label: "Clicks",
+				canonical: true,
+				description: "Canonical click-attributed totals.",
+				totals,
+			},
+			deterministicViews: {
+				label: "Deterministic views",
+				canonical: false,
+				description: "Deterministic view-through totals.",
+				totals: zeroTotals,
+			},
+			metaViewThrough: {
+				label: "Meta view-through",
+				canonical: false,
+				description: "Meta API view-through totals.",
+				totals: zeroTotals,
+			},
+		},
+	};
+}
+
 function createFetchStub(calls: FetchCall[]) {
 	return async (input: string | URL | Request) => {
 		const rawUrl =
@@ -112,20 +174,12 @@ function createFetchStub(calls: FetchCall[]) {
 		}
 
 		if (url.pathname === "/api/reporting/summary") {
-			return jsonResponse({
-				range: {
-					startDate: url.searchParams.get("startDate"),
-					endDate: url.searchParams.get("endDate"),
-				},
-				totals: {
-					visits: 1200,
-					orders: 48,
-					revenue: 5210.5,
-					spend: 0,
-					conversionRate: 0.04,
-					roas: null,
-				},
-			});
+			return jsonResponse(
+				createSummaryResponse(
+					url.searchParams.get("startDate"),
+					url.searchParams.get("endDate"),
+				),
+			);
 		}
 
 		if (url.pathname === "/api/reporting/campaigns") {
@@ -204,6 +258,7 @@ test("dashboard query-state helpers preserve valid control state and keep unrela
           source: 'meta',
           campaign: 'retargeting',
           attributionModel: undefined,
+          reportingMode: 'clicks',
           attributionTier: 'ga4_fallback'
         },
         groupBy: 'campaign'
@@ -219,6 +274,7 @@ test("dashboard query-state helpers preserve valid control state and keep unrela
           source: 'google',
           campaign: '',
           attributionModel: undefined,
+          reportingMode: 'clicks',
           attributionTier: 'deterministic_shopify_hint'
         },
         'source'

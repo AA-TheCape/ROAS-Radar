@@ -75,6 +75,7 @@ export const ATTRIBUTION_CLICK_ID_FIELDS = ['gclid', 'gbraid', 'wbraid', 'fbclid
 
 const ISO_TIMESTAMP_REGEX =
 	/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
+const DATE_ONLY_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 const UUID_REGEX =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -290,6 +291,12 @@ const isoTimestampOrNullSchema = z
 const decimalStringSchema = z
   .union([z.string(), z.number()])
   .transform((value) => normalizeAttributionDecimalString(value));
+const dateOnlySchema = z.string().trim().regex(DATE_ONLY_REGEX, 'Use YYYY-MM-DD.');
+const positiveIdSchema = z.number().int().positive();
+const nullablePositiveIdSchema = z
+  .union([positiveIdSchema, z.null(), z.undefined()])
+  .transform((value) => value ?? null);
+const nonEmptyMetaTextSchema = z.string().trim().min(1).max(MAX_ATTRIBUTION_TEXT_LENGTH);
 
 export const ATTRIBUTION_EVIDENCE_SOURCES = [
   'landing_session_id',
@@ -336,6 +343,51 @@ export const ATTRIBUTION_ALLOCATION_STATUSES = [
 export const ATTRIBUTION_LOOKBACK_RULES = ['28d_click', '7d_view', 'mixed'] as const;
 export const ATTRIBUTION_EXPLAIN_STAGES = ['candidate_extraction', 'eligibility_filter', 'model_scoring', 'fallback'] as const;
 export const ATTRIBUTION_EXPLAIN_DECISIONS = ['included', 'excluded', 'winner', 'fallback_used', 'no_credit'] as const;
+export const ATTRIBUTION_QA_PAYLOAD_SCHEMA_VERSION = 1 as const;
+export const ATTRIBUTION_QA_OUTCOME_STATUSES = ['success', 'no_match'] as const;
+export const ATTRIBUTION_QA_TIERS = [
+  'deterministic_first_party',
+  'deterministic_shopify_hint',
+  'ga4_fallback',
+  'unattributed'
+] as const;
+export const ATTRIBUTION_QA_MATCH_SOURCES = [
+  'landing_session_id',
+  'checkout_token',
+  'cart_token',
+  'customer_identity',
+  'stitched_identity_journey',
+  'shopify_marketing_hint',
+  'ga4_fallback',
+  'unattributed'
+] as const;
+export const ATTRIBUTION_QA_CONFIDENCE_LABELS = ['high', 'medium', 'low', 'none'] as const;
+export const ATTRIBUTION_QA_CANDIDATE_GROUPS = [
+  'deterministic_first_party',
+  'shopify_hint',
+  'ga4_fallback'
+] as const;
+export const ATTRIBUTION_QA_NORMALIZATION_FAILURE_SCOPES = [
+  'order',
+  'shopify_hint',
+  'ga4_fallback',
+  'touchpoint',
+  'credit',
+  'explainability'
+] as const;
+
+export const META_DETERMINISTIC_ATTRIBUTION_EVENT_TYPES = ['impression', 'view'] as const;
+export const META_DETERMINISTIC_ATTRIBUTION_FAMILIES = [
+  'deterministic_views',
+  'deterministic_impressions'
+] as const;
+export const META_DETERMINISTIC_ATTRIBUTION_WINDOWS = ['7d_view'] as const;
+export const META_DETERMINISTIC_ATTRIBUTION_VERIFICATION_STATUSES = [
+  'pending',
+  'verified',
+  'failed',
+  'superseded'
+] as const;
 
 export const attributionHintConfidenceLabelSchema = nonEmptyLowercaseEnum(['low', 'medium', 'high']);
 
@@ -490,6 +542,271 @@ export const attributionExplainRecordV1Schema = z.object({
   created_at_utc: isoTimestampSchema
 });
 
+const confidenceScoreSchema = z.number().min(0).max(1);
+
+export const attributionQaOrderIdentifiersV1Schema = z.object({
+  landing_session_id: uuidOrNullSchema,
+  checkout_token: nullableTokenSchema,
+  cart_token: nullableTokenSchema,
+  shopify_customer_id: nullableTokenSchema,
+  email_hash: z
+    .union([z.string(), z.null(), z.undefined()])
+    .transform((value) => normalizeAttributionString(value))
+    .refine((value) => value === null || /^[0-9a-f]{64}$/i.test(value), 'Invalid email hash'),
+  identity_journey_id: uuidOrNullSchema
+});
+
+export const attributionQaOrderV1Schema = z.object({
+  order_id: z.string().min(1),
+  order_platform: z.literal('shopify'),
+  order_name: nullableTextSchema,
+  order_occurred_at_utc: isoTimestampOrNullSchema,
+  order_timestamp_source: z
+    .union([z.enum(ATTRIBUTION_ORDER_TIMESTAMP_SOURCES), z.null(), z.undefined()])
+    .transform((value) => value ?? null),
+  currency_code: z
+    .string()
+    .trim()
+    .min(3)
+    .max(16)
+    .transform((value) => normalizeAttributionCurrencyCode(value) as string),
+  subtotal_amount: decimalStringSchema,
+  total_amount: decimalStringSchema,
+  source_name: nullableTextSchema,
+  identifiers: attributionQaOrderIdentifiersV1Schema
+});
+
+export const attributionQaCandidateV1Schema = z.object({
+  candidate_group: z.enum(ATTRIBUTION_QA_CANDIDATE_GROUPS),
+  source_key: z.string().min(1).max(MAX_ATTRIBUTION_TEXT_LENGTH),
+  touchpoint_id: nullableTextSchema,
+  session_id: uuidOrNullSchema,
+  source_touch_event_id: nullableTextSchema,
+  occurred_at_utc: isoTimestampSchema,
+  source: nullableLowercaseTextSchema,
+  medium: nullableLowercaseTextSchema,
+  campaign: nullableLowercaseTextSchema,
+  content: nullableLowercaseTextSchema,
+  term: nullableLowercaseTextSchema,
+  click_id_type: z
+    .union([z.enum(ATTRIBUTION_CLICK_ID_FIELDS), z.null(), z.undefined()])
+    .transform((value) => value ?? null),
+  click_id_value: nullableTextSchema,
+  match_source: z.enum(ATTRIBUTION_QA_MATCH_SOURCES),
+  attribution_reason: z.string().min(1).max(MAX_ATTRIBUTION_TEXT_LENGTH),
+  confidence_score: confidenceScoreSchema,
+  confidence_label: z.enum(ATTRIBUTION_QA_CONFIDENCE_LABELS),
+  is_direct: z.boolean(),
+  is_synthetic: z.boolean(),
+  selected: z.boolean()
+});
+
+export const attributionQaOutcomeV1Schema = z.object({
+  status: z.enum(ATTRIBUTION_QA_OUTCOME_STATUSES),
+  attribution_tier: z.enum(ATTRIBUTION_QA_TIERS),
+  attribution_reason: z.string().min(1).max(MAX_ATTRIBUTION_TEXT_LENGTH),
+  match_source: z.enum(ATTRIBUTION_QA_MATCH_SOURCES),
+  confidence_score: confidenceScoreSchema,
+  confidence_label: z.enum(ATTRIBUTION_QA_CONFIDENCE_LABELS),
+  winner_touchpoint_id: nullableTextSchema,
+  winner_session_id: uuidOrNullSchema,
+  selected_model_key: z
+    .union([z.enum(ATTRIBUTION_MODEL_KEYS), z.null(), z.undefined()])
+    .transform((value) => value ?? null)
+});
+
+export const attributionQaNormalizationFailureV1Schema = z.object({
+  scope: z.enum(ATTRIBUTION_QA_NORMALIZATION_FAILURE_SCOPES),
+  reason: z.string().min(1).max(MAX_ATTRIBUTION_TEXT_LENGTH),
+  source_key: nullableTextSchema
+});
+
+export const attributionQaPayloadV1Schema = z.object({
+  schema_version: z.literal(ATTRIBUTION_QA_PAYLOAD_SCHEMA_VERSION),
+  generated_at_utc: isoTimestampSchema,
+  order: attributionQaOrderV1Schema,
+  outcome: attributionQaOutcomeV1Schema,
+  candidates: z.object({
+    deterministic_first_party: z.array(attributionQaCandidateV1Schema),
+    shopify_hint: z.array(attributionQaCandidateV1Schema),
+    ga4_fallback: z.array(attributionQaCandidateV1Schema)
+  }),
+  model_summaries: z.array(attributionResultRecordV1Schema),
+  credits: z.array(attributionCreditRecordV1Schema),
+  explainability: z.array(attributionExplainRecordV1Schema),
+  diagnostics: z.object({
+    normalization_failures: z.array(attributionQaNormalizationFailureV1Schema),
+    notes: z.array(z.string().trim().min(1).max(MAX_ATTRIBUTION_TEXT_LENGTH))
+  })
+}).superRefine((value, ctx) => {
+  const selectedCandidates = [
+    ...value.candidates.deterministic_first_party,
+    ...value.candidates.shopify_hint,
+    ...value.candidates.ga4_fallback
+  ].filter((candidate) => candidate.selected);
+
+  if (value.outcome.status === 'success') {
+    if (value.outcome.attribution_tier === 'unattributed' || value.outcome.match_source === 'unattributed') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'success payloads must include an attributed tier and match source',
+        path: ['outcome', 'status']
+      });
+    }
+
+    if (!value.outcome.winner_touchpoint_id && !value.outcome.winner_session_id) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'success payloads require winner_touchpoint_id or winner_session_id',
+        path: ['outcome', 'winner_touchpoint_id']
+      });
+    }
+
+    if (selectedCandidates.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'success payloads require one selected candidate',
+        path: ['candidates']
+      });
+    }
+  }
+
+  if (value.outcome.status === 'no_match') {
+    if (
+      value.outcome.attribution_tier !== 'unattributed' ||
+      value.outcome.match_source !== 'unattributed' ||
+      value.outcome.confidence_label !== 'none' ||
+      value.outcome.confidence_score !== 0 ||
+      value.outcome.winner_touchpoint_id !== null ||
+      value.outcome.winner_session_id !== null
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'no_match payloads must be unattributed with no winner and zero confidence',
+        path: ['outcome']
+      });
+    }
+
+    if (selectedCandidates.length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'no_match payloads cannot include selected candidates',
+        path: ['candidates']
+      });
+    }
+  }
+});
+
+export const metaDeterministicAttributionIdentityTupleV1Schema = z.object({
+  organization_id: positiveIdSchema,
+  ad_account_id: nonEmptyMetaTextSchema,
+  report_date: dateOnlySchema,
+  attribution_family: z.enum(META_DETERMINISTIC_ATTRIBUTION_FAMILIES),
+  attribution_window: z.enum(META_DETERMINISTIC_ATTRIBUTION_WINDOWS),
+  campaign_id: nullableTextSchema,
+  adset_id: nullableTextSchema,
+  ad_id: nullableTextSchema
+}).superRefine((value, ctx) => {
+  if (!value.campaign_id && !value.ad_id) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'campaign_id or ad_id is required for deterministic Meta aggregate identity'
+    });
+  }
+});
+
+export const metaDeterministicAttributionAggregateV1Schema = z.object({
+  schema_version: z.literal(1),
+  platform: z.literal('meta_ads'),
+  organization_id: positiveIdSchema,
+  meta_connection_id: positiveIdSchema,
+  source_id: positiveIdSchema,
+  raw_event_id: positiveIdSchema,
+  fact_id: nullablePositiveIdSchema,
+  ad_account_id: nonEmptyMetaTextSchema,
+  report_date: dateOnlySchema,
+  campaign_id: nullableTextSchema,
+  campaign_name: nullableTextSchema,
+  adset_id: nullableTextSchema,
+  adset_name: nullableTextSchema,
+  ad_id: nullableTextSchema,
+  ad_name: nullableTextSchema,
+  event_type: z.enum(META_DETERMINISTIC_ATTRIBUTION_EVENT_TYPES),
+  attribution_family: z.enum(META_DETERMINISTIC_ATTRIBUTION_FAMILIES),
+  attribution_window: z.enum(META_DETERMINISTIC_ATTRIBUTION_WINDOWS),
+  attribution_window_days: z.literal(7),
+  aggregate_count: z.number().int().nonnegative(),
+  evidence_origin: z.literal('api'),
+  platform_verified: z.boolean(),
+  verification_status: z.enum(META_DETERMINISTIC_ATTRIBUTION_VERIFICATION_STATUSES),
+  verified_by_source_id: nullablePositiveIdSchema,
+  verified_at_utc: isoTimestampOrNullSchema,
+  raw_record_metadata: z.record(z.string(), z.unknown()),
+  created_at: isoTimestampSchema.optional(),
+  updated_at: isoTimestampSchema.optional()
+}).superRefine((value, ctx) => {
+  const expectedEventType =
+    value.attribution_family === 'deterministic_views' ? 'view' : 'impression';
+
+  if (value.event_type !== expectedEventType) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'event_type must match attribution_family'
+    });
+  }
+
+  if (!value.campaign_id && !value.ad_id) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'campaign_id or ad_id is required for deterministic Meta aggregate rows'
+    });
+  }
+
+  if (
+    value.platform_verified &&
+    (
+      value.verification_status !== 'verified' ||
+      value.verified_by_source_id === null ||
+      value.verified_at_utc === null
+    )
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'verified Meta aggregate rows require verified status, source, and timestamp'
+    });
+  }
+
+  if (value.platform_verified) {
+    const requiredMetadataFields = [
+      'sourceId',
+      'rawEventId',
+      'rawTable',
+      'apiVersion',
+      'apiEndpoint',
+      'apiAccountId',
+      'apiRequestTimestampUtc',
+      'requestId'
+    ];
+
+    for (const field of requiredMetadataFields) {
+      const metadataValue = value.raw_record_metadata[field];
+      if (typeof metadataValue === 'string' && metadataValue.trim().length > 0) {
+        continue;
+      }
+
+      if (typeof metadataValue === 'number' && Number.isFinite(metadataValue) && metadataValue > 0) {
+        continue;
+      }
+
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'verified Meta aggregate rows require raw payload and Meta API provenance metadata',
+        path: ['raw_record_metadata', field]
+      });
+    }
+  }
+});
+
 const jsonSchemaNullableString = (maxLength = MAX_ATTRIBUTION_TEXT_LENGTH): JsonSchemaDocument => ({
   type: ['string', 'null'],
   maxLength
@@ -533,6 +850,22 @@ const jsonSchemaEvidenceSourceOrNull: JsonSchemaDocument = {
 const jsonSchemaModelKeyOrNull: JsonSchemaDocument = {
   type: ['string', 'null'],
   enum: [...ATTRIBUTION_MODEL_KEYS, null]
+};
+
+const jsonSchemaDateOnly: JsonSchemaDocument = {
+  type: 'string',
+  format: 'date',
+  pattern: DATE_ONLY_REGEX.source
+};
+
+const jsonSchemaPositiveId: JsonSchemaDocument = {
+  type: 'integer',
+  minimum: 1
+};
+
+const jsonSchemaPositiveIdOrNull: JsonSchemaDocument = {
+  type: ['integer', 'null'],
+  minimum: 1
 };
 
 export const attributionHintInputV1JsonSchema: JsonSchemaDocument = {
@@ -819,13 +1152,333 @@ export const attributionExplainRecordV1JsonSchema: JsonSchemaDocument = {
   }
 };
 
+export const attributionQaOrderIdentifiersV1JsonSchema: JsonSchemaDocument = {
+  title: 'AttributionQaOrderIdentifiersV1',
+  type: 'object',
+  additionalProperties: false,
+  required: [
+    'landing_session_id',
+    'checkout_token',
+    'cart_token',
+    'shopify_customer_id',
+    'email_hash',
+    'identity_journey_id'
+  ],
+  properties: {
+    landing_session_id: jsonSchemaUuidOrNull,
+    checkout_token: jsonSchemaNullableString(),
+    cart_token: jsonSchemaNullableString(),
+    shopify_customer_id: jsonSchemaNullableString(),
+    email_hash: { type: ['string', 'null'], pattern: '^[0-9a-fA-F]{64}$' },
+    identity_journey_id: jsonSchemaUuidOrNull
+  }
+};
+
+export const attributionQaOrderV1JsonSchema: JsonSchemaDocument = {
+  title: 'AttributionQaOrderV1',
+  type: 'object',
+  additionalProperties: false,
+  required: [
+    'order_id',
+    'order_platform',
+    'order_name',
+    'order_occurred_at_utc',
+    'order_timestamp_source',
+    'currency_code',
+    'subtotal_amount',
+    'total_amount',
+    'source_name',
+    'identifiers'
+  ],
+  properties: {
+    order_id: { type: 'string', minLength: 1 },
+    order_platform: { const: 'shopify', type: 'string' },
+    order_name: jsonSchemaNullableString(),
+    order_occurred_at_utc: jsonSchemaIsoTimestampOrNull,
+    order_timestamp_source: {
+      type: ['string', 'null'],
+      enum: [...ATTRIBUTION_ORDER_TIMESTAMP_SOURCES, null]
+    },
+    currency_code: { type: 'string', minLength: 3, maxLength: 16 },
+    subtotal_amount: jsonSchemaDecimalString,
+    total_amount: jsonSchemaDecimalString,
+    source_name: jsonSchemaNullableString(),
+    identifiers: attributionQaOrderIdentifiersV1JsonSchema
+  }
+};
+
+const jsonSchemaConfidenceScore: JsonSchemaDocument = {
+  type: 'number',
+  minimum: 0,
+  maximum: 1
+};
+
+export const attributionQaCandidateV1JsonSchema: JsonSchemaDocument = {
+  title: 'AttributionQaCandidateV1',
+  type: 'object',
+  additionalProperties: false,
+  required: [
+    'candidate_group',
+    'source_key',
+    'touchpoint_id',
+    'session_id',
+    'source_touch_event_id',
+    'occurred_at_utc',
+    'source',
+    'medium',
+    'campaign',
+    'content',
+    'term',
+    'click_id_type',
+    'click_id_value',
+    'match_source',
+    'attribution_reason',
+    'confidence_score',
+    'confidence_label',
+    'is_direct',
+    'is_synthetic',
+    'selected'
+  ],
+  properties: {
+    candidate_group: { type: 'string', enum: [...ATTRIBUTION_QA_CANDIDATE_GROUPS] },
+    source_key: { type: 'string', minLength: 1, maxLength: MAX_ATTRIBUTION_TEXT_LENGTH },
+    touchpoint_id: jsonSchemaNullableString(),
+    session_id: jsonSchemaUuidOrNull,
+    source_touch_event_id: jsonSchemaNullableString(),
+    occurred_at_utc: jsonSchemaIsoTimestamp,
+    source: jsonSchemaNullableLowercaseString(),
+    medium: jsonSchemaNullableLowercaseString(),
+    campaign: jsonSchemaNullableLowercaseString(),
+    content: jsonSchemaNullableLowercaseString(),
+    term: jsonSchemaNullableLowercaseString(),
+    click_id_type: jsonSchemaClickIdTypeOrNull,
+    click_id_value: jsonSchemaNullableString(),
+    match_source: { type: 'string', enum: [...ATTRIBUTION_QA_MATCH_SOURCES] },
+    attribution_reason: { type: 'string', minLength: 1, maxLength: MAX_ATTRIBUTION_TEXT_LENGTH },
+    confidence_score: jsonSchemaConfidenceScore,
+    confidence_label: { type: 'string', enum: [...ATTRIBUTION_QA_CONFIDENCE_LABELS] },
+    is_direct: { type: 'boolean' },
+    is_synthetic: { type: 'boolean' },
+    selected: { type: 'boolean' }
+  }
+};
+
+export const attributionQaOutcomeV1JsonSchema: JsonSchemaDocument = {
+  title: 'AttributionQaOutcomeV1',
+  type: 'object',
+  additionalProperties: false,
+  required: [
+    'status',
+    'attribution_tier',
+    'attribution_reason',
+    'match_source',
+    'confidence_score',
+    'confidence_label',
+    'winner_touchpoint_id',
+    'winner_session_id',
+    'selected_model_key'
+  ],
+  properties: {
+    status: { type: 'string', enum: [...ATTRIBUTION_QA_OUTCOME_STATUSES] },
+    attribution_tier: { type: 'string', enum: [...ATTRIBUTION_QA_TIERS] },
+    attribution_reason: { type: 'string', minLength: 1, maxLength: MAX_ATTRIBUTION_TEXT_LENGTH },
+    match_source: { type: 'string', enum: [...ATTRIBUTION_QA_MATCH_SOURCES] },
+    confidence_score: jsonSchemaConfidenceScore,
+    confidence_label: { type: 'string', enum: [...ATTRIBUTION_QA_CONFIDENCE_LABELS] },
+    winner_touchpoint_id: jsonSchemaNullableString(),
+    winner_session_id: jsonSchemaUuidOrNull,
+    selected_model_key: jsonSchemaModelKeyOrNull
+  }
+};
+
+export const attributionQaNormalizationFailureV1JsonSchema: JsonSchemaDocument = {
+  title: 'AttributionQaNormalizationFailureV1',
+  type: 'object',
+  additionalProperties: false,
+  required: ['scope', 'reason', 'source_key'],
+  properties: {
+    scope: { type: 'string', enum: [...ATTRIBUTION_QA_NORMALIZATION_FAILURE_SCOPES] },
+    reason: { type: 'string', minLength: 1, maxLength: MAX_ATTRIBUTION_TEXT_LENGTH },
+    source_key: jsonSchemaNullableString()
+  }
+};
+
+export const attributionQaPayloadV1JsonSchema: JsonSchemaDocument = {
+  $schema: ATTRIBUTION_JSON_SCHEMA_DRAFT,
+  title: 'AttributionQaPayloadV1',
+  type: 'object',
+  additionalProperties: false,
+  required: [
+    'schema_version',
+    'generated_at_utc',
+    'order',
+    'outcome',
+    'candidates',
+    'model_summaries',
+    'credits',
+    'explainability',
+    'diagnostics'
+  ],
+  properties: {
+    schema_version: { const: ATTRIBUTION_QA_PAYLOAD_SCHEMA_VERSION, type: 'integer' },
+    generated_at_utc: jsonSchemaIsoTimestamp,
+    order: attributionQaOrderV1JsonSchema,
+    outcome: attributionQaOutcomeV1JsonSchema,
+    candidates: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['deterministic_first_party', 'shopify_hint', 'ga4_fallback'],
+      properties: {
+        deterministic_first_party: {
+          type: 'array',
+          items: attributionQaCandidateV1JsonSchema
+        },
+        shopify_hint: {
+          type: 'array',
+          items: attributionQaCandidateV1JsonSchema
+        },
+        ga4_fallback: {
+          type: 'array',
+          items: attributionQaCandidateV1JsonSchema
+        }
+      }
+    },
+    model_summaries: {
+      type: 'array',
+      items: attributionResultRecordV1JsonSchema
+    },
+    credits: {
+      type: 'array',
+      items: attributionCreditRecordV1JsonSchema
+    },
+    explainability: {
+      type: 'array',
+      items: attributionExplainRecordV1JsonSchema
+    },
+    diagnostics: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['normalization_failures', 'notes'],
+      properties: {
+        normalization_failures: {
+          type: 'array',
+          items: attributionQaNormalizationFailureV1JsonSchema
+        },
+        notes: {
+          type: 'array',
+          items: { type: 'string', minLength: 1, maxLength: MAX_ATTRIBUTION_TEXT_LENGTH }
+        }
+      }
+    }
+  }
+};
+
+export const metaDeterministicAttributionIdentityTupleV1JsonSchema: JsonSchemaDocument = {
+  $schema: ATTRIBUTION_JSON_SCHEMA_DRAFT,
+  title: 'MetaDeterministicAttributionIdentityTupleV1',
+  type: 'object',
+  additionalProperties: false,
+  required: [
+    'organization_id',
+    'ad_account_id',
+    'report_date',
+    'attribution_family',
+    'attribution_window',
+    'campaign_id',
+    'adset_id',
+    'ad_id'
+  ],
+  properties: {
+    organization_id: jsonSchemaPositiveId,
+    ad_account_id: { type: 'string', minLength: 1, maxLength: MAX_ATTRIBUTION_TEXT_LENGTH },
+    report_date: jsonSchemaDateOnly,
+    attribution_family: { type: 'string', enum: [...META_DETERMINISTIC_ATTRIBUTION_FAMILIES] },
+    attribution_window: { type: 'string', enum: [...META_DETERMINISTIC_ATTRIBUTION_WINDOWS] },
+    campaign_id: jsonSchemaNullableString(),
+    adset_id: jsonSchemaNullableString(),
+    ad_id: jsonSchemaNullableString()
+  },
+  anyOf: [
+    { required: ['campaign_id'], properties: { campaign_id: { type: 'string', minLength: 1 } } },
+    { required: ['ad_id'], properties: { ad_id: { type: 'string', minLength: 1 } } }
+  ]
+};
+
+export const metaDeterministicAttributionAggregateV1JsonSchema: JsonSchemaDocument = {
+  $schema: ATTRIBUTION_JSON_SCHEMA_DRAFT,
+  title: 'MetaDeterministicAttributionAggregateV1',
+  type: 'object',
+  additionalProperties: false,
+  required: [
+    'schema_version',
+    'platform',
+    'organization_id',
+    'meta_connection_id',
+    'source_id',
+    'raw_event_id',
+    'fact_id',
+    'ad_account_id',
+    'report_date',
+    'campaign_id',
+    'campaign_name',
+    'adset_id',
+    'adset_name',
+    'ad_id',
+    'ad_name',
+    'event_type',
+    'attribution_family',
+    'attribution_window',
+    'attribution_window_days',
+    'aggregate_count',
+    'evidence_origin',
+    'platform_verified',
+    'verification_status',
+    'verified_by_source_id',
+    'verified_at_utc',
+    'raw_record_metadata'
+  ],
+  properties: {
+    schema_version: { const: 1, type: 'integer' },
+    platform: { const: 'meta_ads', type: 'string' },
+    organization_id: jsonSchemaPositiveId,
+    meta_connection_id: jsonSchemaPositiveId,
+    source_id: jsonSchemaPositiveId,
+    raw_event_id: jsonSchemaPositiveId,
+    fact_id: jsonSchemaPositiveIdOrNull,
+    ad_account_id: { type: 'string', minLength: 1, maxLength: MAX_ATTRIBUTION_TEXT_LENGTH },
+    report_date: jsonSchemaDateOnly,
+    campaign_id: jsonSchemaNullableString(),
+    campaign_name: jsonSchemaNullableString(),
+    adset_id: jsonSchemaNullableString(),
+    adset_name: jsonSchemaNullableString(),
+    ad_id: jsonSchemaNullableString(),
+    ad_name: jsonSchemaNullableString(),
+    event_type: { type: 'string', enum: [...META_DETERMINISTIC_ATTRIBUTION_EVENT_TYPES] },
+    attribution_family: { type: 'string', enum: [...META_DETERMINISTIC_ATTRIBUTION_FAMILIES] },
+    attribution_window: { type: 'string', enum: [...META_DETERMINISTIC_ATTRIBUTION_WINDOWS] },
+    attribution_window_days: { const: 7, type: 'integer' },
+    aggregate_count: { type: 'integer', minimum: 0 },
+    evidence_origin: { const: 'api', type: 'string' },
+    platform_verified: { type: 'boolean' },
+    verification_status: { type: 'string', enum: [...META_DETERMINISTIC_ATTRIBUTION_VERIFICATION_STATUSES] },
+    verified_by_source_id: jsonSchemaPositiveIdOrNull,
+    verified_at_utc: jsonSchemaIsoTimestampOrNull,
+    raw_record_metadata: { type: 'object', additionalProperties: true },
+    created_at: jsonSchemaIsoTimestamp,
+    updated_at: jsonSchemaIsoTimestamp
+  }
+};
+
 export const attributionEngineV1JsonSchemas = {
   AttributionHintInputV1: attributionHintInputV1JsonSchema,
   AttributionOrderInputV1: attributionOrderInputV1JsonSchema,
   AttributionTouchpointInputV1: attributionTouchpointInputV1JsonSchema,
   AttributionResultRecordV1: attributionResultRecordV1JsonSchema,
   AttributionCreditRecordV1: attributionCreditRecordV1JsonSchema,
-  AttributionExplainRecordV1: attributionExplainRecordV1JsonSchema
+  AttributionExplainRecordV1: attributionExplainRecordV1JsonSchema,
+  AttributionQaPayloadV1: attributionQaPayloadV1JsonSchema,
+  MetaDeterministicAttributionAggregateV1: metaDeterministicAttributionAggregateV1JsonSchema,
+  MetaDeterministicAttributionIdentityTupleV1: metaDeterministicAttributionIdentityTupleV1JsonSchema
 } as const;
 
 export type AttributionEvidenceSource = (typeof ATTRIBUTION_EVIDENCE_SOURCES)[number];
@@ -838,12 +1491,33 @@ export type AttributionAllocationStatus = (typeof ATTRIBUTION_ALLOCATION_STATUSE
 export type AttributionLookbackRule = (typeof ATTRIBUTION_LOOKBACK_RULES)[number];
 export type AttributionExplainStage = (typeof ATTRIBUTION_EXPLAIN_STAGES)[number];
 export type AttributionExplainDecision = (typeof ATTRIBUTION_EXPLAIN_DECISIONS)[number];
+export type AttributionQaOutcomeStatus = (typeof ATTRIBUTION_QA_OUTCOME_STATUSES)[number];
+export type AttributionQaTier = (typeof ATTRIBUTION_QA_TIERS)[number];
+export type AttributionQaMatchSource = (typeof ATTRIBUTION_QA_MATCH_SOURCES)[number];
+export type AttributionQaConfidenceLabel = (typeof ATTRIBUTION_QA_CONFIDENCE_LABELS)[number];
+export type AttributionQaCandidateGroup = (typeof ATTRIBUTION_QA_CANDIDATE_GROUPS)[number];
+export type AttributionQaNormalizationFailureScope =
+  (typeof ATTRIBUTION_QA_NORMALIZATION_FAILURE_SCOPES)[number];
+
+export type MetaDeterministicAttributionEventType = (typeof META_DETERMINISTIC_ATTRIBUTION_EVENT_TYPES)[number];
+export type MetaDeterministicAttributionFamily = (typeof META_DETERMINISTIC_ATTRIBUTION_FAMILIES)[number];
+export type MetaDeterministicAttributionWindow = (typeof META_DETERMINISTIC_ATTRIBUTION_WINDOWS)[number];
+export type MetaDeterministicAttributionVerificationStatus = (typeof META_DETERMINISTIC_ATTRIBUTION_VERIFICATION_STATUSES)[number];
 export type AttributionHintInputV1 = z.infer<typeof attributionHintInputV1Schema>;
 export type AttributionOrderInputV1 = z.infer<typeof attributionOrderInputV1Schema>;
 export type AttributionTouchpointInputV1 = z.infer<typeof attributionTouchpointInputV1Schema>;
 export type AttributionResultRecordV1 = z.infer<typeof attributionResultRecordV1Schema>;
 export type AttributionCreditRecordV1 = z.infer<typeof attributionCreditRecordV1Schema>;
 export type AttributionExplainRecordV1 = z.infer<typeof attributionExplainRecordV1Schema>;
+export type AttributionQaOrderIdentifiersV1 = z.infer<typeof attributionQaOrderIdentifiersV1Schema>;
+export type AttributionQaOrderV1 = z.infer<typeof attributionQaOrderV1Schema>;
+export type AttributionQaCandidateV1 = z.infer<typeof attributionQaCandidateV1Schema>;
+export type AttributionQaOutcomeV1 = z.infer<typeof attributionQaOutcomeV1Schema>;
+export type AttributionQaNormalizationFailureV1 = z.infer<typeof attributionQaNormalizationFailureV1Schema>;
+export type AttributionQaPayloadV1 = z.infer<typeof attributionQaPayloadV1Schema>;
+
+export type MetaDeterministicAttributionIdentityTupleV1 = z.infer<typeof metaDeterministicAttributionIdentityTupleV1Schema>;
+export type MetaDeterministicAttributionAggregateV1 = z.infer<typeof metaDeterministicAttributionAggregateV1Schema>;
 
 export function normalizeAttributionOrderInputV1(input: unknown): AttributionOrderInputV1 {
   return attributionOrderInputV1Schema.parse(input);
@@ -867,4 +1541,242 @@ export function normalizeAttributionCreditRecordV1(input: unknown): AttributionC
 
 export function normalizeAttributionExplainRecordV1(input: unknown): AttributionExplainRecordV1 {
   return attributionExplainRecordV1Schema.parse(input);
+}
+
+export function normalizeAttributionQaPayloadV1(input: unknown): AttributionQaPayloadV1 {
+  return attributionQaPayloadV1Schema.parse(input);
+}
+
+export const attributionQaPayloadV1SuccessFixture = normalizeAttributionQaPayloadV1({
+  schema_version: 1,
+  generated_at_utc: '2026-04-30T12:30:00Z',
+  order: {
+    order_id: 'shopify-order-1105',
+    order_platform: 'shopify',
+    order_name: 'RR-1105',
+    order_occurred_at_utc: '2026-04-30T12:00:00Z',
+    order_timestamp_source: 'processed_at',
+    currency_code: 'usd',
+    subtotal_amount: '180.00',
+    total_amount: '195.00',
+    source_name: 'web',
+    identifiers: {
+      landing_session_id: '123e4567-e89b-42d3-a456-426614174000',
+      checkout_token: 'checkout-456',
+      cart_token: 'cart-789',
+      shopify_customer_id: 'gid://shopify/Customer/99',
+      email_hash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      identity_journey_id: '223e4567-e89b-42d3-a456-426614174111'
+    }
+  },
+  outcome: {
+    status: 'success',
+    attribution_tier: 'deterministic_first_party',
+    attribution_reason: 'matched_by_landing_session_id',
+    match_source: 'landing_session_id',
+    confidence_score: 1,
+    confidence_label: 'high',
+    winner_touchpoint_id: 'touch-landing-1',
+    winner_session_id: '123e4567-e89b-42d3-a456-426614174000',
+    selected_model_key: 'last_touch'
+  },
+  candidates: {
+    deterministic_first_party: [
+      {
+        candidate_group: 'deterministic_first_party',
+        source_key: 'landing_session_id:123e4567-e89b-42d3-a456-426614174000',
+        touchpoint_id: 'touch-landing-1',
+        session_id: '123e4567-e89b-42d3-a456-426614174000',
+        source_touch_event_id: 'event-100',
+        occurred_at_utc: '2026-04-30T11:15:00Z',
+        source: 'google',
+        medium: 'cpc',
+        campaign: 'brand-search',
+        content: 'hero',
+        term: 'roas radar',
+        click_id_type: 'gclid',
+        click_id_value: 'GCLID-123',
+        match_source: 'landing_session_id',
+        attribution_reason: 'matched_by_landing_session_id',
+        confidence_score: 1,
+        confidence_label: 'high',
+        is_direct: false,
+        is_synthetic: false,
+        selected: true
+      }
+    ],
+    shopify_hint: [],
+    ga4_fallback: []
+  },
+  model_summaries: [
+    {
+      run_id: '323e4567-e89b-42d3-a456-426614174222',
+      attribution_spec_version: 'v1',
+      order_id: 'shopify-order-1105',
+      model_key: 'last_touch',
+      allocation_status: 'attributed',
+      winner_touchpoint_id: 'touch-landing-1',
+      winner_session_id: '123e4567-e89b-42d3-a456-426614174000',
+      winner_evidence_source: 'landing_session_id',
+      winner_attribution_reason: 'matched_by_landing_session_id',
+      total_credit_weight: '1.00',
+      total_revenue_credited: '195.00',
+      touchpoint_count_considered: 1,
+      eligible_click_count: 1,
+      eligible_view_count: 0,
+      lookback_rule_applied: '28d_click',
+      winner_selection_rule: 'last_touch',
+      direct_suppression_applied: false,
+      deterministic_block_applied: false,
+      normalization_failures_count: 0,
+      generated_at_utc: '2026-04-30T12:30:00Z'
+    }
+  ],
+  credits: [
+    {
+      run_id: '323e4567-e89b-42d3-a456-426614174222',
+      attribution_spec_version: 'v1',
+      order_id: 'shopify-order-1105',
+      model_key: 'last_touch',
+      touchpoint_id: 'touch-landing-1',
+      session_id: '123e4567-e89b-42d3-a456-426614174000',
+      touchpoint_position: 1,
+      occurred_at_utc: '2026-04-30T11:15:00Z',
+      source: 'google',
+      medium: 'cpc',
+      campaign: 'brand-search',
+      content: 'hero',
+      term: 'roas radar',
+      click_id_type: 'gclid',
+      click_id_value: 'GCLID-123',
+      touch_type: 'click',
+      is_direct: false,
+      evidence_source: 'landing_session_id',
+      is_synthetic: false,
+      attribution_reason: 'matched_by_landing_session_id',
+      credit_weight: '1.00',
+      revenue_credit: '195.00',
+      is_primary: true
+    }
+  ],
+  explainability: [
+    {
+      run_id: '323e4567-e89b-42d3-a456-426614174222',
+      order_id: 'shopify-order-1105',
+      touchpoint_id: 'touch-landing-1',
+      model_key: 'last_touch',
+      explain_stage: 'model_scoring',
+      decision: 'winner',
+      decision_reason: 'selected_last_touch_candidate',
+      details_json: {
+        match_source: 'landing_session_id',
+        confidence_score: 1
+      },
+      order_occurred_at_utc: '2026-04-30T12:00:00Z',
+      created_at_utc: '2026-04-30T12:30:00Z'
+    }
+  ],
+  diagnostics: {
+    normalization_failures: [],
+    notes: ['deterministic first-party candidate selected']
+  }
+});
+
+export const attributionQaPayloadV1NoMatchFixture = normalizeAttributionQaPayloadV1({
+  schema_version: 1,
+  generated_at_utc: '2026-04-30T13:30:00Z',
+  order: {
+    order_id: 'shopify-order-1106',
+    order_platform: 'shopify',
+    order_name: 'RR-1106',
+    order_occurred_at_utc: '2026-04-30T13:00:00Z',
+    order_timestamp_source: 'processed_at',
+    currency_code: 'USD',
+    subtotal_amount: '90.00',
+    total_amount: '100.00',
+    source_name: 'web',
+    identifiers: {
+      landing_session_id: null,
+      checkout_token: null,
+      cart_token: null,
+      shopify_customer_id: null,
+      email_hash: null,
+      identity_journey_id: null
+    }
+  },
+  outcome: {
+    status: 'no_match',
+    attribution_tier: 'unattributed',
+    attribution_reason: 'no_eligible_touchpoints',
+    match_source: 'unattributed',
+    confidence_score: 0,
+    confidence_label: 'none',
+    winner_touchpoint_id: null,
+    winner_session_id: null,
+    selected_model_key: 'last_touch'
+  },
+  candidates: {
+    deterministic_first_party: [],
+    shopify_hint: [],
+    ga4_fallback: []
+  },
+  model_summaries: [
+    {
+      run_id: '423e4567-e89b-42d3-a456-426614174333',
+      attribution_spec_version: 'v1',
+      order_id: 'shopify-order-1106',
+      model_key: 'last_touch',
+      allocation_status: 'no_eligible_touches',
+      winner_touchpoint_id: null,
+      winner_session_id: null,
+      winner_evidence_source: null,
+      winner_attribution_reason: null,
+      total_credit_weight: '0.00',
+      total_revenue_credited: '0.00',
+      touchpoint_count_considered: 0,
+      eligible_click_count: 0,
+      eligible_view_count: 0,
+      lookback_rule_applied: '28d_click',
+      winner_selection_rule: 'last_touch',
+      direct_suppression_applied: false,
+      deterministic_block_applied: false,
+      normalization_failures_count: 0,
+      generated_at_utc: '2026-04-30T13:30:00Z'
+    }
+  ],
+  credits: [],
+  explainability: [
+    {
+      run_id: '423e4567-e89b-42d3-a456-426614174333',
+      order_id: 'shopify-order-1106',
+      touchpoint_id: null,
+      model_key: 'last_touch',
+      explain_stage: 'candidate_extraction',
+      decision: 'no_credit',
+      decision_reason: 'no_eligible_touchpoints',
+      details_json: {
+        deterministic_first_party_count: 0,
+        shopify_hint_count: 0,
+        ga4_fallback_count: 0
+      },
+      order_occurred_at_utc: '2026-04-30T13:00:00Z',
+      created_at_utc: '2026-04-30T13:30:00Z'
+    }
+  ],
+  diagnostics: {
+    normalization_failures: [],
+    notes: ['no eligible attribution candidates found']
+  }
+});
+
+export function normalizeMetaDeterministicAttributionIdentityTupleV1(
+  input: unknown
+): MetaDeterministicAttributionIdentityTupleV1 {
+  return metaDeterministicAttributionIdentityTupleV1Schema.parse(input);
+}
+
+export function normalizeMetaDeterministicAttributionAggregateV1(
+  input: unknown
+): MetaDeterministicAttributionAggregateV1 {
+  return metaDeterministicAttributionAggregateV1Schema.parse(input);
 }

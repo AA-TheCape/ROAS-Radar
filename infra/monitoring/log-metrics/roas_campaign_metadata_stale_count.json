@@ -1,8 +1,27 @@
-New distribution metric extracting `jsonPayload.staleEntityCount` from
-`campaign_metadata_freshness_snapshot` logs.
-
-Labels:
-- service
-- platform
-- entity_type
-- worker_id
+{
+  "name": "roas_campaign_metadata_stale_count",
+  "description": "Distribution of stale campaign metadata entity counts emitted by freshness snapshots.",
+  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"campaign_metadata_freshness_snapshot\"",
+  "valueExtractor": "EXTRACT(jsonPayload.staleEntityCount)",
+  "labelExtractors": {
+    "service": "EXTRACT(jsonPayload.service)",
+    "platform": "EXTRACT(jsonPayload.platform)",
+    "entity_type": "EXTRACT(jsonPayload.entityType)"
+  },
+  "metricDescriptor": {
+    "metricKind": "DELTA",
+    "valueType": "DISTRIBUTION",
+    "unit": "1",
+    "displayName": "ROAS Radar Campaign Metadata Stale Count",
+    "labels": [
+      { "key": "service", "valueType": "STRING", "description": "Service emitting the freshness snapshot." },
+      { "key": "platform", "valueType": "STRING", "description": "Ad platform." },
+      { "key": "entity_type", "valueType": "STRING", "description": "Metadata entity type." }
+    ]
+  },
+  "bucketOptions": {
+    "explicitBuckets": {
+      "bounds": [0, 1, 5, 10, 25, 50, 100, 250, 500]
+    }
+  }
+}

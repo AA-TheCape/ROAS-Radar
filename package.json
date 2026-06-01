@@ -13,6 +13,7 @@
     "db:verify-raw-payload-query-plans": "node scripts/verify-raw-payload-query-plans.mjs",
     "db:verify-attribution-v1-query-plans": "node scripts/verify-attribution-v1-query-plans.mjs",
     "db:verify-identity-graph-query-plans": "node scripts/verify-identity-graph-query-plans.mjs",
+    "ops:verify-meta-deterministic-rollout": "node scripts/verify-meta-deterministic-rollout.mjs",
     "dev": "tsx watch src/server.ts",
     "lint": "biome lint src scripts test",
     "lint:dashboard": "npm --prefix dashboard run lint",
@@ -24,6 +25,9 @@
     "meta-ads:sync:start": "node dist/src/meta-ads-worker.js",
     "meta-ads:order-value": "tsx src/meta-order-value-worker.ts",
     "meta-ads:order-value:start": "node dist/src/meta-order-value-worker.js",
+    "meta-ads:deterministic": "tsx src/meta-deterministic-worker.ts",
+    "meta-ads:deterministic:start": "node dist/src/meta-deterministic-worker.js",
+    "meta-ads:deterministic:backfill": "tsx src/admin/backfill-meta-deterministic.ts",
     "meta-ads:metadata-refresh": "tsx src/meta-ads-metadata-refresh-worker.ts",
     "meta-ads:metadata-refresh:start": "node dist/src/meta-ads-metadata-refresh-worker.js",
     "google-ads:sync": "tsx src/google-ads-worker.ts",
@@ -38,6 +42,8 @@
     "data-quality:check:start": "node dist/src/data-quality-worker.js",
     "session-attribution:retention": "tsx src/session-attribution-retention-worker.ts",
     "session-attribution:retention:start": "node dist/src/session-attribution-retention-worker.js",
+    "attribution-qa:retention": "tsx src/attribution-qa-retention-worker.ts",
+    "attribution-qa:retention:start": "node dist/src/attribution-qa-retention-worker.js",
     "attribution:backfill-orders": "tsx src/admin/backfill-order-attribution.ts",
     "attribution:backfill-orders:start": "node dist/src/admin/backfill-order-attribution.js",
     "attribution:recover-shopify-hints": "tsx src/admin/recover-shopify-attribution.ts",
@@ -62,9 +68,9 @@
     "test:dead-letters": "node --import tsx --test test/dead-letter-replay.test.ts"
   },
   "dependencies": {
-    "@google-cloud/bigquery": "^7.8.0",
+    "@google-cloud/bigquery": "^8.3.1",
     "dotenv": "^16.4.5",
-    "express": "^4.21.2",
+    "express": "^4.22.2",
     "pg": "^8.13.1",
     "zod": "^3.24.1"
   },

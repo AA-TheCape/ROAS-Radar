@@ -1,0 +1,25 @@
+{
+  "name": "roas_attribution_qa_snapshot_writes",
+  "description": "Counts Attribution QA snapshot write successes and failures from realtime and backfill attribution paths.",
+  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"attribution_qa_snapshot_write\"",
+  "labelExtractors": {
+    "service": "EXTRACT(jsonPayload.service)",
+    "pipeline": "EXTRACT(jsonPayload.pipeline)",
+    "status": "EXTRACT(jsonPayload.status)",
+    "attribution_tier": "EXTRACT(jsonPayload.attributionTier)",
+    "match_source": "EXTRACT(jsonPayload.matchSource)"
+  },
+  "metricDescriptor": {
+    "metricKind": "DELTA",
+    "valueType": "INT64",
+    "unit": "1",
+    "displayName": "ROAS Radar Attribution QA Snapshot Writes",
+    "labels": [
+      { "key": "service", "valueType": "STRING", "description": "Service emitting the QA snapshot write event." },
+      { "key": "pipeline", "valueType": "STRING", "description": "Attribution pipeline that attempted the snapshot write." },
+      { "key": "status", "valueType": "STRING", "description": "Snapshot write outcome: success or failure." },
+      { "key": "attribution_tier", "valueType": "STRING", "description": "Final attribution tier on the QA payload." },
+      { "key": "match_source", "valueType": "STRING", "description": "Attribution match source recorded for the order." }
+    ]
+  }
+}

@@ -6,6 +6,8 @@ const originalKService = process.env.K_SERVICE;
 process.env.K_SERVICE = 'roas-radar-observability-test';
 
 const {
+  emitAttributionQaPayloadFetchLog,
+  emitAttributionQaSnapshotWriteLog,
   emitCampaignMetadataFreshnessSnapshotLog,
   emitCampaignMetadataResolutionCoverageLog,
   emitCampaignMetadataSyncJobLifecycleLog,
@@ -315,4 +317,84 @@ test('recovery telemetry logs include run counters, chunk duration, trace correl
     (entries[2]?.actionContext as { inspectRunFilter?: string }).inspectRunFilter ?? '',
     /recovery_run_lifecycle/
   );
+});
+
+test('attribution QA snapshot write logs include order correlation and payload size metrics', async () => {
+  const payload = {
+    candidates: {
+      deterministic_first_party: [{ source_key: 'session-1' }],
+      shopify_hint: [],
+      ga4_fallback: [{ source_key: 'ga4-1' }]
+    },
+    model_summaries: [{ attribution_model: 'last_non_direct' }],
+    credits: [{ credit_weight: '1.000000' }],
+    explainability: [{ rule_id: 'winner_selected' }],
+    diagnostics: { normalization_failures: [{ scope: 'order', reason: 'missing_processed_at' }] }
+  };
+  const { entries } = await captureStructuredLogs(() =>
+    emitAttributionQaSnapshotWriteLog({
+      orderId: 'order-qa-observe-1',
+      pipeline: 'realtime_queue',
+      status: 'success',
+      attributionTier: 'deterministic_first_party',
+      matchSource: 'first_party',
+      payload
+    })
+  );
+
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].event, 'attribution_qa_snapshot_write');
+  assert.equal(entries[0].order_id, 'order-qa-observe-1');
+  assert.equal(entries[0].orderId, 'order-qa-observe-1');
+  assert.equal(entries[0].status, 'success');
+  assert.equal(entries[0].pipeline, 'realtime_queue');
+  assert.equal(entries[0].candidateCount, 2);
+  assert.equal(entries[0].modelSummaryCount, 1);
+  assert.equal(entries[0].creditCount, 1);
+  assert.equal(entries[0].explainabilityRecordCount, 1);
+  assert.equal(entries[0].normalizationFailureCount, 1);
+  assert.equal(typeof entries[0].payloadSizeBytes, 'number');
+  assert.ok((entries[0].payloadSizeBytes as number) > 0);
+});
+
+test('attribution QA fetch logs emit latency, source, evidence size, and failure severity', async () => {
+  const { entries } = await captureStructuredLogs(() => {
+    emitAttributionQaPayloadFetchLog({
+      endpoint: 'admin_qa_debug',
+      orderId: 'order-qa-observe-2',
+      status: 'success',
+      statusCode: 200,
+      durationMs: 12.3456,
+      source: 'persisted_snapshot',
+      payload: { candidates: { deterministic_first_party: [], shopify_hint: [], ga4_fallback: [] } },
+      rawEvidenceCount: 3,
+      rawEvidenceSizeBytes: 2048
+    });
+
+    emitAttributionQaPayloadFetchLog({
+      endpoint: 'public_qa_payload',
+      orderId: 'order-qa-observe-3',
+      status: 'failure',
+      statusCode: 500,
+      durationMs: 25,
+      error: new Error('database unavailable')
+    });
+  });
+
+  assert.equal(entries.length, 2);
+  assert.equal(entries[0].severity, 'INFO');
+  assert.equal(entries[0].event, 'attribution_qa_payload_fetch');
+  assert.equal(entries[0].order_id, 'order-qa-observe-2');
+  assert.equal(entries[0].endpoint, 'admin_qa_debug');
+  assert.equal(entries[0].statusClass, '2xx');
+  assert.equal(entries[0].durationMs, 12.35);
+  assert.equal(entries[0].source, 'persisted_snapshot');
+  assert.equal(entries[0].rawEvidenceCount, 3);
+  assert.equal(entries[0].rawEvidenceSizeBytes, 2048);
+
+  assert.equal(entries[1].severity, 'ERROR');
+  assert.equal(entries[1].order_id, 'order-qa-observe-3');
+  assert.equal(entries[1].status, 'failure');
+  assert.equal(entries[1].statusClass, '5xx');
+  assert.deepEqual((entries[1].error as { message: string }).message, 'database unavailable');
 });

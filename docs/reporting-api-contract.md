@@ -5,6 +5,7 @@ This document defines the backward-compatibility contract for authenticated repo
 Use it together with:
 
 - `docs/analytics-playbook.md` for how reporting slices should be interpreted
+- `docs/deterministic-attribution-behavior.md` for deterministic view/impression reporting modes and non-mixing rules
 - `docs/reporting-metrics.md` for KPI formulas
 - `docs/database-operations.md` and the campaign metadata resolution contract for how resolved labels are stored
 
@@ -14,11 +15,34 @@ ROAS Radar uses additive schema evolution for reporting responses.
 
 - Existing response fields must not be renamed or removed in-place.
 - New capabilities ship as additive fields on the same endpoint.
-- The current reporting response schema version is `2026-05-02`.
-- Every `/api/reporting/*` response includes `X-ROAS-Radar-Reporting-Schema: 2026-05-02`.
+- The current reporting response schema version is `2026-05-27`.
+- Every `/api/reporting/*` response includes `X-ROAS-Radar-Reporting-Schema: 2026-05-27`.
 - Consumers that care about the contract version should read the response header rather than infer version from field presence.
 
 This means no path-level version bump is required for additive reporting changes in this phase.
+
+## Reporting Modes And Layer Separation
+
+`GET /api/reporting/summary` supports additive reporting modes while preserving canonical Click attribution as the default.
+
+Supported modes:
+
+| `reportingMode` | Canonical | Source surface | Contract |
+| --- | --- | --- | --- |
+| omitted or `clicks` | yes | `daily_reporting_metrics` click-attributed credits | Canonical reporting totals. |
+| `deterministic_views` | no | `deterministic_model_outputs` | Meta API-verified deterministic view/impression model layer. |
+| `meta_view_through` | no | `meta_ads_order_value_aggregates` | Meta API-reported impression-time view-through aggregates. |
+| `combined` | no | Clicks plus Deterministic Views | Comparison-only total. |
+
+Required response behavior:
+
+- `totals` reflects only the selected reporting mode.
+- `totalsCanonical` is `true` only for omitted or `clicks` mode.
+- `layers.clicks`, `layers.deterministicViews`, and `layers.metaViewThrough` remain separate namespaces.
+- `comparisonTotals.combined` must remain labeled non-canonical.
+- Deterministic view/impression model credit must not be blended into generic canonical `attributedRevenue`, primary attribution winners, Shopify writeback fields, or click-attributed order credit.
+
+This separation applies to API responses, dashboard consumers, exports, and derived analyst tables.
 
 ## Campaign Label Enrichment
 

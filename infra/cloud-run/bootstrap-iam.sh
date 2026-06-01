@@ -45,6 +45,17 @@ ensure_service_account() {
   fi
 }
 
+ensure_secret() {
+  secret_name="$1"
+
+  if ! gcloud secrets describe "$secret_name" --project "$GCP_PROJECT_ID" >/dev/null 2>&1; then
+    gcloud secrets create "$secret_name" \
+      --project "$GCP_PROJECT_ID" \
+      --replication-policy=automatic \
+      --labels="app=roas-radar,environment=$ENVIRONMENT"
+  fi
+}
+
 grant_project_role() {
   member="$1"
   role="$2"
@@ -79,6 +90,7 @@ grant_secret_access() {
     return
   fi
 
+  ensure_secret "$secret_name"
   gcloud secrets add-iam-policy-binding "$secret_name" \
     --project="$GCP_PROJECT_ID" \
     --member="serviceAccount:$(service_account_email "$service_account")" \
@@ -93,6 +105,7 @@ for var in \
   WORKER_SERVICE_ACCOUNT_NAME \
   MIGRATOR_JOB_SERVICE_ACCOUNT_NAME \
   META_ADS_JOB_SERVICE_ACCOUNT_NAME \
+  META_ADS_DETERMINISTIC_JOB_SERVICE_ACCOUNT_NAME \
   GOOGLE_ADS_JOB_SERVICE_ACCOUNT_NAME \
   GA4_INGESTION_JOB_SERVICE_ACCOUNT_NAME \
   CAMPAIGN_METADATA_BACKFILL_JOB_SERVICE_ACCOUNT_NAME \
@@ -116,6 +129,7 @@ ensure_service_account "$DASHBOARD_SERVICE_ACCOUNT_NAME" "ROAS Radar dashboard $
 ensure_service_account "$WORKER_SERVICE_ACCOUNT_NAME" "ROAS Radar attribution worker $ENVIRONMENT"
 ensure_service_account "$MIGRATOR_JOB_SERVICE_ACCOUNT_NAME" "ROAS Radar migrator $ENVIRONMENT"
 ensure_service_account "$META_ADS_JOB_SERVICE_ACCOUNT_NAME" "ROAS Radar Meta Ads jobs $ENVIRONMENT"
+ensure_service_account "$META_ADS_DETERMINISTIC_JOB_SERVICE_ACCOUNT_NAME" "ROAS Radar Meta deterministic sync $ENVIRONMENT"
 ensure_service_account "$GOOGLE_ADS_JOB_SERVICE_ACCOUNT_NAME" "ROAS Radar Google Ads jobs $ENVIRONMENT"
 ensure_service_account "$GA4_INGESTION_JOB_SERVICE_ACCOUNT_NAME" "ROAS Radar GA4 ingestion job $ENVIRONMENT"
 ensure_service_account "$CAMPAIGN_METADATA_BACKFILL_JOB_SERVICE_ACCOUNT_NAME" "ROAS Radar campaign metadata backfill $ENVIRONMENT"
@@ -136,6 +150,7 @@ grant_roles_csv "$DASHBOARD_SERVICE_ACCOUNT_NAME" "${DASHBOARD_SERVICE_ACCOUNT_R
 grant_roles_csv "$WORKER_SERVICE_ACCOUNT_NAME" "${WORKER_SERVICE_ACCOUNT_ROLES:-roles/cloudsql.client,roles/logging.logWriter,roles/monitoring.metricWriter,roles/run.invoker}"
 grant_roles_csv "$MIGRATOR_JOB_SERVICE_ACCOUNT_NAME" "${MIGRATOR_JOB_SERVICE_ACCOUNT_ROLES:-roles/cloudsql.client,roles/logging.logWriter}"
 grant_roles_csv "$META_ADS_JOB_SERVICE_ACCOUNT_NAME" "${META_ADS_JOB_SERVICE_ACCOUNT_ROLES:-roles/cloudsql.client,roles/logging.logWriter,roles/monitoring.metricWriter}"
+grant_roles_csv "$META_ADS_DETERMINISTIC_JOB_SERVICE_ACCOUNT_NAME" "${META_ADS_DETERMINISTIC_JOB_SERVICE_ACCOUNT_ROLES:-roles/cloudsql.client,roles/logging.logWriter,roles/monitoring.metricWriter}"
 grant_roles_csv "$GOOGLE_ADS_JOB_SERVICE_ACCOUNT_NAME" "${GOOGLE_ADS_JOB_SERVICE_ACCOUNT_ROLES:-roles/cloudsql.client,roles/logging.logWriter,roles/monitoring.metricWriter}"
 grant_roles_csv "$GA4_INGESTION_JOB_SERVICE_ACCOUNT_NAME" "${GA4_INGESTION_JOB_SERVICE_ACCOUNT_ROLES:-roles/cloudsql.client,roles/logging.logWriter,roles/monitoring.metricWriter,roles/bigquery.jobUser,roles/bigquery.dataViewer}"
 grant_roles_csv "$CAMPAIGN_METADATA_BACKFILL_JOB_SERVICE_ACCOUNT_NAME" "${CAMPAIGN_METADATA_BACKFILL_JOB_SERVICE_ACCOUNT_ROLES:-roles/cloudsql.client,roles/logging.logWriter,roles/monitoring.metricWriter}"
@@ -149,7 +164,7 @@ grant_roles_csv "$DATA_QUALITY_JOB_SERVICE_ACCOUNT_NAME" "${DATA_QUALITY_JOB_SER
 grant_roles_csv "$IDENTITY_GRAPH_BACKFILL_JOB_SERVICE_ACCOUNT_NAME" "${IDENTITY_GRAPH_BACKFILL_JOB_SERVICE_ACCOUNT_ROLES:-roles/cloudsql.client,roles/logging.logWriter,roles/monitoring.metricWriter}"
 grant_roles_csv "$ORDER_ATTRIBUTION_MATERIALIZATION_JOB_SERVICE_ACCOUNT_NAME" "${ORDER_ATTRIBUTION_MATERIALIZATION_JOB_SERVICE_ACCOUNT_ROLES:-roles/cloudsql.client,roles/logging.logWriter,roles/monitoring.metricWriter}"
 grant_roles_csv "$SCHEDULER_INVOKER_SERVICE_ACCOUNT_NAME" "${SCHEDULER_INVOKER_SERVICE_ACCOUNT_ROLES:-roles/logging.logWriter}"
-grant_roles_csv "$DEPLOYER_SERVICE_ACCOUNT_NAME" "${DEPLOYER_SERVICE_ACCOUNT_ROLES:-roles/run.developer,roles/run.invoker,roles/logging.logWriter}"
+grant_roles_csv "$DEPLOYER_SERVICE_ACCOUNT_NAME" "${DEPLOYER_SERVICE_ACCOUNT_ROLES:-roles/run.developer,roles/artifactregistry.writer,roles/cloudbuild.builds.editor,roles/iam.serviceAccountUser,roles/cloudscheduler.admin,roles/monitoring.editor}"
 
 grant_secret_access "$API_SERVICE_ACCOUNT_NAME" "DATABASE_URL"
 grant_secret_access "$API_SERVICE_ACCOUNT_NAME" "REPORTING_API_TOKEN"
@@ -178,6 +193,9 @@ grant_secret_access "$DEPLOYER_SERVICE_ACCOUNT_NAME" "REPORTING_API_TOKEN"
 grant_secret_access "$META_ADS_JOB_SERVICE_ACCOUNT_NAME" "DATABASE_URL"
 grant_secret_access "$META_ADS_JOB_SERVICE_ACCOUNT_NAME" "META_ADS_APP_SECRET"
 grant_secret_access "$META_ADS_JOB_SERVICE_ACCOUNT_NAME" "META_ADS_ENCRYPTION_KEY"
+grant_secret_access "$META_ADS_DETERMINISTIC_JOB_SERVICE_ACCOUNT_NAME" "DATABASE_URL"
+grant_secret_access "$META_ADS_DETERMINISTIC_JOB_SERVICE_ACCOUNT_NAME" "META_ADS_APP_SECRET"
+grant_secret_access "$META_ADS_DETERMINISTIC_JOB_SERVICE_ACCOUNT_NAME" "META_ADS_ENCRYPTION_KEY"
 
 grant_secret_access "$GOOGLE_ADS_JOB_SERVICE_ACCOUNT_NAME" "DATABASE_URL"
 grant_secret_access "$GOOGLE_ADS_JOB_SERVICE_ACCOUNT_NAME" "GOOGLE_ADS_ENCRYPTION_KEY"
@@ -210,5 +228,23 @@ grant_secret_access "$ORDER_ATTRIBUTION_MATERIALIZATION_JOB_SERVICE_ACCOUNT_NAME
 grant_secret_access "$ORDER_ATTRIBUTION_MATERIALIZATION_JOB_SERVICE_ACCOUNT_NAME" "SHOPIFY_APP_ENCRYPTION_KEY"
 
 echo "Bootstrap complete for $ENVIRONMENT"
+echo "API service account: $(service_account_email "$API_SERVICE_ACCOUNT_NAME")"
+echo "Dashboard service account: $(service_account_email "$DASHBOARD_SERVICE_ACCOUNT_NAME")"
+echo "Worker service account: $(service_account_email "$WORKER_SERVICE_ACCOUNT_NAME")"
+echo "Migrator service account: $(service_account_email "$MIGRATOR_JOB_SERVICE_ACCOUNT_NAME")"
+echo "Meta Ads job service account: $(service_account_email "$META_ADS_JOB_SERVICE_ACCOUNT_NAME")"
+echo "Meta deterministic job service account: $(service_account_email "$META_ADS_DETERMINISTIC_JOB_SERVICE_ACCOUNT_NAME")"
+echo "Google Ads job service account: $(service_account_email "$GOOGLE_ADS_JOB_SERVICE_ACCOUNT_NAME")"
+echo "GA4 ingestion job service account: $(service_account_email "$GA4_INGESTION_JOB_SERVICE_ACCOUNT_NAME")"
+echo "Campaign metadata backfill service account: $(service_account_email "$CAMPAIGN_METADATA_BACKFILL_JOB_SERVICE_ACCOUNT_NAME")"
+echo "Shopify order reimport service account: $(service_account_email "$SHOPIFY_ORDER_REIMPORT_JOB_SERVICE_ACCOUNT_NAME")"
+echo "Order attribution backfill service account: $(service_account_email "$ORDER_ATTRIBUTION_BACKFILL_JOB_SERVICE_ACCOUNT_NAME")"
+echo "Shopify attribution recovery service account: $(service_account_email "$SHOPIFY_ATTRIBUTION_RECOVERY_JOB_SERVICE_ACCOUNT_NAME")"
+echo "GA4 fallback recovery service account: $(service_account_email "$GA4_FALLBACK_RECOVERY_JOB_SERVICE_ACCOUNT_NAME")"
+echo "Dead-letter replay service account: $(service_account_email "$DEAD_LETTER_REPLAY_JOB_SERVICE_ACCOUNT_NAME")"
+echo "Retention service account: $(service_account_email "$RETENTION_JOB_SERVICE_ACCOUNT_NAME")"
+echo "Data quality service account: $(service_account_email "$DATA_QUALITY_JOB_SERVICE_ACCOUNT_NAME")"
+echo "Identity graph backfill service account: $(service_account_email "$IDENTITY_GRAPH_BACKFILL_JOB_SERVICE_ACCOUNT_NAME")"
+echo "Order attribution materialization service account: $(service_account_email "$ORDER_ATTRIBUTION_MATERIALIZATION_JOB_SERVICE_ACCOUNT_NAME")"
 echo "Scheduler invoker service account: $(service_account_email "$SCHEDULER_INVOKER_SERVICE_ACCOUNT_NAME")"
 echo "Deployer service account: $(service_account_email "$DEPLOYER_SERVICE_ACCOUNT_NAME")"
