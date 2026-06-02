@@ -178,11 +178,17 @@ type SpendDetailRow = {
 type CampaignLabelResponseFields = {
 	campaignDisplayName?: string;
 	campaignEntityId?: string | null;
+	campaignEntityType?: "campaign" | "adset";
+	parentCampaignEntityId?: string | null;
+	parentCampaignDisplayName?: string | null;
 	campaignPlatform?: "google_ads" | "meta_ads" | null;
 	campaignNameResolutionStatus?: "resolved" | "fallback_name" | "unresolved";
 	campaignLabel?: {
 		displayName: string;
 		entityId: string | null;
+		entityType?: "campaign" | "adset";
+		parentCampaignEntityId?: string | null;
+		parentCampaignDisplayName?: string | null;
 		platform: "google_ads" | "meta_ads" | null;
 		resolutionStatus: "resolved" | "fallback_name" | "unresolved";
 		lastSeenAt: string | null;
@@ -520,11 +526,17 @@ function buildCampaignLabelFields(resolution: CampaignDisplayResolution | undefi
 	return {
 		campaignDisplayName: resolution.campaignDisplayName,
 		campaignEntityId: resolution.campaignEntityId,
+		campaignEntityType: resolution.campaignEntityType,
+		parentCampaignEntityId: resolution.parentCampaignEntityId,
+		parentCampaignDisplayName: resolution.parentCampaignDisplayName,
 		campaignPlatform: resolution.campaignPlatform,
 		campaignNameResolutionStatus: resolution.campaignNameResolutionStatus,
 		campaignLabel: {
 			displayName: resolution.campaignDisplayName,
 			entityId: resolution.campaignEntityId,
+			entityType: resolution.campaignEntityType,
+			parentCampaignEntityId: resolution.parentCampaignEntityId,
+			parentCampaignDisplayName: resolution.parentCampaignDisplayName,
 			platform: resolution.campaignPlatform,
 			resolutionStatus: resolution.campaignNameResolutionStatus,
 			lastSeenAt: resolution.lastSeenAt,

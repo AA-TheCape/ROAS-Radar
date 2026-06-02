@@ -11,6 +11,9 @@ export type CampaignDisplayResolution = {
   medium: string;
   campaignDisplayName: string;
   campaignEntityId: string | null;
+  campaignEntityType?: 'campaign' | 'adset';
+  parentCampaignEntityId?: string | null;
+  parentCampaignDisplayName?: string | null;
   campaignPlatform: 'google_ads' | 'meta_ads' | null;
   campaignNameResolutionStatus: CampaignNameResolutionStatus;
   lastSeenAt: string | null;
@@ -35,6 +38,20 @@ type MetaAttributedIdAccountRow = {
   ad_account_id: string;
   object_type: MetaMetadataObjectType;
   object_id: string;
+  object_name: string | null;
+  parent_campaign_id: string | null;
+  parent_campaign_name: string | null;
+  last_seen_at: Date | null;
+};
+
+type MetaAttributedIdCandidate = {
+  adAccountId: string;
+  objectType: MetaMetadataObjectType;
+  objectId: string;
+  objectName: string | null;
+  parentCampaignId: string | null;
+  parentCampaignName: string | null;
+  lastSeenAt: string | null;
 };
 
 export function buildCampaignResolutionGroupKey(source: string, medium: string, campaign: string): string {
@@ -95,6 +112,9 @@ function buildResolutionFingerprint(resolution: CampaignDisplayResolution): stri
   return [
     resolution.campaignDisplayName,
     resolution.campaignEntityId ?? '',
+    resolution.campaignEntityType ?? '',
+    resolution.parentCampaignEntityId ?? '',
+    resolution.parentCampaignDisplayName ?? '',
     resolution.campaignPlatform ?? '',
     resolution.campaignNameResolutionStatus
   ].join('\u0000');
@@ -171,7 +191,10 @@ function buildResolution(row: CampaignResolutionRow): CampaignDisplayResolution 
 function buildMetaAttributedIdResolution(input: {
   campaign: string;
   objectId: string;
+  objectType: MetaMetadataObjectType;
   objectName: string;
+  parentCampaignId?: string | null;
+  parentCampaignName?: string | null;
   lastFetchedAt: string | null;
 }): CampaignDisplayResolution {
   return {
@@ -180,6 +203,9 @@ function buildMetaAttributedIdResolution(input: {
     medium: 'paid_social',
     campaignDisplayName: input.objectName,
     campaignEntityId: input.objectId,
+    campaignEntityType: input.objectType,
+    parentCampaignEntityId: input.objectType === 'adset' ? normalizeString(input.parentCampaignId) : null,
+    parentCampaignDisplayName: input.objectType === 'adset' ? collapseWhitespace(input.parentCampaignName) : null,
     campaignPlatform: 'meta_ads',
     campaignNameResolutionStatus: 'resolved',
     lastSeenAt: input.lastFetchedAt,
@@ -202,6 +228,8 @@ async function resolveAttributedMetaIdMetadata(
     return new Map();
   }
 
+  const candidateMap = new Map<string, MetaAttributedIdCandidate[]>();
+
   const accountRows = await query<MetaAttributedIdAccountRow>(
     `
       WITH requested_ids AS (
@@ -211,32 +239,46 @@ async function resolveAttributedMetaIdMetadata(
         SELECT DISTINCT
           mads.account_id AS ad_account_id,
           'campaign'::text AS object_type,
-          mads.campaign_id AS object_id
+          mads.campaign_id AS object_id,
+          mads.campaign_name AS object_name,
+          NULL::text AS parent_campaign_id,
+          NULL::text AS parent_campaign_name,
+          MAX(mads.report_date)::timestamptz AS last_seen_at
         FROM meta_ads_daily_spend mads
         JOIN requested_ids requested
           ON requested.object_id = mads.campaign_id
         WHERE mads.report_date BETWEEN $2::date AND $3::date
           AND mads.account_id IS NOT NULL
           AND mads.campaign_id IS NOT NULL
+        GROUP BY mads.account_id, mads.campaign_id, mads.campaign_name
 
         UNION
 
         SELECT DISTINCT
           mads.account_id AS ad_account_id,
           'adset'::text AS object_type,
-          mads.adset_id AS object_id
+          mads.adset_id AS object_id,
+          mads.adset_name AS object_name,
+          mads.campaign_id AS parent_campaign_id,
+          mads.campaign_name AS parent_campaign_name,
+          MAX(mads.report_date)::timestamptz AS last_seen_at
         FROM meta_ads_daily_spend mads
         JOIN requested_ids requested
           ON requested.object_id = mads.adset_id
         WHERE mads.report_date BETWEEN $2::date AND $3::date
           AND mads.account_id IS NOT NULL
           AND mads.adset_id IS NOT NULL
+        GROUP BY mads.account_id, mads.adset_id, mads.adset_name, mads.campaign_id, mads.campaign_name
       ),
       cache_matches AS (
         SELECT DISTINCT
           cache.ad_account_id,
           cache.object_type,
-          cache.object_id
+          cache.object_id,
+          cache.object_name,
+          NULL::text AS parent_campaign_id,
+          NULL::text AS parent_campaign_name,
+          cache.last_fetched_at AS last_seen_at
         FROM meta_ads_metadata_cache cache
         JOIN requested_ids requested
           ON requested.object_id = cache.object_id
@@ -256,15 +298,21 @@ async function resolveAttributedMetaIdMetadata(
         WHERE $6::boolean
       )
       SELECT ad_account_id, object_type, object_id
+           , object_name, parent_campaign_id, parent_campaign_name, last_seen_at
       FROM spend_matches
       UNION
       SELECT ad_account_id, object_type, object_id
+           , object_name, parent_campaign_id, parent_campaign_name, last_seen_at
       FROM cache_matches
       UNION
       SELECT
         active_accounts.ad_account_id,
         object_types.object_type,
-        requested_ids.object_id
+        requested_ids.object_id,
+        NULL::text AS object_name,
+        NULL::text AS parent_campaign_id,
+        NULL::text AS parent_campaign_name,
+        NULL::timestamptz AS last_seen_at
       FROM active_accounts
       CROSS JOIN requested_ids
       CROSS JOIN (VALUES ('campaign'::text), ('adset'::text)) AS object_types(object_type)
@@ -298,6 +346,20 @@ async function resolveAttributedMetaIdMetadata(
     }
 
     const objectType = row.object_type as MetaMetadataObjectType;
+    const candidateKey = `${adAccountId}\u0000${objectType}\u0000${objectId}`;
+    const candidates = candidateMap.get(candidateKey) ?? [];
+
+    candidates.push({
+      adAccountId,
+      objectType,
+      objectId,
+      objectName: collapseWhitespace(row.object_name),
+      parentCampaignId: normalizeString(row.parent_campaign_id),
+      parentCampaignName: collapseWhitespace(row.parent_campaign_name),
+      lastSeenAt: row.last_seen_at?.toISOString() ?? null
+    });
+    candidateMap.set(candidateKey, candidates);
+
     const key = `${adAccountId}\u0000${objectType}`;
     const request = requestMap.get(key) ?? {
       adAccountId,
@@ -319,18 +381,51 @@ async function resolveAttributedMetaIdMetadata(
       objectIds: [...new Set(request.objectIds)]
     }))
   );
-  const byCampaign = new Map<string, CampaignDisplayResolution>();
+  const resolutionsByCampaign = new Map<string, CampaignDisplayResolution[]>();
 
   for (const resolved of metaResult.resolved) {
-    const existing = byCampaign.get(resolved.objectId);
+    const candidateKey = `${resolved.adAccountId}\u0000${resolved.objectType}\u0000${resolved.objectId}`;
+    const candidateMetadata = candidateMap.get(candidateKey) ?? [];
+    const bestCandidate = candidateMetadata.reduce<MetaAttributedIdCandidate | undefined>((current, candidate) => {
+      if (!current) {
+        return candidate;
+      }
+
+      const currentHasName = Boolean(current.objectName);
+      const candidateHasName = Boolean(candidate.objectName);
+
+      if (candidateHasName !== currentHasName) {
+        return candidateHasName ? candidate : current;
+      }
+
+      const currentTimestamp = current.lastSeenAt ? Date.parse(current.lastSeenAt) : 0;
+      const candidateTimestamp = candidate.lastSeenAt ? Date.parse(candidate.lastSeenAt) : 0;
+
+      return candidateTimestamp > currentTimestamp ? candidate : current;
+    }, undefined);
     const candidate = buildMetaAttributedIdResolution({
       campaign: resolved.objectId,
       objectId: resolved.objectId,
-      objectName: resolved.objectName,
-      lastFetchedAt: resolved.lastFetchedAt
+      objectType: resolved.objectType,
+      objectName: bestCandidate?.objectName ?? resolved.objectName,
+      parentCampaignId: bestCandidate?.parentCampaignId ?? null,
+      parentCampaignName: bestCandidate?.parentCampaignName ?? null,
+      lastFetchedAt: bestCandidate?.lastSeenAt ?? resolved.lastFetchedAt
     });
+    const resolutions = resolutionsByCampaign.get(resolved.objectId) ?? [];
 
-    byCampaign.set(resolved.objectId, chooseBetterResolution(existing, candidate));
+    resolutions.push(candidate);
+    resolutionsByCampaign.set(resolved.objectId, resolutions);
+  }
+
+  const byCampaign = new Map<string, CampaignDisplayResolution>();
+
+  for (const [campaign, resolutions] of resolutionsByCampaign) {
+    const collapsed = collapseScopedResolutions(resolutions);
+
+    if (collapsed) {
+      byCampaign.set(campaign, collapsed);
+    }
   }
 
   return byCampaign;

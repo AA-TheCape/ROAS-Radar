@@ -25,11 +25,17 @@ function buildCampaignLabel(
   platform: 'google_ads' | 'meta_ads' | null,
   resolutionStatus: 'resolved' | 'fallback_name' | 'unresolved',
   lastSeenAt: string | null = null,
-  updatedAt: string | null = null
+  updatedAt: string | null = null,
+  hierarchy: {
+    entityType?: 'campaign' | 'adset';
+    parentCampaignEntityId?: string | null;
+    parentCampaignDisplayName?: string | null;
+  } = {}
 ) {
   return {
     displayName,
     entityId,
+    ...hierarchy,
     platform,
     resolutionStatus,
     lastSeenAt,
@@ -519,11 +525,29 @@ test('reporting campaigns resolve attributed Meta campaign and ad set ids before
           {
             source: 'facebook',
             medium: 'paid_social',
+            campaign: '333',
+            content: null,
+            visits: '40',
+            orders: '4',
+            revenue: '500.00'
+          },
+          {
+            source: 'facebook',
+            medium: 'paid_social',
             campaign: '444',
             content: null,
             visits: '25',
             orders: '3',
             revenue: '300.00'
+          },
+          {
+            source: 'meta',
+            medium: 'paid_social',
+            campaign: '777',
+            content: null,
+            visits: '18',
+            orders: '2',
+            revenue: '150.00'
           },
           {
             source: 'google',
@@ -539,18 +563,49 @@ test('reporting campaigns resolve attributed Meta campaign and ad set ids before
     }
 
     if (text.includes('FROM google_candidates')) {
-      assert.deepEqual(params, ['2026-04-01', '2026-04-10', ['444', '555'], null]);
+      assert.deepEqual(params, ['2026-04-01', '2026-04-10', ['333', '444', '777', '555'], null]);
       return { rows: [] };
     }
 
     if (text.includes('WITH requested_ids')) {
-      assert.deepEqual(params, [['444', '555'], '2026-04-01', '2026-04-10', null, false, false]);
+      assert.deepEqual(params, [['333', '444', '777', '555'], '2026-04-01', '2026-04-10', null, false, false]);
       return {
         rows: [
           {
             ad_account_id: '123456789',
+            object_type: 'campaign',
+            object_id: '333',
+            object_name: 'Awareness Campaign',
+            parent_campaign_id: null,
+            parent_campaign_name: null,
+            last_seen_at: new Date('2026-04-10T00:00:00.000Z')
+          },
+          {
+            ad_account_id: '123456789',
             object_type: 'adset',
-            object_id: '444'
+            object_id: '444',
+            object_name: 'US Prospecting Ad Set',
+            parent_campaign_id: '333',
+            parent_campaign_name: 'Awareness Campaign',
+            last_seen_at: new Date('2026-04-10T00:00:00.000Z')
+          },
+          {
+            ad_account_id: '123456789',
+            object_type: 'campaign',
+            object_id: '777',
+            object_name: 'Campaign Using Shared Id',
+            parent_campaign_id: null,
+            parent_campaign_name: null,
+            last_seen_at: new Date('2026-04-10T00:00:00.000Z')
+          },
+          {
+            ad_account_id: '123456789',
+            object_type: 'adset',
+            object_id: '777',
+            object_name: 'Ad Set Using Shared Id',
+            parent_campaign_id: '333',
+            parent_campaign_name: 'Awareness Campaign',
+            last_seen_at: new Date('2026-04-10T00:00:00.000Z')
           }
         ]
       };
@@ -562,21 +617,63 @@ test('reporting campaigns resolve attributed Meta campaign and ad set ids before
         object_type: string;
         object_id: string;
       }>;
-      assert.deepEqual(requested, [
-        {
-          ad_account_id: '123456789',
-          object_type: 'adset',
-          object_id: '444'
-        }
-      ]);
+      assert.deepEqual(
+        requested.sort((left, right) => `${left.object_type}:${left.object_id}`.localeCompare(`${right.object_type}:${right.object_id}`)),
+        [
+          {
+            ad_account_id: '123456789',
+            object_type: 'adset',
+            object_id: '444'
+          },
+          {
+            ad_account_id: '123456789',
+            object_type: 'adset',
+            object_id: '777'
+          },
+          {
+            ad_account_id: '123456789',
+            object_type: 'campaign',
+            object_id: '333'
+          },
+          {
+            ad_account_id: '123456789',
+            object_type: 'campaign',
+            object_id: '777'
+          }
+        ]
+      );
 
       return {
         rows: [
           {
             ad_account_id: '123456789',
+            object_type: 'campaign',
+            object_id: '333',
+            object_name: 'Awareness Campaign',
+            status: 'ACTIVE',
+            last_fetched_at: new Date('2026-06-02T15:00:00.000Z')
+          },
+          {
+            ad_account_id: '123456789',
             object_type: 'adset',
             object_id: '444',
             object_name: 'US Prospecting Ad Set',
+            status: 'ACTIVE',
+            last_fetched_at: new Date('2026-06-02T15:00:00.000Z')
+          },
+          {
+            ad_account_id: '123456789',
+            object_type: 'campaign',
+            object_id: '777',
+            object_name: 'Campaign Using Shared Id',
+            status: 'ACTIVE',
+            last_fetched_at: new Date('2026-06-02T15:00:00.000Z')
+          },
+          {
+            ad_account_id: '123456789',
+            object_type: 'adset',
+            object_id: '777',
+            object_name: 'Ad Set Using Shared Id',
             status: 'ACTIVE',
             last_fetched_at: new Date('2026-06-02T15:00:00.000Z')
           }
@@ -600,6 +697,36 @@ test('reporting campaigns resolve attributed Meta campaign and ad set ids before
       {
         source: 'meta',
         medium: 'paid_social',
+        campaign: '333',
+        content: null,
+        visits: 40,
+        orders: 4,
+        revenue: 500,
+        conversionRate: 4 / 40,
+        campaignDisplayName: 'Awareness Campaign',
+        campaignEntityId: '333',
+        campaignEntityType: 'campaign',
+        parentCampaignEntityId: null,
+        parentCampaignDisplayName: null,
+        campaignPlatform: 'meta_ads',
+        campaignNameResolutionStatus: 'resolved',
+        campaignLabel: buildCampaignLabel(
+          'Awareness Campaign',
+          '333',
+          'meta_ads',
+          'resolved',
+          '2026-04-10T00:00:00.000Z',
+          '2026-04-10T00:00:00.000Z',
+          {
+            entityType: 'campaign',
+            parentCampaignEntityId: null,
+            parentCampaignDisplayName: null
+          }
+        )
+      },
+      {
+        source: 'meta',
+        medium: 'paid_social',
         campaign: '444',
         content: null,
         visits: 25,
@@ -608,6 +735,9 @@ test('reporting campaigns resolve attributed Meta campaign and ad set ids before
         conversionRate: 3 / 25,
         campaignDisplayName: 'US Prospecting Ad Set',
         campaignEntityId: '444',
+        campaignEntityType: 'adset',
+        parentCampaignEntityId: '333',
+        parentCampaignDisplayName: 'Awareness Campaign',
         campaignPlatform: 'meta_ads',
         campaignNameResolutionStatus: 'resolved',
         campaignLabel: buildCampaignLabel(
@@ -615,9 +745,24 @@ test('reporting campaigns resolve attributed Meta campaign and ad set ids before
           '444',
           'meta_ads',
           'resolved',
-          '2026-06-02T15:00:00.000Z',
-          '2026-06-02T15:00:00.000Z'
+          '2026-04-10T00:00:00.000Z',
+          '2026-04-10T00:00:00.000Z',
+          {
+            entityType: 'adset',
+            parentCampaignEntityId: '333',
+            parentCampaignDisplayName: 'Awareness Campaign'
+          }
         )
+      },
+      {
+        source: 'meta',
+        medium: 'paid_social',
+        campaign: '777',
+        content: null,
+        visits: 18,
+        orders: 2,
+        revenue: 150,
+        conversionRate: 2 / 18
       },
       {
         source: 'google',

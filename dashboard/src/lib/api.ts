@@ -105,6 +105,9 @@ export type CampaignRow = {
 	conversionRate: number;
 	campaignDisplayName?: string;
 	campaignEntityId?: string | null;
+	campaignEntityType?: "campaign" | "adset";
+	parentCampaignEntityId?: string | null;
+	parentCampaignDisplayName?: string | null;
 	campaignPlatform?: "google_ads" | "meta_ads" | null;
 	campaignNameResolutionStatus?: "resolved" | "fallback_name" | "unresolved";
 	campaignLabel?: CampaignLabel;
@@ -120,6 +123,9 @@ export type SpendDetailCampaignRow = {
 	spend: number;
 	campaignDisplayName?: string;
 	campaignEntityId?: string | null;
+	campaignEntityType?: "campaign" | "adset";
+	parentCampaignEntityId?: string | null;
+	parentCampaignDisplayName?: string | null;
 	campaignPlatform?: "google_ads" | "meta_ads" | null;
 	campaignNameResolutionStatus?: "resolved" | "fallback_name" | "unresolved";
 	campaignLabel?: CampaignLabel;
@@ -161,6 +167,9 @@ export type TimeseriesPoint = {
 	revenue: number;
 	campaignDisplayName?: string;
 	campaignEntityId?: string | null;
+	campaignEntityType?: "campaign" | "adset";
+	parentCampaignEntityId?: string | null;
+	parentCampaignDisplayName?: string | null;
 	campaignPlatform?: "google_ads" | "meta_ads" | null;
 	campaignNameResolutionStatus?: "resolved" | "fallback_name" | "unresolved";
 	campaignLabel?: CampaignLabel;
@@ -178,6 +187,9 @@ export type TimeseriesResponse = {
 		roas: number | null;
 		campaignDisplayName?: string;
 		campaignEntityId?: string | null;
+		campaignEntityType?: "campaign" | "adset";
+		parentCampaignEntityId?: string | null;
+		parentCampaignDisplayName?: string | null;
 		campaignPlatform?: "google_ads" | "meta_ads" | null;
 		campaignNameResolutionStatus?: "resolved" | "fallback_name" | "unresolved";
 		campaignLabel?: CampaignLabel;
@@ -187,6 +199,9 @@ export type TimeseriesResponse = {
 export type CampaignLabel = {
 	displayName: string;
 	entityId: string | null;
+	entityType?: "campaign" | "adset";
+	parentCampaignEntityId?: string | null;
+	parentCampaignDisplayName?: string | null;
 	platform: "google_ads" | "meta_ads" | null;
 	resolutionStatus: "resolved" | "fallback_name" | "unresolved";
 	lastSeenAt: string | null;
