@@ -508,6 +508,134 @@ test('reporting campaigns returns campaign rows sorted for dashboard tables', as
   }
 });
 
+test('reporting campaigns resolve attributed Meta campaign and ad set ids before returning rows', async () => {
+  pool.query = (async (text: string, params?: unknown[]) => {
+    if (text.includes('FROM daily_reporting_metrics')) {
+      assert.match(text, /GROUP BY source, medium, campaign, content/);
+      assert.deepEqual(params, ['2026-04-01', '2026-04-10', 'last_touch', 5]);
+
+      return {
+        rows: [
+          {
+            source: 'facebook',
+            medium: 'paid_social',
+            campaign: '444',
+            content: null,
+            visits: '25',
+            orders: '3',
+            revenue: '300.00'
+          },
+          {
+            source: 'google',
+            medium: 'cpc',
+            campaign: '555',
+            content: null,
+            visits: '10',
+            orders: '1',
+            revenue: '50.00'
+          }
+        ]
+      };
+    }
+
+    if (text.includes('FROM google_candidates')) {
+      assert.deepEqual(params, ['2026-04-01', '2026-04-10', ['444', '555'], null]);
+      return { rows: [] };
+    }
+
+    if (text.includes('WITH requested_ids')) {
+      assert.deepEqual(params, [['444', '555'], '2026-04-01', '2026-04-10', null, false, false]);
+      return {
+        rows: [
+          {
+            ad_account_id: '123456789',
+            object_type: 'adset',
+            object_id: '444'
+          }
+        ]
+      };
+    }
+
+    if (text.includes('FROM meta_ads_metadata_cache c')) {
+      const requested = JSON.parse(String(params?.[0])) as Array<{
+        ad_account_id: string;
+        object_type: string;
+        object_id: string;
+      }>;
+      assert.deepEqual(requested, [
+        {
+          ad_account_id: '123456789',
+          object_type: 'adset',
+          object_id: '444'
+        }
+      ]);
+
+      return {
+        rows: [
+          {
+            ad_account_id: '123456789',
+            object_type: 'adset',
+            object_id: '444',
+            object_name: 'US Prospecting Ad Set',
+            status: 'ACTIVE',
+            last_fetched_at: new Date('2026-06-02T15:00:00.000Z')
+          }
+        ]
+      };
+    }
+
+    throw new Error(`Unexpected query: ${text}`);
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(
+      server,
+      '/api/reporting/campaigns?startDate=2026-04-01&endDate=2026-04-10&limit=5'
+    );
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(body.rows, [
+      {
+        source: 'meta',
+        medium: 'paid_social',
+        campaign: '444',
+        content: null,
+        visits: 25,
+        orders: 3,
+        revenue: 300,
+        conversionRate: 3 / 25,
+        campaignDisplayName: 'US Prospecting Ad Set',
+        campaignEntityId: '444',
+        campaignPlatform: 'meta_ads',
+        campaignNameResolutionStatus: 'resolved',
+        campaignLabel: buildCampaignLabel(
+          'US Prospecting Ad Set',
+          '444',
+          'meta_ads',
+          'resolved',
+          '2026-06-02T15:00:00.000Z',
+          '2026-06-02T15:00:00.000Z'
+        )
+      },
+      {
+        source: 'google',
+        medium: 'cpc',
+        campaign: '555',
+        content: null,
+        visits: 10,
+        orders: 1,
+        revenue: 50,
+        conversionRate: 1 / 10
+      }
+    ]);
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
 test('reporting spend details return channel groups with campaign subtotals in descending order', async () => {
   pool.query = (async (text: string, params?: unknown[]) => {
     if (text.includes('FROM daily_reporting_metrics')) {

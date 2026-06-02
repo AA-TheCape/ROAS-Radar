@@ -533,6 +533,37 @@ function buildCampaignLabelFields(resolution: CampaignDisplayResolution | undefi
 	};
 }
 
+function isMetaLikeAttributionSource(source: string, medium: string): boolean {
+	const normalizedSource = source.trim().toLowerCase();
+	const normalizedMedium = medium.trim().toLowerCase();
+
+	return (
+		['meta', 'facebook', 'fb', 'instagram', 'ig'].includes(normalizedSource) ||
+		(normalizedMedium.includes('social') && ['paid_social', 'paidsocial', 'cpc', 'paid'].includes(normalizedMedium))
+	);
+}
+
+function selectCampaignResolution(
+	metadata: Awaited<ReturnType<typeof resolveCampaignDisplayMetadata>>,
+	row: { source: string; medium: string; campaign: string }
+): CampaignDisplayResolution | undefined {
+	const groupResolution = metadata.byGroup.get(
+		buildCampaignResolutionGroupKey(row.source, row.medium, row.campaign),
+	);
+
+	if (groupResolution) {
+		return groupResolution;
+	}
+
+	return isMetaLikeAttributionSource(row.source, row.medium)
+		? metadata.byCampaign.get(row.campaign)
+		: undefined;
+}
+
+function resolveReportRowSource(row: { source: string }, resolution: CampaignDisplayResolution | undefined): string {
+	return resolution?.campaignPlatform === 'meta_ads' ? 'meta' : row.source;
+}
+
 function countDaysInRange(startDate: string, endDate: string): number {
 	const start = Date.parse(`${startDate}T00:00:00.000Z`);
 	const end = Date.parse(`${endDate}T00:00:00.000Z`);
@@ -775,12 +806,10 @@ export function createReportingRouter(): Router {
 						const visits = Number(row.visits);
 						const orders = Number(row.orders);
 						const revenue = Number(row.revenue);
-						const resolution = campaignMetadata.byGroup.get(
-							buildCampaignResolutionGroupKey(row.source, row.medium, row.campaign),
-						);
+						const resolution = selectCampaignResolution(campaignMetadata, row);
 
 						return {
-							source: row.source,
+							source: resolveReportRowSource(row, resolution),
 							medium: row.medium,
 							campaign: row.campaign,
 							content: normalizeContent(row.content),
@@ -849,12 +878,11 @@ export function createReportingRouter(): Router {
 					const spend = Number(row.spend);
 					const source = row.source;
 					const medium = row.medium;
-					const channel = `${source} / ${medium}`;
 					const groupKey = `${source}\u0000${medium}`;
 					const existingGroup = groupMap.get(groupKey);
-					const labelFields = buildCampaignLabelFields(
-						campaignMetadata.byGroup.get(buildCampaignResolutionGroupKey(source, medium, row.campaign)),
-					);
+					const resolution = selectCampaignResolution(campaignMetadata, row);
+					const labelFields = buildCampaignLabelFields(resolution);
+					const displaySource = resolveReportRowSource(row, resolution);
 
 					if (existingGroup) {
 						existingGroup.subtotal += spend;
@@ -867,9 +895,9 @@ export function createReportingRouter(): Router {
 					}
 
 				groupMap.set(groupKey, {
-					source,
+					source: displaySource,
 					medium,
-					channel,
+					channel: `${displaySource} / ${medium}`,
 					subtotal: spend,
 						campaigns: [
 							{

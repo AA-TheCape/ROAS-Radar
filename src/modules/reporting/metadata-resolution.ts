@@ -1,5 +1,7 @@
 import { query } from '../../db/pool.js';
 import { emitCampaignMetadataResolutionCoverageLog } from '../../observability/index.js';
+import { env } from '../../config/env.js';
+import { resolveMetaMetadata, type MetaMetadataObjectType } from '../meta-ads/metadata-resolver.js';
 
 export type CampaignNameResolutionStatus = 'resolved' | 'fallback_name' | 'unresolved';
 
@@ -27,6 +29,12 @@ type CampaignResolutionRow = {
   latest_name: string | null;
   last_seen_at: Date | null;
   updated_at: Date | null;
+};
+
+type MetaAttributedIdAccountRow = {
+  ad_account_id: string;
+  object_type: MetaMetadataObjectType;
+  object_id: string;
 };
 
 export function buildCampaignResolutionGroupKey(source: string, medium: string, campaign: string): string {
@@ -160,6 +168,174 @@ function buildResolution(row: CampaignResolutionRow): CampaignDisplayResolution 
   };
 }
 
+function buildMetaAttributedIdResolution(input: {
+  campaign: string;
+  objectId: string;
+  objectName: string;
+  lastFetchedAt: string | null;
+}): CampaignDisplayResolution {
+  return {
+    campaign: input.campaign,
+    source: 'meta',
+    medium: 'paid_social',
+    campaignDisplayName: input.objectName,
+    campaignEntityId: input.objectId,
+    campaignPlatform: 'meta_ads',
+    campaignNameResolutionStatus: 'resolved',
+    lastSeenAt: input.lastFetchedAt,
+    updatedAt: input.lastFetchedAt
+  };
+}
+
+function isNumericMetaObjectId(value: string): boolean {
+  return /^\d+$/.test(value.trim());
+}
+
+async function resolveAttributedMetaIdMetadata(
+  startDate: string,
+  endDate: string,
+  campaigns: string[]
+): Promise<Map<string, CampaignDisplayResolution>> {
+  const candidateIds = [...new Set(campaigns.map((value) => value.trim()).filter(isNumericMetaObjectId))];
+
+  if (candidateIds.length === 0) {
+    return new Map();
+  }
+
+  const accountRows = await query<MetaAttributedIdAccountRow>(
+    `
+      WITH requested_ids AS (
+        SELECT unnest($1::text[]) AS object_id
+      ),
+      spend_matches AS (
+        SELECT DISTINCT
+          mads.account_id AS ad_account_id,
+          'campaign'::text AS object_type,
+          mads.campaign_id AS object_id
+        FROM meta_ads_daily_spend mads
+        JOIN requested_ids requested
+          ON requested.object_id = mads.campaign_id
+        WHERE mads.report_date BETWEEN $2::date AND $3::date
+          AND mads.account_id IS NOT NULL
+          AND mads.campaign_id IS NOT NULL
+
+        UNION
+
+        SELECT DISTINCT
+          mads.account_id AS ad_account_id,
+          'adset'::text AS object_type,
+          mads.adset_id AS object_id
+        FROM meta_ads_daily_spend mads
+        JOIN requested_ids requested
+          ON requested.object_id = mads.adset_id
+        WHERE mads.report_date BETWEEN $2::date AND $3::date
+          AND mads.account_id IS NOT NULL
+          AND mads.adset_id IS NOT NULL
+      ),
+      cache_matches AS (
+        SELECT DISTINCT
+          cache.ad_account_id,
+          cache.object_type,
+          cache.object_id
+        FROM meta_ads_metadata_cache cache
+        JOIN requested_ids requested
+          ON requested.object_id = cache.object_id
+        WHERE cache.object_type IN ('campaign', 'adset')
+          AND cache.last_fetched_at IS NOT NULL
+          AND cache.object_name IS NOT NULL
+      ),
+      active_accounts AS (
+        SELECT ad_account_id
+        FROM meta_ads_connections
+        WHERE status = 'active'
+          AND $5::boolean
+
+        UNION
+
+        SELECT NULLIF(regexp_replace($4::text, '^act_', ''), '')
+        WHERE $6::boolean
+      )
+      SELECT ad_account_id, object_type, object_id
+      FROM spend_matches
+      UNION
+      SELECT ad_account_id, object_type, object_id
+      FROM cache_matches
+      UNION
+      SELECT
+        active_accounts.ad_account_id,
+        object_types.object_type,
+        requested_ids.object_id
+      FROM active_accounts
+      CROSS JOIN requested_ids
+      CROSS JOIN (VALUES ('campaign'::text), ('adset'::text)) AS object_types(object_type)
+      WHERE active_accounts.ad_account_id IS NOT NULL
+    `,
+    [
+      candidateIds,
+      startDate,
+      endDate,
+      env.META_ADS_AD_ACCOUNT_ID || null,
+      Boolean(env.META_ADS_ENCRYPTION_KEY),
+      Boolean(env.META_ADS_AD_ACCOUNT_ID && env.META_ADS_METADATA_ACCESS_TOKEN)
+    ]
+  );
+
+  const requestMap = new Map<
+    string,
+    {
+      adAccountId: string;
+      objectType: MetaMetadataObjectType;
+      objectIds: string[];
+    }
+  >();
+
+  for (const row of accountRows.rows) {
+    const adAccountId = row.ad_account_id?.trim();
+    const objectId = row.object_id?.trim();
+
+    if (!adAccountId || !objectId || !['campaign', 'adset'].includes(row.object_type)) {
+      continue;
+    }
+
+    const objectType = row.object_type as MetaMetadataObjectType;
+    const key = `${adAccountId}\u0000${objectType}`;
+    const request = requestMap.get(key) ?? {
+      adAccountId,
+      objectType,
+      objectIds: []
+    };
+
+    request.objectIds.push(objectId);
+    requestMap.set(key, request);
+  }
+
+  if (requestMap.size === 0) {
+    return new Map();
+  }
+
+  const metaResult = await resolveMetaMetadata(
+    [...requestMap.values()].map((request) => ({
+      ...request,
+      objectIds: [...new Set(request.objectIds)]
+    }))
+  );
+  const byCampaign = new Map<string, CampaignDisplayResolution>();
+
+  for (const resolved of metaResult.resolved) {
+    const existing = byCampaign.get(resolved.objectId);
+    const candidate = buildMetaAttributedIdResolution({
+      campaign: resolved.objectId,
+      objectId: resolved.objectId,
+      objectName: resolved.objectName,
+      lastFetchedAt: resolved.lastFetchedAt
+    });
+
+    byCampaign.set(resolved.objectId, chooseBetterResolution(existing, candidate));
+  }
+
+  return byCampaign;
+}
+
 export async function resolveCampaignDisplayMetadata(
   startDate: string,
   endDate: string,
@@ -257,6 +433,10 @@ export async function resolveCampaignDisplayMetadata(
 
   const byCampaign = new Map<string, CampaignDisplayResolution>();
   const byGroup = new Map<string, CampaignDisplayResolution>();
+  const attributedMetaIdMetadata =
+    source === undefined || source === 'meta' || source === 'facebook' || source === 'instagram'
+      ? await resolveAttributedMetaIdMetadata(startDate, endDate, normalizedCampaigns)
+      : new Map<string, CampaignDisplayResolution>();
   const rowsByPlatform = new Map<'google_ads' | 'meta_ads', CampaignDisplayResolution[]>();
   const scopedCampaignCandidates = new Map<string, CampaignDisplayResolution[]>();
   const scopedGroupCandidates = new Map<string, CampaignDisplayResolution[]>();
@@ -292,6 +472,10 @@ export async function resolveCampaignDisplayMetadata(
     if (collapsed) {
       byGroup.set(groupKey, collapsed);
     }
+  }
+
+  for (const [campaign, resolution] of attributedMetaIdMetadata) {
+    byCampaign.set(campaign, chooseBetterResolution(byCampaign.get(campaign), resolution));
   }
 
   for (const [platform, resolutions] of rowsByPlatform) {
