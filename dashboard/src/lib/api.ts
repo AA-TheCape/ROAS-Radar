@@ -198,10 +198,17 @@ export type TimeseriesResponse = {
 
 export type CampaignLabel = {
 	displayName: string;
+	source: string;
+	rawId: string;
 	entityId: string | null;
+	objectType: "campaign" | "adset" | null;
 	entityType?: "campaign" | "adset";
 	parentCampaignEntityId?: string | null;
 	parentCampaignDisplayName?: string | null;
+	parentCampaign?: {
+		entityId: string | null;
+		displayName: string | null;
+	} | null;
 	platform: "google_ads" | "meta_ads" | null;
 	resolutionStatus: "resolved" | "fallback_name" | "unresolved";
 	lastSeenAt: string | null;

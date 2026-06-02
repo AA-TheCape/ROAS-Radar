@@ -154,6 +154,7 @@ function buildResolution(row: CampaignResolutionRow): CampaignDisplayResolution 
       medium: row.medium,
       campaignDisplayName: resolvedName,
       campaignEntityId: entityId,
+      campaignEntityType: 'campaign',
       campaignPlatform: row.platform,
       campaignNameResolutionStatus: 'resolved',
       lastSeenAt: row.last_seen_at?.toISOString() ?? null,
@@ -168,6 +169,7 @@ function buildResolution(row: CampaignResolutionRow): CampaignDisplayResolution 
       medium: row.medium,
       campaignDisplayName: fallbackName,
       campaignEntityId: entityId,
+      campaignEntityType: 'campaign',
       campaignPlatform: row.platform,
       campaignNameResolutionStatus: 'fallback_name',
       lastSeenAt: null,
@@ -181,6 +183,7 @@ function buildResolution(row: CampaignResolutionRow): CampaignDisplayResolution 
     medium: row.medium,
     campaignDisplayName: entityId ?? 'unknown',
     campaignEntityId: entityId,
+    campaignEntityType: 'campaign',
     campaignPlatform: row.platform,
     campaignNameResolutionStatus: 'unresolved',
     lastSeenAt: null,
@@ -416,6 +419,38 @@ async function resolveAttributedMetaIdMetadata(
 
     resolutions.push(candidate);
     resolutionsByCampaign.set(resolved.objectId, resolutions);
+  }
+
+  for (const unresolved of metaResult.unresolved) {
+    const candidateKey = `${unresolved.adAccountId}\u0000${unresolved.objectType}\u0000${unresolved.objectId}`;
+    const candidateMetadata = candidateMap.get(candidateKey) ?? [];
+    const bestCandidate = candidateMetadata.reduce<MetaAttributedIdCandidate | undefined>((current, candidate) => {
+      if (!current) {
+        return candidate;
+      }
+
+      const currentTimestamp = current.lastSeenAt ? Date.parse(current.lastSeenAt) : 0;
+      const candidateTimestamp = candidate.lastSeenAt ? Date.parse(candidate.lastSeenAt) : 0;
+
+      return candidateTimestamp > currentTimestamp ? candidate : current;
+    }, undefined);
+    const resolutions = resolutionsByCampaign.get(unresolved.objectId) ?? [];
+
+    resolutions.push({
+      campaign: unresolved.objectId,
+      source: 'meta',
+      medium: 'paid_social',
+      campaignDisplayName: unresolved.objectId,
+      campaignEntityId: unresolved.objectId,
+      campaignEntityType: unresolved.objectType,
+      parentCampaignEntityId: unresolved.objectType === 'adset' ? normalizeString(bestCandidate?.parentCampaignId) : null,
+      parentCampaignDisplayName: unresolved.objectType === 'adset' ? collapseWhitespace(bestCandidate?.parentCampaignName) : null,
+      campaignPlatform: 'meta_ads',
+      campaignNameResolutionStatus: 'unresolved',
+      lastSeenAt: bestCandidate?.lastSeenAt ?? null,
+      updatedAt: null
+    });
+    resolutionsByCampaign.set(unresolved.objectId, resolutions);
   }
 
   const byCampaign = new Map<string, CampaignDisplayResolution>();

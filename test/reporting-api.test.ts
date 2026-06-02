@@ -27,15 +27,32 @@ function buildCampaignLabel(
   lastSeenAt: string | null = null,
   updatedAt: string | null = null,
   hierarchy: {
+    source?: string;
+    rawId?: string;
+    objectType?: 'campaign' | 'adset' | null;
     entityType?: 'campaign' | 'adset';
     parentCampaignEntityId?: string | null;
     parentCampaignDisplayName?: string | null;
   } = {}
 ) {
+  const parentCampaign =
+    hierarchy.parentCampaignEntityId || hierarchy.parentCampaignDisplayName
+      ? {
+          entityId: hierarchy.parentCampaignEntityId ?? null,
+          displayName: hierarchy.parentCampaignDisplayName ?? null
+        }
+      : null;
+
   return {
     displayName,
+    source:
+      hierarchy.source ??
+      (platform === 'meta_ads' ? 'meta' : platform === 'google_ads' ? 'google' : 'unknown'),
+    rawId: hierarchy.rawId ?? entityId ?? displayName,
     entityId,
+    objectType: hierarchy.objectType ?? hierarchy.entityType ?? null,
     ...hierarchy,
+    parentCampaign,
     platform,
     resolutionStatus,
     lastSeenAt,
@@ -480,6 +497,7 @@ test('reporting campaigns returns campaign rows sorted for dashboard tables', as
           conversionRate: 19 / 420,
           campaignDisplayName: 'Google Spring Sale Latest',
           campaignEntityId: 'cmp_google_1',
+          campaignEntityType: 'campaign',
           campaignPlatform: 'google_ads',
           campaignNameResolutionStatus: 'resolved',
           campaignLabel: buildCampaignLabel(
@@ -488,7 +506,11 @@ test('reporting campaigns returns campaign rows sorted for dashboard tables', as
             'google_ads',
             'resolved',
             '2026-04-10T08:00:00.000Z',
-            '2026-04-10T08:05:00.000Z'
+            '2026-04-10T08:05:00.000Z',
+            {
+              rawId: 'spring-sale',
+              entityType: 'campaign'
+            }
           )
         },
         {
@@ -773,6 +795,110 @@ test('reporting campaigns resolve attributed Meta campaign and ad set ids before
         orders: 1,
         revenue: 50,
         conversionRate: 1 / 10
+      }
+    ]);
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
+test('reporting campaigns return raw Meta id label metadata when display resolution is unavailable', async () => {
+  pool.query = (async (text: string, params?: unknown[]) => {
+    if (text.includes('FROM daily_reporting_metrics')) {
+      assert.deepEqual(params, ['2026-04-01', '2026-04-10', 'last_touch', 1]);
+
+      return {
+        rows: [
+          {
+            source: 'facebook',
+            medium: 'paid_social',
+            campaign: '888',
+            content: null,
+            visits: '12',
+            orders: '1',
+            revenue: '80.00'
+          }
+        ]
+      };
+    }
+
+    if (text.includes('FROM google_candidates')) {
+      assert.deepEqual(params, ['2026-04-01', '2026-04-10', ['888'], null]);
+      return { rows: [] };
+    }
+
+    if (text.includes('WITH requested_ids')) {
+      assert.deepEqual(params, [['888'], '2026-04-01', '2026-04-10', null, false, false]);
+      return {
+        rows: [
+          {
+            ad_account_id: '123456789',
+            object_type: 'campaign',
+            object_id: '888',
+            object_name: null,
+            parent_campaign_id: null,
+            parent_campaign_name: null,
+            last_seen_at: new Date('2026-04-10T00:00:00.000Z')
+          }
+        ]
+      };
+    }
+
+    if (text.includes('FROM meta_ads_metadata_cache c')) {
+      assert.deepEqual(JSON.parse(String(params?.[0])), [
+        {
+          ad_account_id: '123456789',
+          object_type: 'campaign',
+          object_id: '888'
+        }
+      ]);
+      return { rows: [] };
+    }
+
+    throw new Error(`Unexpected query: ${text}`);
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(
+      server,
+      '/api/reporting/campaigns?startDate=2026-04-01&endDate=2026-04-10&limit=1'
+    );
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(body.rows, [
+      {
+        source: 'meta',
+        medium: 'paid_social',
+        campaign: '888',
+        content: null,
+        visits: 12,
+        orders: 1,
+        revenue: 80,
+        conversionRate: 1 / 12,
+        campaignDisplayName: '888',
+        campaignEntityId: '888',
+        campaignEntityType: 'campaign',
+        parentCampaignEntityId: null,
+        parentCampaignDisplayName: null,
+        campaignPlatform: 'meta_ads',
+        campaignNameResolutionStatus: 'unresolved',
+        campaignLabel: buildCampaignLabel(
+          '888',
+          '888',
+          'meta_ads',
+          'unresolved',
+          '2026-04-10T00:00:00.000Z',
+          null,
+          {
+            rawId: '888',
+            entityType: 'campaign',
+            parentCampaignEntityId: null,
+            parentCampaignDisplayName: null
+          }
+        )
       }
     ]);
   } finally {
