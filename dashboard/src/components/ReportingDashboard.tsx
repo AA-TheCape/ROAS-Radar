@@ -530,6 +530,24 @@ function getCampaignObjectType(row: CampaignDisplayFields) {
 	);
 }
 
+function getCampaignRawId(row: CampaignDisplayFields) {
+	return (
+		row.campaignLabel?.rawId?.trim() ||
+		row.campaignLabel?.entityId?.trim() ||
+		row.campaignEntityId?.trim() ||
+		row.campaign
+	);
+}
+
+function getParentCampaignRawId(row: CampaignDisplayFields) {
+	return (
+		row.campaignLabel?.parentCampaign?.entityId?.trim() ||
+		row.campaignLabel?.parentCampaignEntityId?.trim() ||
+		row.parentCampaignEntityId?.trim() ||
+		null
+	);
+}
+
 function getCampaignDisplayName(row: CampaignDisplayFields) {
 	if (getCampaignResolutionStatus(row) === "unresolved") {
 		return row.campaign;
@@ -551,7 +569,7 @@ function getParentCampaignDisplayName(row: CampaignDisplayFields) {
 	);
 }
 
-function formatCampaignContext(row: CampaignDisplayFields) {
+function formatCampaignHierarchyContext(row: CampaignDisplayFields) {
 	const parentCampaign = getParentCampaignDisplayName(row);
 
 	if (getCampaignObjectType(row) === "adset" && parentCampaign) {
@@ -559,6 +577,24 @@ function formatCampaignContext(row: CampaignDisplayFields) {
 	}
 
 	return row.content ?? "No content tag";
+}
+
+function formatCampaignIdContext(row: CampaignDisplayFields) {
+	const rawId = getCampaignRawId(row);
+	const objectType = getCampaignObjectType(row);
+	const label = objectType === "adset" ? "Ad set ID" : "Campaign ID";
+	const parentRawId = objectType === "adset" ? getParentCampaignRawId(row) : null;
+	const parts = [`${label} ${rawId}`];
+
+	if (parentRawId && parentRawId !== rawId) {
+		parts.push(`Campaign ID ${parentRawId}`);
+	}
+
+	return parts.join(" | ");
+}
+
+function formatCampaignContext(row: CampaignDisplayFields) {
+	return `${formatCampaignHierarchyContext(row)} | ${formatCampaignIdContext(row)}`;
 }
 
 function formatCampaignSourceMedium(row: CampaignDisplayFields) {
@@ -1429,8 +1465,15 @@ const ReportingDashboard = memo(function ReportingDashboard({
             row.source,
             row.medium,
             row.content,
+            getCampaignRawId(row),
             row.campaignEntityId,
+            row.campaignLabel?.rawId,
+            row.campaignLabel?.entityId,
+            row.campaignLabel?.displayName,
             row.parentCampaignDisplayName,
+            row.campaignLabel?.parentCampaignDisplayName,
+            row.campaignLabel?.parentCampaign?.displayName,
+            getParentCampaignRawId(row),
             row.visits,
             row.orders,
             row.revenue
@@ -1443,7 +1486,7 @@ const ReportingDashboard = memo(function ReportingDashboard({
   const sortedCampaigns = useMemo(
     () =>
       sortRows(filteredCampaigns, campaignSort, {
-        campaign: (row) => getCampaignDisplayName(row),
+        campaign: (row) => `${getCampaignDisplayName(row)} ${getCampaignRawId(row)} ${row.campaign}`,
         source: (row) => formatCampaignSourceMedium(row),
         visits: (row) => row.visits,
         orders: (row) => row.orders,

@@ -278,6 +278,8 @@ test("reporting dashboard labels Meta campaigns and ad sets with resolved names"
 		assert.match(text, /Meta Prospecting Launch/);
 		assert.match(text, /US Broad Audience/);
 		assert.match(text, /Ad set in Meta Prospecting Launch/);
+		assert.match(text, new RegExp(`Campaign ID ${resolvedCampaignId}`));
+		assert.match(text, new RegExp(`Ad set ID ${resolvedAdSetId}`));
 		assert.match(text, /Meta \/ Paid Social/);
 		assert.match(text, new RegExp(unresolvedCampaignId));
 		assert.doesNotMatch(text, /Stale Meta Campaign Name/);
