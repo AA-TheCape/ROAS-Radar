@@ -8,6 +8,8 @@ process.env.REPORTING_API_TOKEN = "test-reporting-token";
 process.env.DEFAULT_ORGANIZATION_ID = "77";
 process.env.SHOPIFY_APP_API_SECRET ??= "test-app-secret";
 process.env.SHOPIFY_WEBHOOK_SECRET ??= "test-webhook-secret";
+process.env.META_ADS_AD_ACCOUNT_ID = "123456789";
+process.env.META_ADS_METADATA_ACCESS_TOKEN = "test-meta-metadata-token";
 
 const poolModule = await import("../src/db/pool.js");
 const serverModule = await import("../src/server.js");
@@ -328,11 +330,14 @@ test("reporting summary reads persisted daily aggregates from PostgreSQL", async
 	}
 });
 
-test("reporting campaigns resolves Meta campaign and ad set ids while preserving non-Meta rows", async () => {
+test("reporting campaigns resolves active-account Meta campaign and ad set ids while preserving unresolved and non-Meta rows", async () => {
 	await resetE2EDatabase();
 	const reportDate = "2026-04-10";
+	const productionFailureCampaignId = "120251699446190386";
 	const connectionId = await seedMetaConnection("123456789");
 	const syncJobId = await seedMetaSpendSyncJob(connectionId, reportDate);
+	const originalFetch = globalThis.fetch;
+	const metaApiFallbackRequests: string[] = [];
 
 	await pool.query(
 		`
@@ -359,9 +364,10 @@ test("reporting campaigns resolves Meta campaign and ad set ids while preserving
       VALUES
         ($1::date, 'last_touch', 'meta', 'paid_social', '333', 'unknown', 'unknown', 40, 4, '500.00', '100.00', 0, 0, 0, 0, 0, 0, now()),
         ($1::date, 'last_touch', 'facebook', 'paid_social', '444', 'unknown', 'unknown', 25, 3, '300.00', '50.00', 0, 0, 0, 0, 0, 0, now()),
+        ($1::date, 'last_touch', 'facebook', 'paid_social', $2, 'unknown', 'unknown', 7, 1, '70.00', '0.00', 0, 0, 0, 0, 0, 0, now()),
         ($1::date, 'last_touch', 'google', 'cpc', '555', 'unknown', 'unknown', 10, 1, '50.00', '25.00', 0, 0, 0, 0, 0, 0, now())
     `,
-		[reportDate],
+		[reportDate, productionFailureCampaignId],
 	);
 
 	await pool.query(
@@ -413,6 +419,20 @@ test("reporting campaigns resolves Meta campaign and ad set ids while preserving
 	);
 
 	const server = createServer();
+	globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+		const url = new URL(input instanceof Request ? input.url : String(input));
+
+		if (url.hostname === "graph.facebook.com") {
+			metaApiFallbackRequests.push(url.toString());
+
+			return new Response(JSON.stringify({ data: [] }), {
+				headers: { "content-type": "application/json" },
+				status: 200,
+			});
+		}
+
+		return originalFetch(input, init);
+	}) as typeof fetch;
 
 	try {
 		const { response, body } = await requestJson(
@@ -424,20 +444,40 @@ test("reporting campaigns resolves Meta campaign and ad set ids while preserving
 		const rows = body.rows as Array<Record<string, unknown>>;
 		const campaignRow = rows.find((row) => row.campaign === "333");
 		const adSetRow = rows.find((row) => row.campaign === "444");
+		const unresolvedRow = rows.find(
+			(row) => row.campaign === productionFailureCampaignId,
+		);
 		const googleRow = rows.find((row) => row.campaign === "555");
+
+		assert.equal(rows.length, 4);
+		assert.ok(
+			metaApiFallbackRequests.some((url) => url.includes("/act_123456789/")),
+			"active-account configured Meta API fallback should be probed for cache misses",
+		);
 
 		assert.deepEqual(
 			{
 				source: campaignRow?.source,
+				medium: campaignRow?.medium,
+				content: campaignRow?.content,
+				visits: campaignRow?.visits,
+				orders: campaignRow?.orders,
+				revenue: campaignRow?.revenue,
+				conversionRate: campaignRow?.conversionRate,
 				campaignDisplayName: campaignRow?.campaignDisplayName,
 				campaignEntityId: campaignRow?.campaignEntityId,
 				campaignEntityType: campaignRow?.campaignEntityType,
 				campaignPlatform: campaignRow?.campaignPlatform,
-				campaignNameResolutionStatus:
-					campaignRow?.campaignNameResolutionStatus,
+				campaignNameResolutionStatus: campaignRow?.campaignNameResolutionStatus,
 			},
 			{
 				source: "meta",
+				medium: "paid_social",
+				content: null,
+				visits: 40,
+				orders: 4,
+				revenue: 500,
+				conversionRate: 4 / 40,
 				campaignDisplayName: "Awareness Campaign",
 				campaignEntityId: "333",
 				campaignEntityType: "campaign",
@@ -449,6 +489,12 @@ test("reporting campaigns resolves Meta campaign and ad set ids while preserving
 		assert.deepEqual(
 			{
 				source: adSetRow?.source,
+				medium: adSetRow?.medium,
+				content: adSetRow?.content,
+				visits: adSetRow?.visits,
+				orders: adSetRow?.orders,
+				revenue: adSetRow?.revenue,
+				conversionRate: adSetRow?.conversionRate,
 				campaignDisplayName: adSetRow?.campaignDisplayName,
 				campaignEntityId: adSetRow?.campaignEntityId,
 				campaignEntityType: adSetRow?.campaignEntityType,
@@ -459,6 +505,12 @@ test("reporting campaigns resolves Meta campaign and ad set ids while preserving
 			},
 			{
 				source: "meta",
+				medium: "paid_social",
+				content: null,
+				visits: 25,
+				orders: 3,
+				revenue: 300,
+				conversionRate: 3 / 25,
 				campaignDisplayName: "US Prospecting Ad Set",
 				campaignEntityId: "444",
 				campaignEntityType: "adset",
@@ -471,19 +523,64 @@ test("reporting campaigns resolves Meta campaign and ad set ids while preserving
 
 		assert.deepEqual(
 			{
+				source: unresolvedRow?.source,
+				medium: unresolvedRow?.medium,
+				campaign: unresolvedRow?.campaign,
+				content: unresolvedRow?.content,
+				visits: unresolvedRow?.visits,
+				orders: unresolvedRow?.orders,
+				revenue: unresolvedRow?.revenue,
+				conversionRate: unresolvedRow?.conversionRate,
+				campaignDisplayName: unresolvedRow?.campaignDisplayName,
+				campaignEntityId: unresolvedRow?.campaignEntityId,
+				campaignPlatform: unresolvedRow?.campaignPlatform,
+				campaignNameResolutionStatus:
+					unresolvedRow?.campaignNameResolutionStatus,
+			},
+			{
+				source: "facebook",
+				medium: "paid_social",
+				campaign: productionFailureCampaignId,
+				content: null,
+				visits: 7,
+				orders: 1,
+				revenue: 70,
+				conversionRate: 1 / 7,
+				campaignDisplayName: undefined,
+				campaignEntityId: undefined,
+				campaignPlatform: undefined,
+				campaignNameResolutionStatus: undefined,
+			},
+		);
+
+		assert.deepEqual(
+			{
 				source: googleRow?.source,
+				medium: googleRow?.medium,
 				campaign: googleRow?.campaign,
+				content: googleRow?.content,
+				visits: googleRow?.visits,
+				orders: googleRow?.orders,
+				revenue: googleRow?.revenue,
+				conversionRate: googleRow?.conversionRate,
 				campaignDisplayName: googleRow?.campaignDisplayName,
 				campaignPlatform: googleRow?.campaignPlatform,
 			},
 			{
 				source: "google",
+				medium: "cpc",
 				campaign: "555",
+				content: null,
+				visits: 10,
+				orders: 1,
+				revenue: 50,
+				conversionRate: 1 / 10,
 				campaignDisplayName: undefined,
 				campaignPlatform: undefined,
 			},
 		);
 	} finally {
+		globalThis.fetch = originalFetch;
 		await closeServer(server);
 		await resetE2EDatabase();
 	}
