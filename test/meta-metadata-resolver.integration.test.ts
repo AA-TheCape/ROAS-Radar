@@ -45,7 +45,9 @@ test.after(async () => {
 	await pool.end();
 });
 
-async function captureStructuredLogs<T>(callback: () => T | Promise<T>): Promise<{
+async function captureStructuredLogs<T>(
+	callback: () => T | Promise<T>,
+): Promise<{
 	entries: Array<Record<string, unknown>>;
 	result: T;
 }> {
@@ -269,6 +271,260 @@ test("resolveMetaMetadata reads cache first, fetches missing Meta ids, and retur
 	);
 });
 
+test("resolveMetaMetadata refreshes stale cached names after the cache TTL", async () => {
+	await pool.query(
+		`
+      INSERT INTO meta_ads_metadata_cache (
+        ad_account_id,
+        object_type,
+        object_id,
+        object_name,
+        status,
+        last_fetched_at
+      )
+      VALUES (
+        '123456789',
+        'campaign',
+        '111',
+        'Old Campaign Name',
+        'PAUSED',
+        '2026-05-01T12:00:00.000Z'
+      )
+    `,
+	);
+
+	const lookupCalls: Array<{ adAccountId: string; objectIds: string[] }> = [];
+	const result = await resolveMetaMetadata(
+		[
+			{
+				adAccountId: "123456789",
+				objectType: "campaign",
+				objectIds: ["111"],
+			},
+		],
+		{
+			now: new Date("2026-06-02T15:00:00.000Z"),
+			cacheTtlMs: 7 * 24 * 60 * 60 * 1000,
+			apiLookup: async ({ adAccountId, objectIds }) => {
+				lookupCalls.push({ adAccountId, objectIds });
+
+				return new Map([
+					[
+						"111",
+						{
+							id: "111",
+							name: "New Campaign Name",
+							status: "ACTIVE",
+						},
+					],
+				]);
+			},
+		},
+	);
+
+	assert.deepEqual(lookupCalls, [
+		{
+			adAccountId: "123456789",
+			objectIds: ["111"],
+		},
+	]);
+	assert.deepEqual(
+		result.resolved.map((row) => ({
+			objectId: row.objectId,
+			objectName: row.objectName,
+			source: row.source,
+			status: row.status,
+		})),
+		[
+			{
+				objectId: "111",
+				objectName: "New Campaign Name",
+				source: "meta_api",
+				status: "ACTIVE",
+			},
+		],
+	);
+
+	const cachedRow = await pool.query<{
+		object_name: string;
+		status: string | null;
+		last_fetched_at: Date | null;
+	}>(
+		`
+      SELECT object_name, status, last_fetched_at
+      FROM meta_ads_metadata_cache
+      WHERE ad_account_id = '123456789'
+        AND object_type = 'campaign'
+        AND object_id = '111'
+    `,
+	);
+
+	assert.deepEqual(
+		cachedRow.rows.map((row) => ({
+			objectName: row.object_name,
+			status: row.status,
+			lastFetchedAt: row.last_fetched_at?.toISOString() ?? null,
+		})),
+		[
+			{
+				objectName: "New Campaign Name",
+				status: "ACTIVE",
+				lastFetchedAt: "2026-06-02T15:00:00.000Z",
+			},
+		],
+	);
+});
+
+test("resolveMetaMetadata keeps stale cached names when a refresh fails", async () => {
+	await pool.query(
+		`
+      INSERT INTO meta_ads_metadata_cache (
+        ad_account_id,
+        object_type,
+        object_id,
+        object_name,
+        status,
+        last_fetched_at
+      )
+      VALUES (
+        '123456789',
+        'campaign',
+        '111',
+        'Fallback Campaign',
+        'ACTIVE',
+        '2026-05-01T12:00:00.000Z'
+      )
+    `,
+	);
+
+	const result = await resolveMetaMetadata(
+		[
+			{
+				adAccountId: "123456789",
+				objectType: "campaign",
+				objectIds: ["111", "222"],
+			},
+		],
+		{
+			now: new Date("2026-06-02T15:00:00.000Z"),
+			cacheTtlMs: 7 * 24 * 60 * 60 * 1000,
+			apiLookup: async () => {
+				throw new Error("Meta API quota exceeded");
+			},
+		},
+	);
+
+	assert.deepEqual(
+		result.resolved.map((row) => ({
+			objectId: row.objectId,
+			objectName: row.objectName,
+			source: row.source,
+		})),
+		[
+			{
+				objectId: "111",
+				objectName: "Fallback Campaign",
+				source: "cache",
+			},
+		],
+	);
+	assert.deepEqual(
+		result.unresolved.map((row) => ({
+			objectId: row.objectId,
+			reason: row.reason,
+			error: row.error,
+		})),
+		[
+			{
+				objectId: "222",
+				reason: "meta_api_error",
+				error: "Meta API quota exceeded",
+			},
+		],
+	);
+});
+
+test("resolveMetaMetadata does not refetch recently unresolved ids inside retry window", async () => {
+	await pool.query(
+		`
+      INSERT INTO meta_ads_metadata_cache (
+        ad_account_id,
+        object_type,
+        object_id,
+        lookup_failed_at
+      )
+      VALUES (
+        '123456789',
+        'campaign',
+        '333',
+        '2026-06-02T14:45:00.000Z'
+      )
+    `,
+	);
+
+	const lookupCalls: Array<{ adAccountId: string; objectIds: string[] }> = [];
+	const result = await resolveMetaMetadata(
+		[
+			{
+				adAccountId: "123456789",
+				objectType: "campaign",
+				objectIds: ["333", "444"],
+			},
+		],
+		{
+			now: new Date("2026-06-02T15:00:00.000Z"),
+			retryWindowMs: 60 * 60 * 1000,
+			apiLookup: async ({ adAccountId, objectIds }) => {
+				lookupCalls.push({ adAccountId, objectIds });
+
+				return new Map([
+					[
+						"444",
+						{
+							id: "444",
+							name: "Resolvable Campaign",
+							status: null,
+						},
+					],
+				]);
+			},
+		},
+	);
+
+	assert.deepEqual(lookupCalls, [
+		{
+			adAccountId: "123456789",
+			objectIds: ["444"],
+		},
+	]);
+	assert.deepEqual(
+		result.resolved.map((row) => ({
+			objectId: row.objectId,
+			objectName: row.objectName,
+			source: row.source,
+		})),
+		[
+			{
+				objectId: "444",
+				objectName: "Resolvable Campaign",
+				source: "meta_api",
+			},
+		],
+	);
+	assert.deepEqual(
+		result.unresolved.map((row) => ({
+			objectId: row.objectId,
+			reason: row.reason,
+		})),
+		[
+			{
+				objectId: "333",
+				reason: "meta_api_not_found",
+			},
+		],
+	);
+});
+
 test("resolveMetaMetadata can read campaign and ad set names with a runtime Meta token", async () => {
 	Reflect.deleteProperty(process.env, "META_ADS_ENCRYPTION_KEY");
 	process.env.META_ADS_AD_ACCOUNT_ID = "act_123456789";
@@ -282,8 +538,14 @@ test("resolveMetaMetadata can read campaign and ad set names with a runtime Meta
 			typeof url === "string" ? new URL(url) : new URL(url.toString());
 		fetchUrls.push(requestUrl.toString());
 
-		assert.equal(requestUrl.searchParams.get("access_token"), "runtime-meta-token");
-		assert.equal(requestUrl.searchParams.get("fields"), "id,name,effective_status,status");
+		assert.equal(
+			requestUrl.searchParams.get("access_token"),
+			"runtime-meta-token",
+		);
+		assert.equal(
+			requestUrl.searchParams.get("fields"),
+			"id,name,effective_status,status",
+		);
 
 		return new Response(
 			JSON.stringify({

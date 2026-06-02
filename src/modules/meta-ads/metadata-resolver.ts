@@ -5,6 +5,8 @@ import { logWarning } from "../../observability/index.js";
 const META_GRAPH_BASE_URL = "https://graph.facebook.com";
 const META_RESOLVABLE_OBJECT_TYPES = ["campaign", "adset"] as const;
 const META_OBJECT_FIELDS = "id,name,effective_status,status";
+const DEFAULT_META_METADATA_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const DEFAULT_META_METADATA_RETRY_WINDOW_MS = 60 * 60 * 1000;
 
 export type MetaMetadataObjectType =
 	(typeof META_RESOLVABLE_OBJECT_TYPES)[number];
@@ -61,6 +63,13 @@ type MetaMetadataCacheRow = {
 	object_name: string | null;
 	status: string | null;
 	last_fetched_at: Date | null;
+	lookup_failed_at: Date | null;
+};
+
+type MetaMetadataCachePolicy = {
+	freshResolved: Map<string, MetaMetadataResolvedObject>;
+	staleResolved: Map<string, MetaMetadataResolvedObject>;
+	recentFailures: Map<string, MetaMetadataUnresolvedObject>;
 };
 
 type MetaMetadataConnectionRow = {
@@ -143,15 +152,37 @@ function buildResolutionKey(
 	return `${adAccountId}\u0000${objectType}\u0000${objectId}`;
 }
 
-async function loadCachedMetaMetadata(
+function isWithinWindow(
+	timestamp: Date | null,
+	now: Date,
+	windowMs: number,
+): boolean {
+	if (!timestamp) {
+		return false;
+	}
+
+	const ageMs = now.getTime() - timestamp.getTime();
+	return ageMs >= 0 && ageMs <= windowMs;
+}
+
+async function loadMetaMetadataCachePolicy(
 	requests: Array<{
 		adAccountId: string;
 		objectType: MetaMetadataObjectType;
 		objectIds: string[];
 	}>,
-): Promise<Map<string, MetaMetadataResolvedObject>> {
+	now: Date,
+	cacheTtlMs: number,
+	retryWindowMs: number,
+): Promise<MetaMetadataCachePolicy> {
+	const cachePolicy: MetaMetadataCachePolicy = {
+		freshResolved: new Map(),
+		staleResolved: new Map(),
+		recentFailures: new Map(),
+	};
+
 	if (requests.length === 0) {
-		return new Map();
+		return cachePolicy;
 	}
 
 	const rows: Array<{
@@ -178,7 +209,8 @@ async function loadCachedMetaMetadata(
         c.object_id,
         c.object_name,
         c.status,
-        c.last_fetched_at
+        c.last_fetched_at,
+        c.lookup_failed_at
       FROM meta_ads_metadata_cache c
       JOIN jsonb_to_recordset($1::jsonb) AS requested(
         ad_account_id text,
@@ -188,8 +220,11 @@ async function loadCachedMetaMetadata(
         ON requested.ad_account_id = c.ad_account_id
        AND requested.object_type = c.object_type
        AND requested.object_id = c.object_id
-      WHERE c.last_fetched_at IS NOT NULL
-        AND c.object_name IS NOT NULL
+      WHERE (
+          c.last_fetched_at IS NOT NULL
+          AND c.object_name IS NOT NULL
+        )
+        OR c.lookup_failed_at IS NOT NULL
     `,
 		[
 			JSON.stringify(
@@ -202,30 +237,43 @@ async function loadCachedMetaMetadata(
 		],
 	);
 
-	const resolved = new Map<string, MetaMetadataResolvedObject>();
-
 	for (const row of result.rows) {
+		const key = buildResolutionKey(
+			row.ad_account_id,
+			row.object_type,
+			row.object_id,
+		);
 		const objectName = collapseWhitespace(row.object_name);
 
-		if (!objectName) {
-			continue;
-		}
-
-		resolved.set(
-			buildResolutionKey(row.ad_account_id, row.object_type, row.object_id),
-			{
+		if (objectName && row.last_fetched_at) {
+			const resolved = {
 				adAccountId: row.ad_account_id,
 				objectType: row.object_type,
 				objectId: row.object_id,
 				objectName,
 				status: collapseWhitespace(row.status),
 				source: "cache",
-				lastFetchedAt: row.last_fetched_at?.toISOString() ?? null,
-			},
-		);
+				lastFetchedAt: row.last_fetched_at.toISOString(),
+			} satisfies MetaMetadataResolvedObject;
+
+			if (isWithinWindow(row.last_fetched_at, now, cacheTtlMs)) {
+				cachePolicy.freshResolved.set(key, resolved);
+			} else {
+				cachePolicy.staleResolved.set(key, resolved);
+			}
+		}
+
+		if (isWithinWindow(row.lookup_failed_at, now, retryWindowMs)) {
+			cachePolicy.recentFailures.set(key, {
+				adAccountId: row.ad_account_id,
+				objectType: row.object_type,
+				objectId: row.object_id,
+				reason: "meta_api_not_found",
+			});
+		}
 	}
 
-	return resolved;
+	return cachePolicy;
 }
 
 async function loadActiveMetaMetadataConnections(
@@ -438,8 +486,14 @@ export async function resolveMetaMetadata(
 	options: {
 		now?: Date;
 		apiLookup?: MetaMetadataApiLookup;
+		cacheTtlMs?: number;
+		retryWindowMs?: number;
 	} = {},
 ): Promise<MetaMetadataResolutionResult> {
+	const now = options.now ?? new Date();
+	const cacheTtlMs = options.cacheTtlMs ?? DEFAULT_META_METADATA_CACHE_TTL_MS;
+	const retryWindowMs =
+		options.retryWindowMs ?? DEFAULT_META_METADATA_RETRY_WINDOW_MS;
 	const normalizedRequests: Array<{
 		adAccountId: string;
 		objectType: MetaMetadataObjectType;
@@ -476,8 +530,13 @@ export async function resolveMetaMetadata(
 		});
 	}
 
-	const cached = await loadCachedMetaMetadata(normalizedRequests);
-	const resolved = [...cached.values()];
+	const cachePolicy = await loadMetaMetadataCachePolicy(
+		normalizedRequests,
+		now,
+		cacheTtlMs,
+		retryWindowMs,
+	);
+	const resolved = [...cachePolicy.freshResolved.values()];
 	const missingByAccountType = new Map<
 		string,
 		{
@@ -489,11 +548,20 @@ export async function resolveMetaMetadata(
 
 	for (const request of normalizedRequests) {
 		for (const objectId of request.objectIds) {
-			if (
-				cached.has(
-					buildResolutionKey(request.adAccountId, request.objectType, objectId),
-				)
-			) {
+			const resolutionKey = buildResolutionKey(
+				request.adAccountId,
+				request.objectType,
+				objectId,
+			);
+
+			if (cachePolicy.freshResolved.has(resolutionKey)) {
+				continue;
+			}
+
+			const recentFailure = cachePolicy.recentFailures.get(resolutionKey);
+
+			if (recentFailure && !cachePolicy.staleResolved.has(resolutionKey)) {
+				unresolved.push(recentFailure);
 				continue;
 			}
 
@@ -520,7 +588,7 @@ export async function resolveMetaMetadata(
 					[...missingByAccountType.values()].map((group) => group.adAccountId),
 				),
 			]);
-	const fetchedAt = options.now ?? new Date();
+	const fetchedAt = now;
 	const apiResolved: MetaMetadataResolvedObject[] = [];
 	const apiUnresolved: MetaMetadataUnresolvedObject[] = [];
 
@@ -549,6 +617,15 @@ export async function resolveMetaMetadata(
 			});
 
 			for (const objectId of group.objectIds) {
+				const staleCached = cachePolicy.staleResolved.get(
+					buildResolutionKey(group.adAccountId, group.objectType, objectId),
+				);
+
+				if (staleCached) {
+					resolved.push(staleCached);
+					continue;
+				}
+
 				apiUnresolved.push({
 					adAccountId: group.adAccountId,
 					objectType: group.objectType,
@@ -593,6 +670,15 @@ export async function resolveMetaMetadata(
 			const message = error instanceof Error ? error.message : String(error);
 
 			for (const objectId of group.objectIds) {
+				const staleCached = cachePolicy.staleResolved.get(
+					buildResolutionKey(group.adAccountId, group.objectType, objectId),
+				);
+
+				if (staleCached) {
+					resolved.push(staleCached);
+					continue;
+				}
+
 				apiUnresolved.push({
 					adAccountId: group.adAccountId,
 					objectType: group.objectType,
