@@ -69,6 +69,7 @@ type Env = {
   META_ADS_APP_SCOPES: string[];
   META_ADS_APP_SECRET: string;
   META_ADS_ENCRYPTION_KEY: string;
+  META_ADS_METADATA_ACCESS_TOKEN: string;
   META_ADS_DETERMINISTIC_SYNC_ENABLED: boolean;
   META_ADS_DETERMINISTIC_SYNC_INITIAL_LOOKBACK_DAYS: number;
   META_ADS_DETERMINISTIC_SYNC_LOOKBACK_DAYS: number;
@@ -246,6 +247,7 @@ const parsers: { [TKey in keyof Env]: EnvParser<Env[TKey]> } = {
   META_ADS_APP_SCOPES: (name) => parseStringList(name, []),
   META_ADS_APP_SECRET: (name) => parseString(name, ''),
   META_ADS_ENCRYPTION_KEY: (name) => parseString(name, ''),
+  META_ADS_METADATA_ACCESS_TOKEN: (name) => parseString(name, ''),
   META_ADS_DETERMINISTIC_SYNC_ENABLED: (name) => parseBoolean(name, true),
   META_ADS_DETERMINISTIC_SYNC_INITIAL_LOOKBACK_DAYS: (name) => parseInteger(name, 30),
   META_ADS_DETERMINISTIC_SYNC_LOOKBACK_DAYS: (name) => parseInteger(name, 7),

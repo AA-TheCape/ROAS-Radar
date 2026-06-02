@@ -9,6 +9,27 @@ This runbook covers the latest-name metadata lookup surface and the scheduled me
 
 The scheduled refresh path is the Cloud Run metadata refresh jobs, not the normal spend sync workers.
 
+## Meta API Runtime Configuration
+
+Meta campaign and ad set labels are resolved from cached metadata first. On a cache miss, the backend can call the Meta Graph API when one of these runtime credential paths is available:
+
+- Stored OAuth connection: `META_ADS_ENCRYPTION_KEY` must be available so `meta_ads_connections.access_token_encrypted` can be decrypted for active connections.
+- Metadata-only runtime token: `META_ADS_METADATA_ACCESS_TOKEN` can be supplied from Secret Manager and is scoped to `META_ADS_AD_ACCOUNT_ID`.
+
+Required non-secret configuration:
+
+- `META_ADS_API_VERSION`: Graph API version, for example `v25.0`.
+- `META_ADS_AD_ACCOUNT_ID`: account id, with or without the `act_` prefix, when using `META_ADS_METADATA_ACCESS_TOKEN`.
+- `META_ADS_APP_SCOPES`: must include `ads_read` for campaign and ad set metadata reads. Keep `business_management` only when the app flow needs broader business asset access.
+
+Required secrets must come from runtime configuration, not committed files:
+
+- `META_ADS_ENCRYPTION_KEY`: required for the stored OAuth connection path.
+- `META_ADS_METADATA_ACCESS_TOKEN`: optional metadata-only fallback token for environments that cannot rely on a stored active connection.
+- `META_ADS_APP_SECRET`: required by the OAuth connection flow, but it is not used as a metadata lookup token.
+
+If both token paths are unavailable, metadata resolution does not fail the reporting request. It logs `meta_metadata_runtime_config_diagnostic` with `fallback="raw_id"` and returns unresolved campaign or ad set ids so callers can display the raw id label.
+
 ## Required Scheduler Inputs
 
 Per environment, define:

@@ -1,5 +1,6 @@
 import { env } from "../../config/env.js";
 import { query } from "../../db/pool.js";
+import { logWarning } from "../../observability/index.js";
 
 const META_GRAPH_BASE_URL = "https://graph.facebook.com";
 const META_RESOLVABLE_OBJECT_TYPES = ["campaign", "adset"] as const;
@@ -65,6 +66,7 @@ type MetaMetadataCacheRow = {
 type MetaMetadataConnectionRow = {
 	ad_account_id: string;
 	access_token: string;
+	source: "database" | "runtime_config";
 };
 
 type MetaGraphObjectResponse = {
@@ -78,6 +80,8 @@ type MetaGraphObjectResponse = {
 };
 
 type MetaGraphBatchResponse = Record<string, MetaGraphObjectResponse>;
+
+const emittedRuntimeDiagnosticKeys = new Set<string>();
 
 function normalizeString(value: string | null | undefined): string | null {
 	if (typeof value !== "string") {
@@ -235,8 +239,26 @@ async function loadActiveMetaMetadataConnections(
 		),
 	];
 
+	const connections = new Map<string, MetaMetadataConnectionRow>();
+	const configuredAccountId = normalizeAdAccountId(env.META_ADS_AD_ACCOUNT_ID);
+	const configuredAccessToken = normalizeString(
+		env.META_ADS_METADATA_ACCESS_TOKEN,
+	);
+
+	if (configuredAccountId && configuredAccessToken) {
+		for (const accountId of normalizedAccountIds) {
+			if (accountId === configuredAccountId) {
+				connections.set(accountId, {
+					ad_account_id: accountId,
+					access_token: configuredAccessToken,
+					source: "runtime_config",
+				});
+			}
+		}
+	}
+
 	if (normalizedAccountIds.length === 0 || !env.META_ADS_ENCRYPTION_KEY) {
-		return new Map();
+		return connections;
 	}
 
 	const result = await query<MetaMetadataConnectionRow>(
@@ -252,15 +274,43 @@ async function loadActiveMetaMetadataConnections(
 		[env.META_ADS_ENCRYPTION_KEY, normalizedAccountIds],
 	);
 
-	const connections = new Map<string, MetaMetadataConnectionRow>();
-
 	for (const row of result.rows) {
 		if (!connections.has(row.ad_account_id)) {
-			connections.set(row.ad_account_id, row);
+			connections.set(row.ad_account_id, {
+				...row,
+				source: "database",
+			});
 		}
 	}
 
 	return connections;
+}
+
+function emitMetaMetadataRuntimeDiagnostic(input: {
+	adAccountIds: string[];
+	missingConfigKeys: string[];
+	message: string;
+}): void {
+	const key = `${input.missingConfigKeys.sort().join(",")}\u0000${input.adAccountIds
+		.slice()
+		.sort()
+		.join(",")}`;
+
+	if (emittedRuntimeDiagnosticKeys.has(key)) {
+		return;
+	}
+
+	emittedRuntimeDiagnosticKeys.add(key);
+
+	logWarning("meta_metadata_runtime_config_diagnostic", {
+		service: process.env.K_SERVICE ?? "roas-radar",
+		platform: "meta_ads",
+		resolutionScope: "campaign_adset_metadata",
+		adAccountIds: input.adAccountIds.slice(0, 10),
+		missingConfigKeys: input.missingConfigKeys,
+		fallback: "raw_id",
+		message: input.message,
+	});
 }
 
 async function fetchMetaObjectsByIds(input: {
@@ -478,6 +528,26 @@ export async function resolveMetaMetadata(
 		const connection = connections.get(group.adAccountId);
 
 		if (!options.apiLookup && !connection) {
+			const missingConfigKeys = [
+				!env.META_ADS_ENCRYPTION_KEY ? "META_ADS_ENCRYPTION_KEY" : null,
+				!env.META_ADS_METADATA_ACCESS_TOKEN
+					? "META_ADS_METADATA_ACCESS_TOKEN"
+					: null,
+				env.META_ADS_METADATA_ACCESS_TOKEN && !env.META_ADS_AD_ACCOUNT_ID
+					? "META_ADS_AD_ACCOUNT_ID"
+					: null,
+			].filter((value): value is string => Boolean(value));
+
+			emitMetaMetadataRuntimeDiagnostic({
+				adAccountIds: [group.adAccountId],
+				missingConfigKeys:
+					missingConfigKeys.length > 0
+						? missingConfigKeys
+						: ["meta_ads_connections.active"],
+				message:
+					"Meta metadata resolver has no active token for this account; returning unresolved objects so reporting can display raw IDs.",
+			});
+
 			for (const objectId of group.objectIds) {
 				apiUnresolved.push({
 					adAccountId: group.adAccountId,
