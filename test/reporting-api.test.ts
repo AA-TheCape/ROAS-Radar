@@ -870,7 +870,7 @@ test('reporting campaigns return raw Meta id label metadata when display resolut
     assert.equal(response.status, 200);
     assert.deepEqual(body.rows, [
       {
-        source: 'meta',
+        source: 'facebook',
         medium: 'paid_social',
         campaign: '888',
         content: null,
@@ -883,18 +883,124 @@ test('reporting campaigns return raw Meta id label metadata when display resolut
         campaignEntityType: 'campaign',
         parentCampaignEntityId: null,
         parentCampaignDisplayName: null,
-        campaignPlatform: 'meta_ads',
+        campaignPlatform: null,
         campaignNameResolutionStatus: 'unresolved',
         campaignLabel: buildCampaignLabel(
           '888',
           '888',
-          'meta_ads',
+          null,
           'unresolved',
           '2026-04-10T00:00:00.000Z',
           null,
           {
+            source: 'facebook',
             rawId: '888',
             entityType: 'campaign',
+            parentCampaignEntityId: null,
+            parentCampaignDisplayName: null
+          }
+        )
+      }
+    ]);
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
+test('reporting campaigns resolve raw Meta attributed IDs from platform entity metadata', async () => {
+  pool.query = (async (text: string, params?: unknown[]) => {
+    if (text.includes('FROM daily_reporting_metrics')) {
+      assert.deepEqual(params, ['2026-04-01', '2026-04-10', 'last_touch', 1]);
+
+      return {
+        rows: [
+          {
+            source: 'facebook',
+            medium: 'paid_social',
+            campaign: '999',
+            content: null,
+            visits: '14',
+            orders: '2',
+            revenue: '120.00'
+          }
+        ]
+      };
+    }
+
+    if (text.includes('FROM google_candidates')) {
+      assert.deepEqual(params, ['2026-04-01', '2026-04-10', ['999'], null]);
+      return { rows: [] };
+    }
+
+    if (text.includes('WITH requested_ids')) {
+      assert.deepEqual(params, [['999'], '2026-04-01', '2026-04-10', null, false, false]);
+      return {
+        rows: [
+          {
+            ad_account_id: '123456789',
+            object_type: 'adset',
+            object_id: '999',
+            object_name: 'Platform Metadata Ad Set',
+            parent_campaign_id: null,
+            parent_campaign_name: null,
+            last_seen_at: new Date('2026-04-09T12:00:00.000Z'),
+            metadata_source: 'ad_platform_entity_metadata'
+          }
+        ]
+      };
+    }
+
+    if (text.includes('FROM meta_ads_metadata_cache c')) {
+      assert.deepEqual(JSON.parse(String(params?.[0])), [
+        {
+          ad_account_id: '123456789',
+          object_type: 'adset',
+          object_id: '999'
+        }
+      ]);
+      return { rows: [] };
+    }
+
+    throw new Error(`Unexpected query: ${text}`);
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(
+      server,
+      '/api/reporting/campaigns?startDate=2026-04-01&endDate=2026-04-10&limit=1'
+    );
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(body.rows, [
+      {
+        source: 'meta',
+        medium: 'paid_social',
+        campaign: '999',
+        content: null,
+        visits: 14,
+        orders: 2,
+        revenue: 120,
+        conversionRate: 2 / 14,
+        campaignDisplayName: 'Platform Metadata Ad Set',
+        campaignEntityId: '999',
+        campaignEntityType: 'adset',
+        parentCampaignEntityId: null,
+        parentCampaignDisplayName: null,
+        campaignPlatform: 'meta_ads',
+        campaignNameResolutionStatus: 'resolved',
+        campaignLabel: buildCampaignLabel(
+          'Platform Metadata Ad Set',
+          '999',
+          'meta_ads',
+          'resolved',
+          '2026-04-09T12:00:00.000Z',
+          '2026-04-09T12:00:00.000Z',
+          {
+            rawId: '999',
+            entityType: 'adset',
             parentCampaignEntityId: null,
             parentCampaignDisplayName: null
           }
