@@ -600,7 +600,28 @@ test('reporting campaigns resolve attributed Meta campaign and ad set ids before
             object_name: 'Awareness Campaign',
             parent_campaign_id: null,
             parent_campaign_name: null,
-            last_seen_at: new Date('2026-04-10T00:00:00.000Z')
+            last_seen_at: new Date('2026-04-10T00:00:00.000Z'),
+            metadata_source: 'spend'
+          },
+          {
+            ad_account_id: '123456789',
+            object_type: 'adset',
+            object_id: '333',
+            object_name: null,
+            parent_campaign_id: null,
+            parent_campaign_name: null,
+            last_seen_at: null,
+            metadata_source: 'active_account'
+          },
+          {
+            ad_account_id: '123456789',
+            object_type: 'campaign',
+            object_id: '444',
+            object_name: null,
+            parent_campaign_id: null,
+            parent_campaign_name: null,
+            last_seen_at: null,
+            metadata_source: 'active_account'
           },
           {
             ad_account_id: '123456789',
@@ -609,7 +630,8 @@ test('reporting campaigns resolve attributed Meta campaign and ad set ids before
             object_name: 'US Prospecting Ad Set',
             parent_campaign_id: '333',
             parent_campaign_name: 'Awareness Campaign',
-            last_seen_at: new Date('2026-04-10T00:00:00.000Z')
+            last_seen_at: new Date('2026-04-10T00:00:00.000Z'),
+            metadata_source: 'spend'
           },
           {
             ad_account_id: '123456789',
@@ -618,7 +640,8 @@ test('reporting campaigns resolve attributed Meta campaign and ad set ids before
             object_name: 'Campaign Using Shared Id',
             parent_campaign_id: null,
             parent_campaign_name: null,
-            last_seen_at: new Date('2026-04-10T00:00:00.000Z')
+            last_seen_at: new Date('2026-04-10T00:00:00.000Z'),
+            metadata_source: 'spend'
           },
           {
             ad_account_id: '123456789',
@@ -627,7 +650,8 @@ test('reporting campaigns resolve attributed Meta campaign and ad set ids before
             object_name: 'Ad Set Using Shared Id',
             parent_campaign_id: '333',
             parent_campaign_name: 'Awareness Campaign',
-            last_seen_at: new Date('2026-04-10T00:00:00.000Z')
+            last_seen_at: new Date('2026-04-10T00:00:00.000Z'),
+            metadata_source: 'spend'
           }
         ]
       };
@@ -645,6 +669,11 @@ test('reporting campaigns resolve attributed Meta campaign and ad set ids before
           {
             ad_account_id: '123456789',
             object_type: 'adset',
+            object_id: '333'
+          },
+          {
+            ad_account_id: '123456789',
+            object_type: 'adset',
             object_id: '444'
           },
           {
@@ -656,6 +685,11 @@ test('reporting campaigns resolve attributed Meta campaign and ad set ids before
             ad_account_id: '123456789',
             object_type: 'campaign',
             object_id: '333'
+          },
+          {
+            ad_account_id: '123456789',
+            object_type: 'campaign',
+            object_id: '444'
           },
           {
             ad_account_id: '123456789',

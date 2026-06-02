@@ -132,7 +132,11 @@ function collapseScopedResolutions(
     return undefined;
   }
 
-  const fingerprints = new Set(resolutions.map(buildResolutionFingerprint));
+  const resolvedResolutions = resolutions.filter(
+    (resolution) => resolution.campaignNameResolutionStatus === 'resolved'
+  );
+  const conflictScope = resolvedResolutions.length > 0 ? resolvedResolutions : resolutions;
+  const fingerprints = new Set(conflictScope.map(buildResolutionFingerprint));
 
   if (fingerprints.size > 1) {
     return undefined;
@@ -140,7 +144,7 @@ function collapseScopedResolutions(
 
   let winner: CampaignDisplayResolution | undefined;
 
-  for (const resolution of resolutions) {
+  for (const resolution of conflictScope) {
     winner = chooseBetterResolution(winner, resolution);
   }
 
