@@ -28,6 +28,8 @@ Required secrets must come from runtime configuration, not committed files:
 - `META_ADS_METADATA_ACCESS_TOKEN`: optional metadata-only fallback token for environments that cannot rely on a stored active connection.
 - `META_ADS_APP_SECRET`: required by the OAuth connection flow, but it is not used as a metadata lookup token.
 
+Cloud Run deploys bind `META_ADS_METADATA_ACCESS_TOKEN` from Secret Manager using the environment file value `META_ADS_METADATA_ACCESS_TOKEN_SECRET_NAME`. Treat a missing Secret Manager secret as a deployment blocker for Meta metadata-capable environments, even if the token is only a fallback at runtime.
+
 If both token paths are unavailable, metadata resolution does not fail the reporting request. It logs `meta_metadata_runtime_config_diagnostic` with `fallback="raw_id"` and returns unresolved campaign or ad set ids so callers can display the raw id label.
 
 ## Required Scheduler Inputs
