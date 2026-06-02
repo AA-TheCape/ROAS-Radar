@@ -77,6 +77,154 @@ async function captureStructuredLogs<T>(
 	}
 }
 
+test("resolveMetaMetadata returns a fresh cache hit without calling the Meta API", async () => {
+	await pool.query(
+		`
+      INSERT INTO meta_ads_metadata_cache (
+        ad_account_id,
+        object_type,
+        object_id,
+        object_name,
+        status,
+        last_fetched_at
+      )
+      VALUES (
+        '123456789',
+        'campaign',
+        '111',
+        ' Cached   Campaign ',
+        'ACTIVE',
+        '2026-06-02T14:00:00.000Z'
+      )
+    `,
+	);
+
+	const result = await resolveMetaMetadata(
+		[
+			{
+				adAccountId: "act_123456789",
+				objectType: "campaign",
+				objectIds: ["111"],
+			},
+		],
+		{
+			now: new Date("2026-06-02T15:00:00.000Z"),
+			apiLookup: async () => {
+				throw new Error("Meta API should not be called for a fresh cache hit");
+			},
+		},
+	);
+
+	assert.deepEqual(result.unresolved, []);
+	assert.deepEqual(
+		result.resolved.map((row) => ({
+			objectId: row.objectId,
+			objectName: row.objectName,
+			source: row.source,
+			status: row.status,
+			lastFetchedAt: row.lastFetchedAt,
+		})),
+		[
+			{
+				objectId: "111",
+				objectName: "Cached Campaign",
+				source: "cache",
+				status: "ACTIVE",
+				lastFetchedAt: "2026-06-02T14:00:00.000Z",
+			},
+		],
+	);
+});
+
+test("resolveMetaMetadata fetches and caches a cache miss from the Meta API", async () => {
+	const lookupCalls: Array<{ adAccountId: string; objectIds: string[] }> = [];
+	const result = await resolveMetaMetadata(
+		[
+			{
+				adAccountId: "123456789",
+				objectType: "adset",
+				objectIds: ["444"],
+			},
+		],
+		{
+			now: new Date("2026-06-02T15:00:00.000Z"),
+			apiLookup: async ({ adAccountId, objectIds }) => {
+				lookupCalls.push({ adAccountId, objectIds });
+
+				return new Map([
+					[
+						"444",
+						{
+							id: "444",
+							name: " Meta   API Ad Set ",
+							status: "PAUSED",
+						},
+					],
+				]);
+			},
+		},
+	);
+
+	assert.deepEqual(lookupCalls, [
+		{
+			adAccountId: "123456789",
+			objectIds: ["444"],
+		},
+	]);
+	assert.deepEqual(result.unresolved, []);
+	assert.deepEqual(
+		result.resolved.map((row) => ({
+			objectType: row.objectType,
+			objectId: row.objectId,
+			objectName: row.objectName,
+			source: row.source,
+			status: row.status,
+		})),
+		[
+			{
+				objectType: "adset",
+				objectId: "444",
+				objectName: "Meta API Ad Set",
+				source: "meta_api",
+				status: "PAUSED",
+			},
+		],
+	);
+
+	const cachedRows = await pool.query<{
+		object_type: string;
+		object_id: string;
+		object_name: string | null;
+		status: string | null;
+		last_fetched_at: Date | null;
+	}>(
+		`
+      SELECT object_type, object_id, object_name, status, last_fetched_at
+      FROM meta_ads_metadata_cache
+      WHERE ad_account_id = '123456789'
+    `,
+	);
+
+	assert.deepEqual(
+		cachedRows.rows.map((row) => ({
+			objectType: row.object_type,
+			objectId: row.object_id,
+			objectName: row.object_name,
+			status: row.status,
+			lastFetchedAt: row.last_fetched_at?.toISOString() ?? null,
+		})),
+		[
+			{
+				objectType: "adset",
+				objectId: "444",
+				objectName: "Meta API Ad Set",
+				status: "PAUSED",
+				lastFetchedAt: "2026-06-02T15:00:00.000Z",
+			},
+		],
+	);
+});
+
 test("resolveMetaMetadata reads cache first, fetches missing Meta ids, and returns unresolved ids", async () => {
 	await pool.query(
 		`

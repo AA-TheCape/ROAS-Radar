@@ -85,6 +85,22 @@ async function seedMetaConnection(adAccountId: string): Promise<number> {
 	return result.rows[0].id;
 }
 
+async function seedMetaSpendSyncJob(
+	connectionId: number,
+	syncDate: string,
+): Promise<number> {
+	const result = await pool.query<{ id: number }>(
+		`
+      INSERT INTO meta_ads_sync_jobs (connection_id, sync_date, status)
+      VALUES ($1, $2::date, 'completed')
+      RETURNING id
+    `,
+		[connectionId, syncDate],
+	);
+
+	return result.rows[0].id;
+}
+
 async function seedMetaOrderValueSyncJob(
 	connectionId: number,
 	syncDate: string,
@@ -306,6 +322,167 @@ test("reporting summary reads persisted daily aggregates from PostgreSQL", async
 				},
 			},
 		});
+	} finally {
+		await closeServer(server);
+		await resetE2EDatabase();
+	}
+});
+
+test("reporting campaigns resolves Meta campaign and ad set ids while preserving non-Meta rows", async () => {
+	await resetE2EDatabase();
+	const reportDate = "2026-04-10";
+	const connectionId = await seedMetaConnection("123456789");
+	const syncJobId = await seedMetaSpendSyncJob(connectionId, reportDate);
+
+	await pool.query(
+		`
+      INSERT INTO daily_reporting_metrics (
+        metric_date,
+        attribution_model,
+        source,
+        medium,
+        campaign,
+        content,
+        term,
+        visits,
+        attributed_orders,
+        attributed_revenue,
+        spend,
+        impressions,
+        clicks,
+        new_customer_orders,
+        returning_customer_orders,
+        new_customer_revenue,
+        returning_customer_revenue,
+        last_computed_at
+      )
+      VALUES
+        ($1::date, 'last_touch', 'meta', 'paid_social', '333', 'unknown', 'unknown', 40, 4, '500.00', '100.00', 0, 0, 0, 0, 0, 0, now()),
+        ($1::date, 'last_touch', 'facebook', 'paid_social', '444', 'unknown', 'unknown', 25, 3, '300.00', '50.00', 0, 0, 0, 0, 0, 0, now()),
+        ($1::date, 'last_touch', 'google', 'cpc', '555', 'unknown', 'unknown', 10, 1, '50.00', '25.00', 0, 0, 0, 0, 0, 0, now())
+    `,
+		[reportDate],
+	);
+
+	await pool.query(
+		`
+      INSERT INTO meta_ads_daily_spend (
+        connection_id,
+        sync_job_id,
+        report_date,
+        granularity,
+        entity_key,
+        account_id,
+        account_name,
+        campaign_id,
+        campaign_name,
+        adset_id,
+        adset_name,
+        canonical_source,
+        canonical_medium,
+        canonical_campaign,
+        canonical_content,
+        canonical_term,
+        currency,
+        spend,
+        impressions,
+        clicks,
+        raw_payload
+      )
+      VALUES
+        ($1, $2, $3::date, 'campaign', 'campaign-333', '123456789', 'Meta Account', '333', 'Campaign Fallback', NULL, NULL, 'meta', 'paid_social', '333', 'unknown', 'unknown', 'USD', '100.00', 1000, 80, '{}'::jsonb),
+        ($1, $2, $3::date, 'adset', 'adset-444', '123456789', 'Meta Account', '333', 'Campaign Fallback', '444', 'Ad Set Fallback', 'meta', 'paid_social', '444', 'unknown', 'unknown', 'USD', '50.00', 500, 40, '{}'::jsonb)
+    `,
+		[connectionId, syncJobId, reportDate],
+	);
+
+	await pool.query(
+		`
+      INSERT INTO meta_ads_metadata_cache (
+        ad_account_id,
+        object_type,
+        object_id,
+        object_name,
+        status,
+        last_fetched_at
+      )
+      VALUES
+        ('123456789', 'campaign', '333', 'Awareness Campaign', 'ACTIVE', '2026-04-10T18:00:00.000Z'),
+        ('123456789', 'adset', '444', 'US Prospecting Ad Set', 'ACTIVE', '2026-04-10T18:05:00.000Z')
+    `,
+	);
+
+	const server = createServer();
+
+	try {
+		const { response, body } = await requestJson(
+			server,
+			"/api/reporting/campaigns?startDate=2026-04-10&endDate=2026-04-10&limit=10",
+		);
+
+		assert.equal(response.status, 200);
+		const rows = body.rows as Array<Record<string, unknown>>;
+		const campaignRow = rows.find((row) => row.campaign === "333");
+		const adSetRow = rows.find((row) => row.campaign === "444");
+		const googleRow = rows.find((row) => row.campaign === "555");
+
+		assert.deepEqual(
+			{
+				source: campaignRow?.source,
+				campaignDisplayName: campaignRow?.campaignDisplayName,
+				campaignEntityId: campaignRow?.campaignEntityId,
+				campaignEntityType: campaignRow?.campaignEntityType,
+				campaignPlatform: campaignRow?.campaignPlatform,
+				campaignNameResolutionStatus:
+					campaignRow?.campaignNameResolutionStatus,
+			},
+			{
+				source: "meta",
+				campaignDisplayName: "Awareness Campaign",
+				campaignEntityId: "333",
+				campaignEntityType: "campaign",
+				campaignPlatform: "meta_ads",
+				campaignNameResolutionStatus: "resolved",
+			},
+		);
+
+		assert.deepEqual(
+			{
+				source: adSetRow?.source,
+				campaignDisplayName: adSetRow?.campaignDisplayName,
+				campaignEntityId: adSetRow?.campaignEntityId,
+				campaignEntityType: adSetRow?.campaignEntityType,
+				parentCampaignEntityId: adSetRow?.parentCampaignEntityId,
+				parentCampaignDisplayName: adSetRow?.parentCampaignDisplayName,
+				campaignPlatform: adSetRow?.campaignPlatform,
+				campaignNameResolutionStatus: adSetRow?.campaignNameResolutionStatus,
+			},
+			{
+				source: "meta",
+				campaignDisplayName: "US Prospecting Ad Set",
+				campaignEntityId: "444",
+				campaignEntityType: "adset",
+				parentCampaignEntityId: "333",
+				parentCampaignDisplayName: "Campaign Fallback",
+				campaignPlatform: "meta_ads",
+				campaignNameResolutionStatus: "resolved",
+			},
+		);
+
+		assert.deepEqual(
+			{
+				source: googleRow?.source,
+				campaign: googleRow?.campaign,
+				campaignDisplayName: googleRow?.campaignDisplayName,
+				campaignPlatform: googleRow?.campaignPlatform,
+			},
+			{
+				source: "google",
+				campaign: "555",
+				campaignDisplayName: undefined,
+				campaignPlatform: undefined,
+			},
+		);
 	} finally {
 		await closeServer(server);
 		await resetE2EDatabase();
