@@ -186,6 +186,9 @@ test("reporting dashboard labels Meta campaigns and ad sets with resolved names"
 		typeof import("../dashboard/src/components/ReportingDashboard")
 	>("dashboard/src/components/ReportingDashboard.tsx");
 
+	const resolvedCampaignId = "23861234567890123";
+	const resolvedAdSetId = "23869876543210987";
+	const unresolvedCampaignId = "23860000000000000";
 	const mounted = await mountUi(
 		h(
 			ReportingDashboard,
@@ -195,47 +198,72 @@ test("reporting dashboard labels Meta campaigns and ad sets with resolved names"
 						{
 							source: "meta",
 							medium: "paid_social",
-							campaign: "23861234567890123",
+							campaign: resolvedCampaignId,
 							content: "feed",
 							visits: 1200,
 							orders: 44,
 							revenue: 8800,
 							conversionRate: 0.0367,
-							campaignDisplayName: "Meta Prospecting Launch",
-							campaignEntityId: "23861234567890123",
-							campaignEntityType: "campaign",
-							campaignPlatform: "meta_ads",
-							campaignNameResolutionStatus: "resolved",
+							campaignLabel: {
+								displayName: "Meta Prospecting Launch",
+								source: "meta",
+								rawId: resolvedCampaignId,
+								entityId: resolvedCampaignId,
+								objectType: "campaign",
+								platform: "meta_ads",
+								resolutionStatus: "resolved",
+								lastSeenAt: "2026-04-20T08:00:00.000Z",
+								updatedAt: "2026-04-20T08:30:00.000Z",
+							},
 						},
 						{
 							source: "meta",
 							medium: "paid_social",
-							campaign: "23869876543210987",
+							campaign: resolvedAdSetId,
 							content: "story",
 							visits: 940,
 							orders: 31,
 							revenue: 6100,
 							conversionRate: 0.033,
-							campaignDisplayName: "US Broad Audience",
-							campaignEntityId: "23869876543210987",
-							campaignEntityType: "adset",
-							parentCampaignEntityId: "23861234567890123",
-							parentCampaignDisplayName: "Meta Prospecting Launch",
-							campaignPlatform: "meta_ads",
-							campaignNameResolutionStatus: "resolved",
+							campaignLabel: {
+								displayName: "US Broad Audience",
+								source: "meta",
+								rawId: resolvedAdSetId,
+								entityId: resolvedAdSetId,
+								objectType: "adset",
+								platform: "meta_ads",
+								resolutionStatus: "resolved",
+								parentCampaign: {
+									entityId: resolvedCampaignId,
+									displayName: "Meta Prospecting Launch",
+								},
+								parentCampaignEntityId: resolvedCampaignId,
+								parentCampaignDisplayName: "Meta Prospecting Launch",
+								lastSeenAt: "2026-04-20T08:05:00.000Z",
+								updatedAt: "2026-04-20T08:35:00.000Z",
+							},
 						},
 						{
 							source: "meta",
 							medium: "paid_social",
-							campaign: "23860000000000000",
+							campaign: unresolvedCampaignId,
 							content: "reels",
 							visits: 300,
 							orders: 5,
 							revenue: 900,
 							conversionRate: 0.0167,
-							campaignEntityId: "23860000000000000",
-							campaignPlatform: "meta_ads",
-							campaignNameResolutionStatus: "unresolved",
+							campaignDisplayName: "Stale Meta Campaign Name",
+							campaignLabel: {
+								displayName: "Stale Meta Campaign Name",
+								source: "meta",
+								rawId: unresolvedCampaignId,
+								entityId: unresolvedCampaignId,
+								objectType: "campaign",
+								platform: "meta_ads",
+								resolutionStatus: "unresolved",
+								lastSeenAt: null,
+								updatedAt: null,
+							},
 						},
 					],
 					loading: false,
@@ -251,7 +279,8 @@ test("reporting dashboard labels Meta campaigns and ad sets with resolved names"
 		assert.match(text, /US Broad Audience/);
 		assert.match(text, /Ad set in Meta Prospecting Launch/);
 		assert.match(text, /Meta \/ Paid Social/);
-		assert.match(text, /23860000000000000/);
+		assert.match(text, new RegExp(unresolvedCampaignId));
+		assert.doesNotMatch(text, /Stale Meta Campaign Name/);
 	} finally {
 		mounted.cleanup();
 	}
