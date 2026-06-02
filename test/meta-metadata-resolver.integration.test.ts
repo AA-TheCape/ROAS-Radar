@@ -158,6 +158,7 @@ test("resolveMetaMetadata fetches and caches a cache miss from the Meta API", as
 							id: "444",
 							name: " Meta   API Ad Set ",
 							status: "PAUSED",
+							objectType: "adset",
 						},
 					],
 				]);
@@ -225,6 +226,137 @@ test("resolveMetaMetadata fetches and caches a cache miss from the Meta API", as
 	);
 });
 
+test("resolveMetaMetadata rejects wrong Meta object types and does not cache them as the requested type", async () => {
+	const lookupCalls: Array<{
+		adAccountId: string;
+		objectType: "campaign" | "adset";
+		objectIds: string[];
+	}> = [];
+	const result = await resolveMetaMetadata(
+		[
+			{
+				adAccountId: "123456789",
+				objectType: "campaign",
+				objectIds: ["777"],
+			},
+			{
+				adAccountId: "123456789",
+				objectType: "adset",
+				objectIds: ["777"],
+			},
+		],
+		{
+			now: new Date("2026-06-02T15:00:00.000Z"),
+			apiLookup: async ({ adAccountId, objectType, objectIds }) => {
+				lookupCalls.push({ adAccountId, objectType, objectIds });
+
+				return new Map([
+					[
+						"777",
+						{
+							id: "777",
+							name:
+								objectType === "campaign"
+									? "Wrongly Returned Ad Set"
+									: "Verified Ad Set",
+							status: "ACTIVE",
+							objectType: "adset",
+						},
+					],
+				]);
+			},
+		},
+	);
+
+	assert.deepEqual(lookupCalls, [
+		{
+			adAccountId: "123456789",
+			objectType: "campaign",
+			objectIds: ["777"],
+		},
+		{
+			adAccountId: "123456789",
+			objectType: "adset",
+			objectIds: ["777"],
+		},
+	]);
+	assert.deepEqual(
+		result.resolved.map((row) => ({
+			objectType: row.objectType,
+			objectId: row.objectId,
+			objectName: row.objectName,
+			source: row.source,
+		})),
+		[
+			{
+				objectType: "adset",
+				objectId: "777",
+				objectName: "Verified Ad Set",
+				source: "meta_api",
+			},
+		],
+	);
+	assert.deepEqual(
+		result.unresolved.map((row) => ({
+			objectType: row.objectType,
+			objectId: row.objectId,
+			reason: row.reason,
+		})),
+		[
+			{
+				objectType: "campaign",
+				objectId: "777",
+				reason: "meta_api_not_found",
+			},
+		],
+	);
+
+	const cachedRows = await pool.query<{
+		object_type: string;
+		object_id: string;
+		object_name: string | null;
+		status: string | null;
+		last_fetched_at: Date | null;
+		lookup_failed_at: Date | null;
+	}>(
+		`
+      SELECT object_type, object_id, object_name, status, last_fetched_at, lookup_failed_at
+      FROM meta_ads_metadata_cache
+      WHERE ad_account_id = '123456789'
+      ORDER BY object_type ASC
+    `,
+	);
+
+	assert.deepEqual(
+		cachedRows.rows.map((row) => ({
+			objectType: row.object_type,
+			objectId: row.object_id,
+			objectName: row.object_name,
+			status: row.status,
+			lastFetchedAt: row.last_fetched_at?.toISOString() ?? null,
+			lookupFailedAt: row.lookup_failed_at?.toISOString() ?? null,
+		})),
+		[
+			{
+				objectType: "adset",
+				objectId: "777",
+				objectName: "Verified Ad Set",
+				status: "ACTIVE",
+				lastFetchedAt: "2026-06-02T15:00:00.000Z",
+				lookupFailedAt: null,
+			},
+			{
+				objectType: "campaign",
+				objectId: "777",
+				objectName: null,
+				status: null,
+				lastFetchedAt: null,
+				lookupFailedAt: "2026-06-02T15:00:00.000Z",
+			},
+		],
+	);
+});
+
 test("resolveMetaMetadata reads cache first, fetches missing Meta ids, and returns unresolved ids", async () => {
 	await pool.query(
 		`
@@ -269,7 +401,12 @@ test("resolveMetaMetadata reads cache first, fetches missing Meta ids, and retur
 
 				const rows = new Map<
 					string,
-					{ id: string; name: string | null; status: string | null }
+					{
+						id: string;
+						name: string | null;
+						status: string | null;
+						objectType: "campaign" | "adset";
+					}
 				>();
 
 				if (objectIds.includes("222")) {
@@ -277,6 +414,7 @@ test("resolveMetaMetadata reads cache first, fetches missing Meta ids, and retur
 						id: "222",
 						name: " API Campaign ",
 						status: "PAUSED",
+						objectType: "campaign",
 					});
 				}
 
@@ -285,6 +423,7 @@ test("resolveMetaMetadata reads cache first, fetches missing Meta ids, and retur
 						id: "444",
 						name: "US Prospecting Ad Set",
 						status: null,
+						objectType: "adset",
 					});
 				}
 
@@ -462,6 +601,7 @@ test("resolveMetaMetadata emits lookup summary logs without connection secrets",
 									id: objectId,
 									name: "Resolved From API",
 									status: "ACTIVE",
+									objectType: "campaign",
 								},
 							]),
 					),
@@ -568,6 +708,7 @@ test("resolveMetaMetadata refreshes stale cached names after the cache TTL", asy
 							id: "111",
 							name: "New Campaign Name",
 							status: "ACTIVE",
+							objectType: "campaign",
 						},
 					],
 				]);
@@ -737,6 +878,7 @@ test("resolveMetaMetadata does not refetch recently unresolved ids inside retry 
 							id: "444",
 							name: "Resolvable Campaign",
 							status: null,
+							objectType: "campaign",
 						},
 					],
 				]);
@@ -799,22 +941,51 @@ test("resolveMetaMetadata can read campaign and ad set names with a runtime Meta
 			requestUrl.searchParams.get("fields"),
 			"id,name,effective_status,status",
 		);
+		assert.equal(requestUrl.searchParams.get("limit"), "1");
 
-		return new Response(
-			JSON.stringify({
-				"222": {
-					id: "222",
-					name: "Runtime Campaign",
-					effective_status: "ACTIVE",
-				},
-				"444": {
-					id: "444",
-					name: "Runtime Ad Set",
-					status: "PAUSED",
-				},
-			}),
-			{ status: 200 },
-		);
+		const filtering = JSON.parse(
+			requestUrl.searchParams.get("filtering") ?? "[]",
+		) as Array<{ field?: string; operator?: string; value?: string[] }>;
+		assert.deepEqual(filtering[0]?.field, "id");
+		assert.deepEqual(filtering[0]?.operator, "IN");
+
+		if (requestUrl.pathname.endsWith("/act_123456789/campaigns")) {
+			assert.deepEqual(filtering[0]?.value, ["222"]);
+
+			return new Response(
+				JSON.stringify({
+					data: [
+						{
+							id: "222",
+							name: "Runtime Campaign",
+							effective_status: "ACTIVE",
+						},
+					],
+				}),
+				{ status: 200 },
+			);
+		}
+
+		if (requestUrl.pathname.endsWith("/act_123456789/adsets")) {
+			assert.deepEqual(filtering[0]?.value, ["444"]);
+
+			return new Response(
+				JSON.stringify({
+					data: [
+						{
+							id: "444",
+							name: "Runtime Ad Set",
+							status: "PAUSED",
+						},
+					],
+				}),
+				{ status: 200 },
+			);
+		}
+
+		return new Response(JSON.stringify({ error: { message: "unexpected" } }), {
+			status: 404,
+		});
 	}) as typeof globalThis.fetch;
 
 	try {

@@ -50,6 +50,7 @@ export type MetaMetadataResolutionResult = {
 export type MetaMetadataApiLookup = (input: {
 	adAccountId: string;
 	accessToken: string;
+	objectType: MetaMetadataObjectType;
 	objectIds: string[];
 }) => Promise<Map<string, MetaMetadataApiObject>>;
 
@@ -57,6 +58,7 @@ type MetaMetadataApiObject = {
 	id: string;
 	name: string | null;
 	status: string | null;
+	objectType: MetaMetadataObjectType;
 };
 
 type MetaMetadataCacheRow = {
@@ -91,7 +93,12 @@ type MetaGraphObjectResponse = {
 	};
 };
 
-type MetaGraphBatchResponse = Record<string, MetaGraphObjectResponse>;
+type MetaGraphCollectionResponse = {
+	data?: MetaGraphObjectResponse[];
+	error?: {
+		message?: string;
+	};
+};
 
 const emittedRuntimeDiagnosticKeys = new Set<string>();
 
@@ -365,34 +372,40 @@ function emitMetaMetadataRuntimeDiagnostic(input: {
 }
 
 async function fetchMetaObjectsByIds(input: {
+	adAccountId: string;
 	accessToken: string;
+	objectType: MetaMetadataObjectType;
 	objectIds: string[];
 }): Promise<Map<string, MetaMetadataApiObject>> {
 	const resolved = new Map<string, MetaMetadataApiObject>();
+	const edge = input.objectType === "campaign" ? "campaigns" : "adsets";
+	const scopedAccountId = `act_${input.adAccountId}`;
 
 	for (let index = 0; index < input.objectIds.length; index += 50) {
 		const chunk = input.objectIds.slice(index, index + 50);
-		const url = new URL(`${META_GRAPH_BASE_URL}/${env.META_ADS_API_VERSION}/`);
+		const url = new URL(
+			`${META_GRAPH_BASE_URL}/${env.META_ADS_API_VERSION}/${scopedAccountId}/${edge}`,
+		);
 		url.searchParams.set("access_token", input.accessToken);
-		url.searchParams.set("ids", chunk.join(","));
 		url.searchParams.set("fields", META_OBJECT_FIELDS);
+		url.searchParams.set(
+			"filtering",
+			JSON.stringify([{ field: "id", operator: "IN", value: chunk }]),
+		);
+		url.searchParams.set("limit", String(chunk.length));
 
 		const response = await fetch(url);
-		const payload = (await response.json()) as
-			| MetaGraphBatchResponse
-			| { error?: { message?: string } };
+		const payload = (await response.json()) as MetaGraphCollectionResponse;
 
 		if (!response.ok) {
-			const message = (payload as { error?: { message?: string } }).error
-				?.message;
+			const message = payload.error?.message;
 			throw new Error(
 				message ??
 					`Meta Ads metadata lookup failed with status ${response.status}`,
 			);
 		}
 
-		for (const objectId of chunk) {
-			const entry = (payload as MetaGraphBatchResponse)[objectId];
+		for (const entry of payload.data ?? []) {
 			const id = normalizeString(entry?.id);
 			const name = collapseWhitespace(entry?.name);
 
@@ -400,10 +413,11 @@ async function fetchMetaObjectsByIds(input: {
 				continue;
 			}
 
-			resolved.set(objectId, {
+			resolved.set(id, {
 				id,
 				name,
 				status: collapseWhitespace(entry.effective_status ?? entry.status),
+				objectType: input.objectType,
 			});
 		}
 	}
@@ -688,13 +702,14 @@ export async function resolveMetaMetadata(
 			const lookupResult = await (options.apiLookup ?? fetchMetaObjectsByIds)({
 				adAccountId: group.adAccountId,
 				accessToken: connection?.access_token ?? "",
+				objectType: group.objectType,
 				objectIds: group.objectIds,
 			});
 
 			for (const objectId of group.objectIds) {
 				const apiObject = lookupResult.get(objectId);
 
-				if (!apiObject?.name) {
+				if (!apiObject?.name || apiObject.objectType !== group.objectType) {
 					apiUnresolved.push({
 						adAccountId: group.adAccountId,
 						objectType: group.objectType,
