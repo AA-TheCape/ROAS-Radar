@@ -21,6 +21,7 @@ export async function resetE2EDatabase(): Promise<void> {
     'app_sessions',
     'app_users',
     'campaign_metadata_backfill_runs',
+    'meta_ads_metadata_cache',
     'ad_platform_entity_metadata',
     'attribution_explain_records',
     'attribution_model_credits',
