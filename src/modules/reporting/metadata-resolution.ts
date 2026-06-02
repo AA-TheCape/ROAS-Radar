@@ -1,5 +1,8 @@
 import { query } from '../../db/pool.js';
-import { emitCampaignMetadataResolutionCoverageLog } from '../../observability/index.js';
+import {
+  emitCampaignMetadataResolutionCoverageLog,
+  emitMetaMetadataRawIdFallbackLog
+} from '../../observability/index.js';
 import { env } from '../../config/env.js';
 import { resolveMetaMetadata, type MetaMetadataObjectType } from '../meta-ads/metadata-resolver.js';
 
@@ -223,7 +226,8 @@ function isNumericMetaObjectId(value: string): boolean {
 async function resolveAttributedMetaIdMetadata(
   startDate: string,
   endDate: string,
-  campaigns: string[]
+  campaigns: string[],
+  source?: string | null
 ): Promise<Map<string, CampaignDisplayResolution>> {
   const candidateIds = [...new Set(campaigns.map((value) => value.trim()).filter(isNumericMetaObjectId))];
 
@@ -384,6 +388,23 @@ async function resolveAttributedMetaIdMetadata(
       objectIds: [...new Set(request.objectIds)]
     }))
   );
+
+  if (metaResult.unresolved.length > 0) {
+    emitMetaMetadataRawIdFallbackLog({
+      resolutionScope: 'campaign_adset_metadata',
+      startDate,
+      endDate,
+      source,
+      requestedCount: candidateIds.length,
+      unresolvedCount: metaResult.unresolved.length,
+      unresolvedEntityIds: metaResult.unresolved.map((entry) => entry.objectId),
+      unresolvedReasons: metaResult.unresolved.reduce<Record<string, number>>((summary, entry) => {
+        summary[entry.reason] = (summary[entry.reason] ?? 0) + 1;
+        return summary;
+      }, {})
+    });
+  }
+
   const resolutionsByCampaign = new Map<string, CampaignDisplayResolution[]>();
 
   for (const resolved of metaResult.resolved) {
@@ -565,7 +586,7 @@ export async function resolveCampaignDisplayMetadata(
   const byGroup = new Map<string, CampaignDisplayResolution>();
   const attributedMetaIdMetadata =
     source === undefined || source === 'meta' || source === 'facebook' || source === 'instagram'
-      ? await resolveAttributedMetaIdMetadata(startDate, endDate, normalizedCampaigns)
+      ? await resolveAttributedMetaIdMetadata(startDate, endDate, normalizedCampaigns, source ?? null)
       : new Map<string, CampaignDisplayResolution>();
   const rowsByPlatform = new Map<'google_ads' | 'meta_ads', CampaignDisplayResolution[]>();
   const scopedCampaignCandidates = new Map<string, CampaignDisplayResolution[]>();

@@ -1,6 +1,9 @@
 import { env } from "../../config/env.js";
 import { query } from "../../db/pool.js";
-import { logWarning } from "../../observability/index.js";
+import {
+	emitMetaMetadataLookupSummaryLog,
+	logWarning,
+} from "../../observability/index.js";
 
 const META_GRAPH_BASE_URL = "https://graph.facebook.com";
 const META_RESOLVABLE_OBJECT_TYPES = ["campaign", "adset"] as const;
@@ -500,6 +503,8 @@ export async function resolveMetaMetadata(
 		objectIds: string[];
 	}> = [];
 	const unresolved: MetaMetadataUnresolvedObject[] = [];
+	let requestedCount = 0;
+	let invalidIdCount = 0;
 
 	for (const request of requests) {
 		const adAccountId = normalizeAdAccountId(request.adAccountId);
@@ -509,6 +514,8 @@ export async function resolveMetaMetadata(
 		}
 
 		const { validIds, invalidIds } = normalizeObjectIds(request.objectIds);
+		requestedCount += validIds.length + invalidIds.length;
+		invalidIdCount += invalidIds.length;
 
 		for (const invalidId of invalidIds) {
 			unresolved.push({
@@ -530,6 +537,11 @@ export async function resolveMetaMetadata(
 		});
 	}
 
+	const normalizedRequestCount = normalizedRequests.reduce(
+		(total, request) => total + request.objectIds.length,
+		0,
+	);
+
 	const cachePolicy = await loadMetaMetadataCachePolicy(
 		normalizedRequests,
 		now,
@@ -545,6 +557,7 @@ export async function resolveMetaMetadata(
 			objectIds: string[];
 		}
 	>();
+	let recentFailureCacheHitCount = 0;
 
 	for (const request of normalizedRequests) {
 		for (const objectId of request.objectIds) {
@@ -562,6 +575,7 @@ export async function resolveMetaMetadata(
 
 			if (recentFailure && !cachePolicy.staleResolved.has(resolutionKey)) {
 				unresolved.push(recentFailure);
+				recentFailureCacheHitCount += 1;
 				continue;
 			}
 
@@ -577,7 +591,34 @@ export async function resolveMetaMetadata(
 		}
 	}
 
+	const cacheMissCount = [...missingByAccountType.values()].reduce(
+		(total, group) => total + group.objectIds.length,
+		0,
+	);
+
 	if (missingByAccountType.size === 0) {
+		const unresolvedReasons = summarizeUnresolvedReasons(unresolved);
+
+		emitMetaMetadataLookupSummaryLog({
+			resolutionScope: "campaign_adset_metadata",
+			requestedCount,
+			normalizedRequestCount,
+			invalidIdCount,
+			cacheHitCount: resolved.length,
+			staleCacheHitCount: 0,
+			recentFailureCacheHitCount,
+			cacheMissCount,
+			apiRequestCount: 0,
+			apiLookupObjectCount: 0,
+			apiResolvedCount: 0,
+			apiNotFoundCount: 0,
+			apiFailureCount: 0,
+			missingConnectionCount: 0,
+			unresolvedCount: unresolved.length,
+			unresolvedEntityIds: unresolved.map((entry) => entry.objectId),
+			unresolvedReasons,
+		});
+
 		return { resolved, unresolved };
 	}
 
@@ -591,6 +632,10 @@ export async function resolveMetaMetadata(
 	const fetchedAt = now;
 	const apiResolved: MetaMetadataResolvedObject[] = [];
 	const apiUnresolved: MetaMetadataUnresolvedObject[] = [];
+	let apiRequestCount = 0;
+	let apiLookupObjectCount = 0;
+	let apiFailureCount = 0;
+	let staleCacheHitCount = 0;
 
 	for (const group of missingByAccountType.values()) {
 		const connection = connections.get(group.adAccountId);
@@ -623,6 +668,7 @@ export async function resolveMetaMetadata(
 
 				if (staleCached) {
 					resolved.push(staleCached);
+					staleCacheHitCount += 1;
 					continue;
 				}
 
@@ -637,6 +683,8 @@ export async function resolveMetaMetadata(
 		}
 
 		try {
+			apiRequestCount += 1;
+			apiLookupObjectCount += group.objectIds.length;
 			const lookupResult = await (options.apiLookup ?? fetchMetaObjectsByIds)({
 				adAccountId: group.adAccountId,
 				accessToken: connection?.access_token ?? "",
@@ -668,6 +716,7 @@ export async function resolveMetaMetadata(
 			}
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
+			apiFailureCount += group.objectIds.length;
 
 			for (const objectId of group.objectIds) {
 				const staleCached = cachePolicy.staleResolved.get(
@@ -676,6 +725,7 @@ export async function resolveMetaMetadata(
 
 				if (staleCached) {
 					resolved.push(staleCached);
+					staleCacheHitCount += 1;
 					continue;
 				}
 
@@ -693,8 +743,44 @@ export async function resolveMetaMetadata(
 	await upsertSuccessfulMetaMetadataCache(apiResolved, fetchedAt);
 	await markFailedMetaMetadataLookups(apiUnresolved, fetchedAt);
 
+	const combinedUnresolved = [...unresolved, ...apiUnresolved];
+	const unresolvedReasons = summarizeUnresolvedReasons(combinedUnresolved);
+
+	emitMetaMetadataLookupSummaryLog({
+		resolutionScope: "campaign_adset_metadata",
+		requestedCount,
+		normalizedRequestCount,
+		invalidIdCount,
+		cacheHitCount: resolved.length,
+		staleCacheHitCount,
+		recentFailureCacheHitCount,
+		cacheMissCount,
+		apiRequestCount,
+		apiLookupObjectCount,
+		apiResolvedCount: apiResolved.length,
+		apiNotFoundCount: apiUnresolved.filter(
+			(entry) => entry.reason === "meta_api_not_found",
+		).length,
+		apiFailureCount,
+		missingConnectionCount: apiUnresolved.filter(
+			(entry) => entry.reason === "missing_connection",
+		).length,
+		unresolvedCount: combinedUnresolved.length,
+		unresolvedEntityIds: combinedUnresolved.map((entry) => entry.objectId),
+		unresolvedReasons,
+	});
+
 	return {
 		resolved: [...resolved, ...apiResolved],
-		unresolved: [...unresolved, ...apiUnresolved],
+		unresolved: combinedUnresolved,
 	};
+}
+
+function summarizeUnresolvedReasons(
+	unresolved: MetaMetadataUnresolvedObject[],
+): Record<string, number> {
+	return unresolved.reduce<Record<string, number>>((summary, entry) => {
+		summary[entry.reason] = (summary[entry.reason] ?? 0) + 1;
+		return summary;
+	}, {});
 }

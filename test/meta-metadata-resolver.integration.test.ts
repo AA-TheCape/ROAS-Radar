@@ -419,6 +419,111 @@ test("resolveMetaMetadata reads cache first, fetches missing Meta ids, and retur
 	);
 });
 
+test("resolveMetaMetadata emits lookup summary logs without connection secrets", async () => {
+	await pool.query(
+		`
+      INSERT INTO meta_ads_metadata_cache (
+        ad_account_id,
+        object_type,
+        object_id,
+        object_name,
+        status,
+        last_fetched_at
+      )
+      VALUES (
+        '123456789',
+        'campaign',
+        '111',
+        'Cached Campaign',
+        'ACTIVE',
+        '2026-06-02T14:00:00.000Z'
+      )
+    `,
+	);
+
+	const { entries, result } = await captureStructuredLogs(() =>
+		resolveMetaMetadata(
+			[
+				{
+					adAccountId: "act_123456789",
+					objectType: "campaign",
+					objectIds: ["111", "222", "333", "bad-id"],
+				},
+			],
+			{
+				now: new Date("2026-06-02T15:00:00.000Z"),
+				apiLookup: async ({ objectIds }) =>
+					new Map(
+						objectIds
+							.filter((objectId) => objectId === "222")
+							.map((objectId) => [
+								objectId,
+								{
+									id: objectId,
+									name: "Resolved From API",
+									status: "ACTIVE",
+								},
+							]),
+					),
+			},
+		),
+	);
+
+	assert.equal(result.resolved.length, 2);
+	assert.equal(result.unresolved.length, 2);
+
+	const summary = entries.find(
+		(entry) => entry.event === "meta_metadata_lookup_summary",
+	);
+
+	assert.deepEqual(
+		{
+			severity: summary?.severity,
+			platform: summary?.platform,
+			resolutionScope: summary?.resolutionScope,
+			requestedCount: summary?.requestedCount,
+			normalizedRequestCount: summary?.normalizedRequestCount,
+			invalidIdCount: summary?.invalidIdCount,
+			cacheHitCount: summary?.cacheHitCount,
+			cacheMissCount: summary?.cacheMissCount,
+			apiRequestCount: summary?.apiRequestCount,
+			apiLookupObjectCount: summary?.apiLookupObjectCount,
+			apiResolvedCount: summary?.apiResolvedCount,
+			apiNotFoundCount: summary?.apiNotFoundCount,
+			apiFailureCount: summary?.apiFailureCount,
+			unresolvedCount: summary?.unresolvedCount,
+			unresolvedEntityIds: summary?.unresolvedEntityIds,
+			unresolvedReasons: summary?.unresolvedReasons,
+		},
+		{
+			severity: "INFO",
+			platform: "meta_ads",
+			resolutionScope: "campaign_adset_metadata",
+			requestedCount: 4,
+			normalizedRequestCount: 3,
+			invalidIdCount: 1,
+			cacheHitCount: 1,
+			cacheMissCount: 2,
+			apiRequestCount: 1,
+			apiLookupObjectCount: 2,
+			apiResolvedCount: 1,
+			apiNotFoundCount: 1,
+			apiFailureCount: 0,
+			unresolvedCount: 2,
+			unresolvedEntityIds: ["bad-id", "333"],
+			unresolvedReasons: {
+				invalid_id: 1,
+				meta_api_not_found: 1,
+			},
+		},
+	);
+
+	const serializedSummary = JSON.stringify(summary);
+	assert.equal(serializedSummary.includes("access_token"), false);
+	assert.equal(serializedSummary.includes("runtime-meta-token"), false);
+	assert.equal(serializedSummary.includes("META_ADS_METADATA_ACCESS_TOKEN"), false);
+});
+
 test("resolveMetaMetadata refreshes stale cached names after the cache TTL", async () => {
 	await pool.query(
 		`
