@@ -6,8 +6,11 @@ const originalKService = process.env.K_SERVICE;
 process.env.K_SERVICE = 'roas-radar-observability-test';
 
 const {
+  emitAttributionConfidenceBackfillProgressLog,
   emitAttributionQaPayloadFetchLog,
   emitAttributionQaSnapshotWriteLog,
+  emitAttributionRunLookupResolutionErrorLog,
+  emitAttributionRunOrderOutcomeLog,
   emitCampaignMetadataFreshnessSnapshotLog,
   emitCampaignMetadataResolutionCoverageLog,
   emitCampaignMetadataSyncJobLifecycleLog,
@@ -499,4 +502,117 @@ test('attribution QA fetch logs emit latency, source, evidence size, and failure
   assert.equal(entries[1].status, 'failure');
   assert.equal(entries[1].statusClass, '5xx');
   assert.deepEqual((entries[1].error as { message: string }).message, 'database unavailable');
+});
+
+test('attribution run order outcome logs include order and run correlation fields', async () => {
+  const { entries } = await captureStructuredLogs(() =>
+    emitAttributionRunOrderOutcomeLog({
+      attributionRunId: '2d5f5284-e17d-4b73-a428-bad6d7318244',
+      orderId: '1001',
+      outcome: 'recomputed',
+      processedOrderCount: 1,
+      recomputedOrderCount: 1,
+      skippedOrderCount: 0,
+      failedOrderCount: 0,
+      modelCount: 3,
+      creditCount: 4,
+      primaryModelKey: 'last_non_direct',
+      primaryAllocationStatus: 'credited',
+      primaryConfidenceLabel: 'high',
+      lookupResolutionErrorCount: 0,
+      lookupResolutionErrorCodes: [],
+      orderOccurredAtUtc: '2026-04-12T10:00:00.000Z'
+    })
+  );
+
+  assert.equal(entries.length, 1);
+  assert.deepEqual(entries[0], {
+    severity: 'INFO',
+    event: 'attribution_run_order_outcome',
+    message: 'attribution_run_order_outcome',
+    timestamp: entries[0]?.timestamp,
+    service: 'roas-radar-observability-test',
+    attributionRunId: '2d5f5284-e17d-4b73-a428-bad6d7318244',
+    orderId: '1001',
+    outcome: 'recomputed',
+    processedOrderCount: 1,
+    recomputedOrderCount: 1,
+    skippedOrderCount: 0,
+    failedOrderCount: 0,
+    modelCount: 3,
+    creditCount: 4,
+    primaryModelKey: 'last_non_direct',
+    primaryAllocationStatus: 'credited',
+    primaryConfidenceLabel: 'high',
+    lookupResolutionErrorCount: 0,
+    lookupResolutionErrorCodes: [],
+    orderOccurredAtUtc: '2026-04-12T10:00:00.000Z'
+  });
+});
+
+test('attribution lookup resolution errors are warning logs with traceable identifiers', async () => {
+  const { entries } = await captureStructuredLogs(() =>
+    emitAttributionRunLookupResolutionErrorLog({
+      attributionRunId: '2d5f5284-e17d-4b73-a428-bad6d7318244',
+      orderId: '1002',
+      reasonCode: 'campaign_lookup_missing',
+      orderOccurredAtUtc: new Date('2026-04-12T11:00:00.000Z')
+    })
+  );
+
+  assert.equal(entries.length, 1);
+  assert.deepEqual(entries[0], {
+    severity: 'WARNING',
+    event: 'attribution_run_lookup_resolution_error',
+    message: 'attribution_run_lookup_resolution_error',
+    timestamp: entries[0]?.timestamp,
+    service: 'roas-radar-observability-test',
+    attributionRunId: '2d5f5284-e17d-4b73-a428-bad6d7318244',
+    orderId: '1002',
+    reasonCode: 'campaign_lookup_missing',
+    orderOccurredAtUtc: '2026-04-12T11:00:00.000Z',
+    alertable: true
+  });
+});
+
+test('confidence backfill progress logs expose skipped and recomputed ratios', async () => {
+  const { entries } = await captureStructuredLogs(() =>
+    emitAttributionConfidenceBackfillProgressLog({
+      workerId: 'confidence-worker-1',
+      dryRun: false,
+      stage: 'batch_processed',
+      scannedOrders: 10,
+      updatedOrders: 4,
+      updatedResults: 3,
+      skippedOrders: 6,
+      fallbackRows: 2,
+      failedBatches: 0,
+      batchesProcessed: 1,
+      lastOrderRowId: '42'
+    })
+  );
+
+  assert.equal(entries.length, 1);
+  assert.deepEqual(entries[0], {
+    severity: 'INFO',
+    event: 'order_attribution_confidence_backfill_progress',
+    message: 'order_attribution_confidence_backfill_progress',
+    timestamp: entries[0]?.timestamp,
+    service: 'roas-radar-observability-test',
+    workerId: 'confidence-worker-1',
+    dryRun: false,
+    stage: 'batch_processed',
+    scannedOrders: 10,
+    updatedOrders: 4,
+    updatedResults: 3,
+    skippedOrders: 6,
+    recomputedOrders: 4,
+    fallbackRows: 2,
+    lookupResolutionErrorCount: 2,
+    lookupResolutionErrorRate: 0.2,
+    skippedVsRecomputedRatio: 1.5,
+    failedBatches: 0,
+    batchesProcessed: 1,
+    lastOrderRowId: '42'
+  });
 });

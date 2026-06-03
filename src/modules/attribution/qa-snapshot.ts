@@ -432,7 +432,7 @@ export function buildAttributionQaSnapshot(input: {
       status: input.journey.winner ? 'success' : 'no_match',
       attribution_tier: input.journey.tier,
       attribution_reason: input.journey.attributionReason,
-      match_source: audit.source as AttributionQaMatchSource,
+      match_source: resolveMatchSource(input.journey.winner?.ingestionSource, input.journey.attributionReason),
       confidence_score: input.journey.confidenceScore,
       confidence_label: confidenceLabel(input.journey.confidenceScore),
       winner_touchpoint_id: input.journey.winner

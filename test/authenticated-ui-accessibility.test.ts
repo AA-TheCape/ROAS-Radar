@@ -424,6 +424,8 @@ test("authenticated dashboard, order details, and settings pass automated access
               revenueCredit: 195,
               creditWeight: 1,
               attributionReason: 'last-touch',
+              matchSource: 'landing_session_id',
+              confidenceLabel: 'high',
               clickIdType: 'gclid',
               clickIdValue: 'gclid_123'
             }

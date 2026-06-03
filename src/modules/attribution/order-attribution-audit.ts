@@ -16,7 +16,7 @@ export type OrderAttributionAuditRecord = {
   reason: string | null;
 };
 
-export type AttributionConfidenceLabel = 'high' | 'medium' | 'low';
+export type AttributionConfidenceLabel = 'high' | 'medium' | 'low' | 'none';
 
 function mapDeterministicSource(source: DeterministicIngestionSource): string {
   switch (source) {
@@ -27,7 +27,7 @@ function mapDeterministicSource(source: DeterministicIngestionSource): string {
     case 'cart_token':
       return 'cart_token';
     case 'customer_identity':
-      return 'stitched_identity_journey';
+      return 'customer_identity';
   }
 }
 
@@ -58,7 +58,7 @@ export function buildOrderAttributionAuditRecord(
   if (journey.tier === 'deterministic_shopify_hint') {
     return {
       tier: 'deterministic_shopify_hint',
-      source: 'shopify_marketing_hint',
+      source: 'shopify_hint_fallback',
       matchedAt,
       reason: journey.attributionReason
     };
@@ -86,21 +86,40 @@ export function buildOrderAttributionAuditRecord(
 }
 
 export function buildAttributionMatchSource(
-  journey: Pick<ResolvedJourney, 'attributionReason'>
+  journey: Pick<ResolvedJourney, 'tier' | 'winner'>
 ): string {
-  return journey.attributionReason;
+  if (journey.tier === 'unattributed' || !journey.winner) {
+    return 'unattributed';
+  }
+
+  if (journey.tier === 'deterministic_shopify_hint') {
+    return 'shopify_hint_fallback';
+  }
+
+  if (journey.tier === 'ga4_fallback') {
+    return 'ga4_fallback';
+  }
+
+  return mapAttributionSource(journey.winner.ingestionSource);
 }
 
 export function buildAttributionConfidenceLabel(
   confidenceScore: number
 ): AttributionConfidenceLabel {
-  if (confidenceScore >= 0.9) {
-    return 'high';
+  switch (confidenceScore.toFixed(2)) {
+    case '1.00':
+    case '0.90':
+      return 'high';
+    case '0.60':
+      return 'medium';
+    case '0.55':
+    case '0.40':
+    case '0.35':
+    case '0.25':
+      return 'low';
+    case '0.00':
+      return 'none';
+    default:
+      throw new Error(`Unsupported attribution confidence score for v1 contract: ${confidenceScore.toFixed(2)}`);
   }
-
-  if (confidenceScore >= 0.5) {
-    return 'medium';
-  }
-
-  return 'low';
 }

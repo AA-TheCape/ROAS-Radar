@@ -540,8 +540,10 @@ export function createReportingDashboardProps(
           attributionTierDescription:
             'Resolved from durable ROAS Radar first-party evidence such as a landing session, checkout token, cart token, or stitched identity path.',
           attributionSource: 'landing_session_id',
+          matchingMethod: 'matched_by_landing_session',
           attributionMatchedAt: '2026-04-20T18:00:30.000Z',
           confidenceScore: 1,
+          lastAttributionRunAt: '2026-04-20T18:00:30.000Z',
           sessionId: 'sess_123'
         },
         {
@@ -558,8 +560,10 @@ export function createReportingDashboardProps(
           attributionTierLabel: 'Deterministic Shopify hint',
           attributionTierDescription: 'Recovered synthetically from Shopify marketing hints after first-party resolution failed.',
           attributionSource: 'shopify_marketing_hint',
+          matchingMethod: 'shopify_hint_derived',
           attributionMatchedAt: '2026-04-19T18:00:15.000Z',
           confidenceScore: 0.55,
+          lastAttributionRunAt: '2026-04-19T18:00:15.000Z',
           sessionId: null
         },
         {
@@ -577,8 +581,10 @@ export function createReportingDashboardProps(
           attributionTierDescription:
             'No eligible first-party, Shopify hint, or GA4 fallback match qualified, or the required timing data could not be normalized.',
           attributionSource: 'unattributed',
+          matchingMethod: 'unattributed',
           attributionMatchedAt: null,
           confidenceScore: null,
+          lastAttributionRunAt: null,
           sessionId: null
         }
       ],
@@ -727,9 +733,11 @@ export function createOrderDetailsProps(
           attributionTierDescription:
             'Resolved from durable ROAS Radar first-party evidence such as a landing session, checkout token, cart token, or stitched identity path.',
           attributionSource: 'landing_session_id',
+          matchingMethod: 'matched_by_landing_session',
           attributionMatchedAt: '2026-04-20T18:00:30.000Z',
           attributionReason: 'matched_by_landing_session',
           confidenceScore: 1,
+          lastAttributionRunAt: '2026-04-20T18:00:30.000Z',
           sessionId: 'sess_123',
           attributedSource: 'google',
           attributedMedium: 'cpc',
@@ -806,6 +814,8 @@ export function createOrderDetailsProps(
             revenueCredit: 195,
             isPrimary: true,
             attributionReason: 'matched checkout token',
+            matchSource: 'checkout_token',
+            confidenceLabel: 'high',
             createdAt: '2026-04-20T18:31:00.000Z',
             modelVersion: 2
           },
@@ -825,6 +835,8 @@ export function createOrderDetailsProps(
             revenueCredit: 97.5,
             isPrimary: false,
             attributionReason: 'modeled credit',
+            matchSource: 'landing_session_id',
+            confidenceLabel: 'high',
             createdAt: '2026-04-20T18:31:00.000Z',
             modelVersion: 2
           }

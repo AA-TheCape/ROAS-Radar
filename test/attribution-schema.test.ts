@@ -568,6 +568,35 @@ test('attribution v1 order, touchpoint, and hint schemas normalize canonical pre
   assert.equal(touchpoint.touchpoint_occurred_at_utc, '2026-04-30T11:00:00.000Z');
 });
 
+test('attribution hint input rejects confidence scores outside 0..1', () => {
+  const baseHint = {
+    hint_source_system: 'shopify_order',
+    hint_type: 'landing_site',
+    source: 'Google',
+    medium: 'CPC',
+    campaign: 'Brand',
+    content: null,
+    term: null,
+    click_id_type: 'gclid',
+    click_id_value: 'ABC123',
+    hint_confidence_label: 'medium',
+    raw_hint_keys: ['utm_source', 'gclid']
+  };
+
+  assert.throws(() =>
+    normalizeAttributionHintInputV1({
+      ...baseHint,
+      hint_confidence_score: '1.01'
+    })
+  );
+  assert.throws(() =>
+    normalizeAttributionHintInputV1({
+      ...baseHint,
+      hint_confidence_score: '-0.01'
+    })
+  );
+});
+
 test('attribution v1 canonical schemas normalize omitted nullable fields to explicit nulls', () => {
   const order = normalizeAttributionOrderInputV1({
     schema_version: 1,

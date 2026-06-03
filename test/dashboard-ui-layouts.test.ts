@@ -167,6 +167,8 @@ test("reporting dashboard search and order drill-in stay wired for high-traffic 
     assert.match(mounted.container.textContent ?? '', /Order attribution rows/);
     assert.match(mounted.container.textContent ?? '', /Deterministic first-party/);
     assert.match(mounted.container.textContent ?? '', /Unattributed/);
+    assert.match(mounted.container.textContent ?? '', /Pending/);
+    assert.match(mounted.container.textContent ?? '', /Awaiting attribution run/);
 
 		const orderButton = mounted.container.querySelector(
 			'button[aria-label="Open order details for Shopify order 1105"]',
@@ -682,6 +684,30 @@ test("order details empty state stays explicit when no drill-in selection is act
 
 	try {
 		assert.match(mounted.container.textContent ?? "", /No order selected\./);
+	} finally {
+		mounted.cleanup();
+	}
+});
+
+test("order details renders attribution confidence lookup metadata", async () => {
+	const { default: OrderDetailsView } = await loadDashboardModule<
+		typeof import("../dashboard/src/components/OrderDetailsView")
+	>("dashboard/src/components/OrderDetailsView.tsx");
+
+	const mounted = await mountUi(
+		h(OrderDetailsView, createOrderDetailsProps()),
+		{ width: 1280, height: 900 },
+	);
+
+	try {
+		const text = mounted.container.textContent ?? "";
+		assert.match(text, /Attribution source/);
+		assert.match(text, /landing_session_id/);
+		assert.match(text, /Matching method/);
+		assert.match(text, /matched_by_landing_session/);
+		assert.match(text, /Confidence score/);
+		assert.match(text, /Last attribution run/);
+		assert.match(text, /Apr 20, 11:00 AM/);
 	} finally {
 		mounted.cleanup();
 	}

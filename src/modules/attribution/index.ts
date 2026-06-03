@@ -18,6 +18,14 @@ import {
   executeAttributionModels,
   type AttributionCredit
 } from './engine.js';
+import { resolveActiveAttributionLookupPair } from './attribution-lookups.js';
+import {
+  attributionConfidenceFingerprintChanged,
+  boundConfidenceScore,
+  buildAttributionConfidenceMetadata,
+  type AttributionConfidenceFingerprint,
+  type PersistedAttributionConfidenceState
+} from './confidence-scoring.js';
 import {
   buildAttributionConfidenceLabel,
   buildAttributionMatchSource,
@@ -114,6 +122,19 @@ type SyntheticAttributionInput = {
   attributionReason: string;
   confidenceScore?: number | null;
 };
+
+type PersistedAttributionTouchpoint = Pick<
+  AttributionCredit,
+  | 'sessionId'
+  | 'source'
+  | 'medium'
+  | 'campaign'
+  | 'content'
+  | 'term'
+  | 'clickIdType'
+  | 'clickIdValue'
+  | 'attributionReason'
+>;
 
 type ProcessAttributionQueueOptions = {
   workerId: string;
@@ -467,18 +488,7 @@ function selectPrimaryCredit(credits: AttributionCredit[]): AttributionCredit | 
 function selectPersistedPrimaryTouchpoint(
   outputs: Record<(typeof ATTRIBUTION_MODELS)[number], AttributionCredit[]>,
   journey: ResolvedJourney
-): Pick<
-  AttributionCredit,
-  | 'sessionId'
-  | 'source'
-  | 'medium'
-  | 'campaign'
-  | 'content'
-  | 'term'
-  | 'clickIdType'
-  | 'clickIdValue'
-  | 'attributionReason'
-> | null {
+): PersistedAttributionTouchpoint | null {
   const persistedCredit =
     selectPrimaryCredit(outputs.last_non_direct) ??
     selectPrimaryCredit(outputs.hinted_fallback_only);
@@ -504,6 +514,111 @@ function selectPersistedPrimaryTouchpoint(
   };
 }
 
+async function fetchPersistedAttributionConfidenceState(
+  client: PoolClient,
+  shopifyOrderId: string
+): Promise<PersistedAttributionConfidenceState | null> {
+  const result = await client.query<{
+    session_id: string | null;
+    attributed_source: string | null;
+    attributed_medium: string | null;
+    attributed_campaign: string | null;
+    attributed_content: string | null;
+    attributed_term: string | null;
+    attributed_click_id_type: string | null;
+    attributed_click_id_value: string | null;
+    confidence_score: string;
+    attribution_reason: string;
+    model_version: number;
+    match_source: string;
+    attribution_source_code: string | null;
+    matching_method_code: string | null;
+    confidence_contract_version: string | null;
+    last_attribution_run_at: Date | null;
+  }>(
+    `
+      SELECT
+        results.session_id::text AS session_id,
+        results.attributed_source,
+        results.attributed_medium,
+        results.attributed_campaign,
+        results.attributed_content,
+        results.attributed_term,
+        results.attributed_click_id_type,
+        results.attributed_click_id_value,
+        results.confidence_score::text,
+        results.attribution_reason,
+        results.model_version,
+        results.match_source,
+        sources.code AS attribution_source_code,
+        methods.code AS matching_method_code,
+        results.confidence_contract_version,
+        results.last_attribution_run_at
+      FROM attribution_results results
+      LEFT JOIN attribution_sources sources
+        ON sources.id = results.attribution_source_id
+      LEFT JOIN matching_methods methods
+        ON methods.id = results.matching_method_id
+      WHERE results.shopify_order_id = $1
+      LIMIT 1
+    `,
+    [shopifyOrderId]
+  );
+
+  const row = result.rows[0];
+
+  if (!row) {
+    return null;
+  }
+
+  return {
+    sessionId: row.session_id,
+    attributedSource: row.attributed_source,
+    attributedMedium: row.attributed_medium,
+    attributedCampaign: row.attributed_campaign,
+    attributedContent: row.attributed_content,
+    attributedTerm: row.attributed_term,
+    attributedClickIdType: row.attributed_click_id_type,
+    attributedClickIdValue: row.attributed_click_id_value,
+    confidenceScore: boundConfidenceScore(Number(row.confidence_score)),
+    attributionReason: row.attribution_reason,
+    modelVersion: row.model_version,
+    matchSource: row.match_source,
+    attributionSourceCode: row.attribution_source_code ?? 'unattributed',
+    matchingMethodCode: row.matching_method_code ?? 'unknown',
+    confidenceContractVersion: row.confidence_contract_version ?? 'v1',
+    lastAttributionRunAt: row.last_attribution_run_at
+  };
+}
+
+function buildAttributionConfidenceFingerprint(input: {
+  primaryCredit: PersistedAttributionTouchpoint | null;
+  journey: ResolvedJourney;
+  confidenceScore: number;
+  matchSource: string;
+  attributionSourceCode: string;
+}): AttributionConfidenceFingerprint {
+  const attributionReason = input.primaryCredit?.attributionReason ?? input.journey.attributionReason;
+
+  return {
+    sessionId: input.primaryCredit?.sessionId ?? null,
+    attributedSource: normalizeNullableString(input.primaryCredit?.source),
+    attributedMedium: normalizeNullableString(input.primaryCredit?.medium),
+    attributedCampaign: normalizeNullableString(input.primaryCredit?.campaign),
+    attributedContent: normalizeNullableString(input.primaryCredit?.content),
+    attributedTerm: normalizeNullableString(input.primaryCredit?.term),
+    attributedClickIdType: normalizeNullableString(input.primaryCredit?.clickIdType),
+    attributedClickIdValue: normalizeNullableString(input.primaryCredit?.clickIdValue),
+    confidenceScore: input.confidenceScore,
+    attributionReason,
+    modelVersion: ATTRIBUTION_MODEL_VERSION,
+    matchSource: input.matchSource,
+    attributionSourceCode: input.attributionSourceCode,
+    matchingMethodCode: attributionReason,
+    confidenceContractVersion: 'v1'
+  };
+}
+
 async function persistAttribution(
   client: PoolClient,
   order: OrderRow,
@@ -521,10 +636,34 @@ async function persistAttribution(
 
   const primaryCredit = selectPersistedPrimaryTouchpoint(outputs, journey);
 
+  const persistedConfidenceState = await fetchPersistedAttributionConfidenceState(client, order.shopify_order_id);
   const matchedAt = new Date();
   const orderAttributionAudit = buildOrderAttributionAuditRecord(journey, matchedAt);
+  const proposedConfidenceMetadata = buildAttributionConfidenceMetadata({
+    journey,
+    attributionSourceCode: orderAttributionAudit.source,
+    lastAttributionRunAt: matchedAt
+  });
   const matchSource = buildAttributionMatchSource(journey);
-  const confidenceLabel = buildAttributionConfidenceLabel(journey.confidenceScore);
+  const confidenceFingerprint = buildAttributionConfidenceFingerprint({
+    primaryCredit,
+    journey,
+    confidenceScore: proposedConfidenceMetadata.confidenceScore,
+    matchSource,
+    attributionSourceCode: proposedConfidenceMetadata.attributionSourceCode
+  });
+  const attributionChanged = attributionConfidenceFingerprintChanged(persistedConfidenceState, confidenceFingerprint);
+  const confidenceMetadata =
+    attributionChanged || !persistedConfidenceState?.lastAttributionRunAt
+      ? proposedConfidenceMetadata
+      : {
+          confidenceScore: persistedConfidenceState.confidenceScore,
+          attributionSourceCode: persistedConfidenceState.attributionSourceCode,
+          matchingMethodCode: persistedConfidenceState.matchingMethodCode,
+          confidenceContractVersion: persistedConfidenceState.confidenceContractVersion,
+          lastAttributionRunAt: persistedConfidenceState.lastAttributionRunAt
+        };
+  const confidenceLabel = buildAttributionConfidenceLabel(confidenceMetadata.confidenceScore);
   const current = await fetchCurrentAttribution(client, order.shopify_order_id);
   const shouldApply = shouldApplyAttributionUpdate({
     current: current
@@ -565,11 +704,15 @@ async function persistAttribution(
     attributionReason: journey.attributionReason,
     orderOccurredAtUtc: journey.orderOccurredAtUtc?.toISOString() ?? null,
     normalizationFailures: journey.normalizationFailures,
-    confidenceScore: journey.confidenceScore,
+    confidenceScore: confidenceMetadata.confidenceScore,
     winner: journey.winner ? serializeResolvedTouchpoint(journey.winner) : null,
     timeline: journey.touchpoints.map(serializeResolvedTouchpoint),
     qaSnapshot
   };
+  const lookupPair = await resolveActiveAttributionLookupPair(client, {
+    attributionSourceCode: confidenceMetadata.attributionSourceCode,
+    matchingMethodCode: confidenceMetadata.matchingMethodCode
+  });
 
   await client.query('DELETE FROM attribution_order_credits WHERE shopify_order_id = $1', [order.shopify_order_id]);
 
@@ -598,7 +741,8 @@ async function persistAttribution(
             attribution_reason,
             model_version,
             match_source,
-            confidence_label
+            confidence_label,
+            confidence_contract_version
           )
           VALUES (
             $1,
@@ -619,7 +763,8 @@ async function persistAttribution(
             $16,
             $17,
             $18,
-            $19
+            $19,
+            $20
           )
         `,
         [
@@ -641,7 +786,8 @@ async function persistAttribution(
           credit.attributionReason,
           ATTRIBUTION_MODEL_VERSION,
           matchSource,
-          confidenceLabel
+          confidenceLabel,
+          confidenceMetadata.confidenceContractVersion
         ]
       );
     }
@@ -666,7 +812,11 @@ async function persistAttribution(
         reprocess_version,
         model_version,
         match_source,
-        confidence_label
+        confidence_label,
+        attribution_source_id,
+        matching_method_id,
+        confidence_contract_version,
+        last_attribution_run_at
       )
       VALUES (
         $1,
@@ -685,7 +835,11 @@ async function persistAttribution(
         1,
         $13,
         $14,
-        $15
+        $15,
+        $16,
+        $17,
+        $18,
+        $12
       )
       ON CONFLICT (shopify_order_id)
       DO UPDATE SET
@@ -703,7 +857,11 @@ async function persistAttribution(
         attributed_at = EXCLUDED.attributed_at,
         model_version = EXCLUDED.model_version,
         match_source = EXCLUDED.match_source,
-        confidence_label = EXCLUDED.confidence_label
+        confidence_label = EXCLUDED.confidence_label,
+        attribution_source_id = EXCLUDED.attribution_source_id,
+        matching_method_id = EXCLUDED.matching_method_id,
+        confidence_contract_version = EXCLUDED.confidence_contract_version,
+        last_attribution_run_at = EXCLUDED.last_attribution_run_at
     `,
     [
       order.shopify_order_id,
@@ -715,12 +873,15 @@ async function persistAttribution(
       normalizeNullableString(primaryCredit?.term),
       normalizeNullableString(primaryCredit?.clickIdType),
       normalizeNullableString(primaryCredit?.clickIdValue),
-      journey.confidenceScore,
+      confidenceMetadata.confidenceScore,
       primaryCredit?.attributionReason ?? journey.attributionReason,
-      matchedAt,
+      confidenceMetadata.lastAttributionRunAt,
       ATTRIBUTION_MODEL_VERSION,
       matchSource,
-      confidenceLabel
+      confidenceLabel,
+      lookupPair.attributionSourceId,
+      lookupPair.matchingMethodId,
+      confidenceMetadata.confidenceContractVersion
     ]
   );
 
@@ -733,7 +894,12 @@ async function persistAttribution(
           attribution_source = $3,
           attribution_matched_at = $4,
           attribution_reason = $5,
-          attribution_snapshot = $6::jsonb,
+          attribution_source_id = $9,
+          matching_method_id = $10,
+          attribution_confidence_score = $6,
+          attribution_confidence_contract_version = $8,
+          last_attribution_run_at = $4,
+          attribution_snapshot = $7::jsonb,
           attribution_snapshot_updated_at = $4
         WHERE shopify_order_id = $1
       `,
@@ -741,9 +907,13 @@ async function persistAttribution(
         order.shopify_order_id,
         orderAttributionAudit.tier,
         orderAttributionAudit.source,
-        orderAttributionAudit.matchedAt,
+        confidenceMetadata.lastAttributionRunAt,
         orderAttributionAudit.reason,
-        JSON.stringify(attributionSnapshot)
+        confidenceMetadata.confidenceScore,
+        JSON.stringify(attributionSnapshot),
+        confidenceMetadata.confidenceContractVersion,
+        lookupPair.attributionSourceId,
+        lookupPair.matchingMethodId
       ]
     );
     emitAttributionQaSnapshotWriteLog({
@@ -772,7 +942,7 @@ async function persistAttribution(
     orderOccurredAtUtc: journey.orderOccurredAtUtc,
     tier: journey.tier,
     attributionReason: journey.attributionReason,
-    confidenceScore: journey.confidenceScore,
+    confidenceScore: confidenceMetadata.confidenceScore,
     pipeline: 'realtime_queue',
     touchpoints: journey.touchpoints,
     winner: journey.winner,
@@ -890,7 +1060,7 @@ export async function applySyntheticAttributionForOrder(
       clickIdType: normalizedClickIdType,
       clickIdValue: normalizedClickIdValue,
       attributionReason: input.attributionReason,
-      ingestionSource: 'customer_identity',
+      ingestionSource: input.matchSource === 'ga4_fallback' ? 'ga4_fallback' : 'shopify_marketing_hint',
       isDirect: isDirectTouchpoint({
         source: normalizedSource,
         medium: normalizedMedium,
@@ -902,10 +1072,33 @@ export async function applySyntheticAttributionForOrder(
       isForced: true
     };
 
-    const confidenceScore = input.confidenceScore ?? 0.35;
+    const syntheticTier = input.matchSource === 'ga4_fallback' ? 'ga4_fallback' : 'deterministic_shopify_hint';
+    const confidenceScore =
+      input.confidenceScore ??
+      (input.matchSource === 'ga4_fallback' ? (normalizedClickIdValue ? 0.35 : 0.25) : normalizedClickIdValue ? 0.55 : 0.4);
+    const syntheticCandidate = {
+      sourceClass: syntheticTier,
+      sourceKey: `synthetic:${shopifyOrderId}:${orderOccurredAt.toISOString()}`,
+      sessionId: null,
+      sourceTouchEventId: null,
+      ingestionSource: syntheticTier === 'ga4_fallback' ? 'ga4_fallback' : 'shopify_marketing_hint',
+      occurredAtUtc: touchpoint.occurredAt,
+      source: touchpoint.source,
+      medium: touchpoint.medium,
+      campaign: touchpoint.campaign,
+      content: touchpoint.content,
+      term: touchpoint.term,
+      clickIdType: touchpoint.clickIdType,
+      clickIdValue: touchpoint.clickIdValue,
+      attributionReason: touchpoint.attributionReason,
+      confidenceScore,
+      isDirect: touchpoint.isDirect,
+      isSynthetic: true
+    } as const;
+
     await persistAttribution(db, order, {
       journey: {
-        tier: 'deterministic_first_party',
+        tier: syntheticTier,
         touchpoints: [touchpoint],
         winner: touchpoint,
         confidenceScore,
@@ -920,29 +1113,9 @@ export async function applySyntheticAttributionForOrder(
           : order.created_at_shopify
             ? 'created_at_shopify'
             : 'ingested_at',
-        deterministicFirstParty: [
-          {
-            sourceClass: 'deterministic_first_party',
-            sourceKey: `synthetic:${shopifyOrderId}:${orderOccurredAt.toISOString()}`,
-            sessionId: null,
-            sourceTouchEventId: null,
-            ingestionSource: 'customer_identity',
-            occurredAtUtc: touchpoint.occurredAt,
-            source: touchpoint.source,
-            medium: touchpoint.medium,
-            campaign: touchpoint.campaign,
-            content: touchpoint.content,
-            term: touchpoint.term,
-            clickIdType: touchpoint.clickIdType,
-            clickIdValue: touchpoint.clickIdValue,
-            attributionReason: touchpoint.attributionReason,
-            confidenceScore,
-            isDirect: touchpoint.isDirect,
-            isSynthetic: true
-          }
-        ],
-        shopifyHint: [],
-        ga4Fallback: [],
+        deterministicFirstParty: [],
+        shopifyHint: syntheticTier === 'deterministic_shopify_hint' ? [syntheticCandidate] : [],
+        ga4Fallback: syntheticTier === 'ga4_fallback' ? [syntheticCandidate] : [],
         normalizationFailures: []
       }
     });

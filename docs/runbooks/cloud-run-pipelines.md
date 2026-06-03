@@ -47,6 +47,33 @@ For staged releases, prefer:
 
 Do not sign off staging or continue to production unless the smoke evidence includes the authenticated Meta order value response contract check.
 
+## Confidence Scoring Rollout
+
+Use this sequence for the confidence-scoring schema and service release. The migration is additive for deployed services: old revisions continue to read the legacy attribution columns and snapshots while the new revision writes and exposes `confidenceScore`, `attributionSource`, `matchingMethod`, and `lastAttributionRunAt`.
+
+1. Confirm `npm run db:migrate:check`, `npm run test:attribution`, and `npm --prefix dashboard run build` pass against the release image source.
+2. Expand staging through `RUN_STAGING_ROLLBACK_DRILL=true sh infra/cloud-run/promote.sh staging`. Migration `0046_add_order_attribution_confidence_metadata.sql` must remain fast: nullable columns, defaults for future writes, and `NOT VALID` constraints only.
+3. Keep compatibility mode during transition by leaving the previous API, worker, and dashboard revisions available in the deploy metadata. Do not run rollback SQL during this phase; the schema expansion is intentionally backward-compatible.
+4. Run the historical metadata backfill outside the migration transaction:
+   `npm run attribution:backfill-confidence -- --dry-run --batch-size 1000`
+   then `npm run attribution:backfill-confidence -- --batch-size 1000`. Resume with `--resume-after-order-row-id 123456` if interrupted.
+5. Create the large indexes with `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/operations/0046_add_order_attribution_confidence_indexes.sql`. Do not run this file through `roas-radar-migrate`; it uses `CREATE INDEX CONCURRENTLY`.
+6. Validate staging smoke output includes `/api/reporting/orders` and confirms bounded `confidenceScore` values plus `attributionSource`, `matchingMethod`, and `lastAttributionRunAt` keys when rows are present.
+7. Validate the dashboard order table renders and can sort by Confidence for the same bounded date window.
+8. After the backfill report is complete and zero incomplete rows remain, run `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/operations/0046_contract_order_attribution_confidence_metadata.sql` to validate constraints and apply `NOT NULL`.
+9. Promote production with `RUN_STAGING_ROLLBACK_DRILL=true sh infra/cloud-run/promote.sh production` and repeat steps 4 through 8 against production before closing the compatibility window.
+10. For 24 hours after production contract, monitor `roas_order_attribution_confidence_backfill_progress`, API latency, and attribution worker backlog.
+
+Rollback path:
+
+1. If the confidence API/UI check fails but `/readyz` is healthy, route services back to the previous revisions with `sh infra/cloud-run/rollback.sh <environment> <deploy-metadata-file> previous`.
+2. Re-run `sh infra/cloud-run/smoke-test.sh <environment>` after rollback. The smoke helper remains valid because previous revisions are compatible with the expanded schema.
+3. Pause only the order-attribution materialization scheduler if confidence writes are producing bad metadata while other services remain healthy: `gcloud scheduler jobs pause <order-attribution-materialization-scheduler> --project=<project> --location=<region>`.
+4. Before contract, prefer service rollback and leave the expanded schema in place. The expanded columns and `NOT VALID` constraints are backward-compatible.
+5. If the backfill fails, stop the command and resume from the last reported `lastOrderRowId`; the job is idempotent.
+6. If a concurrent index build is canceled, drop only the invalid index with `DROP INDEX CONCURRENTLY IF EXISTS <index_name>` and rerun `db/operations/0046_add_order_attribution_confidence_indexes.sql`.
+7. Use `db/rollbacks/0046_add_order_attribution_confidence_metadata.down.sql` only after traffic is pinned to a revision that does not reference the new columns and after confirming no new revision, worker, or job uses confidence metadata. After `db/operations/0046_contract_order_attribution_confidence_metadata.sql` has run, prefer a forward fix unless a maintenance rollback is explicitly approved.
+
 ## Meta Scheduler Controls
 
 - `META_ADS_ORDER_VALUE_SCHEDULER_PAUSED` controls whether deploys leave the hourly Meta order-value scheduler active or paused.

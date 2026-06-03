@@ -371,6 +371,8 @@ async function renderSnapshots() {
               revenueCredit: 195,
               isPrimary: true,
               attributionReason: 'matched checkout token',
+              matchSource: 'checkout_token',
+              confidenceLabel: 'high',
               createdAt: '2026-04-20T18:31:00.000Z',
               modelVersion: 2
             }

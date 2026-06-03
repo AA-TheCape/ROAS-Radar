@@ -1,4 +1,5 @@
 import type { AttributionTouchpoint } from './engine.js';
+import { boundConfidenceScore, confidenceScoreForWinner } from './confidence-scoring.js';
 import {
   attributionEvidenceSourcePrecedence,
   attributionOriginPrecedence,
@@ -217,28 +218,6 @@ export function selectLastNonDirectWinner(
   return selectionPool.slice().sort(compareWinnerPriority)[0] ?? null;
 }
 
-export function confidenceScoreForWinner(
-  winner: Pick<ResolvedAttributionTouchpoint, 'ingestionSource'> | null
-): number {
-  if (!winner) {
-    return 0;
-  }
-
-  switch (winner.ingestionSource) {
-    case 'landing_session_id':
-    case 'checkout_token':
-      return 1;
-    case 'cart_token':
-      return 0.9;
-    case 'customer_identity':
-      return 0.6;
-    case 'shopify_marketing_hint':
-      return 0.55;
-    case 'ga4_fallback':
-      return 0.35;
-  }
-}
-
 function mapCandidateToResolvedTouchpoint(candidate: TieredAttributionCandidate): ResolvedAttributionTouchpoint {
   return {
     sessionId: candidate.sessionId,
@@ -386,7 +365,7 @@ export function resolveAttributionTier(input: TieredAttributionResolverInput): R
       tier: 'deterministic_shopify_hint',
       touchpoints: shopifyHintTouchpoints.map(mapCandidateToResolvedTouchpoint),
       winner: shopifyHintWinner,
-      confidenceScore: shopifyHintWinnerCandidate?.confidenceScore ?? confidenceScoreForWinner(shopifyHintWinner),
+      confidenceScore: confidenceScoreForWinner(shopifyHintWinner, shopifyHintWinnerCandidate?.confidenceScore),
       attributionReason: shopifyHintWinner.attributionReason,
       orderOccurredAtUtc,
       normalizationFailures: input.normalizationFailures ?? []
@@ -405,7 +384,7 @@ export function resolveAttributionTier(input: TieredAttributionResolverInput): R
       tier: 'ga4_fallback',
       touchpoints: ga4FallbackTouchpoints.map(mapCandidateToResolvedTouchpoint),
       winner: ga4FallbackWinner,
-      confidenceScore: ga4FallbackWinnerCandidate?.confidenceScore ?? confidenceScoreForWinner(ga4FallbackWinner),
+      confidenceScore: confidenceScoreForWinner(ga4FallbackWinner, ga4FallbackWinnerCandidate?.confidenceScore),
       attributionReason: ga4FallbackWinner.attributionReason,
       orderOccurredAtUtc,
       normalizationFailures: input.normalizationFailures ?? []
@@ -422,3 +401,5 @@ export function resolveAttributionTier(input: TieredAttributionResolverInput): R
     normalizationFailures: input.normalizationFailures ?? []
   };
 }
+
+export { boundConfidenceScore, confidenceScoreForWinner };

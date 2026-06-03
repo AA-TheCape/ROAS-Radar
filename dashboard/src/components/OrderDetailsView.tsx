@@ -6,7 +6,12 @@ import {
   formatAttributionTierLabel,
   getAttributionTierDescription
 } from '../lib/attributionTier';
-import { formatCurrency, formatDateTimeLabel, formatNumber } from '../lib/format';
+import { getConfidenceDisplay } from '../lib/confidence';
+import {
+	formatCurrency,
+	formatDateTimeLabel,
+	formatNumber,
+} from '../lib/format';
 import { AttributionTierBadge } from './AttributionTierBadge';
 import {
 	type SortState,
@@ -98,7 +103,7 @@ function formatContractValue(value: string | null | undefined): string {
 
 function readSnapshotWinner(
 	snapshot: unknown,
-): { matchSource?: string; confidenceLabel?: string } | null {
+): { matchSource?: string } | null {
 	if (!snapshot || typeof snapshot !== "object") {
 		return null;
 	}
@@ -108,7 +113,7 @@ function readSnapshotWinner(
 		return null;
 	}
 
-	return winner as { matchSource?: string; confidenceLabel?: string };
+	return winner as { matchSource?: string };
 }
 
 function MetricCard({
@@ -168,6 +173,7 @@ export default function OrderDetailsView({
 	const lineItems = data?.lineItems ?? [];
 	const attributionCredits = data?.attributionCredits ?? [];
 	const snapshotWinner = readSnapshotWinner(order?.attributionSnapshot);
+	const confidenceDisplay = getConfidenceDisplay(order);
 	const [lineItemSearch, setLineItemSearch] = useState("");
 	const [lineItemSort, setLineItemSort] = useState<
 		SortState<"title" | "sku" | "quantity" | "price" | "vendor">
@@ -362,12 +368,24 @@ export default function OrderDetailsView({
                   <dd>{formatOptionalValue(order?.attributionSource)}</dd>
                 </div>
                 <div>
+                  <dt>Matching method</dt>
+                  <dd>{formatContractValue(order?.matchingMethod)}</dd>
+                </div>
+                <div>
                   <dt>Matched at</dt>
                   <dd>{formatOptionalDateTime(order?.attributionMatchedAt, reportingTimezone)}</dd>
                 </div>
                 <div>
                   <dt>Confidence score</dt>
-                  <dd>{formatOptionalValue(order?.confidenceScore)}</dd>
+                  <dd>{confidenceDisplay.label}</dd>
+                </div>
+                <div>
+                  <dt>Confidence state</dt>
+                  <dd>{confidenceDisplay.detail}</dd>
+                </div>
+                <div>
+                  <dt>Last attribution run</dt>
+                  <dd>{formatOptionalDateTime(order?.lastAttributionRunAt, reportingTimezone)}</dd>
                 </div>
                 <div>
                   <dt>Resolved session ID</dt>
@@ -488,8 +506,8 @@ export default function OrderDetailsView({
 								<dd>{formatContractValue(snapshotWinner?.matchSource)}</dd>
 							</div>
 							<div>
-								<dt>Winner confidence</dt>
-								<dd>{formatContractValue(snapshotWinner?.confidenceLabel)}</dd>
+								<dt>Order confidence</dt>
+								<dd>{confidenceDisplay.label}</dd>
 							</div>
 						</DetailList>
 					</DetailCard>

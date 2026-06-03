@@ -12,6 +12,7 @@ import {
   type DeterministicIngestionSource,
   type ResolvedAttributionTouchpoint
 } from './resolver.js';
+import { boundConfidenceScore } from './confidence-scoring.js';
 import { CLICK_LOOKBACK_WINDOW_DAYS } from './rules.js';
 
 type OrderTimestampSource = 'processed_at' | 'created_at_shopify' | 'ingested_at';
@@ -116,14 +117,6 @@ export type AttributionCandidateExtractionResult = {
 function normalizeNullableString(value: string | null | undefined): string | null {
   const normalized = value?.trim();
   return normalized ? normalized : null;
-}
-
-function clampConfidenceScore(value: number | null | undefined, fallback: number): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    return fallback;
-  }
-
-  return Math.min(Math.max(value, 0), 1);
 }
 
 export function normalizeTimestampToUtc(value: Date | string | null | undefined): Date | null {
@@ -543,7 +536,7 @@ function mapGa4Candidate(
       clickIdType: canonicalDimensions.clickIdType,
       clickIdValue: canonicalDimensions.clickIdValue,
       attributionReason: normalizeNullableString(rawCandidate.attributionReason) ?? 'ga4_fallback_match',
-      confidenceScore: clampConfidenceScore(rawCandidate.confidenceScore, canonicalDimensions.clickIdValue ? 0.35 : 0.25),
+      confidenceScore: boundConfidenceScore(rawCandidate.confidenceScore, canonicalDimensions.clickIdValue ? 0.35 : 0.25),
       isDirect: isDirectTouchpoint({
         source: canonicalDimensions.source,
         medium: canonicalDimensions.medium,

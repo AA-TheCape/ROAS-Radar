@@ -1,0 +1,42 @@
+{
+	"displayName": "ROAS Radar __ENVIRONMENT__ Attribution Skipped vs Recomputed Ratio",
+	"documentation": {
+		"content": "The attribution skipped-vs-recomputed ratio is outside the expected range. Compare `attribution_run_order_outcome` and `order_attribution_confidence_backfill_progress` logs by run, worker, and order IDs. Runbook: __RUNBOOK_URL_ATTRIBUTION__",
+		"mimeType": "text/markdown"
+	},
+	"combiner": "OR",
+	"enabled": true,
+	"severity": "WARNING",
+	"notificationChannels": "__ALERT_NOTIFICATION_CHANNELS__",
+	"conditions": [
+		{
+			"displayName": "Skipped outcomes exceed recomputed outcomes over 30 minutes",
+			"conditionThreshold": {
+				"filter": "metric.type=\"logging.googleapis.com/user/roas_attribution_run_order_outcomes\" resource.type=\"cloud_run_revision\" metric.labels.outcome=\"skipped\"",
+				"denominatorFilter": "metric.type=\"logging.googleapis.com/user/roas_attribution_run_order_outcomes\" resource.type=\"cloud_run_revision\" metric.labels.outcome=\"recomputed\"",
+				"comparison": "COMPARISON_GT",
+				"thresholdValue": 1,
+				"duration": "1800s",
+				"aggregations": [
+					{
+						"alignmentPeriod": "1800s",
+						"perSeriesAligner": "ALIGN_SUM",
+						"crossSeriesReducer": "REDUCE_SUM",
+						"groupByFields": ["resource.label.service_name"]
+					}
+				],
+				"denominatorAggregations": [
+					{
+						"alignmentPeriod": "1800s",
+						"perSeriesAligner": "ALIGN_SUM",
+						"crossSeriesReducer": "REDUCE_SUM",
+						"groupByFields": ["resource.label.service_name"]
+					}
+				],
+				"trigger": {
+					"count": 1
+				}
+			}
+		}
+	]
+}

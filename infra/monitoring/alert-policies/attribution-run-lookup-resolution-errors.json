@@ -1,0 +1,31 @@
+{
+	"displayName": "ROAS Radar __ENVIRONMENT__ Attribution Lookup Resolution Errors",
+	"documentation": {
+		"content": "Attribution run lookup resolution errors spiked during score computation. Inspect `attribution_run_lookup_resolution_error` logs by `jsonPayload.attributionRunId` and `jsonPayload.orderId`. Runbook: __RUNBOOK_URL_ATTRIBUTION__",
+		"mimeType": "text/markdown"
+	},
+	"combiner": "OR",
+	"enabled": true,
+	"severity": "WARNING",
+	"notificationChannels": "__ALERT_NOTIFICATION_CHANNELS__",
+	"conditions": [
+		{
+			"displayName": "Lookup resolution errors exceed 10 in 15 minutes",
+			"conditionThreshold": {
+				"filter": "metric.type=\"logging.googleapis.com/user/roas_attribution_run_lookup_resolution_errors\" resource.type=\"cloud_run_revision\"",
+				"comparison": "COMPARISON_GT",
+				"thresholdValue": 10,
+				"duration": "900s",
+				"aggregations": [
+					{
+						"alignmentPeriod": "900s",
+						"perSeriesAligner": "ALIGN_SUM"
+					}
+				],
+				"trigger": {
+					"count": 1
+				}
+			}
+		}
+	]
+}

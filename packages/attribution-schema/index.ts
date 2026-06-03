@@ -298,6 +298,11 @@ const nullablePositiveIdSchema = z
   .transform((value) => value ?? null);
 const nonEmptyMetaTextSchema = z.string().trim().min(1).max(MAX_ATTRIBUTION_TEXT_LENGTH);
 
+const confidenceScoreStringSchema = decimalStringSchema.refine((value) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1;
+}, 'Confidence score must be between 0 and 1');
+
 export const ATTRIBUTION_EVIDENCE_SOURCES = [
   'landing_session_id',
   'checkout_token',
@@ -403,7 +408,7 @@ export const attributionHintInputV1Schema = z.object({
     .union([z.enum(ATTRIBUTION_CLICK_ID_FIELDS), z.null(), z.undefined()])
     .transform((value) => value ?? null),
   click_id_value: nullableTextSchema,
-  hint_confidence_score: decimalStringSchema,
+  hint_confidence_score: confidenceScoreStringSchema,
   hint_confidence_label: attributionHintConfidenceLabelSchema,
   raw_hint_keys: z.array(z.string().trim().min(1)).default([])
 });
@@ -837,6 +842,11 @@ const jsonSchemaDecimalString: JsonSchemaDocument = {
   pattern: '^\\d+(?:\\.\\d+)?$'
 };
 
+const jsonSchemaConfidenceScoreString: JsonSchemaDocument = {
+  type: 'string',
+  pattern: '^(?:0(?:\\.\\d+)?|1(?:\\.0+)?)$'
+};
+
 const jsonSchemaClickIdTypeOrNull: JsonSchemaDocument = {
   type: ['string', 'null'],
   enum: [...ATTRIBUTION_CLICK_ID_FIELDS, null]
@@ -897,7 +907,7 @@ export const attributionHintInputV1JsonSchema: JsonSchemaDocument = {
     term: jsonSchemaNullableLowercaseString(),
     click_id_type: jsonSchemaClickIdTypeOrNull,
     click_id_value: jsonSchemaNullableString(),
-    hint_confidence_score: jsonSchemaDecimalString,
+    hint_confidence_score: jsonSchemaConfidenceScoreString,
     hint_confidence_label: { type: 'string', enum: ['low', 'medium', 'high'] },
     raw_hint_keys: {
       type: 'array',

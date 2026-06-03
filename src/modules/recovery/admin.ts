@@ -8,7 +8,6 @@ import {
 	getRegisteredRecoveryJobTypes,
 	isRegisteredRecoveryJobType,
 } from "./registered-jobs.js";
-import { createRegisteredRecoveryJobExecutor } from "../recovery-jobs/registered.js";
 import {
 	PostgresRecoveryJobStore,
 	buildRecoveryConcurrencyKey,
@@ -71,6 +70,14 @@ type RecoveryRunRow = {
 	error_code: string | null;
 	error_message: string | null;
 };
+
+async function createRegisteredRecoveryExecutor() {
+	const { createRegisteredRecoveryJobExecutor } = await import(
+		"../recovery-jobs/registered.js"
+	);
+
+	return createRegisteredRecoveryJobExecutor();
+}
 
 const runColumns = `
 	id,
@@ -520,7 +527,7 @@ export function createRecoveryAdminRouter(): Router {
 				return;
 			}
 
-			const executor = createRegisteredRecoveryJobExecutor();
+			const executor = await createRegisteredRecoveryExecutor();
 			const { run: enqueued, created } = await executor.enqueue({
 				jobType: input.jobType,
 				mode: "manual",

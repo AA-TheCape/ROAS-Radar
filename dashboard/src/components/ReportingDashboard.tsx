@@ -13,6 +13,7 @@ import {
   ATTRIBUTION_TIER_VALUES,
   formatAttributionTierLabel
 } from '../lib/attributionTier';
+import { getConfidenceDisplay } from '../lib/confidence';
 import {
   formatCompactCurrency,
   formatCurrency,
@@ -163,7 +164,9 @@ type OrderSortKey =
 	| "processedAt"
 	| "source"
 	| "campaign"
-	| "totalPrice";
+	| "totalPrice"
+	| "confidenceScore"
+	| "lastAttributionRunAt";
 export type DateField = "startDate" | "endDate";
 
 const CAMPAIGN_PAGE_SIZE = 6;
@@ -1512,6 +1515,10 @@ const ReportingDashboard = memo(function ReportingDashboard({
             row.primaryCreditAttributionReason,
             row.attributionTier,
             row.attributionTierLabel,
+            row.attributionSource,
+            row.matchingMethod,
+            row.confidenceScore,
+            row.lastAttributionRunAt,
             row.totalPrice
           ],
           orderSearch
@@ -1526,7 +1533,9 @@ const ReportingDashboard = memo(function ReportingDashboard({
         processedAt: (row) => row.processedAt ?? '',
         source: (row) => `${row.source ?? ''} ${row.medium ?? ''}`,
         campaign: (row) => row.campaign ?? '',
-        totalPrice: (row) => row.totalPrice
+        totalPrice: (row) => row.totalPrice,
+        confidenceScore: (row) => row.confidenceScore ?? (row.lastAttributionRunAt ? -1 : -2),
+        lastAttributionRunAt: (row) => row.lastAttributionRunAt ?? ''
       }),
     [filteredOrders, orderSort]
   );
@@ -1910,6 +1919,10 @@ const ReportingDashboard = memo(function ReportingDashboard({
                     <option value="order:asc">Order ↑</option>
                     <option value="campaign:asc">Campaign A-Z</option>
                     <option value="campaign:desc">Campaign Z-A</option>
+                    <option value="confidenceScore:desc">Confidence ↓</option>
+                    <option value="confidenceScore:asc">Confidence ↑</option>
+                    <option value="lastAttributionRunAt:desc">Last run ↓</option>
+                    <option value="lastAttributionRunAt:asc">Last run ↑</option>
                   </Select>
                 </Field>
               </TableFilterBar>
@@ -1966,13 +1979,28 @@ const ReportingDashboard = memo(function ReportingDashboard({
                     >
                       Total
                     </SortableTableHeaderCell>
+                    <SortableTableHeaderCell
+                      sorted={orderSort.key === 'confidenceScore'}
+                      direction={orderSort.direction}
+                      onSort={() => toggleOrderSort('confidenceScore')}
+                    >
+                      Confidence
+                    </SortableTableHeaderCell>
+                    <TableHeaderCell>Method</TableHeaderCell>
+                    <SortableTableHeaderCell
+                      sorted={orderSort.key === 'lastAttributionRunAt'}
+                      direction={orderSort.direction}
+                      onSort={() => toggleOrderSort('lastAttributionRunAt')}
+                    >
+                      Last run
+                    </SortableTableHeaderCell>
                     <TableHeaderCell>Match reason</TableHeaderCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   {paginatedOrders.rows.length === 0 ? (
                     <TableEmptyRow
-                      colSpan={7}
+                      colSpan={10}
                       title="No orders matched"
                       description="Try another search term or widen the reporting window."
                     />
@@ -1995,8 +2023,8 @@ const ReportingDashboard = memo(function ReportingDashboard({
                       <TableCell>{formatDateTimeLabel(row.processedAt, reportingTimezone)}</TableCell>
                       <TableCell>
                         <PrimaryCell className="gap-0.5">
-                          <strong>{row.source ?? 'Unattributed'}</strong>
-                          <span>{row.medium ?? (row.attributionTier === 'unattributed' ? 'No attributed medium' : 'No medium')}</span>
+                          <strong>{row.source ?? (getConfidenceDisplay(row).state === 'pending' ? 'Pending' : 'Unattributed')}</strong>
+                          <span>{row.medium ?? (getConfidenceDisplay(row).state === 'pending' ? 'Awaiting attribution run' : row.attributionTier === 'unattributed' ? 'No attributed medium' : 'No medium')}</span>
                         </PrimaryCell>
                       </TableCell>
                       <TableCell>
@@ -2005,8 +2033,16 @@ const ReportingDashboard = memo(function ReportingDashboard({
                           <span>{row.attributionSource ?? 'No persisted source'}</span>
                         </PrimaryCell>
                       </TableCell>
-                      <TableCell>{row.campaign ?? (row.attributionTier === 'unattributed' ? 'No attributed campaign' : 'No campaign')}</TableCell>
+                      <TableCell>{row.campaign ?? (getConfidenceDisplay(row).state === 'pending' ? 'Pending' : row.attributionTier === 'unattributed' ? 'No attributed campaign' : 'No campaign')}</TableCell>
                       <TableCell>{formatCurrency(row.totalPrice)}</TableCell>
+                      <TableCell>
+                        <PrimaryCell className="gap-0.5">
+                          <strong>{getConfidenceDisplay(row).label}</strong>
+                          <span>{getConfidenceDisplay(row).detail}</span>
+                        </PrimaryCell>
+                      </TableCell>
+                      <TableCell>{row.matchingMethod?.replace(/_/g, ' ') ?? 'Not available'}</TableCell>
+                      <TableCell>{formatDateTimeLabel(row.lastAttributionRunAt, reportingTimezone)}</TableCell>
                       <TableCell>
                         <PrimaryCell className="gap-1">
                           <strong>{row.attributionReason}</strong>

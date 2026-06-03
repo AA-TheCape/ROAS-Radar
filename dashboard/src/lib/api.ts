@@ -229,8 +229,10 @@ export type OrderRow = {
   attributionTierLabel: string;
   attributionTierDescription: string;
   attributionSource: string | null;
+  matchingMethod: string | null;
   attributionMatchedAt: string | null;
   confidenceScore: number | null;
+  lastAttributionRunAt: string | null;
   sessionId: string | null;
 };
 
@@ -371,9 +373,11 @@ export type OrderDetail = {
   attributionTierLabel: string;
   attributionTierDescription: string;
   attributionSource: string | null;
+  matchingMethod: string | null;
   attributionMatchedAt: string | null;
   attributionReason: string;
   confidenceScore: number | null;
+  lastAttributionRunAt: string | null;
   sessionId: string | null;
   attributedSource: string | null;
   attributedMedium: string | null;

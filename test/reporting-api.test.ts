@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
-import test from 'node:test';
+import test, { after } from 'node:test';
 
 process.env.DATABASE_URL ??= 'postgres://postgres:postgres@localhost:5432/roas_radar_test';
 process.env.REPORTING_API_TOKEN = 'test-reporting-token';
@@ -12,6 +12,11 @@ const { pool } = poolModule;
 const { closeServer, createServer } = serverModule;
 const originalPoolQuery = pool.query.bind(pool);
 const REPORTING_SCHEMA_VERSION = '2026-05-27';
+
+after(async () => {
+  pool.query = originalPoolQuery as typeof pool.query;
+  await pool.end();
+});
 
 function buildHeaders(): Record<string, string> {
   return {
@@ -1256,8 +1261,12 @@ test('reporting orders returns order-level attribution details for debugging', a
           total_price: '120.00',
           attribution_tier: 'deterministic_first_party',
           attribution_source: 'checkout_token',
+          attribution_source_code: 'checkout_token',
+          matching_method_code: 'matched_by_checkout_token',
           order_attribution_reason: 'matched_by_checkout_token',
           attribution_matched_at: new Date('2026-04-10T13:01:00.000Z'),
+          attribution_confidence_score: '1.00',
+          last_attribution_run_at: new Date('2026-04-10T13:01:00.000Z'),
           attribution_snapshot: {
             confidenceScore: 1,
             winner: {
@@ -1302,8 +1311,10 @@ test('reporting orders returns order-level attribution details for debugging', a
           attributionTierDescription:
             'Resolved from durable ROAS Radar first-party evidence such as a landing session, checkout token, cart token, or stitched identity path.',
           attributionSource: 'checkout_token',
+          matchingMethod: 'matched_by_checkout_token',
           attributionMatchedAt: '2026-04-10T13:01:00.000Z',
           confidenceScore: 1,
+          lastAttributionRunAt: '2026-04-10T13:01:00.000Z',
           sessionId: '11111111-1111-4111-8111-111111111111'
         }
       ]
@@ -1341,8 +1352,12 @@ test('reporting order details expose attribution tier metadata additively', asyn
             source_name: 'web',
             attribution_tier: 'deterministic_first_party',
             attribution_source: 'landing_session_id',
+            attribution_source_code: 'landing_session_id',
+            matching_method_code: 'matched_by_landing_session',
             attribution_matched_at: new Date('2026-04-10T13:01:00.000Z'),
             attribution_reason: 'matched_by_landing_session',
+            attribution_confidence_score: '1.00',
+            last_attribution_run_at: new Date('2026-04-10T13:01:00.000Z'),
             attribution_snapshot: {
               confidenceScore: 1,
               winner: {
@@ -1394,9 +1409,11 @@ test('reporting order details expose attribution tier metadata additively', asyn
     assert.equal(body.order.attributionTierLabel, 'Deterministic first-party');
     assert.match(body.order.attributionTierDescription, /durable ROAS Radar first-party evidence/);
     assert.equal(body.order.attributionSource, 'landing_session_id');
+    assert.equal(body.order.matchingMethod, 'matched_by_landing_session');
     assert.equal(body.order.attributionMatchedAt, '2026-04-10T13:01:00.000Z');
     assert.equal(body.order.attributionReason, 'matched_by_landing_session');
     assert.equal(body.order.confidenceScore, 1);
+    assert.equal(body.order.lastAttributionRunAt, '2026-04-10T13:01:00.000Z');
     assert.equal(body.order.sessionId, '33333333-3333-4333-8333-333333333333');
     assert.equal(body.order.attributedSource, 'google');
     assert.equal(body.order.attributedMedium, 'cpc');

@@ -1,0 +1,27 @@
+{
+	"name": "roas_attribution_run_order_outcomes",
+	"description": "Counts attribution run order-level score computation outcomes for recomputed, skipped, and failed orders.",
+	"filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"attribution_run_order_outcome\"",
+	"labelExtractors": {
+		"service": "EXTRACT(jsonPayload.service)",
+		"outcome": "EXTRACT(jsonPayload.outcome)"
+	},
+	"metricDescriptor": {
+		"metricKind": "DELTA",
+		"valueType": "INT64",
+		"unit": "1",
+		"displayName": "ROAS Radar Attribution Run Order Outcomes",
+		"labels": [
+			{
+				"key": "service",
+				"valueType": "STRING",
+				"description": "Service emitting the order outcome."
+			},
+			{
+				"key": "outcome",
+				"valueType": "STRING",
+				"description": "Order-level score computation outcome."
+			}
+		]
+	}
+}

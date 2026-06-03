@@ -167,6 +167,7 @@ test('attribution order QA payload can be generated on read from order candidate
     assert.equal(body.payload.order.order_id, 'order-qa-generated');
     assert.equal(body.payload.outcome.status, 'success');
     assert.equal(body.payload.outcome.attribution_tier, 'deterministic_shopify_hint');
+    assert.equal(body.payload.outcome.match_source, 'shopify_marketing_hint');
     assert.equal(body.payload.candidates.shopify_hint.length, 1);
     assert.equal(body.payload.candidates.shopify_hint[0].selected, true);
   } finally {
