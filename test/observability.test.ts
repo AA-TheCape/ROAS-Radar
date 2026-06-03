@@ -11,6 +11,8 @@ const {
   emitCampaignMetadataFreshnessSnapshotLog,
   emitCampaignMetadataResolutionCoverageLog,
   emitCampaignMetadataSyncJobLifecycleLog,
+  emitMetaMetadataLookupSummaryLog,
+  emitMetaMetadataRawIdFallbackLog,
   emitRecoveryRecordFailureLog,
   emitRecoveryRunChunkLog,
   emitRecoveryRunLifecycleLog
@@ -165,6 +167,106 @@ test('campaign metadata freshness snapshot logs expose the fields used by freshn
     freshnessThresholdHours: 30,
     oldestLastSeenAt: '2026-04-08T10:00:00.000Z',
     newestLastSeenAt: '2026-04-10T09:00:00.000Z'
+  });
+});
+
+test('meta metadata lookup summary logs expose lookup cache and API counters', async () => {
+  const { entries } = await captureStructuredLogs(() =>
+    emitMetaMetadataLookupSummaryLog({
+      resolutionScope: 'campaign_adset_metadata',
+      requestedCount: 12,
+      normalizedRequestCount: 10,
+      invalidIdCount: 2,
+      cacheHitCount: 4,
+      staleCacheHitCount: 1,
+      recentFailureCacheHitCount: 1,
+      cacheMissCount: 5,
+      apiRequestCount: 2,
+      apiLookupObjectCount: 5,
+      apiResolvedCount: 3,
+      apiNotFoundCount: 1,
+      apiFailureCount: 1,
+      missingConnectionCount: 0,
+      unresolvedCount: 3,
+      unresolvedEntityIds: ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11'],
+      unresolvedReasons: {
+        invalid_id: 2,
+        meta_api_error: 1
+      }
+    })
+  );
+
+  assert.equal(entries.length, 1);
+  assert.deepEqual(entries[0], {
+    severity: 'INFO',
+    event: 'meta_metadata_lookup_summary',
+    message: 'meta_metadata_lookup_summary',
+    timestamp: entries[0]?.timestamp,
+    service: 'roas-radar-observability-test',
+    platform: 'meta_ads',
+    resolutionScope: 'campaign_adset_metadata',
+    requestedCount: 12,
+    normalizedRequestCount: 10,
+    invalidIdCount: 2,
+    cacheHitCount: 4,
+    staleCacheHitCount: 1,
+    recentFailureCacheHitCount: 1,
+    cacheMissCount: 5,
+    cacheHitRate: 0.4,
+    cacheMissRate: 0.5,
+    apiRequestCount: 2,
+    apiLookupObjectCount: 5,
+    apiResolvedCount: 3,
+    apiNotFoundCount: 1,
+    apiFailureCount: 1,
+    missingConnectionCount: 0,
+    unresolvedCount: 3,
+    unresolvedRate: 0.3,
+    unresolvedEntityIds: ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10'],
+    unresolvedReasons: {
+      invalid_id: 2,
+      meta_api_error: 1
+    }
+  });
+});
+
+test('meta metadata raw-id fallback logs include reporting context and unresolved samples', async () => {
+  const { entries } = await captureStructuredLogs(() =>
+    emitMetaMetadataRawIdFallbackLog({
+      resolutionScope: 'campaign_adset_metadata',
+      startDate: '2026-05-01',
+      endDate: '2026-05-02',
+      source: 'meta',
+      requestedCount: 3,
+      unresolvedCount: 2,
+      unresolvedEntityIds: ['111', '222'],
+      unresolvedReasons: {
+        missing_connection: 1,
+        meta_api_not_found: 1
+      }
+    })
+  );
+
+  assert.equal(entries.length, 1);
+  assert.deepEqual(entries[0], {
+    severity: 'INFO',
+    event: 'meta_metadata_raw_id_fallback',
+    message: 'meta_metadata_raw_id_fallback',
+    timestamp: entries[0]?.timestamp,
+    service: 'roas-radar-observability-test',
+    platform: 'meta_ads',
+    resolutionScope: 'campaign_adset_metadata',
+    requestedCount: 3,
+    unresolvedCount: 2,
+    unresolvedEntityIds: ['111', '222'],
+    unresolvedReasons: {
+      missing_connection: 1,
+      meta_api_not_found: 1
+    },
+    fallback: 'raw_id',
+    startDate: '2026-05-01',
+    endDate: '2026-05-02',
+    source: 'meta'
   });
 });
 

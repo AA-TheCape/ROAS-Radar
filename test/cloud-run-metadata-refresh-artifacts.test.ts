@@ -49,8 +49,9 @@ test('cloud run metadata refresh jobs use provider-specific secret bindings', ()
 
   assert.match(
     metaAdsSection,
-    /DATABASE_URL=DATABASE_URL:latest,META_ADS_APP_SECRET=META_ADS_APP_SECRET:latest,META_ADS_ENCRYPTION_KEY=META_ADS_ENCRYPTION_KEY:latest/
+    /DATABASE_URL=DATABASE_URL:latest,\$META_ADS_SECRET_FLAGS/
   );
+  assert.match(script, /META_ADS_METADATA_ACCESS_TOKEN=\$META_ADS_METADATA_ACCESS_TOKEN_SECRET_NAME:latest/);
   assert.doesNotMatch(metaAdsSection, /GOOGLE_ADS_ENCRYPTION_KEY/);
   assert.match(
     googleAdsSection,
@@ -92,6 +93,7 @@ test('cloud run environment templates declare per-platform metadata scheduler co
     assert.match(text, /META_ADS_DETERMINISTIC_JOB_SERVICE_ACCOUNT_NAME=/);
     assert.match(text, /META_ADS_DETERMINISTIC_SYNC_SCHEDULE=/);
     assert.match(text, /META_ADS_METADATA_SCHEDULE=/);
+    assert.match(text, /META_ADS_METADATA_ACCESS_TOKEN_SECRET_NAME=/);
     assert.match(text, /META_ADS_METADATA_SCHEDULER_ENABLED=/);
     assert.match(text, /META_ADS_METADATA_REFRESH_REQUESTED_BY=/);
     assert.match(text, /GOOGLE_ADS_METADATA_SCHEDULER_NAME=/);
@@ -118,8 +120,28 @@ test('cloud run runbooks document metadata scheduler creation and pause or resum
   assert.match(cloudRunRunbook, /GOOGLE_ADS_METADATA_SCHEDULER_NAME/);
 
   assert.match(metadataRunbook, /campaign_metadata_sync_job_lifecycle/);
+  assert.match(metadataRunbook, /META_ADS_METADATA_ACCESS_TOKEN_SECRET_NAME/);
   assert.match(metadataRunbook, /META_ADS_METADATA_REFRESH_REQUESTED_BY/);
   assert.match(metadataRunbook, /GOOGLE_ADS_METADATA_REFRESH_REQUESTED_BY/);
+});
+
+test('cloud run IAM bootstrap grants Meta metadata token access to Meta-capable workloads', () => {
+  const bootstrapScript = readRepoFile('infra/cloud-run/bootstrap-iam.sh');
+
+  for (const serviceAccount of [
+    'API_SERVICE_ACCOUNT_NAME',
+    'WORKER_SERVICE_ACCOUNT_NAME',
+    'META_ADS_JOB_SERVICE_ACCOUNT_NAME',
+    'META_ADS_DETERMINISTIC_JOB_SERVICE_ACCOUNT_NAME',
+    'CAMPAIGN_METADATA_BACKFILL_JOB_SERVICE_ACCOUNT_NAME'
+  ]) {
+    assert.match(
+      bootstrapScript,
+      new RegExp(
+        `grant_secret_access "\\$${serviceAccount}" "\\$\\{META_ADS_METADATA_ACCESS_TOKEN_SECRET_NAME:-META_ADS_METADATA_ACCESS_TOKEN\\}"`
+      )
+    );
+  }
 });
 
 test('cloud run runbook documents recovery queue and dead-letter replay workflows', () => {

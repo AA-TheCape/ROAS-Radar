@@ -49,6 +49,10 @@ The shared recovery job queue fields added in `0048_add_shared_recovery_job_queu
 
 - `db/rollbacks/0048_add_shared_recovery_job_queue.down.sql`
 
+The Meta metadata cache table added in `0053_add_meta_metadata_cache.sql` can be rolled back with:
+
+- `db/rollbacks/0053_add_meta_metadata_cache.down.sql`
+
 ## Session Attribution Capture Schema
 
 Migration `0019_add_session_attribution_capture_tables.sql` adds three additive tables for canonical first-party capture persistence:

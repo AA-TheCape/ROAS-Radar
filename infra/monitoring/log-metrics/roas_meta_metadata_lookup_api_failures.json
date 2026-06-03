@@ -1,0 +1,27 @@
+{
+  "name": "roas_meta_metadata_lookup_api_failures",
+  "description": "Distribution of Meta metadata API lookup failure counts emitted by meta_metadata_lookup_summary logs.",
+  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"meta_metadata_lookup_summary\"",
+  "valueExtractor": "EXTRACT(jsonPayload.apiFailureCount)",
+  "labelExtractors": {
+    "service": "EXTRACT(jsonPayload.service)",
+    "resolution_scope": "EXTRACT(jsonPayload.resolutionScope)",
+    "platform": "EXTRACT(jsonPayload.platform)"
+  },
+  "metricDescriptor": {
+    "metricKind": "DELTA",
+    "valueType": "DISTRIBUTION",
+    "unit": "1",
+    "displayName": "ROAS Radar Meta Metadata Lookup API Failures",
+    "labels": [
+      { "key": "service", "valueType": "STRING", "description": "Service emitting lookup telemetry." },
+      { "key": "resolution_scope", "valueType": "STRING", "description": "Meta metadata resolution scope." },
+      { "key": "platform", "valueType": "STRING", "description": "Ad platform." }
+    ]
+  },
+  "bucketOptions": {
+    "explicitBuckets": {
+      "bounds": [0, 1, 5, 10, 25, 50, 100, 250]
+    }
+  }
+}

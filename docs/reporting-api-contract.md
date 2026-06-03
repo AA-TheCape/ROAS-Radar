@@ -73,7 +73,14 @@ New consumers should prefer the additive nested object:
 {
   "campaignLabel": {
     "displayName": "Google Brand Search Latest",
+    "source": "google",
+    "rawId": "brand-search",
     "entityId": "cmp_google_1",
+    "objectType": "campaign",
+    "entityType": "campaign",
+    "parentCampaignEntityId": null,
+    "parentCampaignDisplayName": null,
+    "parentCampaign": null,
     "platform": "google_ads",
     "resolutionStatus": "resolved",
     "lastSeenAt": "2026-04-10T08:00:00.000Z",
@@ -85,7 +92,14 @@ New consumers should prefer the additive nested object:
 Field meanings:
 
 - `displayName`: resolved display label after lookup or fallback ordering
-- `entityId`: native platform campaign id
+- `source`: normalized reporting source to render for this label, such as `meta` after Meta source normalization
+- `rawId`: raw campaign grouping value from the reporting row
+- `entityId`: native platform object id when known
+- `objectType`: native object type, currently `campaign`, `adset`, or `null`
+- `entityType`: backward-compatible alias for `objectType`
+- `parentCampaignEntityId`: parent campaign id for Meta ad set labels when known
+- `parentCampaignDisplayName`: parent campaign display name for Meta ad set labels when known
+- `parentCampaign`: structured parent campaign metadata for Meta ad set labels, or `null`
 - `platform`: `google_ads` or `meta_ads`
 - `resolutionStatus`: `resolved`, `fallback_name`, or `unresolved`
 - `lastSeenAt`: upstream observation timestamp from metadata sync when available

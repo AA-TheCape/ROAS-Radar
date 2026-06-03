@@ -470,8 +470,135 @@ function titleCaseToken(value: string) {
 		.join(" ");
 }
 
-function formatChannelLabel(source: string, medium: string) {
-	return `${titleCaseToken(source || "unknown")} / ${titleCaseToken(medium || "unknown")}`;
+type CampaignDisplayFields = Pick<
+	CampaignRow,
+	| "source"
+	| "medium"
+	| "campaign"
+	| "content"
+	| "campaignDisplayName"
+	| "campaignEntityId"
+	| "campaignEntityType"
+	| "parentCampaignEntityId"
+	| "parentCampaignDisplayName"
+	| "campaignPlatform"
+	| "campaignNameResolutionStatus"
+	| "campaignLabel"
+>;
+
+function formatSourceLabel(
+	source: string | null | undefined,
+	platform?: CampaignDisplayFields["campaignPlatform"],
+) {
+	if (platform === "meta_ads" || source === "meta" || source === "facebook") {
+		return "Meta";
+	}
+
+	if (platform === "google_ads") {
+		return "Google Ads";
+	}
+
+	return titleCaseToken(source || "unknown");
+}
+
+function formatChannelLabel(
+	source: string,
+	medium: string,
+	platform?: CampaignDisplayFields["campaignPlatform"],
+) {
+	return `${formatSourceLabel(source, platform)} / ${titleCaseToken(medium || "unknown")}`;
+}
+
+function getCampaignResolutionStatus(row: CampaignDisplayFields) {
+	return (
+		row.campaignLabel?.resolutionStatus ??
+		row.campaignNameResolutionStatus ??
+		(row.campaignDisplayName ? "resolved" : "unresolved")
+	);
+}
+
+function getCampaignPlatform(row: CampaignDisplayFields) {
+	return row.campaignLabel?.platform ?? row.campaignPlatform ?? null;
+}
+
+function getCampaignObjectType(row: CampaignDisplayFields) {
+	return (
+		row.campaignLabel?.objectType ??
+		row.campaignLabel?.entityType ??
+		row.campaignEntityType ??
+		null
+	);
+}
+
+function getCampaignRawId(row: CampaignDisplayFields) {
+	return (
+		row.campaignLabel?.rawId?.trim() ||
+		row.campaignLabel?.entityId?.trim() ||
+		row.campaignEntityId?.trim() ||
+		row.campaign
+	);
+}
+
+function getParentCampaignRawId(row: CampaignDisplayFields) {
+	return (
+		row.campaignLabel?.parentCampaign?.entityId?.trim() ||
+		row.campaignLabel?.parentCampaignEntityId?.trim() ||
+		row.parentCampaignEntityId?.trim() ||
+		null
+	);
+}
+
+function getCampaignDisplayName(row: CampaignDisplayFields) {
+	if (getCampaignResolutionStatus(row) === "unresolved") {
+		return row.campaign;
+	}
+
+	return (
+		row.campaignLabel?.displayName?.trim() ||
+		row.campaignDisplayName?.trim() ||
+		row.campaign
+	);
+}
+
+function getParentCampaignDisplayName(row: CampaignDisplayFields) {
+	return (
+		row.campaignLabel?.parentCampaign?.displayName?.trim() ||
+		row.campaignLabel?.parentCampaignDisplayName?.trim() ||
+		row.parentCampaignDisplayName?.trim() ||
+		null
+	);
+}
+
+function formatCampaignHierarchyContext(row: CampaignDisplayFields) {
+	const parentCampaign = getParentCampaignDisplayName(row);
+
+	if (getCampaignObjectType(row) === "adset" && parentCampaign) {
+		return `Ad set in ${parentCampaign}`;
+	}
+
+	return row.content ?? "No content tag";
+}
+
+function formatCampaignIdContext(row: CampaignDisplayFields) {
+	const rawId = getCampaignRawId(row);
+	const objectType = getCampaignObjectType(row);
+	const label = objectType === "adset" ? "Ad set ID" : "Campaign ID";
+	const parentRawId = objectType === "adset" ? getParentCampaignRawId(row) : null;
+	const parts = [`${label} ${rawId}`];
+
+	if (parentRawId && parentRawId !== rawId) {
+		parts.push(`Campaign ID ${parentRawId}`);
+	}
+
+	return parts.join(" | ");
+}
+
+function formatCampaignContext(row: CampaignDisplayFields) {
+	return `${formatCampaignHierarchyContext(row)} | ${formatCampaignIdContext(row)}`;
+}
+
+function formatCampaignSourceMedium(row: CampaignDisplayFields) {
+	return formatChannelLabel(row.source, row.medium, getCampaignPlatform(row));
 }
 
 const DashboardOverview = memo(function DashboardOverview({
@@ -563,7 +690,27 @@ const DashboardOverview = memo(function DashboardOverview({
 									{peakPoint
 										? groupBy === "day"
 											? formatDateLabel(peakPoint.date, reportingTimezone)
-											: peakPoint.date
+											: groupBy === "campaign"
+												? getCampaignDisplayName({
+														source: "",
+														medium: "",
+														campaign: peakPoint.date,
+														content: null,
+														campaignDisplayName: peakPoint.campaignDisplayName,
+														campaignEntityId: peakPoint.campaignEntityId,
+														campaignEntityType: peakPoint.campaignEntityType,
+														parentCampaignEntityId: peakPoint.parentCampaignEntityId,
+														parentCampaignDisplayName:
+															peakPoint.parentCampaignDisplayName,
+														campaignPlatform: peakPoint.campaignPlatform,
+														campaignNameResolutionStatus:
+															peakPoint.campaignNameResolutionStatus,
+														campaignLabel: peakPoint.campaignLabel,
+													})
+												: formatSourceLabel(
+														peakPoint.date,
+														peakPoint.campaignPlatform,
+													)
 										: "N/A"}
 								</p>
 								<p className="mt-2 text-body text-ink-soft">
@@ -594,11 +741,13 @@ const DashboardOverview = memo(function DashboardOverview({
 							>
 								<Eyebrow>Leading campaign</Eyebrow>
 								<p className="mt-4 font-display text-title text-ink">
-									{leadingCampaign?.campaign ?? "N/A"}
+									{leadingCampaign
+										? getCampaignDisplayName(leadingCampaign)
+										: "N/A"}
 								</p>
 								<p className="mt-2 text-body text-ink-soft">
 									{leadingCampaign
-										? `${formatCurrency(leadingCampaign.revenue)} from ${leadingCampaign.source} / ${leadingCampaign.medium}`
+										? `${formatCurrency(leadingCampaign.revenue)} from ${formatCampaignSourceMedium(leadingCampaign)}`
 										: "No campaign leader available yet"}
 								</p>
 							</Card>
@@ -978,7 +1127,24 @@ const TimeseriesTrendPanel = memo(function TimeseriesTrendPanel({
 					const bucketLabel =
 						groupBy === "day"
 							? formatDateLabel(point.date, reportingTimezone)
-							: point.date;
+							: groupBy === "campaign"
+								? getCampaignDisplayName({
+										source: "",
+										medium: "",
+										campaign: point.date,
+										content: null,
+										campaignDisplayName: point.campaignDisplayName,
+										campaignEntityId: point.campaignEntityId,
+										campaignEntityType: point.campaignEntityType,
+										parentCampaignEntityId: point.parentCampaignEntityId,
+										parentCampaignDisplayName:
+											point.parentCampaignDisplayName,
+										campaignPlatform: point.campaignPlatform,
+										campaignNameResolutionStatus:
+											point.campaignNameResolutionStatus,
+										campaignLabel: point.campaignLabel,
+									})
+								: formatSourceLabel(point.date, point.campaignPlatform);
 					return {
 						x: bucketLabel,
 						y: point.revenue,
@@ -1092,7 +1258,29 @@ const TimeseriesTrendPanel = memo(function TimeseriesTrendPanel({
 												<p className="text-body font-semibold text-ink">
 													{groupBy === "day"
 														? formatDateLabel(point.date, reportingTimezone)
-														: point.date}
+														: groupBy === "campaign"
+															? getCampaignDisplayName({
+																	source: "",
+																	medium: "",
+																	campaign: point.date,
+																	content: null,
+																	campaignDisplayName:
+																		point.campaignDisplayName,
+																	campaignEntityId: point.campaignEntityId,
+																	campaignEntityType: point.campaignEntityType,
+																	parentCampaignEntityId:
+																		point.parentCampaignEntityId,
+																	parentCampaignDisplayName:
+																		point.parentCampaignDisplayName,
+																	campaignPlatform: point.campaignPlatform,
+																	campaignNameResolutionStatus:
+																		point.campaignNameResolutionStatus,
+																	campaignLabel: point.campaignLabel,
+																})
+															: formatSourceLabel(
+																	point.date,
+																	point.campaignPlatform,
+																)}
 												</p>
 												<p className="font-display text-lg text-brand">
 													{formatCompactCurrency(point.revenue)}
@@ -1136,7 +1324,29 @@ const TimeseriesTrendPanel = memo(function TimeseriesTrendPanel({
 												<p className="text-body font-semibold text-ink">
 													{groupBy === "day"
 														? formatDateLabel(point.date, reportingTimezone)
-														: point.date}
+														: groupBy === "campaign"
+															? getCampaignDisplayName({
+																	source: "",
+																	medium: "",
+																	campaign: point.date,
+																	content: null,
+																	campaignDisplayName:
+																		point.campaignDisplayName,
+																	campaignEntityId: point.campaignEntityId,
+																	campaignEntityType: point.campaignEntityType,
+																	parentCampaignEntityId:
+																		point.parentCampaignEntityId,
+																	parentCampaignDisplayName:
+																		point.parentCampaignDisplayName,
+																	campaignPlatform: point.campaignPlatform,
+																	campaignNameResolutionStatus:
+																		point.campaignNameResolutionStatus,
+																	campaignLabel: point.campaignLabel,
+																})
+															: formatSourceLabel(
+																	point.date,
+																	point.campaignPlatform,
+																)}
 												</p>
 												<p className="font-display text-lg text-warning">
 													{formatCompactCurrency(point.revenue)}
@@ -1203,7 +1413,7 @@ const ReportingDashboard = memo(function ReportingDashboard({
 	const campaignMixData = useMemo(
 		() =>
 			campaigns.map((row) => ({
-				campaign: row.campaign,
+				campaign: getCampaignDisplayName(row),
 				revenueShare: Number(
 					(
 						(totalCampaignRevenue > 0
@@ -1212,7 +1422,7 @@ const ReportingDashboard = memo(function ReportingDashboard({
 					).toFixed(2),
 				),
 				revenue: row.revenue,
-				sourceMedium: `${row.source} / ${row.medium}`,
+				sourceMedium: formatCampaignSourceMedium(row),
 			})),
 		[campaigns, totalCampaignRevenue],
 	);
@@ -1221,7 +1431,7 @@ const ReportingDashboard = memo(function ReportingDashboard({
 		const sourceMixMap = campaigns.reduce<
 			Record<string, { revenue: number; orders: number }>
 		>((accumulator, row) => {
-			const key = row.source || "Unknown";
+			const key = formatSourceLabel(row.source, getCampaignPlatform(row));
 			const current = accumulator[key] ?? { revenue: 0, orders: 0 };
 			current.revenue += row.revenue;
 			current.orders += row.orders;
@@ -1247,7 +1457,27 @@ const ReportingDashboard = memo(function ReportingDashboard({
     () =>
       campaigns.filter((row) =>
         matchesQuery(
-          [row.campaign, row.source, row.medium, row.content, row.visits, row.orders, row.revenue],
+          [
+            row.campaign,
+            getCampaignDisplayName(row),
+            formatCampaignSourceMedium(row),
+            formatCampaignContext(row),
+            row.source,
+            row.medium,
+            row.content,
+            getCampaignRawId(row),
+            row.campaignEntityId,
+            row.campaignLabel?.rawId,
+            row.campaignLabel?.entityId,
+            row.campaignLabel?.displayName,
+            row.parentCampaignDisplayName,
+            row.campaignLabel?.parentCampaignDisplayName,
+            row.campaignLabel?.parentCampaign?.displayName,
+            getParentCampaignRawId(row),
+            row.visits,
+            row.orders,
+            row.revenue
+          ],
           campaignSearch
         )
       ),
@@ -1256,8 +1486,8 @@ const ReportingDashboard = memo(function ReportingDashboard({
   const sortedCampaigns = useMemo(
     () =>
       sortRows(filteredCampaigns, campaignSort, {
-        campaign: (row) => row.campaign,
-        source: (row) => `${row.source} ${row.medium}`,
+        campaign: (row) => `${getCampaignDisplayName(row)} ${getCampaignRawId(row)} ${row.campaign}`,
+        source: (row) => formatCampaignSourceMedium(row),
         visits: (row) => row.visits,
         orders: (row) => row.orders,
         revenue: (row) => row.revenue,
@@ -1402,7 +1632,7 @@ const ReportingDashboard = memo(function ReportingDashboard({
 											<div>
 												<Eyebrow>Top campaign</Eyebrow>
 												<p className="mt-3 font-display text-title text-ink">
-													{row.campaign}
+													{getCampaignDisplayName(row)}
 												</p>
 											</div>
 											<Badge tone="brand">
@@ -1410,7 +1640,10 @@ const ReportingDashboard = memo(function ReportingDashboard({
 											</Badge>
 										</div>
 										<p className="mt-3 break-words text-body text-ink-soft">
-											{row.source} / {row.medium}
+											{formatCampaignSourceMedium(row)}
+										</p>
+										<p className="mt-1 break-words text-caption text-ink-muted">
+											{formatCampaignContext(row)}
 										</p>
 										<p className="mt-5 font-display text-metric text-brand">
 											{formatCompactCurrency(row.revenue)}
@@ -1550,11 +1783,11 @@ const ReportingDashboard = memo(function ReportingDashboard({
 											>
 												<TableCell>
 													<PrimaryCell>
-														<strong>{row.campaign}</strong>
-														<span>{row.content ?? "No content tag"}</span>
+														<strong>{getCampaignDisplayName(row)}</strong>
+														<span>{formatCampaignContext(row)}</span>
 													</PrimaryCell>
 												</TableCell>
-												<TableCell>{`${row.source} / ${row.medium}`}</TableCell>
+												<TableCell>{formatCampaignSourceMedium(row)}</TableCell>
 												<TableCell>{formatNumber(row.visits)}</TableCell>
 												<TableCell>{formatNumber(row.orders)}</TableCell>
 												<TableCell>{formatCurrency(row.revenue)}</TableCell>
@@ -1868,12 +2101,21 @@ const ReportingDashboard = memo(function ReportingDashboard({
 													>
 														<TableCell>
 															<PrimaryCell>
-																<strong>{campaign.campaign}</strong>
+																<strong>
+																	{getCampaignDisplayName({
+																		...campaign,
+																		source: group.source,
+																		medium: group.medium,
+																		content: null,
+																	})}
+																</strong>
 																<span>
-																	{formatChannelLabel(
-																		group.source,
-																		group.medium,
-																	)}
+																	{formatCampaignContext({
+																		...campaign,
+																		source: group.source,
+																		medium: group.medium,
+																		content: null,
+																	})}
 																</span>
 															</PrimaryCell>
 														</TableCell>

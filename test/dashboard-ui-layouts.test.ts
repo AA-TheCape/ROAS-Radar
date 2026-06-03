@@ -181,6 +181,113 @@ test("reporting dashboard search and order drill-in stay wired for high-traffic 
 	}
 });
 
+test("reporting dashboard labels Meta campaigns and ad sets with resolved names", async () => {
+	const { default: ReportingDashboard } = await loadDashboardModule<
+		typeof import("../dashboard/src/components/ReportingDashboard")
+	>("dashboard/src/components/ReportingDashboard.tsx");
+
+	const resolvedCampaignId = "23861234567890123";
+	const resolvedAdSetId = "23869876543210987";
+	const unresolvedCampaignId = "23860000000000000";
+	const mounted = await mountUi(
+		h(
+			ReportingDashboard,
+			createReportingDashboardProps({
+				campaignsSection: {
+					data: [
+						{
+							source: "meta",
+							medium: "paid_social",
+							campaign: resolvedCampaignId,
+							content: "feed",
+							visits: 1200,
+							orders: 44,
+							revenue: 8800,
+							conversionRate: 0.0367,
+							campaignLabel: {
+								displayName: "Meta Prospecting Launch",
+								source: "meta",
+								rawId: resolvedCampaignId,
+								entityId: resolvedCampaignId,
+								objectType: "campaign",
+								platform: "meta_ads",
+								resolutionStatus: "resolved",
+								lastSeenAt: "2026-04-20T08:00:00.000Z",
+								updatedAt: "2026-04-20T08:30:00.000Z",
+							},
+						},
+						{
+							source: "meta",
+							medium: "paid_social",
+							campaign: resolvedAdSetId,
+							content: "story",
+							visits: 940,
+							orders: 31,
+							revenue: 6100,
+							conversionRate: 0.033,
+							campaignLabel: {
+								displayName: "US Broad Audience",
+								source: "meta",
+								rawId: resolvedAdSetId,
+								entityId: resolvedAdSetId,
+								objectType: "adset",
+								platform: "meta_ads",
+								resolutionStatus: "resolved",
+								parentCampaign: {
+									entityId: resolvedCampaignId,
+									displayName: "Meta Prospecting Launch",
+								},
+								parentCampaignEntityId: resolvedCampaignId,
+								parentCampaignDisplayName: "Meta Prospecting Launch",
+								lastSeenAt: "2026-04-20T08:05:00.000Z",
+								updatedAt: "2026-04-20T08:35:00.000Z",
+							},
+						},
+						{
+							source: "meta",
+							medium: "paid_social",
+							campaign: unresolvedCampaignId,
+							content: "reels",
+							visits: 300,
+							orders: 5,
+							revenue: 900,
+							conversionRate: 0.0167,
+							campaignDisplayName: "Stale Meta Campaign Name",
+							campaignLabel: {
+								displayName: "Stale Meta Campaign Name",
+								source: "meta",
+								rawId: unresolvedCampaignId,
+								entityId: unresolvedCampaignId,
+								objectType: "campaign",
+								platform: "meta_ads",
+								resolutionStatus: "unresolved",
+								lastSeenAt: null,
+								updatedAt: null,
+							},
+						},
+					],
+					loading: false,
+					error: null,
+				},
+			}),
+		),
+	);
+
+	try {
+		const text = mounted.container.textContent ?? "";
+		assert.match(text, /Meta Prospecting Launch/);
+		assert.match(text, /US Broad Audience/);
+		assert.match(text, /Ad set in Meta Prospecting Launch/);
+		assert.match(text, new RegExp(`Campaign ID ${resolvedCampaignId}`));
+		assert.match(text, new RegExp(`Ad set ID ${resolvedAdSetId}`));
+		assert.match(text, /Meta \/ Paid Social/);
+		assert.match(text, new RegExp(unresolvedCampaignId));
+		assert.doesNotMatch(text, /Stale Meta Campaign Name/);
+	} finally {
+		mounted.cleanup();
+	}
+});
+
 test("reporting dashboard summary cards keep spend visible alongside the overview KPIs", async () => {
 	const { default: ReportingDashboard } = await loadDashboardModule<
 		typeof import("../dashboard/src/components/ReportingDashboard")

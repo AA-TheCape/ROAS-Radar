@@ -178,11 +178,24 @@ type SpendDetailRow = {
 type CampaignLabelResponseFields = {
 	campaignDisplayName?: string;
 	campaignEntityId?: string | null;
+	campaignEntityType?: "campaign" | "adset";
+	parentCampaignEntityId?: string | null;
+	parentCampaignDisplayName?: string | null;
 	campaignPlatform?: "google_ads" | "meta_ads" | null;
 	campaignNameResolutionStatus?: "resolved" | "fallback_name" | "unresolved";
 	campaignLabel?: {
 		displayName: string;
+		source: string;
+		rawId: string;
 		entityId: string | null;
+		objectType: "campaign" | "adset" | null;
+		entityType?: "campaign" | "adset";
+		parentCampaignEntityId?: string | null;
+		parentCampaignDisplayName?: string | null;
+		parentCampaign?: {
+			entityId: string | null;
+			displayName: string | null;
+		} | null;
 		platform: "google_ads" | "meta_ads" | null;
 		resolutionStatus: "resolved" | "fallback_name" | "unresolved";
 		lastSeenAt: string | null;
@@ -458,7 +471,7 @@ function normalizeContent(value: string | null): string | null {
 	}
 
 	const trimmed = value.trim();
-	return trimmed.length > 0 ? trimmed : null;
+	return trimmed.length > 0 && trimmed.toLowerCase() !== "unknown" ? trimmed : null;
 }
 
 type AttributionWinnerMetadata = {
@@ -512,25 +525,88 @@ function normalizeAttributionTier(value: string | null | undefined): ReportingAt
   return attributionTierSchema.safeParse(value).success ? (value as ReportingAttributionTier) : 'unattributed';
 }
 
-function buildCampaignLabelFields(resolution: CampaignDisplayResolution | undefined): CampaignLabelResponseFields {
+function buildCampaignLabelFields(
+	resolution: CampaignDisplayResolution | undefined,
+	input: { source?: string; rawId?: string } = {},
+): CampaignLabelResponseFields {
 	if (!resolution?.campaignDisplayName) {
 		return {};
 	}
 
+	const source = input.source ?? resolution.source;
+	const rawId = input.rawId ?? resolution.campaign;
+	const objectType = resolution.campaignEntityType ?? null;
+	const parentCampaign =
+		resolution.parentCampaignEntityId || resolution.parentCampaignDisplayName
+			? {
+					entityId: resolution.parentCampaignEntityId ?? null,
+					displayName: resolution.parentCampaignDisplayName ?? null,
+				}
+			: null;
+
 	return {
 		campaignDisplayName: resolution.campaignDisplayName,
 		campaignEntityId: resolution.campaignEntityId,
+		campaignEntityType: resolution.campaignEntityType,
+		parentCampaignEntityId: resolution.parentCampaignEntityId,
+		parentCampaignDisplayName: resolution.parentCampaignDisplayName,
 		campaignPlatform: resolution.campaignPlatform,
 		campaignNameResolutionStatus: resolution.campaignNameResolutionStatus,
 		campaignLabel: {
 			displayName: resolution.campaignDisplayName,
+			source,
+			rawId,
 			entityId: resolution.campaignEntityId,
+			objectType,
+			entityType: resolution.campaignEntityType,
+			parentCampaignEntityId: resolution.parentCampaignEntityId,
+			parentCampaignDisplayName: resolution.parentCampaignDisplayName,
+			parentCampaign,
 			platform: resolution.campaignPlatform,
 			resolutionStatus: resolution.campaignNameResolutionStatus,
 			lastSeenAt: resolution.lastSeenAt,
 			updatedAt: resolution.updatedAt,
 		},
 	};
+}
+
+function isMetaLikeAttributionSource(source: string, medium: string): boolean {
+	const normalizedSource = source.trim().toLowerCase();
+	const normalizedMedium = medium.trim().toLowerCase();
+
+	return (
+		['meta', 'facebook', 'fb', 'instagram', 'ig'].includes(normalizedSource) ||
+		(normalizedMedium.includes('social') && ['paid_social', 'paidsocial', 'cpc', 'paid'].includes(normalizedMedium))
+	);
+}
+
+function selectCampaignResolution(
+	metadata: Awaited<ReturnType<typeof resolveCampaignDisplayMetadata>>,
+	row: { source: string; medium: string; campaign: string }
+): CampaignDisplayResolution | undefined {
+	const groupResolution = metadata.byGroup.get(
+		buildCampaignResolutionGroupKey(row.source, row.medium, row.campaign),
+	);
+
+	if (groupResolution) {
+		return groupResolution;
+	}
+
+	return isMetaLikeAttributionSource(row.source, row.medium)
+		? metadata.byCampaign.get(row.campaign)
+		: undefined;
+}
+
+function resolveReportRowSource(row: { source: string }, resolution: CampaignDisplayResolution | undefined): string {
+	return resolution?.campaignPlatform === 'meta_ads' ? 'meta' : row.source;
+}
+
+function resolveReportRowContent(row: { content: string | null }, resolution: CampaignDisplayResolution | undefined): string | null {
+	if (resolution?.campaignPlatform === 'meta_ads' && resolution.campaignNameResolutionStatus === 'resolved') {
+		return null;
+	}
+
+	return normalizeContent(row.content);
 }
 
 function countDaysInRange(startDate: string, endDate: string): number {
@@ -775,20 +851,21 @@ export function createReportingRouter(): Router {
 						const visits = Number(row.visits);
 						const orders = Number(row.orders);
 						const revenue = Number(row.revenue);
-						const resolution = campaignMetadata.byGroup.get(
-							buildCampaignResolutionGroupKey(row.source, row.medium, row.campaign),
-						);
+						const resolution = selectCampaignResolution(campaignMetadata, row);
 
 						return {
-							source: row.source,
+							source: resolveReportRowSource(row, resolution),
 							medium: row.medium,
 							campaign: row.campaign,
-							content: normalizeContent(row.content),
+							content: resolveReportRowContent(row, resolution),
 							visits,
 							orders,
 							revenue,
 							conversionRate: visits > 0 ? orders / visits : 0,
-							...buildCampaignLabelFields(resolution),
+							...buildCampaignLabelFields(resolution, {
+								source: resolveReportRowSource(row, resolution),
+								rawId: row.campaign,
+							}),
 						};
 					}),
 					nextCursor: null,
@@ -849,12 +926,14 @@ export function createReportingRouter(): Router {
 					const spend = Number(row.spend);
 					const source = row.source;
 					const medium = row.medium;
-					const channel = `${source} / ${medium}`;
 					const groupKey = `${source}\u0000${medium}`;
 					const existingGroup = groupMap.get(groupKey);
-					const labelFields = buildCampaignLabelFields(
-						campaignMetadata.byGroup.get(buildCampaignResolutionGroupKey(source, medium, row.campaign)),
-					);
+					const resolution = selectCampaignResolution(campaignMetadata, row);
+					const displaySource = resolveReportRowSource(row, resolution);
+					const labelFields = buildCampaignLabelFields(resolution, {
+						source: displaySource,
+						rawId: row.campaign,
+					});
 
 					if (existingGroup) {
 						existingGroup.subtotal += spend;
@@ -867,9 +946,9 @@ export function createReportingRouter(): Router {
 					}
 
 				groupMap.set(groupKey, {
-					source,
+					source: displaySource,
 					medium,
-					channel,
+					channel: `${displaySource} / ${medium}`,
 					subtotal: spend,
 						campaigns: [
 							{
@@ -970,7 +1049,9 @@ export function createReportingRouter(): Router {
 						conversionRate: metrics.conversionRate,
 						roas: metrics.roas,
 						...(input.groupBy === "campaign"
-							? buildCampaignLabelFields(campaignMetadata?.byCampaign.get(row.bucket))
+							? buildCampaignLabelFields(campaignMetadata?.byCampaign.get(row.bucket), {
+									rawId: row.bucket,
+								})
 							: {}),
 					};
 				});
@@ -982,7 +1063,9 @@ export function createReportingRouter(): Router {
 						orders: row.orders,
 						revenue: row.revenue,
 						...(input.groupBy === "campaign"
-							? buildCampaignLabelFields(campaignMetadata?.byCampaign.get(row.bucket))
+							? buildCampaignLabelFields(campaignMetadata?.byCampaign.get(row.bucket), {
+									rawId: row.bucket,
+								})
 							: {}),
 					})),
 				lowestBuckets: [...bucketMetrics]

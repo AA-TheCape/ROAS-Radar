@@ -130,6 +130,37 @@ type CampaignMetadataSyncJobLifecycleLogInput = {
   error?: unknown;
 };
 
+type MetaMetadataLookupSummaryLogInput = {
+  resolutionScope: 'campaign_adset_metadata';
+  requestedCount: number;
+  normalizedRequestCount: number;
+  invalidIdCount: number;
+  cacheHitCount: number;
+  staleCacheHitCount: number;
+  recentFailureCacheHitCount: number;
+  cacheMissCount: number;
+  apiRequestCount: number;
+  apiLookupObjectCount: number;
+  apiResolvedCount: number;
+  apiNotFoundCount: number;
+  apiFailureCount: number;
+  missingConnectionCount: number;
+  unresolvedCount: number;
+  unresolvedEntityIds?: string[];
+  unresolvedReasons?: Record<string, number>;
+};
+
+type MetaMetadataRawIdFallbackLogInput = {
+  resolutionScope: 'campaign_adset_metadata';
+  startDate: string;
+  endDate: string;
+  source?: string | null;
+  requestedCount: number;
+  unresolvedCount: number;
+  unresolvedEntityIds?: string[];
+  unresolvedReasons?: Record<string, number>;
+};
+
 type RecoveryRunLifecycleLogInput = {
   stage: 'started' | 'completed' | 'failed' | 'cancelled';
   run: RecoveryRun;
@@ -943,6 +974,52 @@ export function emitCampaignMetadataSyncJobLifecycleLog(input: CampaignMetadataS
   logInfo('campaign_metadata_sync_job_lifecycle', fields);
 }
 
+export function emitMetaMetadataLookupSummaryLog(input: MetaMetadataLookupSummaryLogInput): void {
+  const normalizedRequestCount = Math.max(0, input.normalizedRequestCount);
+  const unresolvedCount = Math.max(0, input.unresolvedCount);
+
+  logInfo('meta_metadata_lookup_summary', {
+    service: process.env.K_SERVICE ?? 'roas-radar',
+    platform: 'meta_ads',
+    resolutionScope: input.resolutionScope,
+    requestedCount: Math.max(0, input.requestedCount),
+    normalizedRequestCount,
+    invalidIdCount: Math.max(0, input.invalidIdCount),
+    cacheHitCount: Math.max(0, input.cacheHitCount),
+    staleCacheHitCount: Math.max(0, input.staleCacheHitCount),
+    recentFailureCacheHitCount: Math.max(0, input.recentFailureCacheHitCount),
+    cacheMissCount: Math.max(0, input.cacheMissCount),
+    cacheHitRate: normalizedRequestCount > 0 ? input.cacheHitCount / normalizedRequestCount : 0,
+    cacheMissRate: normalizedRequestCount > 0 ? input.cacheMissCount / normalizedRequestCount : 0,
+    apiRequestCount: Math.max(0, input.apiRequestCount),
+    apiLookupObjectCount: Math.max(0, input.apiLookupObjectCount),
+    apiResolvedCount: Math.max(0, input.apiResolvedCount),
+    apiNotFoundCount: Math.max(0, input.apiNotFoundCount),
+    apiFailureCount: Math.max(0, input.apiFailureCount),
+    missingConnectionCount: Math.max(0, input.missingConnectionCount),
+    unresolvedCount,
+    unresolvedRate: normalizedRequestCount > 0 ? unresolvedCount / normalizedRequestCount : 0,
+    unresolvedEntityIds: (input.unresolvedEntityIds ?? []).slice(0, 10),
+    unresolvedReasons: input.unresolvedReasons ?? {}
+  });
+}
+
+export function emitMetaMetadataRawIdFallbackLog(input: MetaMetadataRawIdFallbackLogInput): void {
+  logInfo('meta_metadata_raw_id_fallback', {
+    service: process.env.K_SERVICE ?? 'roas-radar',
+    platform: 'meta_ads',
+    resolutionScope: input.resolutionScope,
+    requestedCount: Math.max(0, input.requestedCount),
+    unresolvedCount: Math.max(0, input.unresolvedCount),
+    unresolvedEntityIds: (input.unresolvedEntityIds ?? []).slice(0, 10),
+    unresolvedReasons: input.unresolvedReasons ?? {},
+    fallback: 'raw_id',
+    startDate: input.startDate,
+    endDate: input.endDate,
+    source: input.source ?? null
+  });
+}
+
 export function buildAttributionBacklogLog(snapshot: AttributionBacklogSnapshot): string {
   return JSON.stringify({
     severity: 'INFO',
@@ -966,5 +1043,7 @@ export const __observabilityTestUtils = {
   summarizeResolverOutcome,
   emitCampaignMetadataResolutionCoverageLog,
   emitCampaignMetadataFreshnessSnapshotLog,
-  emitCampaignMetadataSyncJobLifecycleLog
+  emitCampaignMetadataSyncJobLifecycleLog,
+  emitMetaMetadataLookupSummaryLog,
+  emitMetaMetadataRawIdFallbackLog
 };

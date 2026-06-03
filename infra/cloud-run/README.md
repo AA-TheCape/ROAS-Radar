@@ -63,6 +63,12 @@ The checked-in env files are valid shell files. Replace the placeholder project 
 - `SHOPIFY_APP_API_VERSION`
 - `SHOPIFY_APP_SCOPES`
 - `SHOPIFY_APP_POST_INSTALL_REDIRECT_URL`
+- `META_ADS_APP_ID`
+- `META_ADS_APP_BASE_URL`
+- `META_ADS_APP_SCOPES`
+- `META_ADS_AD_ACCOUNT_ID`
+- `META_ADS_API_VERSION`
+- `META_ADS_METADATA_ACCESS_TOKEN_SECRET_NAME`
 - `DASHBOARD_API_BASE_URL`
 - `API_CPU`
 - `API_MEMORY`
@@ -197,6 +203,13 @@ The checked-in env files are valid shell files. Replace the placeholder project 
 - `ATTRIBUTION_QA_RETENTION_BATCH_SIZE`
 - `ATTRIBUTION_QA_RETENTION_MAX_BATCHES`
 
+Meta deployment blockers:
+
+- `MIGRATOR_DATABASE_URL` must exist in Secret Manager before deploy because the migrator job runs before service rollout by default.
+- `META_ADS_APP_SECRET`, `META_ADS_ENCRYPTION_KEY`, and the secret named by `META_ADS_METADATA_ACCESS_TOKEN_SECRET_NAME` must exist in Secret Manager before `bootstrap-iam.sh` or `deploy.sh` can grant/bind them.
+- `META_ADS_APP_ID`, `META_ADS_AD_ACCOUNT_ID`, `META_ADS_APP_SCOPES`, and `META_ADS_API_VERSION` must be populated in the environment file before enabling Meta sync or metadata schedulers.
+- `CLOUD_SQL_CONNECTION_NAME` must point at the environment Cloud SQL instance; API, worker, migrator, Meta sync, metadata refresh, and campaign metadata backfill workloads all attach it for the metadata cache table.
+
 Run these commands from the repo root on Node 22 before deploying:
 
 1. Provision Cloud SQL and private networking from `infra/cloud-sql/`.
@@ -223,7 +236,7 @@ For staged promotion, use `infra/cloud-run/promote.sh <dev|staging|production>`.
 
 - `SKIP_BUILDS=true`: reuse an already-pushed image tag instead of building locally
 - `SHORT_SHA=<tag>` or `IMAGE_TAG=<tag>`: force the image tag that `deploy.sh` references
-- `RUN_MIGRATIONS_ON_DEPLOY=true`: execute the migration job after deployment
+- `RUN_MIGRATIONS_ON_DEPLOY=true`: execute the migration job after the job definition is deployed and before API, worker, dashboard, and sync jobs are rolled out
 - `APPLY_MONITORING_ON_DEPLOY=true`: apply the monitoring assets in `infra/monitoring/`
 
 - `roas-radar-deployer-dev@<project>.iam.gserviceaccount.com` for dev

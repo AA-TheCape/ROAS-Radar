@@ -21,6 +21,12 @@ import {
   runMetaAdsOrderValueSync
 } from './order-value.js';
 export { runMetaDeterministicSync, processMetaDeterministicSyncQueue } from './deterministic-events.js';
+export {
+  type MetaMetadataObjectType,
+  type MetaMetadataResolutionRequest,
+  type MetaMetadataResolutionResult,
+  resolveMetaMetadata
+} from './metadata-resolver.js';
 
 export { runMetaAdsOrderValueSync };
 
