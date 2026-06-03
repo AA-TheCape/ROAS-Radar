@@ -33,6 +33,8 @@
     "campaign-metadata:backfill": "tsx src/admin/backfill-campaign-metadata.ts",
     "data-quality:check": "tsx src/data-quality-worker.ts",
     "data-quality:check:start": "node dist/src/data-quality-worker.js",
+    "mmm:train-baseline": "tsx src/admin/train-mmm-baseline.ts",
+    "mmm:train-baseline:start": "node dist/src/admin/train-mmm-baseline.js",
     "session-attribution:retention": "tsx src/session-attribution-retention-worker.ts",
     "session-attribution:retention:start": "node dist/src/session-attribution-retention-worker.js",
     "attribution:backfill-orders": "tsx src/admin/backfill-order-attribution.ts",

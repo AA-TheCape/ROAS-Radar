@@ -14,6 +14,24 @@ Refresh entry points:
 - `refreshDailyMmmInputMart(client, metricDates)` rebuilds specific dates.
 - `refreshAllDailyMmmInputMart(client)` rebuilds all dates observed in Shopify orders, Meta spend, or Google Ads spend.
 
+## Baseline Model Training
+
+The first MMM training pipeline is `baseline_linear_mmm_v1`.
+
+Run it after the mart has been refreshed:
+
+```bash
+npm run mmm:train-baseline -- --start-date 2026-04-01 --end-date 2026-04-30 --attribution-model last_touch
+```
+
+The trainer reads only `mmm_daily_input_mart_v1`:
+
+- `paid_media` rows become media features using `log1p(adstock(spend))`.
+- `attribution` rows provide the daily Shopify outcome response and deterministic calibration segments for the selected attribution model.
+- Per-segment deterministic attribution metrics are persisted in `calibration_report` and `validation_report`; they are not used as direct per-channel replacement labels.
+
+Completed model runs are stored in `mmm_model_runs` with versioned `run_config`, `input_summary`, `model_artifact`, `calibration_report`, and `validation_report` JSON. The baseline is intentionally deterministic and TypeScript-native so Backend/Data Platform can operate it before introducing heavier modeling infrastructure.
+
 ## Read API and Export
 
 The approved mart is exposed through `GET /api/reporting/mmm`.
