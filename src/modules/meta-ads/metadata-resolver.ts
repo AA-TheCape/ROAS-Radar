@@ -708,8 +708,9 @@ export async function resolveMetaMetadata(
 
 			for (const objectId of group.objectIds) {
 				const apiObject = lookupResult.get(objectId);
+				const objectName = collapseWhitespace(apiObject?.name);
 
-				if (!apiObject?.name || apiObject.objectType !== group.objectType) {
+				if (!objectName || apiObject?.objectType !== group.objectType) {
 					apiUnresolved.push({
 						adAccountId: group.adAccountId,
 						objectType: group.objectType,
@@ -723,8 +724,8 @@ export async function resolveMetaMetadata(
 					adAccountId: group.adAccountId,
 					objectType: group.objectType,
 					objectId,
-					objectName: apiObject.name,
-					status: apiObject.status,
+					objectName,
+					status: collapseWhitespace(apiObject.status),
 					source: "meta_api",
 					lastFetchedAt: fetchedAt.toISOString(),
 				});

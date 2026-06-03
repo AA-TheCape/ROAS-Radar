@@ -50,6 +50,6 @@ test("Cloud Run deploy script keeps spend and order-value job entrypoints isolat
 	assert.doesNotMatch(deterministicSection, /META_ADS_ORDER_VALUE_SYNC_ENABLED=/);
 	assert.match(
 		deterministicSection,
-		/DATABASE_URL=DATABASE_URL:latest,META_ADS_APP_SECRET=META_ADS_APP_SECRET:latest,META_ADS_ENCRYPTION_KEY=META_ADS_ENCRYPTION_KEY:latest/,
+		/DATABASE_URL=DATABASE_URL:latest,\$META_ADS_SECRET_FLAGS/,
 	);
 });

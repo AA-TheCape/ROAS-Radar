@@ -471,7 +471,7 @@ function normalizeContent(value: string | null): string | null {
 	}
 
 	const trimmed = value.trim();
-	return trimmed.length > 0 ? trimmed : null;
+	return trimmed.length > 0 && trimmed.toLowerCase() !== "unknown" ? trimmed : null;
 }
 
 type AttributionWinnerMetadata = {
@@ -599,6 +599,14 @@ function selectCampaignResolution(
 
 function resolveReportRowSource(row: { source: string }, resolution: CampaignDisplayResolution | undefined): string {
 	return resolution?.campaignPlatform === 'meta_ads' ? 'meta' : row.source;
+}
+
+function resolveReportRowContent(row: { content: string | null }, resolution: CampaignDisplayResolution | undefined): string | null {
+	if (resolution?.campaignPlatform === 'meta_ads' && resolution.campaignNameResolutionStatus === 'resolved') {
+		return null;
+	}
+
+	return normalizeContent(row.content);
 }
 
 function countDaysInRange(startDate: string, endDate: string): number {
@@ -849,7 +857,7 @@ export function createReportingRouter(): Router {
 							source: resolveReportRowSource(row, resolution),
 							medium: row.medium,
 							campaign: row.campaign,
-							content: normalizeContent(row.content),
+							content: resolveReportRowContent(row, resolution),
 							visits,
 							orders,
 							revenue,

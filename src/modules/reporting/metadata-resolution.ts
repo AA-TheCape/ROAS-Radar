@@ -439,15 +439,17 @@ async function resolveAttributedMetaIdMetadata(
   const resolutionsByCampaign = new Map<string, CampaignDisplayResolution[]>();
 
   for (const candidates of candidateMap.values()) {
-    const platformMetadataCandidates = candidates.filter(
-      (candidate) => candidate.metadataSource === 'ad_platform_entity_metadata' && candidate.objectName
+    const authoritativeMetadataCandidates = candidates.filter(
+      (candidate) =>
+        (candidate.metadataSource === 'ad_platform_entity_metadata' || candidate.metadataSource === 'cache') &&
+        candidate.objectName
     );
 
-    if (platformMetadataCandidates.length === 0) {
+    if (authoritativeMetadataCandidates.length === 0) {
       continue;
     }
 
-    const bestCandidate = platformMetadataCandidates.reduce<MetaAttributedIdCandidate | undefined>(
+    const bestCandidate = authoritativeMetadataCandidates.reduce<MetaAttributedIdCandidate | undefined>(
       (current, candidate) => {
         if (!current) {
           return candidate;
@@ -460,6 +462,23 @@ async function resolveAttributedMetaIdMetadata(
       },
       undefined
     );
+    const parentCandidate = candidates.reduce<MetaAttributedIdCandidate | undefined>((current, candidate) => {
+      if (!current) {
+        return candidate;
+      }
+
+      const currentHasParent = Boolean(current.parentCampaignId || current.parentCampaignName);
+      const candidateHasParent = Boolean(candidate.parentCampaignId || candidate.parentCampaignName);
+
+      if (candidateHasParent !== currentHasParent) {
+        return candidateHasParent ? candidate : current;
+      }
+
+      const currentTimestamp = current.lastSeenAt ? Date.parse(current.lastSeenAt) : 0;
+      const candidateTimestamp = candidate.lastSeenAt ? Date.parse(candidate.lastSeenAt) : 0;
+
+      return candidateTimestamp > currentTimestamp ? candidate : current;
+    }, undefined);
 
     if (!bestCandidate?.objectName) {
       continue;
@@ -473,8 +492,8 @@ async function resolveAttributedMetaIdMetadata(
         objectId: bestCandidate.objectId,
         objectType: bestCandidate.objectType,
         objectName: bestCandidate.objectName,
-        parentCampaignId: bestCandidate.parentCampaignId,
-        parentCampaignName: bestCandidate.parentCampaignName,
+        parentCampaignId: parentCandidate?.parentCampaignId ?? null,
+        parentCampaignName: parentCandidate?.parentCampaignName ?? null,
         lastFetchedAt: bestCandidate.lastSeenAt
       })
     );
@@ -484,6 +503,11 @@ async function resolveAttributedMetaIdMetadata(
   for (const resolved of metaResult.resolved) {
     const candidateKey = `${resolved.adAccountId}\u0000${resolved.objectType}\u0000${resolved.objectId}`;
     const candidateMetadata = candidateMap.get(candidateKey) ?? [];
+    const authoritativeCandidates = candidateMetadata.filter(
+      (candidate) =>
+        (candidate.metadataSource === 'ad_platform_entity_metadata' || candidate.metadataSource === 'cache') &&
+        candidate.objectName
+    );
     const bestCandidate = candidateMetadata.reduce<MetaAttributedIdCandidate | undefined>((current, candidate) => {
       if (!current) {
         return candidate;
@@ -501,14 +525,44 @@ async function resolveAttributedMetaIdMetadata(
 
       return candidateTimestamp > currentTimestamp ? candidate : current;
     }, undefined);
+    const parentCandidate = candidateMetadata.reduce<MetaAttributedIdCandidate | undefined>((current, candidate) => {
+      if (!current) {
+        return candidate;
+      }
+
+      const currentHasParent = Boolean(current.parentCampaignId || current.parentCampaignName);
+      const candidateHasParent = Boolean(candidate.parentCampaignId || candidate.parentCampaignName);
+
+      if (candidateHasParent !== currentHasParent) {
+        return candidateHasParent ? candidate : current;
+      }
+
+      const currentTimestamp = current.lastSeenAt ? Date.parse(current.lastSeenAt) : 0;
+      const candidateTimestamp = candidate.lastSeenAt ? Date.parse(candidate.lastSeenAt) : 0;
+
+      return candidateTimestamp > currentTimestamp ? candidate : current;
+    }, undefined);
+    const authoritativeCandidate = authoritativeCandidates.reduce<MetaAttributedIdCandidate | undefined>(
+      (current, candidate) => {
+        if (!current) {
+          return candidate;
+        }
+
+        const currentTimestamp = current.lastSeenAt ? Date.parse(current.lastSeenAt) : 0;
+        const candidateTimestamp = candidate.lastSeenAt ? Date.parse(candidate.lastSeenAt) : 0;
+
+        return candidateTimestamp > currentTimestamp ? candidate : current;
+      },
+      undefined
+    );
     const candidate = buildMetaAttributedIdResolution({
       campaign: resolved.objectId,
       objectId: resolved.objectId,
       objectType: resolved.objectType,
-      objectName: bestCandidate?.objectName ?? resolved.objectName,
-      parentCampaignId: bestCandidate?.parentCampaignId ?? null,
-      parentCampaignName: bestCandidate?.parentCampaignName ?? null,
-      lastFetchedAt: bestCandidate?.lastSeenAt ?? resolved.lastFetchedAt
+      objectName: authoritativeCandidate?.objectName ?? resolved.objectName,
+      parentCampaignId: parentCandidate?.parentCampaignId ?? null,
+      parentCampaignName: parentCandidate?.parentCampaignName ?? null,
+      lastFetchedAt: authoritativeCandidate?.lastSeenAt ?? bestCandidate?.lastSeenAt ?? resolved.lastFetchedAt
     });
     const resolutions = resolutionsByCampaign.get(resolved.objectId) ?? [];
 
@@ -714,6 +768,13 @@ export async function resolveCampaignDisplayMetadata(
 
   for (const [campaign, resolution] of attributedMetaIdMetadata) {
     byCampaign.set(campaign, chooseBetterResolution(byCampaign.get(campaign), resolution));
+    byGroup.set(
+      buildCampaignResolutionGroupKey(resolution.source, resolution.medium, campaign),
+      chooseBetterResolution(
+        byGroup.get(buildCampaignResolutionGroupKey(resolution.source, resolution.medium, campaign)),
+        resolution
+      )
+    );
   }
 
   for (const [platform, resolutions] of rowsByPlatform) {
