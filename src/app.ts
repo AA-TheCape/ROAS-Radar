@@ -12,6 +12,7 @@ import { createAttributionReadRouter } from './modules/attribution/read-api.js';
 import { assertGa4BigQueryIngestionConfig } from './modules/attribution/ga4-bigquery-config.js';
 import { createGoogleAdsAdminRouter, createGoogleAdsPublicRouter } from './modules/google-ads/index.js';
 import { createMetaAdsAdminRouter, createMetaAdsPublicRouter } from './modules/meta-ads/index.js';
+import { createMmmRouter } from './modules/reporting/mmm.js';
 import { createMetaOrderValueRouter } from './modules/reporting/meta-order-value.js';
 import { createReportingRouter } from './modules/reporting/index.js';
 import { createSettingsRouter } from './modules/settings/index.js';
@@ -98,6 +99,7 @@ export function createApp() {
   app.use('/api/auth', createAuthRouter());
   app.use('/api/settings', createSettingsRouter());
   app.use('/api/reporting/meta-order-value', createMetaOrderValueRouter());
+  app.use('/api/reporting/mmm', createMmmRouter());
   app.use('/api/reporting', createReportingRouter());
   app.use('/api/attribution', createAttributionReadRouter());
   app.use('/api/internal/identity', createInternalIdentityRouter());
