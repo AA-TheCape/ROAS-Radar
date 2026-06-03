@@ -15,7 +15,9 @@
     cookieDays: 365,
     cookiePath: "/",
     eventType: "page_view",
-    maxQueueSize: 10
+    maxQueueSize: 10,
+    maxDeliveryAttempts: 3,
+    retryDelayMs: 0
   };
 
   var config = assign({}, DEFAULTS, window.ROASRadarConfig || {});
@@ -266,6 +268,14 @@
     }
 
     setQueue(queue);
+  }
+
+  function getIdempotencyKey(payload) {
+    return payload && typeof payload.clientEventId === "string" ? payload.clientEventId : null;
+  }
+
+  function shouldRetryStatus(status) {
+    return status === 408 || status === 425 || status === 429 || status >= 500;
   }
 
   function buildPageUrl() {
@@ -600,9 +610,19 @@
     }
   }
 
-  function tryFetch(body) {
+  function tryFetch(body, payload) {
     if (typeof window.fetch !== "function") {
       return Promise.resolve(false);
+    }
+
+    var idempotencyKey = getIdempotencyKey(payload);
+    var headers = {
+      "Content-Type": "application/json",
+      Accept: "application/json"
+    };
+
+    if (idempotencyKey) {
+      headers["X-ROAS-Radar-Idempotency-Key"] = idempotencyKey;
     }
 
     return window
@@ -610,21 +630,26 @@
         method: "POST",
         keepalive: true,
         credentials: "omit",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json"
-        },
+        headers: headers,
         body: body
       })
       .then(function (response) {
-        return !!(response && response.ok);
+        if (!response) {
+          return false;
+        }
+
+        if (response.ok) {
+          return true;
+        }
+
+        return shouldRetryStatus(response.status) ? false : true;
       })
       .catch(function () {
         return false;
       });
   }
 
-  function tryXmlHttpRequest(body) {
+  function tryXmlHttpRequest(body, payload) {
     if (typeof window.XMLHttpRequest !== "function") {
       return Promise.resolve(false);
     }
@@ -632,15 +657,19 @@
     return new Promise(function (resolve) {
       try {
         var request = new window.XMLHttpRequest();
+        var idempotencyKey = getIdempotencyKey(payload);
         request.open("POST", config.endpoint, true);
         request.setRequestHeader("Content-Type", "application/json");
         request.setRequestHeader("Accept", "application/json");
+        if (idempotencyKey) {
+          request.setRequestHeader("X-ROAS-Radar-Idempotency-Key", idempotencyKey);
+        }
         request.onreadystatechange = function () {
           if (request.readyState !== 4) {
             return;
           }
 
-          resolve(request.status >= 200 && request.status < 300);
+          resolve(request.status >= 200 && request.status < 300 ? true : !shouldRetryStatus(request.status));
         };
         request.onerror = function () {
           resolve(false);
@@ -675,17 +704,38 @@
       return Promise.resolve(true);
     }
 
-    return tryFetch(body).then(function (fetchDelivered) {
+    return tryFetch(body, payload).then(function (fetchDelivered) {
       if (fetchDelivered) {
         dispatchTrackedEvent(payload, true);
         return true;
       }
 
-      return tryXmlHttpRequest(body).then(function (xhrDelivered) {
+      return tryXmlHttpRequest(body, payload).then(function (xhrDelivered) {
         dispatchTrackedEvent(payload, xhrDelivered);
         return xhrDelivered;
       });
     });
+  }
+
+  function deliverPayloadWithRetry(payload) {
+    var attempts = Math.max(Number(config.maxDeliveryAttempts) || 1, 1);
+    var delayMs = Math.max(Number(config.retryDelayMs) || 0, 0);
+    var attempt = 0;
+
+    function runAttempt() {
+      attempt += 1;
+      return deliverPayload(payload).then(function (delivered) {
+        if (delivered || attempt >= attempts) {
+          return delivered;
+        }
+
+        return new Promise(function (resolve) {
+          window.setTimeout(resolve, delayMs * attempt);
+        }).then(runAttempt);
+      });
+    }
+
+    return runAttempt();
   }
 
   function flushQueuedPayloads() {
@@ -700,7 +750,7 @@
     for (var i = 0; i < queue.length; i += 1) {
       (function (payload) {
         chain = chain.then(function () {
-          return deliverPayload(payload).then(function (delivered) {
+          return deliverPayloadWithRetry(payload).then(function (delivered) {
             if (!delivered) {
               remaining.push(payload);
             }
@@ -727,7 +777,7 @@
 
         return flushQueuedPayloads()
           .then(function () {
-            return deliverPayload(payload);
+            return deliverPayloadWithRetry(payload);
           })
           .then(function (delivered) {
             if (!delivered) {

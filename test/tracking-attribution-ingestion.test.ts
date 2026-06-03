@@ -60,6 +60,7 @@ const rawPayloadWithExtraFields = {
 async function postAttribution(
 	server: { address(): AddressInfo | null },
 	payload: unknown,
+	headers: Record<string, string> = {},
 ): Promise<{ response: Response; body: Record<string, unknown> }> {
 	const address = server.address() as AddressInfo;
 	const response = await fetch(
@@ -69,6 +70,7 @@ async function postAttribution(
 			headers: {
 				"content-type": "application/json",
 				accept: "application/json",
+				...headers,
 			},
 			body: JSON.stringify(payload),
 		},
@@ -375,6 +377,106 @@ test("tracking attribution endpoint short-circuits duplicate payloads without op
 		assert.equal(body.touchEventId, 77);
 		assert.equal(body.deduplicated, true);
 		assert.equal(connectCalls, 0);
+	} finally {
+		await closeServer(server);
+	}
+});
+
+test("tracking attribution endpoint filters bot user agents before database writes", async () => {
+	const { pool, createServer, closeServer } = await getModules();
+	let queryCalls = 0;
+	let connectCalls = 0;
+
+	pool.query = (async () => {
+		queryCalls += 1;
+		throw new Error("bot requests should not query");
+	}) as typeof pool.query;
+
+	pool.connect = (async () => {
+		connectCalls += 1;
+		throw new Error("bot requests should not open a transaction");
+	}) as typeof pool.connect;
+
+	const server = createServer();
+
+	try {
+		const address = server.address() as AddressInfo;
+		const response = await fetch(`http://127.0.0.1:${address.port}/track/attribution`, {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				accept: "application/json",
+				"user-agent": "Googlebot/2.1",
+			},
+			body: JSON.stringify(validPayload),
+		});
+
+		assert.equal(response.status, 204);
+		assert.equal(queryCalls, 0);
+		assert.equal(connectCalls, 0);
+	} finally {
+		await closeServer(server);
+	}
+});
+
+test("tracking attribution endpoint records failed payloads to dead letters with the idempotency key", async () => {
+	const { pool, createServer, closeServer } = await getModules();
+	const queries: Array<{ text: string; params?: unknown[] }> = [];
+
+	pool.query = (async () => {
+		throw new Error("invalid payload should not run pool.query");
+	}) as typeof pool.query;
+
+	pool.connect = (async () => ({
+		query: async (text: string, params?: unknown[]) => {
+			queries.push({ text, params });
+
+			if (text === "BEGIN" || text === "COMMIT" || text === "ROLLBACK") {
+				return { rows: [] };
+			}
+
+			if (
+				text.includes("CREATE TABLE IF NOT EXISTS event_dead_letters") ||
+				text.includes("CREATE UNIQUE INDEX IF NOT EXISTS event_dead_letters_source_uidx") ||
+				text.includes("CREATE TABLE IF NOT EXISTS event_replay_runs") ||
+				text.includes("ALTER TABLE event_replay_runs") ||
+				text.includes("CREATE TABLE IF NOT EXISTS event_replay_run_items") ||
+				text.includes("ALTER TABLE event_replay_run_items")
+			) {
+				return { rows: [] };
+			}
+
+			if (text.includes("INSERT INTO event_dead_letters")) {
+				return { rows: [] };
+			}
+
+			throw new Error(`Unexpected client.query call: ${text}`);
+		},
+		release: () => undefined,
+	})) as typeof pool.connect;
+
+	const server = createServer();
+
+	try {
+		const { response, body } = await postAttribution(
+			server,
+			{
+				...validPayload,
+				roas_radar_session_id: "not-a-uuid",
+			},
+			{ "x-roas-radar-idempotency-key": "capture-retry-1" },
+		);
+
+		assert.equal(response.status, 400);
+		assert.equal(body.error, "invalid_request");
+
+		const deadLetterInsert = queries.find((entry) => entry.text.includes("INSERT INTO event_dead_letters"));
+		assert.ok(deadLetterInsert);
+		assert.equal(deadLetterInsert.params?.[0], "tracking_attribution_capture");
+		assert.equal(deadLetterInsert.params?.[1], "tracking_capture_requests");
+		assert.equal(deadLetterInsert.params?.[2], "capture-retry-1");
+		assert.equal(deadLetterInsert.params?.[3], "capture-retry-1");
+		assert.equal(JSON.parse(String(deadLetterInsert.params?.[5])).roas_radar_session_id, "not-a-uuid");
 	} finally {
 		await closeServer(server);
 	}

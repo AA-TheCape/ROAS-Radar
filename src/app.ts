@@ -42,7 +42,7 @@ export function createApp() {
 			res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
 			res.setHeader(
 				"Access-Control-Allow-Headers",
-				"authorization,content-type,x-roas-radar-tenant-id",
+				"authorization,content-type,idempotency-key,x-idempotency-key,x-roas-radar-idempotency-key,x-roas-radar-tenant-id",
 			);
 		}
 
