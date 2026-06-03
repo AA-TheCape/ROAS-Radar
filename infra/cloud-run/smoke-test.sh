@@ -27,11 +27,29 @@ require_var() {
   fi
 }
 
+require_command() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    echo "missing required command $1 in PATH for smoke tests" >&2
+    exit 127
+  fi
+}
+
 require_var GCP_PROJECT_ID
 require_var GCP_REGION
 require_var API_SERVICE_NAME
 require_var DASHBOARD_SERVICE_NAME
 require_var WORKER_SERVICE_NAME
+
+require_command gcloud
+require_command curl
+require_command date
+require_command mktemp
+require_command python3
+
+if [ "${SMOKE_TEST_DEPENDENCY_CHECK_ONLY:-false}" = "true" ]; then
+  echo "Smoke test dependency check complete for $ENVIRONMENT"
+  exit 0
+fi
 
 SMOKE_TEST_END_DATE=${SMOKE_TEST_END_DATE:-${SMOKE_TEST_DATE:-$(date -u +%F)}}
 SMOKE_TEST_START_DATE=${SMOKE_TEST_START_DATE:-$SMOKE_TEST_END_DATE}
@@ -69,98 +87,98 @@ validate_meta_order_value_response() {
   RESPONSE_START_DATE="$2"
   RESPONSE_END_DATE="$3"
 
-  node - "$RESPONSE_FILE" "$RESPONSE_START_DATE" "$RESPONSE_END_DATE" <<'JS'
-const [responseFile, expectedStartDate, expectedEndDate] = process.argv.slice(2);
-const fs = await import('node:fs/promises');
-const payload = JSON.parse(await fs.readFile(responseFile, 'utf8'));
+  python3 - "$RESPONSE_FILE" "$RESPONSE_START_DATE" "$RESPONSE_END_DATE" <<'PY'
+import json
+import sys
 
-if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-  throw new Error('response body must be a JSON object');
-}
+response_file, expected_start_date, expected_end_date = sys.argv[1:4]
 
-const scope = payload.scope;
-if (!scope || typeof scope !== 'object' || !Number.isInteger(scope.organizationId) || scope.organizationId <= 0) {
-  throw new Error('response scope.organizationId must be a positive integer');
-}
+with open(response_file, encoding="utf-8") as handle:
+    payload = json.load(handle)
 
-const dateRange = payload.range;
+if not isinstance(payload, dict):
+    raise SystemExit("response body must be a JSON object")
+
+scope = payload.get("scope")
 if (
-  !dateRange ||
-  typeof dateRange !== 'object' ||
-  dateRange.startDate !== expectedStartDate ||
-  dateRange.endDate !== expectedEndDate
-) {
-  throw new Error('response range does not match smoke-test query');
-}
+    not isinstance(scope, dict)
+    or not isinstance(scope.get("organizationId"), int)
+    or isinstance(scope.get("organizationId"), bool)
+    or scope["organizationId"] <= 0
+):
+    raise SystemExit("response scope.organizationId must be a positive integer")
 
-const pagination = payload.pagination;
+date_range = payload.get("range")
 if (
-  !pagination ||
-  typeof pagination !== 'object' ||
-  !Number.isInteger(pagination.limit) ||
-  !Number.isInteger(pagination.offset)
-) {
-  throw new Error('response pagination is missing required integers');
-}
+    not isinstance(date_range, dict)
+    or date_range.get("startDate") != expected_start_date
+    or date_range.get("endDate") != expected_end_date
+):
+    raise SystemExit("response range does not match smoke-test query")
 
-const totals = payload.totals;
-if (!totals || typeof totals !== 'object' || Array.isArray(totals)) {
-  throw new Error('response totals object is required');
-}
+pagination = payload.get("pagination")
+if (
+    not isinstance(pagination, dict)
+    or not isinstance(pagination.get("limit"), int)
+    or isinstance(pagination.get("limit"), bool)
+    or not isinstance(pagination.get("offset"), int)
+    or isinstance(pagination.get("offset"), bool)
+):
+    raise SystemExit("response pagination is missing required integers")
 
-if (!Array.isArray(payload.rows)) {
-  throw new Error('response rows must be an array');
-}
+totals = payload.get("totals")
+if not isinstance(totals, dict):
+    raise SystemExit("response totals object is required")
 
-for (const key of ['attributedRevenue', 'purchaseCount', 'spend', 'roas']) {
-  const value = totals[key];
-  if (value !== null && typeof value !== 'number') {
-    throw new Error(`response totals.${key} must be numeric or null`);
-  }
-}
-JS
+if not isinstance(payload.get("rows"), list):
+    raise SystemExit("response rows must be an array")
+
+for key in ("attributedRevenue", "purchaseCount", "spend", "roas"):
+    value = totals.get(key)
+    if value is not None and (not isinstance(value, (int, float)) or isinstance(value, bool)):
+        raise SystemExit(f"response totals.{key} must be numeric or null")
+PY
 }
 
 validate_confidence_orders_response() {
   RESPONSE_FILE="$1"
 
-  node - "$RESPONSE_FILE" <<'JS'
-const [responseFile] = process.argv.slice(2);
-const fs = await import('node:fs/promises');
-const payload = JSON.parse(await fs.readFile(responseFile, 'utf8'));
+  python3 - "$RESPONSE_FILE" <<'PY'
+import json
+import sys
 
-if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-  throw new Error('confidence smoke response body must be a JSON object');
-}
+response_file = sys.argv[1]
 
-if (!Array.isArray(payload.rows)) {
-  throw new Error('confidence smoke response rows must be an array');
-}
+with open(response_file, encoding="utf-8") as handle:
+    payload = json.load(handle)
 
-payload.rows.forEach((row, index) => {
-  if (!row || typeof row !== 'object' || Array.isArray(row)) {
-    throw new Error(`confidence smoke row ${index} must be an object`);
-  }
+if not isinstance(payload, dict):
+    raise SystemExit("confidence smoke response body must be a JSON object")
 
-  if (!Object.hasOwn(row, 'confidenceScore')) {
-    throw new Error(`confidence smoke row ${index} is missing confidenceScore`);
-  }
+rows = payload.get("rows")
+if not isinstance(rows, list):
+    raise SystemExit("confidence smoke response rows must be an array")
 
-  const confidenceScore = row.confidenceScore;
-  if (
-    confidenceScore !== null &&
-    (typeof confidenceScore !== 'number' || confidenceScore < 0 || confidenceScore > 1)
-  ) {
-    throw new Error(`confidence smoke row ${index} has an invalid confidenceScore`);
-  }
+for index, row in enumerate(rows):
+    if not isinstance(row, dict):
+        raise SystemExit(f"confidence smoke row {index} must be an object")
 
-  for (const key of ['attributionSource', 'matchingMethod', 'lastAttributionRunAt']) {
-    if (!Object.hasOwn(row, key)) {
-      throw new Error(`confidence smoke row ${index} is missing ${key}`);
-    }
-  }
-});
-JS
+    if "confidenceScore" not in row:
+        raise SystemExit(f"confidence smoke row {index} is missing confidenceScore")
+
+    confidence_score = row["confidenceScore"]
+    if confidence_score is not None and (
+        not isinstance(confidence_score, (int, float))
+        or isinstance(confidence_score, bool)
+        or confidence_score < 0
+        or confidence_score > 1
+    ):
+        raise SystemExit(f"confidence smoke row {index} has an invalid confidenceScore")
+
+    for key in ("attributionSource", "matchingMethod", "lastAttributionRunAt"):
+        if key not in row:
+            raise SystemExit(f"confidence smoke row {index} is missing {key}")
+PY
 }
 
 echo "Smoke testing API health for $ENVIRONMENT"
