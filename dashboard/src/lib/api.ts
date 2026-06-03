@@ -261,6 +261,126 @@ export type MetaOrderValueQuery = {
   offset?: number;
 };
 
+export type MmmReadinessStatus = 'ready' | 'partial' | 'not_ready';
+
+export type MmmExcludedDateWindow = {
+  startDate: string;
+  endDate: string;
+  reason: 'no_mmm_mart_rows' | 'no_rows_matching_filters';
+};
+
+export type MmmExportRow = {
+  date: string;
+  martVersion: string;
+  martRowType: 'paid_media' | 'attribution';
+  attributionModel: string;
+  platform: 'meta' | 'google' | 'taxonomy';
+  platformConnectionId: number | null;
+  granularity: string;
+  entityKey: string;
+  accountId: string | null;
+  accountName: string | null;
+  campaignId: string | null;
+  campaignName: string | null;
+  adsetId: string | null;
+  adsetName: string | null;
+  adId: string | null;
+  adName: string | null;
+  creativeId: string | null;
+  creativeName: string | null;
+  source: string;
+  medium: string;
+  campaign: string;
+  content: string;
+  term: string;
+  currency: string | null;
+  spend: number;
+  impressions: number;
+  clicks: number;
+  shopifyOrders: number;
+  shopifyRevenue: number;
+  attributionCreditOrders: number;
+  attributionCreditRevenue: number;
+  newCustomerCreditOrders: number;
+  returningCustomerCreditOrders: number;
+  newCustomerCreditRevenue: number;
+  returningCustomerCreditRevenue: number;
+  matchSourceCoverage: unknown;
+  confidenceLabelCoverage: unknown;
+  spendLastSyncedAt: string | null;
+  shopifyLastIngestedAt: string | null;
+  attributionLastComputedAt: string | null;
+  lastComputedAt: string | null;
+};
+
+export type MmmExportResponse = {
+  schemaVersion: 'mmm_daily_input_mart_v1';
+  range: {
+    startDate: string;
+    endDate: string;
+  };
+  filters: {
+    martRowType: 'paid_media' | 'attribution' | null;
+    attributionModel: string | null;
+    platform: 'meta' | 'google' | 'taxonomy' | null;
+    source: string | null;
+    campaign: string | null;
+  };
+  readiness: {
+    status: MmmReadinessStatus;
+    generationTimestamp: string | null;
+    includedDateCount: number;
+    excludedDateWindows: MmmExcludedDateWindow[];
+  };
+  pagination: {
+    limit: number;
+    offset: number;
+    returned: number;
+    totalRows: number;
+    hasMore: boolean;
+  };
+  rows: MmmExportRow[];
+};
+
+export type MmmExportQuery = {
+  startDate: string;
+  endDate: string;
+  martRowType?: 'paid_media' | 'attribution';
+  attributionModel?: string;
+  platform?: 'meta' | 'google' | 'taxonomy';
+  source?: string;
+  campaign?: string;
+  limit?: number;
+  offset?: number;
+};
+
+export type MmmModelRun = {
+  id: string;
+  modelType: 'baseline_linear_mmm';
+  modelVersion: 'baseline_linear_mmm_v1';
+  martVersion: 'mmm_daily_input_mart_v1';
+  attributionModel: string;
+  runStatus: 'completed' | 'failed';
+  trainingStartDate: string;
+  trainingEndDate: string;
+  holdoutStartDate: string | null;
+  holdoutEndDate: string | null;
+  runConfig: Record<string, unknown>;
+  inputSummary: Record<string, unknown>;
+  modelArtifact: Record<string, unknown>;
+  calibrationReport: Record<string, unknown>;
+  validationReport: Record<string, unknown>;
+  errorCode: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+  startedAt: string;
+  completedAt: string | null;
+};
+
+export type MmmModelRunsResponse = {
+  rows: MmmModelRun[];
+};
+
 export type OrderDetailLineItem = {
 	shopifyLineItemId: string;
 	shopifyProductId: string | null;
@@ -894,6 +1014,43 @@ function buildMetaOrderValueSearchParams(query: MetaOrderValueQuery): URLSearchP
   return params;
 }
 
+function buildMmmExportSearchParams(query: MmmExportQuery): URLSearchParams {
+  const params = new URLSearchParams({
+    startDate: query.startDate,
+    endDate: query.endDate
+  });
+
+  if (query.martRowType) {
+    params.set('martRowType', query.martRowType);
+  }
+
+  if (query.attributionModel?.trim()) {
+    params.set('attributionModel', query.attributionModel.trim());
+  }
+
+  if (query.platform) {
+    params.set('platform', query.platform);
+  }
+
+  if (query.source?.trim()) {
+    params.set('source', query.source.trim());
+  }
+
+  if (query.campaign?.trim()) {
+    params.set('campaign', query.campaign.trim());
+  }
+
+  if (typeof query.limit === 'number') {
+    params.set('limit', `${query.limit}`);
+  }
+
+  if (typeof query.offset === 'number') {
+    params.set('offset', `${query.offset}`);
+  }
+
+  return params;
+}
+
 function buildHeaders(includeJsonBody: boolean): Record<string, string> {
 	const headers: Record<string, string> = {
 		"x-roas-radar-tenant-id": TENANT_ID,
@@ -1016,6 +1173,41 @@ export function fetchOrders(filters: ReportingFilters, limit = 10) {
 export function fetchMetaOrderValue(query: MetaOrderValueQuery) {
   return requestJson<MetaOrderValueResponse>('/api/reporting/meta-order-value', {
     searchParams: buildMetaOrderValueSearchParams(query)
+  });
+}
+
+export function fetchMmmExport(query: MmmExportQuery) {
+  return requestJson<MmmExportResponse>('/api/reporting/mmm', {
+    searchParams: buildMmmExportSearchParams(query)
+  });
+}
+
+export function fetchMmmModelRuns(query: {
+  startDate?: string;
+  endDate?: string;
+  attributionModel?: string;
+  limit?: number;
+} = {}) {
+  const searchParams = new URLSearchParams();
+
+  if (query.startDate) {
+    searchParams.set('startDate', query.startDate);
+  }
+
+  if (query.endDate) {
+    searchParams.set('endDate', query.endDate);
+  }
+
+  if (query.attributionModel?.trim()) {
+    searchParams.set('attributionModel', query.attributionModel.trim());
+  }
+
+  if (typeof query.limit === 'number') {
+    searchParams.set('limit', `${query.limit}`);
+  }
+
+  return requestJson<MmmModelRunsResponse>('/api/reporting/mmm/model-runs', {
+    searchParams
   });
 }
 

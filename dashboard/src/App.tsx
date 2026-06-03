@@ -110,6 +110,7 @@ import { isAttributionTier } from "./lib/attributionTier";
 const ReportingDashboard = lazy(() => import('./components/ReportingDashboard'));
 const AttributionDashboard = lazy(() => import('./components/AttributionDashboard'));
 const MetaOrderValueView = lazy(() => import('./components/MetaOrderValueView'));
+const MmmReadinessDashboard = lazy(() => import('./components/MmmReadinessDashboard'));
 const OrderDetailsView = lazy(() => import('./components/OrderDetailsView'));
 const SettingsAdminView = lazy(() => import('./components/SettingsAdminView'));
 const IdentityGraphHealthView = lazy(() => import('./components/IdentityGraphHealthView'));
@@ -183,7 +184,7 @@ type SettingsForm = {
 	reportingTimezone: string;
 };
 
-type AppPage = 'dashboard' | 'attribution' | 'meta-order-value' | 'identity-health' | 'settings' | 'order-details';
+type AppPage = 'dashboard' | 'attribution' | 'meta-order-value' | 'mmm' | 'identity-health' | 'settings' | 'order-details';
 
 const AUTHENTICATED_NAV_ITEMS: AppShellNavItem[] = [
   {
@@ -200,6 +201,11 @@ const AUTHENTICATED_NAV_ITEMS: AppShellNavItem[] = [
     key: 'meta-order-value',
     label: 'Meta order value',
     description: 'Campaign-day Meta attributed revenue, spend, ROAS, and canonical action-type breakdowns.'
+  },
+  {
+    key: 'mmm',
+    label: 'MMM',
+    description: 'Readiness checklist, owner approvals, freshness telemetry, and baseline model output status.'
   },
   {
     key: 'identity-health',
@@ -2058,6 +2064,11 @@ function App() {
             { label: 'Authenticated app' },
             { label: 'Meta order value', current: true }
           ]
+      : currentPage === 'mmm'
+        ? [
+            { label: 'Authenticated app' },
+            { label: 'MMM', current: true }
+          ]
       : currentPage === 'identity-health'
         ? [
             { label: 'Authenticated app' },
@@ -2167,6 +2178,19 @@ function App() {
           }
         >
           <MetaOrderValueView reportingTimezone={reportingTimezone} />
+        </Suspense>
+      ) : null}
+
+      {currentPage === 'mmm' ? (
+        <Suspense
+          fallback={
+            <AuthenticatedViewFallback
+              title="MMM"
+              description="Loading readiness checklist, owner approvals, freshness telemetry, and model output status."
+            />
+          }
+        >
+          <MmmReadinessDashboard reportingTimezone={reportingTimezone} />
         </Suspense>
       ) : null}
 
