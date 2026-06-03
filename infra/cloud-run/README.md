@@ -206,7 +206,7 @@ The checked-in env files are valid shell files. Replace the placeholder project 
 Meta deployment blockers:
 
 - `MIGRATOR_DATABASE_URL` must exist in Secret Manager before deploy because the migrator job runs before service rollout by default.
-- `META_ADS_APP_SECRET`, `META_ADS_ENCRYPTION_KEY`, and the secret named by `META_ADS_METADATA_ACCESS_TOKEN_SECRET_NAME` must exist in Secret Manager before `bootstrap-iam.sh` or `deploy.sh` can grant/bind them.
+- `META_ADS_APP_SECRET` and `META_ADS_ENCRYPTION_KEY` must exist in Secret Manager before `bootstrap-iam.sh` or `deploy.sh` can grant/bind them. `META_ADS_METADATA_ACCESS_TOKEN_SECRET_NAME` is optional; leave it empty to use encrypted Meta connection tokens from application storage.
 - `META_ADS_APP_ID`, `META_ADS_AD_ACCOUNT_ID`, `META_ADS_APP_SCOPES`, and `META_ADS_API_VERSION` must be populated in the environment file before enabling Meta sync or metadata schedulers.
 - `CLOUD_SQL_CONNECTION_NAME` must point at the environment Cloud SQL instance; API, worker, migrator, Meta sync, metadata refresh, and campaign metadata backfill workloads all attach it for the metadata cache table.
 
