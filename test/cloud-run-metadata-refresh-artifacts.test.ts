@@ -51,7 +51,14 @@ test('cloud run metadata refresh jobs use provider-specific secret bindings', ()
     metaAdsSection,
     /DATABASE_URL=DATABASE_URL:latest,\$META_ADS_SECRET_FLAGS/
   );
-  assert.match(script, /META_ADS_METADATA_ACCESS_TOKEN=\$META_ADS_METADATA_ACCESS_TOKEN_SECRET_NAME:latest/);
+  assert.match(
+    script,
+    /if \[ -n "\$\{META_ADS_METADATA_ACCESS_TOKEN_SECRET_NAME:-\}" \]; then/
+  );
+  assert.match(
+    script,
+    /META_ADS_METADATA_ACCESS_TOKEN=\$META_ADS_METADATA_ACCESS_TOKEN_SECRET_NAME:latest/
+  );
   assert.doesNotMatch(metaAdsSection, /GOOGLE_ADS_ENCRYPTION_KEY/);
   assert.match(
     googleAdsSection,
@@ -125,8 +132,10 @@ test('cloud run runbooks document metadata scheduler creation and pause or resum
   assert.match(metadataRunbook, /GOOGLE_ADS_METADATA_REFRESH_REQUESTED_BY/);
 });
 
-test('cloud run IAM bootstrap grants Meta metadata token access to Meta-capable workloads', () => {
+test('cloud run IAM bootstrap grants optional Meta metadata token access to Meta-capable workloads', () => {
   const bootstrapScript = readRepoFile('infra/cloud-run/bootstrap-iam.sh');
+
+  assert.match(bootstrapScript, /if \[ -z "\$secret_name" \]; then/);
 
   for (const serviceAccount of [
     'API_SERVICE_ACCOUNT_NAME',
@@ -138,7 +147,7 @@ test('cloud run IAM bootstrap grants Meta metadata token access to Meta-capable 
     assert.match(
       bootstrapScript,
       new RegExp(
-        `grant_secret_access "\\$${serviceAccount}" "\\$\\{META_ADS_METADATA_ACCESS_TOKEN_SECRET_NAME:-META_ADS_METADATA_ACCESS_TOKEN\\}"`
+        `grant_secret_access "\\$${serviceAccount}" "\\$\\{META_ADS_METADATA_ACCESS_TOKEN_SECRET_NAME:-\\}"`
       )
     );
   }
