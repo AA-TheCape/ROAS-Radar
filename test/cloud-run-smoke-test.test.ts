@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, copyFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -8,6 +17,19 @@ import test from 'node:test';
 function writeExecutable(filePath: string, contents: string) {
   writeFileSync(filePath, contents);
   chmodSync(filePath, 0o755);
+}
+
+function shellQuote(value: string) {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function resolvePython3Path() {
+  const result = spawnSync('python3', ['-c', 'import sys; print(sys.executable)'], {
+    encoding: 'utf8'
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout.trim() || 'python3';
 }
 
 function createSmokeFixture(mode: 'success' | 'malformed-authenticated-response' | 'malformed-confidence-response') {
@@ -154,9 +176,9 @@ fi
   );
 
   writeExecutable(
-    path.join(binDir, 'node'),
+    path.join(binDir, 'python3'),
     `#!/bin/sh
-exec "${process.execPath}" "$@"
+exec ${shellQuote(resolvePython3Path())} "$@"
 `
   );
 
@@ -176,6 +198,32 @@ exec "${process.execPath}" "$@"
     scriptPath: path.join(scriptDir, 'smoke-test.sh')
   };
 }
+
+test('cloud run smoke test declares and can run its dependency-only preflight', () => {
+  const fixture = createSmokeFixture('success');
+
+  try {
+    const result = spawnSync('sh', [fixture.scriptPath, 'fixture'], {
+      env: {
+        ...fixture.env,
+        SMOKE_TEST_DEPENDENCY_CHECK_ONLY: 'true'
+      },
+      encoding: 'utf8'
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Smoke test dependency check complete for fixture/);
+    assert.equal(existsSync(fixture.curlLogPath), false);
+
+    const script = readFileSync(path.resolve('infra/cloud-run/smoke-test.sh'), 'utf8');
+    for (const command of ['gcloud', 'curl', 'date', 'mktemp', 'python3']) {
+      assert.match(script, new RegExp(`require_command ${command}\\b`));
+    }
+    assert.doesNotMatch(script, /\bnode\b/);
+  } finally {
+    fixture.cleanup();
+  }
+});
 
 test('cloud run smoke test validates unauthenticated and authenticated Meta order value checks', () => {
   const fixture = createSmokeFixture('success');
