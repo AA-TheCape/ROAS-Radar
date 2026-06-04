@@ -28,15 +28,17 @@ import {
   TableWrap
 } from './AuthenticatedUi';
 import {
+  fetchExposureCoverage,
   fetchMmmExport,
   fetchMmmModelRuns,
+  type ExposureCoverageResponse,
   type MmmExportQuery,
   type MmmExportResponse,
   type MmmExportRow,
   type MmmModelRunsResponse,
   type MmmReadinessStatus
 } from '../lib/api';
-import { formatCurrency, formatDateLabel, formatDateTimeLabel, formatNumber } from '../lib/format';
+import { formatCurrency, formatDateLabel, formatDateTimeLabel, formatNumber, formatPercent } from '../lib/format';
 
 type AsyncSection<T> = {
   data: T | null;
@@ -296,11 +298,15 @@ export default function MmmReadinessDashboard({ reportingTimezone }: MmmReadines
   const [draftQuery, setDraftQuery] = useState<MmmExportQuery>(() => buildDefaultQuery(reportingTimezone));
   const [exportSection, setExportSection] = useState<AsyncSection<MmmExportResponse>>(createSection({ loading: true }));
   const [modelRunsSection, setModelRunsSection] = useState<AsyncSection<MmmModelRunsResponse>>(createSection({ loading: true }));
+  const [exposureCoverageSection, setExposureCoverageSection] = useState<AsyncSection<ExposureCoverageResponse>>(
+    createSection({ loading: true })
+  );
 
   useEffect(() => {
     let cancelled = false;
     setExportSection(createSection({ loading: true }));
     setModelRunsSection(createSection({ loading: true }));
+    setExposureCoverageSection(createSection({ loading: true }));
 
     fetchMmmExport(query)
       .then((response) => {
@@ -331,6 +337,21 @@ export default function MmmReadinessDashboard({ reportingTimezone }: MmmReadines
         }
       });
 
+    fetchExposureCoverage({
+      startDate: query.startDate,
+      endDate: query.endDate
+    })
+      .then((response) => {
+        if (!cancelled) {
+          setExposureCoverageSection(createSection({ data: response }));
+        }
+      })
+      .catch((error: Error) => {
+        if (!cancelled) {
+          setExposureCoverageSection(createSection({ error: error.message }));
+        }
+      });
+
     return () => {
       cancelled = true;
     };
@@ -346,6 +367,7 @@ export default function MmmReadinessDashboard({ reportingTimezone }: MmmReadines
   const latestShopifyIngest = latestDate((exportSection.data?.rows ?? []).map((row) => row.shopifyLastIngestedAt));
   const latestAttributionCompute = latestDate((exportSection.data?.rows ?? []).map((row) => row.attributionLastComputedAt));
   const readiness = exportSection.data?.readiness;
+  const exposureTotals = exposureCoverageSection.data?.totals;
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -520,6 +542,88 @@ export default function MmmReadinessDashboard({ reportingTimezone }: MmmReadines
             </div>
           </Card>
         ))}
+      </div>
+
+      <div className="grid gap-card xl:grid-cols-[0.78fr_1.22fr]">
+        <Card>
+          <CardHeader>
+            <div>
+              <CardTitle>Exposure coverage</CardTitle>
+              <CardDescription>View and impression ingestion coverage for 7-day view attribution readiness.</CardDescription>
+            </div>
+            <Badge tone={exposureTotals && exposureTotals.identityResolutionRate !== null && exposureTotals.identityResolutionRate >= 0.8 ? 'success' : 'warning'}>
+              {formatPercent(exposureTotals?.identityResolutionRate ?? null)}
+            </Badge>
+          </CardHeader>
+          <SectionState
+            loading={exposureCoverageSection.loading}
+            error={exposureCoverageSection.error}
+            empty={!exposureCoverageSection.data || exposureCoverageSection.data.rows.length === 0}
+            emptyLabel="No exposure events were returned for this window."
+            compact
+          >
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="rounded-card border border-line/60 bg-surface-alt/65 p-4">
+                <Eyebrow>Total</Eyebrow>
+                <MetricValue>{formatNumber(exposureTotals?.totalExposures)}</MetricValue>
+                <MetricCopy>{formatNumber(exposureTotals?.validExposures)} valid exposure events.</MetricCopy>
+              </div>
+              <div className="rounded-card border border-line/60 bg-surface-alt/65 p-4">
+                <Eyebrow>Identity</Eyebrow>
+                <MetricValue>{formatPercent(exposureTotals?.identityResolutionRate ?? null)}</MetricValue>
+                <MetricCopy>{formatNumber(exposureTotals?.identityResolvedExposures)} linked to identity graph.</MetricCopy>
+              </div>
+              <div className="rounded-card border border-line/60 bg-surface-alt/65 p-4">
+                <Eyebrow>Campaign metadata</Eyebrow>
+                <MetricValue>{formatPercent(exposureTotals?.campaignMetadataResolutionRate ?? null)}</MetricValue>
+                <MetricCopy>{formatNumber(exposureTotals?.campaignMetadataResolvedExposures)} campaign joins resolved.</MetricCopy>
+              </div>
+            </div>
+          </SectionState>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <div>
+              <CardTitle>Exposure breakdown</CardTitle>
+              <CardDescription>Daily validity, identity, and campaign metadata coverage by platform and exposure type.</CardDescription>
+            </div>
+          </CardHeader>
+          <SectionState
+            loading={exposureCoverageSection.loading}
+            error={exposureCoverageSection.error}
+            empty={!exposureCoverageSection.data || exposureCoverageSection.data.rows.length === 0}
+            emptyLabel="No exposure breakdown rows were returned for this window."
+            compact
+          >
+            <TableWrap>
+              <Table caption="Exposure coverage breakdown">
+                <TableHead>
+                  <TableRow>
+                    <TableHeaderCell>Date</TableHeaderCell>
+                    <TableHeaderCell>Platform</TableHeaderCell>
+                    <TableHeaderCell>Type</TableHeaderCell>
+                    <TableHeaderCell>Total</TableHeaderCell>
+                    <TableHeaderCell>Identity</TableHeaderCell>
+                    <TableHeaderCell>Metadata</TableHeaderCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {(exposureCoverageSection.data?.rows ?? []).slice(0, 12).map((row) => (
+                    <TableRow key={`${row.date}-${row.sourcePlatform}-${row.exposureType}`}>
+                      <TableCell>{formatDateLabel(row.date, reportingTimezone)}</TableCell>
+                      <TableCell>{row.sourcePlatform.replace(/_/g, ' ')}</TableCell>
+                      <TableCell>{row.exposureType}</TableCell>
+                      <TableCell>{formatNumber(row.totalExposures)}</TableCell>
+                      <TableCell>{formatPercent(row.identityResolutionRate)}</TableCell>
+                      <TableCell>{formatPercent(row.campaignMetadataResolutionRate)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableWrap>
+          </SectionState>
+        </Card>
       </div>
 
       <div className="grid gap-card xl:grid-cols-[0.9fr_1.1fr]">

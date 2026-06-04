@@ -381,6 +381,36 @@ export type MmmModelRunsResponse = {
   rows: MmmModelRun[];
 };
 
+export type ExposureCoverageRow = {
+  date: string;
+  sourcePlatform: 'meta_ads' | 'google_ads' | 'tiktok_ads' | 'pinterest_ads' | 'snapchat_ads' | 'unknown';
+  exposureType: 'impression' | 'view';
+  totalExposures: number;
+  validExposures: number;
+  invalidExposures: number;
+  identityResolvedExposures: number;
+  identityUnresolvedExposures: number;
+  identityResolutionRate: number | null;
+  campaignJoinableExposures: number;
+  campaignMetadataResolvedExposures: number;
+  campaignMetadataResolutionRate: number | null;
+  latestExposureAt: string | null;
+};
+
+export type ExposureCoverageResponse = {
+  schemaVersion: 'ad_exposure_coverage_v1';
+  range: {
+    startDate: string;
+    endDate: string;
+  };
+  filters: {
+    sourcePlatform: ExposureCoverageRow['sourcePlatform'] | null;
+    exposureType: ExposureCoverageRow['exposureType'] | null;
+  };
+  totals: Omit<ExposureCoverageRow, 'date' | 'sourcePlatform' | 'exposureType' | 'latestExposureAt'>;
+  rows: ExposureCoverageRow[];
+};
+
 export type OrderDetailLineItem = {
 	shopifyLineItemId: string;
 	shopifyProductId: string | null;
@@ -1207,6 +1237,30 @@ export function fetchMmmModelRuns(query: {
   }
 
   return requestJson<MmmModelRunsResponse>('/api/reporting/mmm/model-runs', {
+    searchParams
+  });
+}
+
+export function fetchExposureCoverage(query: {
+  startDate: string;
+  endDate: string;
+  sourcePlatform?: ExposureCoverageRow['sourcePlatform'];
+  exposureType?: ExposureCoverageRow['exposureType'];
+}) {
+  const searchParams = new URLSearchParams({
+    startDate: query.startDate,
+    endDate: query.endDate
+  });
+
+  if (query.sourcePlatform) {
+    searchParams.set('sourcePlatform', query.sourcePlatform);
+  }
+
+  if (query.exposureType) {
+    searchParams.set('exposureType', query.exposureType);
+  }
+
+  return requestJson<ExposureCoverageResponse>('/api/reporting/mmm/exposure-coverage', {
     searchParams
   });
 }

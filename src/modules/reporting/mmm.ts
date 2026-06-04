@@ -134,6 +134,20 @@ type MmmExportRow = {
   needs_metadata_qa: boolean;
 };
 
+type ExposureCoverageRow = {
+  metric_date: string;
+  source_platform: string;
+  exposure_type: string;
+  total_exposures: string | number;
+  valid_exposures: string | number;
+  invalid_exposures: string | number;
+  identity_resolved_exposures: string | number;
+  identity_unresolved_exposures: string | number;
+  campaign_joinable_exposures: string | number;
+  campaign_metadata_resolved_exposures: string | number;
+  latest_exposure_at: Date | null;
+};
+
 function parseInput<TSchema extends z.ZodTypeAny>(schema: TSchema, input: unknown): z.infer<TSchema> {
   try {
     return schema.parse(input);
@@ -344,6 +358,30 @@ function renderCsv(rows: ReturnType<typeof mapMmmRow>[], generationTimestamp: st
   return `${lines.join('\n')}\n`;
 }
 
+function mapExposureCoverageRow(row: ExposureCoverageRow) {
+  const totalExposures = toNumber(row.total_exposures);
+  const validExposures = toNumber(row.valid_exposures);
+  const identityResolvedExposures = toNumber(row.identity_resolved_exposures);
+  const campaignJoinableExposures = toNumber(row.campaign_joinable_exposures);
+  const campaignMetadataResolvedExposures = toNumber(row.campaign_metadata_resolved_exposures);
+
+  return {
+    date: row.metric_date,
+    sourcePlatform: row.source_platform,
+    exposureType: row.exposure_type,
+    totalExposures,
+    validExposures,
+    invalidExposures: toNumber(row.invalid_exposures),
+    identityResolvedExposures,
+    identityUnresolvedExposures: toNumber(row.identity_unresolved_exposures),
+    identityResolutionRate: totalExposures > 0 ? identityResolvedExposures / totalExposures : null,
+    campaignJoinableExposures,
+    campaignMetadataResolvedExposures,
+    campaignMetadataResolutionRate: campaignJoinableExposures > 0 ? campaignMetadataResolvedExposures / campaignJoinableExposures : null,
+    latestExposureAt: toIsoString(row.latest_exposure_at)
+  };
+}
+
 function deriveReadiness(rows: MmmReadinessRow[]) {
   const excludedDateWindows = rows
     .filter((row) => Number(row.matching_row_count) === 0)
@@ -402,6 +440,126 @@ export function createMmmRouter(): Router {
       res.status(202).json({
         schemaVersion: 'campaign_metadata_resolver_v1',
         report
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/exposure-coverage', async (req, res, next) => {
+    try {
+      const input = parseInput(
+        z
+          .object({
+            startDate: dateStringSchema,
+            endDate: dateStringSchema,
+            sourcePlatform: z
+              .enum(['meta_ads', 'google_ads', 'tiktok_ads', 'pinterest_ads', 'snapchat_ads', 'unknown'])
+              .optional(),
+            exposureType: z.enum(['impression', 'view']).optional()
+          })
+          .superRefine((value, ctx) => {
+            if (value.startDate > value.endDate) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message: 'startDate must be on or before endDate',
+                path: ['startDate']
+              });
+            }
+          }),
+        req.query
+      );
+      const params: unknown[] = [input.startDate, input.endDate];
+      const filters = ['e.occurred_at >= $1::date', "e.occurred_at < ($2::date + interval '1 day')"];
+
+      if (input.sourcePlatform) {
+        params.push(input.sourcePlatform);
+        filters.push(`e.source_platform = $${params.length}`);
+      }
+
+      if (input.exposureType) {
+        params.push(input.exposureType);
+        filters.push(`e.exposure_type = $${params.length}`);
+      }
+
+      const result = await query<ExposureCoverageRow>(
+        `
+          SELECT
+            e.occurred_at::date::text AS metric_date,
+            e.source_platform,
+            e.exposure_type,
+            COUNT(*)::bigint AS total_exposures,
+            COUNT(*) FILTER (WHERE e.validity_status = 'valid')::bigint AS valid_exposures,
+            COUNT(*) FILTER (WHERE e.validity_status = 'invalid')::bigint AS invalid_exposures,
+            COUNT(*) FILTER (WHERE e.identity_journey_id IS NOT NULL)::bigint AS identity_resolved_exposures,
+            COUNT(*) FILTER (
+              WHERE e.validity_status = 'valid'
+                AND e.identity_journey_id IS NULL
+            )::bigint AS identity_unresolved_exposures,
+            COUNT(*) FILTER (
+              WHERE e.validity_status = 'valid'
+                AND e.account_id IS NOT NULL
+                AND e.campaign_id IS NOT NULL
+            )::bigint AS campaign_joinable_exposures,
+            COUNT(*) FILTER (WHERE campaign_meta.id IS NOT NULL)::bigint AS campaign_metadata_resolved_exposures,
+            MAX(e.occurred_at) AS latest_exposure_at
+          FROM ad_exposure_events e
+          LEFT JOIN ad_platform_entity_metadata campaign_meta
+            ON campaign_meta.platform = e.source_platform
+           AND campaign_meta.entity_type = 'campaign'
+           AND campaign_meta.account_id = e.account_id
+           AND campaign_meta.entity_id = e.campaign_id
+           AND COALESCE(campaign_meta.tenant_id, '') = COALESCE(e.tenant_id, '')
+           AND COALESCE(campaign_meta.workspace_id, '') = COALESCE(e.workspace_id, '')
+          WHERE ${filters.join('\n            AND ')}
+          GROUP BY e.occurred_at::date, e.source_platform, e.exposure_type
+          ORDER BY e.occurred_at::date ASC, e.source_platform ASC, e.exposure_type ASC
+        `,
+        params
+      );
+      const rows = result.rows.map(mapExposureCoverageRow);
+      const totals = rows.reduce(
+        (current, row) => ({
+          totalExposures: current.totalExposures + row.totalExposures,
+          validExposures: current.validExposures + row.validExposures,
+          invalidExposures: current.invalidExposures + row.invalidExposures,
+          identityResolvedExposures: current.identityResolvedExposures + row.identityResolvedExposures,
+          identityUnresolvedExposures: current.identityUnresolvedExposures + row.identityUnresolvedExposures,
+          campaignJoinableExposures: current.campaignJoinableExposures + row.campaignJoinableExposures,
+          campaignMetadataResolvedExposures:
+            current.campaignMetadataResolvedExposures + row.campaignMetadataResolvedExposures
+        }),
+        {
+          totalExposures: 0,
+          validExposures: 0,
+          invalidExposures: 0,
+          identityResolvedExposures: 0,
+          identityUnresolvedExposures: 0,
+          campaignJoinableExposures: 0,
+          campaignMetadataResolvedExposures: 0
+        }
+      );
+
+      res.status(200).json({
+        schemaVersion: 'ad_exposure_coverage_v1',
+        range: {
+          startDate: input.startDate,
+          endDate: input.endDate
+        },
+        filters: {
+          sourcePlatform: input.sourcePlatform ?? null,
+          exposureType: input.exposureType ?? null
+        },
+        totals: {
+          ...totals,
+          identityResolutionRate:
+            totals.totalExposures > 0 ? totals.identityResolvedExposures / totals.totalExposures : null,
+          campaignMetadataResolutionRate:
+            totals.campaignJoinableExposures > 0
+              ? totals.campaignMetadataResolvedExposures / totals.campaignJoinableExposures
+              : null
+        },
+        rows
       });
     } catch (error) {
       next(error);
