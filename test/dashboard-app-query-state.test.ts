@@ -204,6 +204,7 @@ test("dashboard query-state helpers preserve valid control state and keep unrela
           source: 'meta',
           campaign: 'retargeting',
           attributionModel: undefined,
+          sourceOfTruth: 'deterministic',
           attributionTier: 'ga4_fallback'
         },
         groupBy: 'campaign'

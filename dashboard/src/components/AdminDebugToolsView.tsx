@@ -1,4 +1,4 @@
-import React, { useEffect, useState, type FormEvent } from 'react';
+import React, { useCallback, useEffect, useState, type FormEvent } from 'react';
 
 import {
   type AdminDebugAuditResponse,
@@ -324,7 +324,7 @@ export default function AdminDebugToolsView({ reportingTimezone }: { reportingTi
   const latestAuditRows = auditSection.data?.rows ?? [];
   const recomputeLimit = 100;
 
-  async function loadAudit() {
+  const loadAudit = useCallback(async () => {
     setAuditSection((current) => loadingSection(current));
 
     try {
@@ -340,11 +340,11 @@ export default function AdminDebugToolsView({ reportingTimezone }: { reportingTi
         error: error instanceof Error ? error.message : 'Failed to load audit log'
       });
     }
-  }
+  }, []);
 
   useEffect(() => {
     void loadAudit();
-  }, []);
+  }, [loadAudit]);
 
   async function handleJourneySubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

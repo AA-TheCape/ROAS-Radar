@@ -61,7 +61,7 @@ test("Bayesian MMM Cloud Run command fails validation when freeze id is missing"
 
 test("Bayesian MMM Cloud Run command fails validation when database config is missing", async () => {
 	const env = { ...commandEnv };
-	delete env.DATABASE_URL;
+	env.DATABASE_URL = undefined;
 
 	await assert.rejects(
 		execFileAsync(

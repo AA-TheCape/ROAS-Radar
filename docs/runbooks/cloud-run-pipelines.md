@@ -26,7 +26,7 @@ Use this runbook when deploying or operating the scheduled Cloud Run workers in 
 
 ## Pre-deploy checks
 
-Run the backend verification contract from a clean Node 22 checkout in this order:
+Run the backend verification contract from a clean Node 22.12.0+ checkout in this order:
 
 1. Confirm the target environment infrastructure plan has no unexpected drift:
    `terraform -chdir=infra/terraform/gcp-pipeline plan -var-file=environments/<environment>.tfvars`

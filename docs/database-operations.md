@@ -14,6 +14,23 @@ Validate that migrations remain idempotent with:
 npm run db:migrate:check
 ```
 
+`db:migrate:check` requires `DATABASE_URL` to point at a non-production Postgres-compatible database. For local verification, create an empty database and run:
+
+```bash
+export DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/roas_radar_migration_check
+npm run db:migrate:check
+```
+
+For Cloud SQL staging verification, connect through the Cloud SQL Auth Proxy or private network endpoint and use the migrator credentials from Secret Manager:
+
+```bash
+cloud-sql-proxy <project>:<region>:<instance> --port 5432
+export DATABASE_URL='postgres://<migrator_user>:<password>@127.0.0.1:5432/<staging_database>'
+npm run db:migrate:check
+```
+
+The CI `migration-and-integration` job runs the same check against a disposable Postgres 16 service before integration tests.
+
 ## Campaign Metadata Lookup
 
 Use `ad_platform_entity_metadata` as the canonical latest-name resolution table for Google Ads and Meta entity labels.
