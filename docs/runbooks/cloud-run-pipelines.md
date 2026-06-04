@@ -12,9 +12,17 @@ Use this runbook when deploying or operating the scheduled Cloud Run workers in 
   - `roas-radar-migrate`
   - `roas-radar-meta-ads-sync`
   - `roas-radar-meta-order-value-sync`
+  - `roas-radar-meta-deterministic-sync`
   - `roas-radar-meta-ads-metadata-refresh`
   - `roas-radar-google-ads-metadata-refresh`
   - `roas-radar-google-ads-sync`
+  - `roas-radar-ga4-ingestion`
+  - `roas-radar-campaign-metadata-backfill`
+  - `roas-radar-shopify-order-reimport`
+  - `roas-radar-order-attribution-backfill`
+  - `roas-radar-shopify-attribution-recovery`
+  - `roas-radar-ga4-fallback-recovery`
+  - `roas-radar-dead-letter-replay`
   - `roas-radar-session-retention`
   - `roas-radar-data-quality`
   - `roas-radar-identity-graph-backfill`
@@ -40,9 +48,10 @@ For staged releases, prefer:
 2. Validate `sh infra/cloud-run/smoke-test.sh staging`
 3. Confirm the smoke log shows `/api/reporting/meta-order-value` returning `401` without auth and succeeding with the reporting bearer token for the bounded `startDate` and `endDate` query
 4. Confirm the Meta order-value scheduler is active in non-prod with `sh infra/cloud-run/scheduler.sh staging meta-order-value status`
-5. After non-prod validation, `sh infra/cloud-run/promote.sh production`
-6. Validate `sh infra/cloud-run/smoke-test.sh production` and retain the same Meta order value smoke evidence for production promotion records
-7. Confirm the production scheduler with `sh infra/cloud-run/scheduler.sh production meta-order-value status`
+5. Confirm deterministic view/impression ingestion is scheduled with `sh infra/cloud-run/scheduler.sh staging meta-deterministic status`
+6. After non-prod validation, `sh infra/cloud-run/promote.sh production`
+7. Validate `sh infra/cloud-run/smoke-test.sh production` and retain the same Meta order value smoke evidence for production promotion records
+8. Confirm the production schedulers with `sh infra/cloud-run/scheduler.sh production meta-order-value status` and `sh infra/cloud-run/scheduler.sh production meta-deterministic status`
 
 Do not sign off staging or continue to production unless the smoke evidence includes the authenticated Meta order value response contract check.
 
@@ -50,6 +59,9 @@ Do not sign off staging or continue to production unless the smoke evidence incl
 
 - `META_ADS_ORDER_VALUE_SCHEDULER_PAUSED` controls whether deploys leave the hourly Meta order-value scheduler active or paused.
 - `META_ADS_ORDER_VALUE_SYNC_SCHEDULE` controls the Meta order-value Cloud Scheduler cron.
+- `META_ADS_DETERMINISTIC_SCHEDULER_PAUSED` controls whether deploys leave the Meta deterministic view/impression scheduler active or paused.
+- `META_ADS_DETERMINISTIC_SYNC_SCHEDULE` controls the deterministic Cloud Scheduler cron.
+- `META_ADS_DETERMINISTIC_SYNC_INITIAL_LOOKBACK_DAYS` and `META_ADS_DETERMINISTIC_SYNC_LOOKBACK_DAYS` control first-run and steady-state backfill windows.
 - `META_ADS_SCHEDULER_ATTEMPT_DEADLINE`, `META_ADS_SCHEDULER_MAX_RETRY_ATTEMPTS`, `META_ADS_SCHEDULER_MIN_BACKOFF`, `META_ADS_SCHEDULER_MAX_BACKOFF`, and `META_ADS_SCHEDULER_MAX_DOUBLINGS` control Cloud Scheduler retry behavior.
 - `META_ADS_JOB_TIMEOUT_SECONDS` and `META_ADS_JOB_MAX_RETRIES` control the Cloud Run Job execution budget.
 - `META_ADS_ORDER_VALUE_SYNC_ENABLED` is the emergency kill switch for Meta order-value extraction without disabling the broader deploy surface.
@@ -73,19 +85,48 @@ Recommended operating posture:
 
 1. If the issue is limited to Meta hourly ingestion, pause only the Meta scheduler:
    `sh infra/cloud-run/scheduler.sh <environment> meta-order-value pause`
-2. If MMM calibration drift or model failures are active, pause the MMM scheduler while upstream freshness is repaired:
+2. If deterministic view/impression extraction is producing bad data, pause that scheduler independently:
+   `sh infra/cloud-run/scheduler.sh <environment> meta-deterministic pause`
+3. If MMM calibration drift or model failures are active, pause the MMM scheduler while upstream freshness is repaired:
    `sh infra/cloud-run/scheduler.sh <environment> mmm-baseline pause`
    `sh infra/cloud-run/scheduler.sh <environment> mmm-bayesian pause`
-3. If the scheduler should stay deployed but order-value extraction must stop, set `META_ADS_ORDER_VALUE_SYNC_ENABLED="false"` in the target environment file and rerun `sh infra/cloud-run/deploy.sh <environment>`.
-4. If the service rollout itself must be reverted, use `sh infra/cloud-run/rollback.sh <environment> <deploy-metadata-file> previous`.
-5. If a schema change must be reversed, apply the matching manual rollback file from `db/rollbacks/` with the migrator database credentials, then rerun the smoke test before resuming schedulers.
-6. After remediation, resume the scheduler:
+4. If the scheduler should stay deployed but order-value extraction must stop, set `META_ADS_ORDER_VALUE_SYNC_ENABLED="false"` in the target environment file and rerun `sh infra/cloud-run/deploy.sh <environment>`.
+5. If deterministic extraction must stop but the job should remain deployed, set `META_ADS_DETERMINISTIC_SYNC_ENABLED="false"` and rerun `sh infra/cloud-run/deploy.sh <environment>`.
+6. If the service rollout itself must be reverted, use `sh infra/cloud-run/rollback.sh <environment> <deploy-metadata-file> previous`.
+7. If a schema change must be reversed, apply the matching manual rollback file from `db/rollbacks/` with the migrator database credentials, then rerun the smoke test before resuming schedulers.
+8. After remediation, resume the scheduler:
    `sh infra/cloud-run/scheduler.sh <environment> meta-order-value resume`
-7. For MMM, manually execute one successful baseline job and then resume:
+   `sh infra/cloud-run/scheduler.sh <environment> meta-deterministic resume`
+9. For MMM, manually execute one successful baseline job and then resume:
    `sh infra/cloud-run/scheduler.sh <environment> mmm-baseline resume`
    For Bayesian MMM, manually execute one successful `roas-radar-mmm-bayesian-<environment>` job with a promoted `MMM_BAYESIAN_FREEZE_ID`, then resume `sh infra/cloud-run/scheduler.sh <environment> mmm-bayesian resume`.
 
 For upstream metadata quota incidents, pause the affected campaign metadata scheduler with `gcloud scheduler jobs pause`, then use `gcloud scheduler jobs resume` after `campaign_metadata_sync_job_lifecycle` logs show successful manual or scheduler refreshes.
+
+## Recovery Queue Operations
+
+Automatic recovery queue checks:
+
+1. Confirm the queued run is bounded by job type, scope key, and date range:
+   `gcloud logging read 'jsonPayload.message="recovery_job_enqueued" AND jsonPayload.jobType="<job-type>"' --project=<project> --limit=20 --format=json`
+2. Confirm duplicate alert or scheduler signals reused the existing idempotency key instead of creating overlapping work.
+3. Confirm the completion report includes `sourcePrecedence=["shopify","ga4","ad_platforms"]`, dry-run state, counters, artifacts, and per-record failures with `retryable=true` or `retryable=false`.
+4. For stale `running` jobs, execute the recovery worker once, then verify heartbeat-expired runs either returned to `queued` with backoff or moved to `dead_lettered` after max attempts.
+
+Dead-letter replay workflow:
+
+1. Find the failed source and window:
+   `gcloud logging read 'jsonPayload.event="recovery_record_failure" AND jsonPayload.alertable=true' --project=<project> --limit=50 --format=json`
+2. Run the matching replay command with `--dry-run` first.
+3. Verify `candidateCount` and `dryRunCount` match the intended records, and verify source records were not requeued.
+4. After the upstream issue is fixed, rerun without `--dry-run`; verify `replayedCount` increases, source rows return to queued or pending state, and dead letters are marked replayed.
+5. If replaying Shopify recovery, confirm raw payload hashes and storage URIs remain unchanged. Replay must reprocess the preserved payload, not fetch a fresh replacement unless the job explicitly documents reimport behavior.
+
+Failure triage:
+
+- Retryable: upstream timeout, quota, lock timeout, heartbeat expiration before max attempts, or temporarily unavailable GA4/ad-platform export. These should return to `queued` with backoff.
+- Permanent: invalid schema, unsupported job type, missing immutable source identifiers, malformed preserved raw payload, or exhausted retry attempts. These should be `dead_lettered` with enough payload context to replay after operator correction.
+- Source precedence: Shopify fields win over GA4 fields; GA4 fills only missing Shopify fields; ad-platform metadata refreshes names and hierarchy only.
 
 ## Promotion Evidence
 

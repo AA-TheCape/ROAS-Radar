@@ -11,6 +11,29 @@ The scheduled refresh path is the Cloud Run metadata refresh jobs, not the norma
 
 It also covers the MMM campaign metadata resolver. That resolver maps UTM dimensions and native ad identifiers to canonical campaign/channel hierarchy metadata in `mmm_daily_input_mart_v1`.
 
+## Meta API Runtime Configuration
+
+Meta campaign and ad set labels are resolved from cached metadata first. On a cache miss, the backend can call the Meta Graph API when one of these runtime credential paths is available:
+
+- Stored OAuth connection: `META_ADS_ENCRYPTION_KEY` must be available so `meta_ads_connections.access_token_encrypted` can be decrypted for active connections.
+- Metadata-only runtime token: `META_ADS_METADATA_ACCESS_TOKEN` can be supplied from Secret Manager and is scoped to `META_ADS_AD_ACCOUNT_ID`.
+
+Required non-secret configuration:
+
+- `META_ADS_API_VERSION`: Graph API version, for example `v25.0`.
+- `META_ADS_AD_ACCOUNT_ID`: account id, with or without the `act_` prefix, when using `META_ADS_METADATA_ACCESS_TOKEN`.
+- `META_ADS_APP_SCOPES`: must include `ads_read` for campaign and ad set metadata reads. Keep `business_management` only when the app flow needs broader business asset access.
+
+Required secrets must come from runtime configuration, not committed files:
+
+- `META_ADS_ENCRYPTION_KEY`: required for the stored OAuth connection path.
+- `META_ADS_METADATA_ACCESS_TOKEN`: optional metadata-only fallback token for environments that cannot rely on a stored active connection.
+- `META_ADS_APP_SECRET`: required by the OAuth connection flow, but it is not used as a metadata lookup token.
+
+Cloud Run deploys bind `META_ADS_METADATA_ACCESS_TOKEN` from Secret Manager using the environment file value `META_ADS_METADATA_ACCESS_TOKEN_SECRET_NAME`. Treat a missing Secret Manager secret as a deployment blocker for Meta metadata-capable environments, even if the token is only a fallback at runtime.
+
+If both token paths are unavailable, metadata resolution does not fail the reporting request. It logs `meta_metadata_runtime_config_diagnostic` with `fallback="raw_id"` and returns unresolved campaign or ad set ids so callers can display the raw id label.
+
 ## Resolver Rules And Overrides
 
 Resolver rules live in `campaign_metadata_resolver_rules`.
@@ -105,6 +128,107 @@ gcloud scheduler jobs resume "$GOOGLE_ADS_METADATA_SCHEDULER_NAME" --location "$
 ```
 
 Use the per-platform pause or resume controls during upstream quota incidents, rollout verification, or backfill windows where only one metadata source should run.
+
+## Attributed Meta ID Refresh
+
+Use this path when reporting or attribution contains Meta campaign or ad set ids whose display metadata is missing or stale in `ad_platform_entity_metadata`. Example impacted campaign id: `120251699446190386`.
+
+First verify the impacted campaign/ad set scope from spend rows. Replace the date window with the affected attribution window:
+
+```sql
+SELECT DISTINCT
+  account_id,
+  campaign_id,
+  campaign_name,
+  adset_id,
+  adset_name
+FROM meta_ads_daily_spend
+WHERE report_date BETWEEN DATE 'DATE_START' AND DATE 'DATE_END'
+  AND campaign_id = '120251699446190386'
+ORDER BY account_id, campaign_id, adset_id;
+```
+
+Run the history backfill when spend rows already contain the missing names. This updates campaign, ad set, and ad metadata from historical spend projections:
+
+```bash
+DATABASE_URL="<database-url>" npm run campaign-metadata:backfill -- \
+  --mode history \
+  --start-date DATE_START \
+  --end-date DATE_END \
+  --requested-by todd-devops-meta-attributed-id-refresh \
+  --worker-id meta-attributed-id-metadata-history \
+  --dry-run true
+
+DATABASE_URL="<database-url>" npm run campaign-metadata:backfill -- \
+  --mode history \
+  --start-date DATE_START \
+  --end-date DATE_END \
+  --requested-by todd-devops-meta-attributed-id-refresh \
+  --worker-id meta-attributed-id-metadata-history \
+  --dry-run false
+```
+
+Run the API refresh when spend rows do not have the current campaign name or the account needs fresh API-confirmed metadata. Use a date window instead of only `--campaign-ids` when ad set rows are also impacted; the campaign-id-only Meta path refreshes matching campaign rows, while a date-scoped account refresh can fetch the account's ad sets and ads too.
+
+```bash
+DATABASE_URL="<database-url>" npm run campaign-metadata:backfill -- \
+  --mode api-refresh \
+  --start-date DATE_START \
+  --end-date DATE_END \
+  --platforms meta_ads \
+  --requested-by todd-devops-meta-attributed-id-refresh \
+  --worker-id meta-attributed-id-metadata-api \
+  --dry-run true
+
+DATABASE_URL="<database-url>" npm run campaign-metadata:backfill -- \
+  --mode api-refresh \
+  --start-date DATE_START \
+  --end-date DATE_END \
+  --platforms meta_ads \
+  --requested-by todd-devops-meta-attributed-id-refresh \
+  --worker-id meta-attributed-id-metadata-api \
+  --dry-run false
+```
+
+If only the campaign display name is affected and ad set metadata is not in scope, a campaign-id-only API refresh is acceptable:
+
+```bash
+DATABASE_URL="<database-url>" npm run campaign-metadata:backfill -- \
+  --mode api-refresh \
+  --platforms meta_ads \
+  --campaign-ids 120251699446190386 \
+  --requested-by todd-devops-meta-attributed-id-refresh \
+  --worker-id meta-attributed-id-metadata-api \
+  --dry-run false
+```
+
+Confirm the metadata table contains matching Meta campaign and ad set rows:
+
+```sql
+SELECT
+  platform,
+  account_id,
+  entity_type,
+  entity_id,
+  latest_name,
+  last_seen_at,
+  updated_at
+FROM ad_platform_entity_metadata
+WHERE platform = 'meta_ads'
+  AND (
+    entity_id = '120251699446190386'
+    OR entity_id IN (
+      SELECT DISTINCT adset_id
+      FROM meta_ads_daily_spend
+      WHERE campaign_id = '120251699446190386'
+        AND adset_id IS NOT NULL
+        AND report_date BETWEEN DATE 'DATE_START' AND DATE 'DATE_END'
+    )
+  )
+ORDER BY account_id, entity_type, entity_id;
+```
+
+After the refresh/backfill, trigger or inspect reporting paths that call metadata resolution and confirm unresolved ids are visible in `campaign_metadata_resolution_coverage` logs. Expected unresolved evidence includes nonzero `unresolvedCount` and sampled `unresolvedEntityIds`; these logs are the existing coverage surface for ids that still cannot be matched after refresh.
 
 ## Verification
 

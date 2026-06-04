@@ -722,6 +722,17 @@ test('refreshWeeklyMmmChannelInputMart builds weekly channel rows with DQ checks
       FROM mmm_weekly_channel_input_mart_v1
     `
   );
+  assert.equal(weeklyRows.rowCount, 1);
+  const weeklyRow = weeklyRows.rows[0] as {
+    deterministic_anchors: Record<string, unknown>;
+    leakage_report: Record<string, unknown>;
+  };
+  const freshness = weeklyRow.leakage_report.freshness as Record<string, unknown>;
+  assert.match(String(freshness.minSourceLastComputedAt), /^\d{4}-\d{2}-\d{2}T/);
+  assert.match(String(freshness.maxSourceLastComputedAt), /^\d{4}-\d{2}-\d{2}T/);
+  freshness.minSourceLastComputedAt = '<timestamp>';
+  freshness.maxSourceLastComputedAt = '<timestamp>';
+
   assert.deepEqual(weeklyRows.rows, [
     {
       week_start_date: '2026-05-04',
@@ -736,12 +747,25 @@ test('refreshWeeklyMmmChannelInputMart builds weekly channel rows with DQ checks
       attribution_credit_orders: '3.00000000',
       attribution_credit_revenue: '360.00',
       deterministic_anchors: {
+        lookbackWindows: {
+          view: {
+            days: 7,
+            rule: '7d_view'
+          },
+          click: {
+            days: 30,
+            rule: '30d_click'
+          }
+        },
         attributionModel: 'last_touch',
+        matchSourceCoverage: { checkout_token: 3 },
+        inputContractVersion: 'bayesian_hierarchical_mmm_v1',
+        viewLookbackWindowDays: 7,
+        clickLookbackWindowDays: 30,
         attributionCreditOrders: 3,
         attributionCreditRevenue: 360,
         newCustomerCreditRevenue: 240,
         returningCustomerCreditRevenue: 120,
-        matchSourceCoverage: { checkout_token: 3 },
         confidenceLabelCoverage: { high: 3 }
       },
       missingness_report: {
@@ -750,9 +774,27 @@ test('refreshWeeklyMmmChannelInputMart builds weekly channel rows with DQ checks
         hasOutcomeWithoutAttributionCredit: false
       },
       leakage_report: {
+        calibrationMetadata: {
+          attributionLookbackRules: ['30d_click', '7d_view'],
+          clickLookbackWindowDays: 30,
+          contractVersion: 'bayesian_hierarchical_mmm_v1',
+          viewLookbackWindowDays: 7
+        },
+        freshness: {
+          maxAttributionLastComputedAt: null,
+          maxShopifyLastIngestedAt: null,
+          maxSourceLastComputedAt: '<timestamp>',
+          maxSpendLastSyncedAt: null,
+          minAttributionLastComputedAt: null,
+          minShopifyLastIngestedAt: null,
+          minSourceLastComputedAt: '<timestamp>',
+          minSpendLastSyncedAt: null
+        },
         maxSourceMetricDate: '2026-05-06',
         latestAllowedMetricDate: '2026-05-10',
-        hasFutureDatedSourceRows: false
+        hasFutureDatedSourceRows: false,
+        inputContractVersion: 'bayesian_hierarchical_mmm_v1',
+        isCompleteWeek: true
       },
       dq_status: 'pass',
       source_row_count: '3'
