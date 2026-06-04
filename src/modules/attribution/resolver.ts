@@ -3,6 +3,7 @@ import {
   CLICK_LOOKBACK_WINDOW_DAYS,
   hasClickId,
   isDirectTouchpoint as isCanonicalDirectTouchpoint,
+  normalizeAttributionLookbackWindows,
   qualifiesSyntheticHintSignal
 } from './rules.js';
 
@@ -69,6 +70,7 @@ export type TieredAttributionResolverInput = {
   deterministicFirstParty: TieredAttributionCandidate[];
   shopifyHint: TieredAttributionCandidate[];
   ga4Fallback: TieredAttributionCandidate[];
+  lookbackWindowDays?: number;
   normalizationFailures?: Array<{
     scope: 'order' | 'shopify_hint' | 'ga4_fallback';
     reason: string;
@@ -356,6 +358,10 @@ export function resolveAttributionTier(input: TieredAttributionResolverInput): R
     };
   }
 
+  const lookbackWindowDays = normalizeAttributionLookbackWindows({
+    clickWindowDays: input.lookbackWindowDays
+  }).clickWindowDays;
+
   const deterministicTouchpoints = dedupeDeterministicCandidates(
     input.deterministicFirstParty
       .map(mapCandidateToResolvedTouchpoint)
@@ -379,7 +385,7 @@ export function resolveAttributionTier(input: TieredAttributionResolverInput): R
     input.shopifyHint.filter(
       (candidate) =>
         qualifiesSyntheticHintCandidate(candidate) &&
-        isWithinLookbackWindow(orderOccurredAtUtc, candidate.occurredAtUtc)
+        isWithinLookbackWindow(orderOccurredAtUtc, candidate.occurredAtUtc, lookbackWindowDays)
     ),
     compareShopifyHintCandidates
   );
@@ -399,7 +405,9 @@ export function resolveAttributionTier(input: TieredAttributionResolverInput): R
   }
 
   const ga4FallbackTouchpoints = dedupeTierCandidatesBySourceKey(
-    input.ga4Fallback.filter((candidate) => isWithinLookbackWindow(orderOccurredAtUtc, candidate.occurredAtUtc)),
+    input.ga4Fallback.filter((candidate) =>
+      isWithinLookbackWindow(orderOccurredAtUtc, candidate.occurredAtUtc, lookbackWindowDays)
+    ),
     compareGa4FallbackCandidates
   );
   const ga4FallbackWinnerCandidate = ga4FallbackTouchpoints[0] ?? null;

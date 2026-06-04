@@ -17,9 +17,11 @@ import {
 } from '../../../packages/attribution-schema/index.js';
 import { buildCanonicalTouchpointDimensions } from '../marketing-dimensions/index.js';
 import { extractShopifyHintAttribution, type ShopifyAttributionHintPayload } from '../shopify/attribution-hints.js';
-
-const CLICK_LOOKBACK_WINDOW_MS = 28 * 24 * 60 * 60 * 1000;
-const VIEW_LOOKBACK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+import {
+  type AttributionLookbackWindows,
+  lookbackWindowMs,
+  normalizeAttributionLookbackWindows
+} from './rules.js';
 
 const EVIDENCE_SOURCE_PRECEDENCE: Record<AttributionEvidenceSource, number> = {
   landing_session_id: 0,
@@ -141,6 +143,7 @@ export type AttributionPreprocessingDataset = {
 
 export type AttributionPreprocessingOptions = {
   logger?: (failure: AttributionPreprocessingFailure) => void;
+  lookbackWindows?: Partial<AttributionLookbackWindows>;
 };
 
 type MatchedSessionContext = {
@@ -384,7 +387,8 @@ function isDirectTouchpoint(input: {
 function determineEligibility(
   orderOccurredAtUtc: string,
   touchpointOccurredAtUtc: string,
-  engagementType: AttributionEngagementType
+  engagementType: AttributionEngagementType,
+  lookbackWindows: AttributionLookbackWindows = normalizeAttributionLookbackWindows(undefined)
 ): { isEligible: boolean; ineligibilityReason: string | null } {
   if (engagementType === 'unknown') {
     return {
@@ -401,14 +405,14 @@ function determineEligibility(
     };
   }
 
-  if (engagementType === 'click' && deltaMs > CLICK_LOOKBACK_WINDOW_MS) {
+  if (engagementType === 'click' && deltaMs > lookbackWindowMs(lookbackWindows.clickWindowDays)) {
     return {
       isEligible: false,
       ineligibilityReason: 'outside_click_lookback_window'
     };
   }
 
-  if (engagementType === 'view' && deltaMs > VIEW_LOOKBACK_WINDOW_MS) {
+  if (engagementType === 'view' && deltaMs > lookbackWindowMs(lookbackWindows.viewWindowDays)) {
     return {
       isEligible: false,
       ineligibilityReason: 'outside_view_lookback_window'
@@ -632,7 +636,8 @@ function determineEvidenceSource(
 function buildFirstTouchCandidate(
   order: AttributionPreprocessingOrderSource,
   orderOccurredAtUtc: string,
-  sessionContext: MatchedSessionContext
+  sessionContext: MatchedSessionContext,
+  lookbackWindows: AttributionLookbackWindows
 ): CandidateTouchpoint | null {
   const identity = sessionContext.identity;
   if (!identity) {
@@ -673,7 +678,7 @@ function buildFirstTouchCandidate(
     campaign: canonicalDimensions.campaign
   });
 
-  const eligibility = determineEligibility(orderOccurredAtUtc, touchpointOccurredAtUtc, engagementType);
+  const eligibility = determineEligibility(orderOccurredAtUtc, touchpointOccurredAtUtc, engagementType, lookbackWindows);
   const touchpoint = normalizeAttributionTouchpointInputV1({
     schema_version: ATTRIBUTION_SCHEMA_VERSION,
     touchpoint_id: `session:${sessionContext.sessionId}:first_touch`,
@@ -720,7 +725,8 @@ function buildEventCandidate(
   order: AttributionPreprocessingOrderSource,
   orderOccurredAtUtc: string,
   sessionContext: MatchedSessionContext,
-  event: AttributionPreprocessingTouchEventSource
+  event: AttributionPreprocessingTouchEventSource,
+  lookbackWindows: AttributionLookbackWindows
 ): CandidateTouchpoint | null {
   const evidence = determineEvidenceSource(order, sessionContext, event);
   if (!evidence) {
@@ -758,7 +764,7 @@ function buildEventCandidate(
     campaign: canonicalDimensions.campaign
   });
 
-  const eligibility = determineEligibility(orderOccurredAtUtc, touchpointOccurredAtUtc, engagementType);
+  const eligibility = determineEligibility(orderOccurredAtUtc, touchpointOccurredAtUtc, engagementType, lookbackWindows);
   const touchpoint = normalizeAttributionTouchpointInputV1({
     schema_version: ATTRIBUTION_SCHEMA_VERSION,
     touchpoint_id: `event:${event.touchEventId}`,
@@ -804,7 +810,8 @@ function buildEventCandidate(
 function buildHintCandidate(
   order: AttributionPreprocessingOrderSource,
   orderOccurredAtUtc: string,
-  hint: AttributionHintInputV1
+  hint: AttributionHintInputV1,
+  lookbackWindows: AttributionLookbackWindows
 ): CandidateTouchpoint {
   const engagementType = classifyEngagementType({
     sourceKind: 'shopify_hint',
@@ -813,7 +820,7 @@ function buildHintCandidate(
     medium: hint.medium,
     campaign: hint.campaign
   });
-  const eligibility = determineEligibility(orderOccurredAtUtc, orderOccurredAtUtc, engagementType);
+  const eligibility = determineEligibility(orderOccurredAtUtc, orderOccurredAtUtc, engagementType, lookbackWindows);
   const touchpoint = normalizeAttributionTouchpointInputV1({
     schema_version: ATTRIBUTION_SCHEMA_VERSION,
     touchpoint_id: `shopify_hint:${order.shopifyOrderId}`,
@@ -900,6 +907,7 @@ export function preprocessAttributionSnapshot(
   const failures: AttributionPreprocessingFailure[] = [];
   const orders: AttributionOrderInputV1[] = [];
   const touchpointCandidates: CandidateTouchpoint[] = [];
+  const lookbackWindows = normalizeAttributionLookbackWindows(options?.lookbackWindows);
 
   const sessionIdentityById = new Map<string, AttributionPreprocessingSessionIdentitySource>();
   for (const identity of snapshot.sessionIdentities) {
@@ -991,7 +999,7 @@ export function preprocessAttributionSnapshot(
     }
 
     for (const sessionContext of matchedSessions) {
-      const firstTouchCandidate = buildFirstTouchCandidate(order, occurredAtUtc, sessionContext);
+      const firstTouchCandidate = buildFirstTouchCandidate(order, occurredAtUtc, sessionContext, lookbackWindows);
       if (firstTouchCandidate) {
         touchpointCandidates.push(firstTouchCandidate);
       } else if (!sessionContext.identity) {
@@ -1010,7 +1018,7 @@ export function preprocessAttributionSnapshot(
       for (const event of (eventsBySessionId.get(sessionContext.sessionId) ?? []).slice().sort((left, right) =>
         left.touchEventId.localeCompare(right.touchEventId)
       )) {
-        const eventCandidate = buildEventCandidate(order, occurredAtUtc, sessionContext, event);
+        const eventCandidate = buildEventCandidate(order, occurredAtUtc, sessionContext, event, lookbackWindows);
         if (!eventCandidate) {
           continue;
         }
@@ -1022,7 +1030,7 @@ export function preprocessAttributionSnapshot(
     if (order.rawPayload && typeof order.rawPayload === 'object') {
       const hint = buildHintInput(order.rawPayload as ShopifyAttributionHintPayload);
       if (hint) {
-        touchpointCandidates.push(buildHintCandidate(order, occurredAtUtc, hint));
+        touchpointCandidates.push(buildHintCandidate(order, occurredAtUtc, hint, lookbackWindows));
       }
     } else if (order.rawPayload != null) {
       logFailure(failures, options, {

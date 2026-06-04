@@ -152,7 +152,7 @@ test('preprocessAttributionSnapshot records missing sessions, future touchpoints
   assert.ok(result.failures.some((failure) => failure.reasonCode === 'missing_session_identity'));
 });
 
-test('preprocessAttributionSnapshot excludes unknown touch types and keeps 28d click versus 7d view windows', async () => {
+test('preprocessAttributionSnapshot excludes unknown touch types and keeps 30d click versus 7d view windows', async () => {
   const preprocessAttributionSnapshot = await getPreprocessing();
 
   const result = preprocessAttributionSnapshot({
@@ -179,8 +179,8 @@ test('preprocessAttributionSnapshot excludes unknown touch types and keeps 28d c
       {
         sessionId: '123e4567-e89b-42d3-a456-426614174004',
         customerIdentityId: 'customer-3',
-        firstCapturedAt: '2026-04-01T11:00:00.000Z',
-        lastCapturedAt: '2026-04-01T11:15:00.000Z',
+        firstCapturedAt: '2026-03-30T11:00:00.000Z',
+        lastCapturedAt: '2026-03-30T11:15:00.000Z',
         initialUtmSource: null,
         initialUtmMedium: null
       }
@@ -192,7 +192,7 @@ test('preprocessAttributionSnapshot excludes unknown touch types and keeps 28d c
         occurredAt: '2026-04-05T10:00:00.000Z',
         capturedAt: '2026-04-05T10:00:00.000Z',
         eventType: 'page_view',
-        gclid: 'CLICK-28D'
+        gclid: 'CLICK-30D'
       },
       {
         touchEventId: 'evt-view',

@@ -104,7 +104,7 @@ type ResultsSummaryRow = {
   touchpoint_count_considered: number;
   eligible_click_count: number;
   eligible_view_count: number;
-  lookback_rule_applied: '28d_click' | '7d_view' | 'mixed';
+  lookback_rule_applied: '30d_click' | '7d_view' | 'mixed';
   winner_selection_rule: z.infer<typeof modelKeySchema>;
   direct_suppression_applied: boolean;
   deterministic_block_applied: boolean;

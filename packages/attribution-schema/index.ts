@@ -290,7 +290,7 @@ export const ATTRIBUTION_ALLOCATION_STATUSES = [
   'blocked_by_deterministic',
   'unattributed'
 ] as const;
-export const ATTRIBUTION_LOOKBACK_RULES = ['28d_click', '7d_view', 'mixed'] as const;
+export const ATTRIBUTION_LOOKBACK_RULES = ['30d_click', '7d_view', 'mixed'] as const;
 export const ATTRIBUTION_EXPLAIN_STAGES = ['candidate_extraction', 'eligibility_filter', 'model_scoring', 'fallback'] as const;
 export const ATTRIBUTION_EXPLAIN_DECISIONS = ['included', 'excluded', 'winner', 'fallback_used', 'no_credit'] as const;
 

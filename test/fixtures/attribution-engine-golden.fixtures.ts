@@ -87,7 +87,7 @@ export const ATTRIBUTION_ENGINE_GOLDEN_FIXTURES: AttributionEngineGoldenFixture[
         touchpointCountConsidered: 2,
         eligibleClickCount: 2,
         eligibleViewCount: 0,
-        lookbackRuleApplied: '28d_click',
+        lookbackRuleApplied: '30d_click',
         directSuppressionApplied: false
       },
       last_touch: {
@@ -101,7 +101,7 @@ export const ATTRIBUTION_ENGINE_GOLDEN_FIXTURES: AttributionEngineGoldenFixture[
         touchpointCountConsidered: 2,
         eligibleClickCount: 2,
         eligibleViewCount: 0,
-        lookbackRuleApplied: '28d_click',
+        lookbackRuleApplied: '30d_click',
         directSuppressionApplied: false
       },
       last_non_direct: {
@@ -115,7 +115,7 @@ export const ATTRIBUTION_ENGINE_GOLDEN_FIXTURES: AttributionEngineGoldenFixture[
         touchpointCountConsidered: 2,
         eligibleClickCount: 2,
         eligibleViewCount: 0,
-        lookbackRuleApplied: '28d_click',
+        lookbackRuleApplied: '30d_click',
         directSuppressionApplied: false
       },
       linear: {
@@ -129,7 +129,7 @@ export const ATTRIBUTION_ENGINE_GOLDEN_FIXTURES: AttributionEngineGoldenFixture[
         touchpointCountConsidered: 2,
         eligibleClickCount: 2,
         eligibleViewCount: 0,
-        lookbackRuleApplied: '28d_click',
+        lookbackRuleApplied: '30d_click',
         directSuppressionApplied: false
       },
       clicks_only: {
@@ -143,7 +143,7 @@ export const ATTRIBUTION_ENGINE_GOLDEN_FIXTURES: AttributionEngineGoldenFixture[
         touchpointCountConsidered: 2,
         eligibleClickCount: 2,
         eligibleViewCount: 0,
-        lookbackRuleApplied: '28d_click',
+        lookbackRuleApplied: '30d_click',
         directSuppressionApplied: false
       },
       hinted_fallback_only: {
@@ -157,13 +157,13 @@ export const ATTRIBUTION_ENGINE_GOLDEN_FIXTURES: AttributionEngineGoldenFixture[
         touchpointCountConsidered: 2,
         eligibleClickCount: 2,
         eligibleViewCount: 0,
-        lookbackRuleApplied: '28d_click',
+        lookbackRuleApplied: '30d_click',
         deterministicBlockApplied: true
       }
     }
   },
   {
-    name: 'mixed click view journey keeps 28d click, 7d view, and direct suppression semantics',
+    name: 'mixed click view journey keeps 30d click, 7d view, and direct suppression semantics',
     orderOccurredAt: '2026-04-30T00:00:00.000Z',
     orderRevenue: '100.00',
     touchpoints: [
@@ -255,7 +255,7 @@ export const ATTRIBUTION_ENGINE_GOLDEN_FIXTURES: AttributionEngineGoldenFixture[
         touchpointCountConsidered: 3,
         eligibleClickCount: 2,
         eligibleViewCount: 1,
-        lookbackRuleApplied: '28d_click',
+        lookbackRuleApplied: '30d_click',
         directSuppressionApplied: true
       },
       hinted_fallback_only: {
@@ -296,7 +296,7 @@ export const ATTRIBUTION_ENGINE_GOLDEN_FIXTURES: AttributionEngineGoldenFixture[
         touchpointCountConsidered: 0,
         eligibleClickCount: 0,
         eligibleViewCount: 0,
-        lookbackRuleApplied: '28d_click'
+        lookbackRuleApplied: '30d_click'
       },
       last_touch: {
         allocationStatus: 'no_eligible_touches',
@@ -305,7 +305,7 @@ export const ATTRIBUTION_ENGINE_GOLDEN_FIXTURES: AttributionEngineGoldenFixture[
         touchpointCountConsidered: 0,
         eligibleClickCount: 0,
         eligibleViewCount: 0,
-        lookbackRuleApplied: '28d_click'
+        lookbackRuleApplied: '30d_click'
       },
       last_non_direct: {
         allocationStatus: 'no_eligible_touches',
@@ -314,7 +314,7 @@ export const ATTRIBUTION_ENGINE_GOLDEN_FIXTURES: AttributionEngineGoldenFixture[
         touchpointCountConsidered: 0,
         eligibleClickCount: 0,
         eligibleViewCount: 0,
-        lookbackRuleApplied: '28d_click'
+        lookbackRuleApplied: '30d_click'
       },
       linear: {
         allocationStatus: 'no_eligible_touches',
@@ -323,7 +323,7 @@ export const ATTRIBUTION_ENGINE_GOLDEN_FIXTURES: AttributionEngineGoldenFixture[
         touchpointCountConsidered: 0,
         eligibleClickCount: 0,
         eligibleViewCount: 0,
-        lookbackRuleApplied: '28d_click'
+        lookbackRuleApplied: '30d_click'
       },
       clicks_only: {
         allocationStatus: 'no_eligible_touches',
@@ -332,7 +332,7 @@ export const ATTRIBUTION_ENGINE_GOLDEN_FIXTURES: AttributionEngineGoldenFixture[
         touchpointCountConsidered: 0,
         eligibleClickCount: 0,
         eligibleViewCount: 0,
-        lookbackRuleApplied: '28d_click'
+        lookbackRuleApplied: '30d_click'
       },
       hinted_fallback_only: {
         allocationStatus: 'unattributed',
@@ -341,7 +341,7 @@ export const ATTRIBUTION_ENGINE_GOLDEN_FIXTURES: AttributionEngineGoldenFixture[
         touchpointCountConsidered: 0,
         eligibleClickCount: 0,
         eligibleViewCount: 0,
-        lookbackRuleApplied: '28d_click',
+        lookbackRuleApplied: '30d_click',
         deterministicBlockApplied: false
       }
     }
@@ -371,7 +371,7 @@ export const ATTRIBUTION_ENGINE_GOLDEN_FIXTURES: AttributionEngineGoldenFixture[
         touchpointCountConsidered: 3,
         eligibleClickCount: 3,
         eligibleViewCount: 0,
-        lookbackRuleApplied: '28d_click'
+        lookbackRuleApplied: '30d_click'
       },
       last_touch: {
         allocationStatus: 'attributed',
@@ -385,7 +385,7 @@ export const ATTRIBUTION_ENGINE_GOLDEN_FIXTURES: AttributionEngineGoldenFixture[
         touchpointCountConsidered: 3,
         eligibleClickCount: 3,
         eligibleViewCount: 0,
-        lookbackRuleApplied: '28d_click'
+        lookbackRuleApplied: '30d_click'
       },
       last_non_direct: {
         allocationStatus: 'attributed',
@@ -399,7 +399,7 @@ export const ATTRIBUTION_ENGINE_GOLDEN_FIXTURES: AttributionEngineGoldenFixture[
         touchpointCountConsidered: 3,
         eligibleClickCount: 3,
         eligibleViewCount: 0,
-        lookbackRuleApplied: '28d_click',
+        lookbackRuleApplied: '30d_click',
         directSuppressionApplied: true
       },
       linear: {
@@ -414,7 +414,7 @@ export const ATTRIBUTION_ENGINE_GOLDEN_FIXTURES: AttributionEngineGoldenFixture[
         touchpointCountConsidered: 3,
         eligibleClickCount: 3,
         eligibleViewCount: 0,
-        lookbackRuleApplied: '28d_click'
+        lookbackRuleApplied: '30d_click'
       },
       clicks_only: {
         allocationStatus: 'attributed',
@@ -428,7 +428,7 @@ export const ATTRIBUTION_ENGINE_GOLDEN_FIXTURES: AttributionEngineGoldenFixture[
         touchpointCountConsidered: 3,
         eligibleClickCount: 3,
         eligibleViewCount: 0,
-        lookbackRuleApplied: '28d_click',
+        lookbackRuleApplied: '30d_click',
         directSuppressionApplied: true
       },
       hinted_fallback_only: {
@@ -443,7 +443,7 @@ export const ATTRIBUTION_ENGINE_GOLDEN_FIXTURES: AttributionEngineGoldenFixture[
         touchpointCountConsidered: 3,
         eligibleClickCount: 3,
         eligibleViewCount: 0,
-        lookbackRuleApplied: '28d_click',
+        lookbackRuleApplied: '30d_click',
         deterministicBlockApplied: true
       }
     }
@@ -473,7 +473,7 @@ export const ATTRIBUTION_ENGINE_GOLDEN_FIXTURES: AttributionEngineGoldenFixture[
         touchpointCountConsidered: 2,
         eligibleClickCount: 2,
         eligibleViewCount: 0,
-        lookbackRuleApplied: '28d_click'
+        lookbackRuleApplied: '30d_click'
       },
       last_touch: {
         allocationStatus: 'attributed',
@@ -486,7 +486,7 @@ export const ATTRIBUTION_ENGINE_GOLDEN_FIXTURES: AttributionEngineGoldenFixture[
         touchpointCountConsidered: 2,
         eligibleClickCount: 2,
         eligibleViewCount: 0,
-        lookbackRuleApplied: '28d_click'
+        lookbackRuleApplied: '30d_click'
       },
       last_non_direct: {
         allocationStatus: 'attributed',
@@ -499,7 +499,7 @@ export const ATTRIBUTION_ENGINE_GOLDEN_FIXTURES: AttributionEngineGoldenFixture[
         touchpointCountConsidered: 2,
         eligibleClickCount: 2,
         eligibleViewCount: 0,
-        lookbackRuleApplied: '28d_click',
+        lookbackRuleApplied: '30d_click',
         directSuppressionApplied: true
       },
       linear: {
@@ -513,7 +513,7 @@ export const ATTRIBUTION_ENGINE_GOLDEN_FIXTURES: AttributionEngineGoldenFixture[
         touchpointCountConsidered: 2,
         eligibleClickCount: 2,
         eligibleViewCount: 0,
-        lookbackRuleApplied: '28d_click'
+        lookbackRuleApplied: '30d_click'
       },
       clicks_only: {
         allocationStatus: 'attributed',
@@ -526,7 +526,7 @@ export const ATTRIBUTION_ENGINE_GOLDEN_FIXTURES: AttributionEngineGoldenFixture[
         touchpointCountConsidered: 2,
         eligibleClickCount: 2,
         eligibleViewCount: 0,
-        lookbackRuleApplied: '28d_click',
+        lookbackRuleApplied: '30d_click',
         directSuppressionApplied: true
       },
       hinted_fallback_only: {
@@ -540,7 +540,7 @@ export const ATTRIBUTION_ENGINE_GOLDEN_FIXTURES: AttributionEngineGoldenFixture[
         touchpointCountConsidered: 2,
         eligibleClickCount: 2,
         eligibleViewCount: 0,
-        lookbackRuleApplied: '28d_click',
+        lookbackRuleApplied: '30d_click',
         deterministicBlockApplied: true
       }
     }
@@ -594,7 +594,7 @@ export const ATTRIBUTION_ENGINE_GOLDEN_FIXTURES: AttributionEngineGoldenFixture[
         touchpointCountConsidered: 0,
         eligibleClickCount: 0,
         eligibleViewCount: 0,
-        lookbackRuleApplied: '28d_click'
+        lookbackRuleApplied: '30d_click'
       },
       last_touch: {
         allocationStatus: 'no_eligible_touches',
@@ -603,7 +603,7 @@ export const ATTRIBUTION_ENGINE_GOLDEN_FIXTURES: AttributionEngineGoldenFixture[
         touchpointCountConsidered: 0,
         eligibleClickCount: 0,
         eligibleViewCount: 0,
-        lookbackRuleApplied: '28d_click'
+        lookbackRuleApplied: '30d_click'
       },
       last_non_direct: {
         allocationStatus: 'no_eligible_touches',
@@ -612,7 +612,7 @@ export const ATTRIBUTION_ENGINE_GOLDEN_FIXTURES: AttributionEngineGoldenFixture[
         touchpointCountConsidered: 0,
         eligibleClickCount: 0,
         eligibleViewCount: 0,
-        lookbackRuleApplied: '28d_click'
+        lookbackRuleApplied: '30d_click'
       },
       linear: {
         allocationStatus: 'no_eligible_touches',
@@ -621,7 +621,7 @@ export const ATTRIBUTION_ENGINE_GOLDEN_FIXTURES: AttributionEngineGoldenFixture[
         touchpointCountConsidered: 0,
         eligibleClickCount: 0,
         eligibleViewCount: 0,
-        lookbackRuleApplied: '28d_click'
+        lookbackRuleApplied: '30d_click'
       },
       clicks_only: {
         allocationStatus: 'no_eligible_touches',
@@ -630,7 +630,7 @@ export const ATTRIBUTION_ENGINE_GOLDEN_FIXTURES: AttributionEngineGoldenFixture[
         touchpointCountConsidered: 0,
         eligibleClickCount: 0,
         eligibleViewCount: 0,
-        lookbackRuleApplied: '28d_click'
+        lookbackRuleApplied: '30d_click'
       },
       hinted_fallback_only: {
         allocationStatus: 'attributed',
@@ -642,7 +642,7 @@ export const ATTRIBUTION_ENGINE_GOLDEN_FIXTURES: AttributionEngineGoldenFixture[
         touchpointCountConsidered: 1,
         eligibleClickCount: 1,
         eligibleViewCount: 0,
-        lookbackRuleApplied: '28d_click',
+        lookbackRuleApplied: '30d_click',
         deterministicBlockApplied: false
       }
     }

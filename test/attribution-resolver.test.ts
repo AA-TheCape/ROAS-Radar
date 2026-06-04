@@ -282,14 +282,14 @@ test('resolveAttributionTier prefers deterministic first-party over eligible Sho
   assert.equal(resolved.winner?.ingestionSource, 'checkout_token');
 });
 
-test('resolveAttributionTier only considers Shopify hints inside the 28-day click lookback and before GA4', async () => {
+test('resolveAttributionTier only considers Shopify hints inside the 30-day click lookback and before GA4', async () => {
   const testUtils = await getTestUtils();
 
   const resolved = testUtils.resolveAttributionTier({
     orderOccurredAtUtc: new Date('2026-04-08T12:00:00.000Z'),
     deterministicFirstParty: [],
     shopifyHint: [
-      buildTierCandidate('shopify-too-old', '2026-03-10T11:59:59.000Z', {
+      buildTierCandidate('shopify-too-old', '2026-03-08T11:59:59.000Z', {
         sessionId: null,
         sourceTouchEventId: null,
         ingestionSource: 'shopify_marketing_hint',
@@ -334,7 +334,7 @@ test('resolveAttributionTier falls back to GA4 only when higher tiers are missin
     orderOccurredAtUtc: new Date('2026-04-08T12:00:00.000Z'),
     deterministicFirstParty: [],
     shopifyHint: [
-      buildTierCandidate('shopify-too-old', '2026-03-10T12:00:00.000Z', {
+      buildTierCandidate('shopify-too-old', '2026-03-08T12:00:00.000Z', {
         sessionId: null,
         sourceTouchEventId: null,
         ingestionSource: 'shopify_marketing_hint',
@@ -344,7 +344,7 @@ test('resolveAttributionTier falls back to GA4 only when higher tiers are missin
       })
     ],
     ga4Fallback: [
-      buildTierCandidate('ga4-too-old', '2026-03-10T11:00:00.000Z', {
+      buildTierCandidate('ga4-too-old', '2026-03-08T11:00:00.000Z', {
         sessionId: null,
         sourceTouchEventId: null,
         ingestionSource: 'ga4_fallback',
@@ -430,7 +430,7 @@ test('resolveAttributionTier is deterministic across repeated runs and returns u
       })
     ],
     ga4Fallback: [
-      buildTierCandidate('ga4-too-old', '2026-03-10T11:59:59.000Z', {
+      buildTierCandidate('ga4-too-old', '2026-03-08T11:59:59.000Z', {
         sessionId: null,
         sourceTouchEventId: null,
         ingestionSource: 'ga4_fallback',
@@ -682,21 +682,21 @@ test('resolveAttributionTier ignores ineligible higher-tier timestamps and still
   assert.equal(resolved.winner?.sourceTouchEventId, 'shopify-eligible-event');
 });
 
-test('resolveAttributionTier treats the 28-day Shopify hint lookback as inclusive and excludes older or future hints', async () => {
+test('resolveAttributionTier treats the 30-day Shopify hint lookback as inclusive and excludes older or future hints', async () => {
   const testUtils = await getTestUtils();
 
   const resolved = testUtils.resolveAttributionTier({
     orderOccurredAtUtc: new Date('2026-04-08T12:00:00.000Z'),
     deterministicFirstParty: [],
     shopifyHint: [
-      buildTierCandidate('shopify-too-old', '2026-03-11T11:59:59.999Z', {
+      buildTierCandidate('shopify-too-old', '2026-03-09T11:59:59.999Z', {
         sessionId: null,
         ingestionSource: 'shopify_marketing_hint',
         attributionReason: 'shopify_hint_derived',
         confidenceScore: 0.55,
         isSynthetic: true
       }),
-      buildTierCandidate('shopify-boundary', '2026-03-11T12:00:00.000Z', {
+      buildTierCandidate('shopify-boundary', '2026-03-09T12:00:00.000Z', {
         sessionId: null,
         ingestionSource: 'shopify_marketing_hint',
         attributionReason: 'shopify_hint_derived',
@@ -775,7 +775,7 @@ test('resolveAttributionTier breaks Shopify hint ties by click id, then recency,
   assert.equal(winnerFromLexicalKey.winner?.sourceTouchEventId, 'shopify-a-event');
 });
 
-test('resolveAttributionTier treats the 28-day GA4 lookback as inclusive and excludes older or future fallback candidates', async () => {
+test('resolveAttributionTier treats the 30-day GA4 lookback as inclusive and excludes older or future fallback candidates', async () => {
   const testUtils = await getTestUtils();
 
   const resolved = testUtils.resolveAttributionTier({
@@ -783,14 +783,14 @@ test('resolveAttributionTier treats the 28-day GA4 lookback as inclusive and exc
     deterministicFirstParty: [],
     shopifyHint: [],
     ga4Fallback: [
-      buildTierCandidate('ga4-too-old', '2026-03-11T11:59:59.999Z', {
+      buildTierCandidate('ga4-too-old', '2026-03-09T11:59:59.999Z', {
         sessionId: null,
         ingestionSource: 'ga4_fallback',
         attributionReason: 'ga4_fallback_match',
         confidenceScore: 0.35,
         isSynthetic: true
       }),
-      buildTierCandidate('ga4-boundary', '2026-03-11T12:00:00.000Z', {
+      buildTierCandidate('ga4-boundary', '2026-03-09T12:00:00.000Z', {
         sessionId: null,
         ingestionSource: 'ga4_fallback',
         attributionReason: 'ga4_fallback_match',

@@ -432,7 +432,7 @@ export default function AttributionDashboard({
   const lookbackClickWindowDays =
     channelTotalsSection.data?.lookbackClickWindowDays ??
     resultsSection.data?.[0]?.run.lookbackClickWindowDays ??
-    28;
+    30;
   const lookbackViewWindowDays =
     channelTotalsSection.data?.lookbackViewWindowDays ??
     resultsSection.data?.[0]?.run.lookbackViewWindowDays ??

@@ -436,7 +436,7 @@ test('attribution v1 result, credit, and explainability schemas normalize canoni
     touchpoint_count_considered: 2,
     eligible_click_count: 2,
     eligible_view_count: 0,
-    lookback_rule_applied: '28d_click',
+    lookback_rule_applied: '30d_click',
     winner_selection_rule: 'last_non_direct',
     direct_suppression_applied: true,
     deterministic_block_applied: false,

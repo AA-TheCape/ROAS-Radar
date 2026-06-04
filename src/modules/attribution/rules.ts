@@ -1,9 +1,46 @@
 export type AttributionEngagementType = 'click' | 'view' | 'unknown';
 
-export const CLICK_LOOKBACK_WINDOW_DAYS = 28;
-export const VIEW_LOOKBACK_WINDOW_DAYS = 7;
-export const CLICK_LOOKBACK_WINDOW_MS = CLICK_LOOKBACK_WINDOW_DAYS * 24 * 60 * 60 * 1000;
-export const VIEW_LOOKBACK_WINDOW_MS = VIEW_LOOKBACK_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+export const DEFAULT_CLICK_LOOKBACK_WINDOW_DAYS = 30;
+export const DEFAULT_VIEW_LOOKBACK_WINDOW_DAYS = 7;
+export const CLICK_LOOKBACK_WINDOW_DAYS = DEFAULT_CLICK_LOOKBACK_WINDOW_DAYS;
+export const VIEW_LOOKBACK_WINDOW_DAYS = DEFAULT_VIEW_LOOKBACK_WINDOW_DAYS;
+
+export type AttributionLookbackWindows = {
+  clickWindowDays: number;
+  viewWindowDays: number;
+};
+
+export const DEFAULT_ATTRIBUTION_LOOKBACK_WINDOWS: AttributionLookbackWindows = {
+  clickWindowDays: DEFAULT_CLICK_LOOKBACK_WINDOW_DAYS,
+  viewWindowDays: DEFAULT_VIEW_LOOKBACK_WINDOW_DAYS
+};
+
+export function normalizeAttributionLookbackWindows(
+  windows: Partial<AttributionLookbackWindows> | undefined
+): AttributionLookbackWindows {
+  const clickWindowDays = windows?.clickWindowDays ?? DEFAULT_CLICK_LOOKBACK_WINDOW_DAYS;
+  const viewWindowDays = windows?.viewWindowDays ?? DEFAULT_VIEW_LOOKBACK_WINDOW_DAYS;
+
+  if (!Number.isFinite(clickWindowDays) || clickWindowDays < 0) {
+    throw new Error(`clickWindowDays must be a finite non-negative number, received ${String(clickWindowDays)}`);
+  }
+
+  if (!Number.isFinite(viewWindowDays) || viewWindowDays < 0) {
+    throw new Error(`viewWindowDays must be a finite non-negative number, received ${String(viewWindowDays)}`);
+  }
+
+  return {
+    clickWindowDays,
+    viewWindowDays
+  };
+}
+
+export function lookbackWindowMs(days: number): number {
+  return days * 24 * 60 * 60 * 1000;
+}
+
+export const CLICK_LOOKBACK_WINDOW_MS = lookbackWindowMs(CLICK_LOOKBACK_WINDOW_DAYS);
+export const VIEW_LOOKBACK_WINDOW_MS = lookbackWindowMs(VIEW_LOOKBACK_WINDOW_DAYS);
 
 export function hasClickId(clickIdValue: string | null | undefined): boolean {
   return Boolean(clickIdValue);
@@ -69,19 +106,21 @@ export function inferEngagementType(input: {
 export function isWithinLookbackWindow(
   orderOccurredAt: Date,
   touchpointOccurredAt: Date,
-  engagementType: AttributionEngagementType
+  engagementType: AttributionEngagementType,
+  windows?: Partial<AttributionLookbackWindows>
 ): boolean {
+  const normalizedWindows = normalizeAttributionLookbackWindows(windows);
   const deltaMs = orderOccurredAt.getTime() - touchpointOccurredAt.getTime();
   if (deltaMs < 0) {
     return false;
   }
 
   if (engagementType === 'click') {
-    return deltaMs <= CLICK_LOOKBACK_WINDOW_MS;
+    return deltaMs <= lookbackWindowMs(normalizedWindows.clickWindowDays);
   }
 
   if (engagementType === 'view') {
-    return deltaMs <= VIEW_LOOKBACK_WINDOW_MS;
+    return deltaMs <= lookbackWindowMs(normalizedWindows.viewWindowDays);
   }
 
   return false;
