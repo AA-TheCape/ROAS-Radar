@@ -33,6 +33,8 @@
     "campaign-metadata:backfill": "tsx src/admin/backfill-campaign-metadata.ts",
     "data-quality:check": "tsx src/data-quality-worker.ts",
     "data-quality:check:start": "node dist/src/data-quality-worker.js",
+    "mmm:refresh-weekly": "tsx src/admin/refresh-mmm-weekly-channel-mart.ts",
+    "mmm:refresh-weekly:start": "node dist/src/admin/refresh-mmm-weekly-channel-mart.js",
     "mmm:train-baseline": "tsx src/admin/train-mmm-baseline.ts",
     "mmm:train-baseline:start": "node dist/src/admin/train-mmm-baseline.js",
     "mmm:backfill-campaign-metadata": "tsx src/admin/backfill-mmm-campaign-metadata.ts",

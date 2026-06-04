@@ -3,10 +3,16 @@ import { createHash } from 'node:crypto';
 import type { PoolClient } from 'pg';
 
 import { withTransaction } from '../../db/pool.js';
+import {
+  fetchWeeklyMmmSnapshotRowsWithClient,
+  MMM_WEEKLY_CHANNEL_MART_VERSION,
+  refreshWeeklyMmmChannelInputMartWithClient,
+  snapshotWeeklyMmmInputRowsWithClient
+} from './weekly-mart.js';
 
 export const MMM_BASELINE_MODEL_VERSION = 'baseline_linear_mmm_v1';
 export const MMM_BASELINE_MODEL_TYPE = 'baseline_linear_mmm';
-export const MMM_BASELINE_MART_VERSION = 'mmm_daily_input_mart_v1';
+export const MMM_BASELINE_MART_VERSION = MMM_WEEKLY_CHANNEL_MART_VERSION;
 
 const DEFAULT_MAX_SEGMENTS = 8;
 const DEFAULT_ADSTOCK_DECAY = 0.5;
@@ -26,7 +32,7 @@ export type MmmBaselineTrainingInput = {
 
 type MmmBaselineMartRow = {
   metric_date: string;
-  mart_row_type: 'paid_media' | 'attribution';
+  mart_row_type: 'paid_media' | 'attribution' | 'weekly_channel';
   attribution_model: string;
   platform: string;
   source: string;
@@ -283,9 +289,11 @@ export function buildBaselineMmmArtifact(rows: MmmBaselineMartRow[], input: MmmB
   const holdoutRatio = clampNumber(input.holdoutRatio, 0.2, 0, 0.5);
 
   const dates = Array.from(new Set(rows.map((row) => row.metric_date))).sort();
-  const paidRows = rows.filter((row) => row.mart_row_type === 'paid_media');
+  const paidRows = rows.filter((row) => row.mart_row_type === 'paid_media' || row.mart_row_type === 'weekly_channel');
   const attributionRows = rows.filter(
-    (row) => row.mart_row_type === 'attribution' && row.attribution_model === attributionModel
+    (row) =>
+      (row.mart_row_type === 'attribution' || row.mart_row_type === 'weekly_channel') &&
+      row.attribution_model === attributionModel
   );
 
   const segmentStats = new Map<string, SegmentStats>();
@@ -395,7 +403,9 @@ export function buildBaselineMmmArtifact(rows: MmmBaselineMartRow[], input: MmmB
     adstockDecay,
     ridgeLambda,
     holdoutRatio,
-    responseVariable: 'daily_total_shopify_revenue_from_mart_outcomes',
+    responseVariable: rows.some((row) => row.mart_row_type === 'weekly_channel')
+      ? 'weekly_total_shopify_revenue_from_channel_mart_outcomes'
+      : 'daily_total_shopify_revenue_from_mart_outcomes',
     calibrationUse: 'segment attribution credit metrics are validation/calibration diagnostics, not per-segment training labels'
   };
   const inputSummary = {
@@ -457,35 +467,38 @@ export async function trainBaselineMmmModelWithClient(
   const startDate = normalizeDate(input.startDate, 'startDate');
   const endDate = normalizeDate(input.endDate, 'endDate');
   const attributionModel = input.attributionModel?.trim() || 'last_touch';
-  const result = await client.query<MmmBaselineMartRow>(
-    `
-      SELECT
-        metric_date::text,
-        mart_row_type,
-        attribution_model,
-        platform,
-        source,
-        medium,
-        campaign,
-        spend,
-        impressions,
-        clicks,
-        shopify_revenue,
-        attribution_credit_revenue,
-        attribution_credit_orders,
-        match_source_coverage,
-        confidence_label_coverage
-      FROM mmm_daily_input_mart_v1
-      WHERE metric_date BETWEEN $1::date AND $2::date
-        AND (
-          mart_row_type = 'paid_media'
-          OR (mart_row_type = 'attribution' AND attribution_model = $3)
-        )
-      ORDER BY metric_date ASC, mart_row_type ASC, platform ASC, source ASC, medium ASC, campaign ASC
-    `,
-    [startDate, endDate, attributionModel]
-  );
-  const run = buildBaselineMmmArtifact(result.rows, { ...input, startDate, endDate, attributionModel });
+  const qualitySummary = await refreshWeeklyMmmChannelInputMartWithClient(client, {
+    startDate,
+    endDate,
+    attributionModels: [attributionModel]
+  });
+  if (qualitySummary.failCount > 0) {
+    throw new Error(`MMM weekly channel mart failed leakage checks for ${qualitySummary.failCount} rows`);
+  }
+
+  const weeklyRows = await fetchWeeklyMmmSnapshotRowsWithClient(client, {
+    startDate,
+    endDate,
+    attributionModels: [attributionModel]
+  });
+  const trainingRows = weeklyRows.map<MmmBaselineMartRow>((row) => ({
+    metric_date: row.week_start_date,
+    mart_row_type: 'weekly_channel',
+    attribution_model: row.attribution_model,
+    platform: 'taxonomy',
+    source: row.source,
+    medium: row.medium,
+    campaign: row.campaign,
+    spend: row.spend,
+    impressions: row.impressions,
+    clicks: row.clicks,
+    shopify_revenue: row.shopify_revenue,
+    attribution_credit_revenue: row.attribution_credit_revenue,
+    attribution_credit_orders: row.attribution_credit_orders,
+    match_source_coverage: row.match_source_coverage,
+    confidence_label_coverage: row.confidence_label_coverage
+  }));
+  const run = buildBaselineMmmArtifact(trainingRows, { ...input, startDate, endDate, attributionModel });
   const insertResult = await client.query<{ id: string }>(
     `
       INSERT INTO mmm_model_runs (
@@ -540,10 +553,32 @@ export async function trainBaselineMmmModelWithClient(
       JSON.stringify(run.validationReport)
     ]
   );
+  const modelRunId = insertResult.rows[0]?.id;
+  if (!modelRunId) {
+    throw new Error('MMM baseline model run insert did not return an id');
+  }
+
+  const snapshot = await snapshotWeeklyMmmInputRowsWithClient(client, modelRunId, weeklyRows);
+  const inputSummary = {
+    ...run.inputSummary,
+    weeklyQualitySummary: qualitySummary,
+    snapshotVersion: 'mmm_weekly_channel_snapshot_v1',
+    snapshotRowCount: snapshot.snapshotRowCount,
+    snapshotHash: snapshot.snapshotHash
+  };
+  await client.query(
+    `
+      UPDATE mmm_model_runs
+      SET input_summary = $2::jsonb
+      WHERE id = $1::uuid
+    `,
+    [modelRunId, JSON.stringify(inputSummary)]
+  );
 
   return {
     ...run,
-    id: insertResult.rows[0]?.id ?? null
+    id: modelRunId,
+    inputSummary
   };
 }
 

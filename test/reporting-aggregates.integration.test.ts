@@ -7,9 +7,15 @@ process.env.DATABASE_URL ??= 'postgres://postgres:postgres@127.0.0.1:5432/roas_r
 
 const poolModule = await import("../src/db/pool.js");
 const reportingModule = await import("../src/modules/reporting/aggregates.js");
+const weeklyMmmModule = await import('../src/modules/mmm/weekly-mart.js');
 
 const { pool } = poolModule;
 const { refreshDailyMmmInputMart, refreshDailyReportingMetrics } = reportingModule;
+const {
+  fetchWeeklyMmmSnapshotRowsWithClient,
+  refreshWeeklyMmmChannelInputMartWithClient,
+  snapshotWeeklyMmmInputRowsWithClient
+} = weeklyMmmModule;
 
 async function seedGoogleConnection() {
   const rawCustomerFixture = buildRawPayloadFixture({ customerId: 'test-customer' }, 'test-customer');
@@ -590,6 +596,180 @@ test('refreshDailyMmmInputMart builds versioned paid and attribution rows with c
     'meta_ads_connections',
     'attribution_order_credits',
     'shopify_orders'
+  ]);
+});
+
+test('refreshWeeklyMmmChannelInputMart builds weekly channel rows with DQ checks and snapshots', async () => {
+  await resetIntegrationTables(pool, [
+    'mmm_model_run_input_snapshots',
+    'mmm_model_runs',
+    'mmm_weekly_channel_input_mart_v1',
+    'mmm_daily_input_mart_v1'
+  ]);
+
+  await pool.query(
+    `
+      INSERT INTO mmm_daily_input_mart_v1 (
+        metric_date,
+        mart_row_type,
+        attribution_model,
+        platform,
+        granularity,
+        entity_key,
+        source,
+        medium,
+        campaign,
+        content,
+        term,
+        spend,
+        impressions,
+        clicks,
+        shopify_orders,
+        shopify_revenue,
+        attribution_credit_orders,
+        attribution_credit_revenue,
+        new_customer_credit_orders,
+        returning_customer_credit_orders,
+        new_customer_credit_revenue,
+        returning_customer_credit_revenue,
+        match_source_coverage,
+        confidence_label_coverage,
+        resolved_canonical_channel,
+        resolved_canonical_channel_group
+      )
+      VALUES
+        ('2026-05-04', 'paid_media', 'none', 'meta', 'creative', 'creative-1', 'meta', 'paid_social', 'prospecting', 'static', 'unknown', 100.00, 1000, 50, 0, 0, 0, 0, 0, 0, 0, 0, '{}'::jsonb, '{}'::jsonb, 'paid_social', 'paid'),
+        ('2026-05-05', 'paid_media', 'none', 'meta', 'creative', 'creative-2', 'meta', 'paid_social', 'prospecting', 'video', 'unknown', 125.00, 1500, 75, 0, 0, 0, 0, 0, 0, 0, 0, '{}'::jsonb, '{}'::jsonb, 'paid_social', 'paid'),
+        ('2026-05-06', 'attribution', 'last_touch', 'taxonomy', 'taxonomy', 'meta|paid_social|prospecting|unknown|unknown', 'meta', 'paid_social', 'prospecting', 'unknown', 'unknown', 0, 0, 0, 3, 360.00, 3.00000000, 360.00, 2.00000000, 1.00000000, 240.00, 120.00, '{"checkout_token": 3}'::jsonb, '{"high": 3}'::jsonb, 'paid_social', 'paid')
+    `
+  );
+
+  const client = await pool.connect();
+  let modelRunId: string | null = null;
+
+  try {
+    await client.query('BEGIN');
+    const summary = await refreshWeeklyMmmChannelInputMartWithClient(client, {
+      startDate: '2026-05-04',
+      endDate: '2026-05-10',
+      attributionModels: ['last_touch']
+    });
+    assert.deepEqual(summary, {
+      rowCount: 1,
+      failCount: 0,
+      warnCount: 0,
+      unknownDimensionRowCount: 0,
+      futureDatedSourceRowCount: 0
+    });
+
+    const runResult = await client.query<{ id: string }>(
+      `
+        INSERT INTO mmm_model_runs (
+          model_type,
+          model_version,
+          mart_version,
+          attribution_model,
+          training_start_date,
+          training_end_date
+        )
+        VALUES (
+          'baseline_linear_mmm',
+          'baseline_linear_mmm_v1',
+          'mmm_weekly_channel_input_mart_v1',
+          'last_touch',
+          '2026-05-04',
+          '2026-05-10'
+        )
+        RETURNING id
+      `
+    );
+    modelRunId = runResult.rows[0].id;
+    const snapshotRows = await fetchWeeklyMmmSnapshotRowsWithClient(client, {
+      startDate: '2026-05-04',
+      endDate: '2026-05-10',
+      attributionModels: ['last_touch']
+    });
+    const snapshot = await snapshotWeeklyMmmInputRowsWithClient(client, modelRunId, snapshotRows);
+    assert.equal(snapshot.snapshotRowCount, 1);
+    assert.match(snapshot.snapshotHash, /^[a-f0-9]{64}$/);
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  const weeklyRows = await pool.query(
+    `
+      SELECT
+        week_start_date::text,
+        week_end_date::text,
+        attribution_model,
+        channel_key,
+        spend,
+        impressions::text,
+        clicks::text,
+        shopify_orders::text,
+        shopify_revenue,
+        attribution_credit_orders,
+        attribution_credit_revenue,
+        deterministic_anchors,
+        missingness_report,
+        leakage_report,
+        dq_status,
+        source_row_count::text
+      FROM mmm_weekly_channel_input_mart_v1
+    `
+  );
+  assert.deepEqual(weeklyRows.rows, [
+    {
+      week_start_date: '2026-05-04',
+      week_end_date: '2026-05-10',
+      attribution_model: 'last_touch',
+      channel_key: 'meta|paid_social|prospecting|paid_social|paid',
+      spend: '225.00',
+      impressions: '2500',
+      clicks: '125',
+      shopify_orders: '3',
+      shopify_revenue: '360.00',
+      attribution_credit_orders: '3.00000000',
+      attribution_credit_revenue: '360.00',
+      deterministic_anchors: {
+        attributionModel: 'last_touch',
+        attributionCreditOrders: 3,
+        attributionCreditRevenue: 360,
+        newCustomerCreditRevenue: 240,
+        returningCustomerCreditRevenue: 120,
+        matchSourceCoverage: { checkout_token: 3 },
+        confidenceLabelCoverage: { high: 3 }
+      },
+      missingness_report: {
+        missingDimensions: [],
+        hasSpendWithoutDelivery: false,
+        hasOutcomeWithoutAttributionCredit: false
+      },
+      leakage_report: {
+        maxSourceMetricDate: '2026-05-06',
+        latestAllowedMetricDate: '2026-05-10',
+        hasFutureDatedSourceRows: false
+      },
+      dq_status: 'pass',
+      source_row_count: '3'
+    }
+  ]);
+
+  const snapshotCount = await pool.query<{ count: string }>(
+    'SELECT COUNT(*)::text AS count FROM mmm_model_run_input_snapshots WHERE model_run_id = $1::uuid',
+    [modelRunId]
+  );
+  assert.equal(snapshotCount.rows[0].count, '1');
+
+  await resetIntegrationTables(pool, [
+    'mmm_model_run_input_snapshots',
+    'mmm_model_runs',
+    'mmm_weekly_channel_input_mart_v1',
+    'mmm_daily_input_mart_v1'
   ]);
 });
 

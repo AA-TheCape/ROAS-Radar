@@ -1,6 +1,6 @@
 # MMM Daily Input Mart
 
-`mmm_daily_input_mart_v1` is the deterministic daily export surface for marketing mix modeling inputs.
+`mmm_daily_input_mart_v1` is the deterministic daily export surface for marketing mix modeling inputs. `mmm_weekly_channel_input_mart_v1` is the approved weekly x channel modeling table derived from it.
 
 The mart is versioned in the table name and `mart_version` column. Version `v1` has two row types:
 
@@ -13,6 +13,21 @@ Refresh entry points:
 
 - `refreshDailyMmmInputMart(client, metricDates)` rebuilds specific dates.
 - `refreshAllDailyMmmInputMart(client)` rebuilds all dates observed in Shopify orders, Meta spend, or Google Ads spend.
+- `refreshWeeklyMmmChannelInputMartWithClient(client, { startDate, endDate, attributionModels })` rebuilds weekly x channel rows from the daily mart.
+
+The weekly mart aggregates each Monday-starting week by canonical source, medium, campaign, channel, and channel group. Each row includes:
+
+- media inputs: spend, impressions, clicks
+- outcome inputs: Shopify orders and revenue
+- deterministic anchors: attribution credit orders/revenue, new/returning splits, match-source coverage, and confidence-label coverage
+- controls: week of year, month, quarter, and simple holiday-window flags
+- data quality reports: missing dimension checks, spend-without-delivery checks, outcome-without-credit checks, and leakage checks proving no source daily row exceeds the row's week end date
+
+Standalone regeneration:
+
+```bash
+npm run mmm:refresh-weekly -- --start-date 2026-04-01 --end-date 2026-04-30 --attribution-models last_touch
+```
 
 ## Baseline Model Training
 
@@ -26,13 +41,13 @@ npm run mmm:train-baseline -- --start-date 2026-04-01 --end-date 2026-04-30 --at
 
 For Cloud Run scheduling, the same trainer reads `MMM_BASELINE_LOOKBACK_DAYS`, `MMM_BASELINE_LAG_DAYS`, `MMM_BASELINE_SUBMITTED_BY`, and optional model tuning environment variables. The checked-in deployment contract runs `roas-radar-mmm-baseline-<environment>` weekly after attribution materialization so baseline model outputs are promoted through the same staging and production path as the rest of the pipeline.
 
-The trainer reads only `mmm_daily_input_mart_v1`:
+The trainer refreshes and reads `mmm_weekly_channel_input_mart_v1`:
 
-- `paid_media` rows become media features using `log1p(adstock(spend))`.
-- `attribution` rows provide the daily Shopify outcome response and deterministic calibration segments for the selected attribution model.
+- weekly channel rows become media features using `log1p(adstock(spend))`.
+- weekly Shopify outcomes provide the response for the selected attribution model.
 - Per-segment deterministic attribution metrics are persisted in `calibration_report` and `validation_report`; they are not used as direct per-channel replacement labels.
 
-Completed model runs are stored in `mmm_model_runs` with versioned `run_config`, `input_summary`, `model_artifact`, `calibration_report`, and `validation_report` JSON. The baseline is intentionally deterministic and TypeScript-native so Backend/Data Platform can operate it before introducing heavier modeling infrastructure.
+Completed model runs are stored in `mmm_model_runs` with versioned `run_config`, `input_summary`, `model_artifact`, `calibration_report`, and `validation_report` JSON. Every completed run also writes immutable row-level inputs to `mmm_model_run_input_snapshots` with `snapshot_version = mmm_weekly_channel_snapshot_v1`, per-row hashes, and a run-level snapshot hash in `input_summary`. Baseline training fails when weekly rows have DQ status `fail`; warning counts are retained in `input_summary.weeklyQualitySummary`.
 
 ## Read API and Export
 
