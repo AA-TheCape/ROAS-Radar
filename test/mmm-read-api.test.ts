@@ -224,6 +224,129 @@ test('MMM read API returns schema-versioned rows with readiness exclusions', asy
   }
 });
 
+test('MMM taxonomy drift API reports taxonomy, metadata, and native id coverage rates', async () => {
+  pool.query = (async (text: string, params?: unknown[]) => {
+    assert.match(text, /WITH filtered_mart AS/);
+    assert.match(text, /ad_platform_entity_metadata/);
+    assert.match(text, /mart\.platform = \$3/);
+    assert.match(text, /mart\.source = \$4/);
+    assert.match(text, /mart\.campaign = \$5/);
+
+    if (text.includes('daily_summary')) {
+      assert.deepEqual(params, ['2026-04-01', '2026-04-02', 'meta', 'facebook', 'prospecting', 30]);
+
+      return {
+        rows: [
+          {
+            metric_date: null,
+            total_rows: '10',
+            unknown_source_rows: '1',
+            unmapped_source_rows: '2',
+            unknown_or_unmapped_source_rows: '3',
+            unknown_medium_rows: '2',
+            unmapped_medium_rows: '1',
+            unknown_or_unmapped_medium_rows: '2',
+            unresolved_campaign_metadata_rows: '4',
+            stale_campaign_metadata_rows: '1',
+            native_id_eligible_rows: '8',
+            account_id_rows: '7',
+            campaign_id_rows: '6',
+            adset_id_rows: '5',
+            ad_id_rows: '4',
+            creative_id_rows: '3',
+            platform_native_id_rows: '6'
+          },
+          {
+            metric_date: '2026-04-01',
+            total_rows: '4',
+            unknown_source_rows: '0',
+            unmapped_source_rows: '1',
+            unknown_or_unmapped_source_rows: '1',
+            unknown_medium_rows: '1',
+            unmapped_medium_rows: '0',
+            unknown_or_unmapped_medium_rows: '1',
+            unresolved_campaign_metadata_rows: '2',
+            stale_campaign_metadata_rows: '0',
+            native_id_eligible_rows: '3',
+            account_id_rows: '3',
+            campaign_id_rows: '2',
+            adset_id_rows: '2',
+            ad_id_rows: '1',
+            creative_id_rows: '1',
+            platform_native_id_rows: '2'
+          }
+        ]
+      };
+    }
+
+    assert.match(text, /sample_candidates/);
+    assert.deepEqual(params, ['2026-04-01', '2026-04-02', 'meta', 'facebook', 'prospecting', 30, 3]);
+    return {
+      rows: [
+        {
+          sample_type: 'unresolved_campaign_metadata',
+          row_count: '4',
+          source: 'facebook',
+          medium: 'paid_social',
+          campaign: 'prospecting',
+          platform: 'meta',
+          mart_row_type: 'paid_media',
+          attribution_model: 'none',
+          account_id: 'act_1',
+          campaign_id: 'cmp_1',
+          metadata_last_seen_at: new Date('2026-03-01T00:00:00.000Z'),
+          metadata_updated_at: new Date('2026-03-01T01:00:00.000Z')
+        }
+      ]
+    };
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(
+      server,
+      '/api/reporting/mmm/taxonomy-drift?startDate=2026-04-01&endDate=2026-04-02&platform=meta&source=facebook&campaign=prospecting&staleAfterDays=30&sampleLimit=3'
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('x-roas-radar-mmm-schema'), MMM_SCHEMA_VERSION);
+    assert.equal(body.schemaVersion, 'mmm_taxonomy_drift_report_v1');
+    assert.deepEqual(body.filters, {
+      martRowType: null,
+      attributionModel: null,
+      platform: 'meta',
+      source: 'facebook',
+      campaign: 'prospecting',
+      staleAfterDays: 30,
+      sampleLimit: 3
+    });
+    assert.equal(body.overall.unknownOrUnmappedSourceRows, 3);
+    assert.equal(body.overall.unknownOrUnmappedSourceRate, 0.3);
+    assert.equal(body.overall.unresolvedCampaignMetadataRate, 0.4);
+    assert.equal(body.overall.nativeIdCoverage.platformNativeIdRate, 0.75);
+    assert.equal(body.daily[0].date, '2026-04-01');
+    assert.equal(body.daily[0].nativeIdCoverage.accountIdRate, 1);
+    assert.deepEqual(body.samples[0], {
+      sampleType: 'unresolved_campaign_metadata',
+      rowCount: 4,
+      source: 'facebook',
+      medium: 'paid_social',
+      campaign: 'prospecting',
+      platform: 'meta',
+      martRowType: 'paid_media',
+      attributionModel: 'none',
+      accountId: 'act_1',
+      campaignId: 'cmp_1',
+      metadataLastSeenAt: '2026-03-01T00:00:00.000Z',
+      metadataUpdatedAt: '2026-03-01T01:00:00.000Z'
+    });
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
 test('MMM export API can render CSV for model training pipelines', async () => {
   pool.query = (async (text: string, params?: unknown[]) => {
     if (text.includes('WITH requested_dates')) {

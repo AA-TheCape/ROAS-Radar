@@ -65,6 +65,8 @@ The approved mart is exposed through `GET /api/reporting/mmm`.
 
 Completed MMM runs and their persisted calibration reports are exposed through `GET /api/reporting/mmm/model-runs`. The admin MMM readiness panel renders the calibration governance status, divergence alert counts, thresholds, and reconciliation logic from this API so reconciliation decisions can be audited without direct database access.
 
+Taxonomy drift readiness is exposed through `GET /api/reporting/mmm/taxonomy-drift`. Marketing Ops and Data Platform should run this report before training or refreshing modeled inputs so unknown taxonomy values and unresolved metadata do not silently enter MMM features.
+
 Authentication matches the other reporting APIs: callers must send the configured bearer token or an authenticated app session. Responses include `X-ROAS-Radar-MMM-Schema: mmm_daily_input_mart_v1`, and JSON responses also include `schemaVersion`.
 
 Supported query parameters:
@@ -83,3 +85,16 @@ JSON responses include:
 - `readiness.generationTimestamp`: the latest `last_computed_at` value across matching mart rows in the requested window.
 - `readiness.excludedDateWindows`: date windows excluded from the filtered training set. Reasons are `no_mmm_mart_rows` when the mart has no rows for the date, or `no_rows_matching_filters` when the mart has rows but none match the requested filters.
 - `rows`: schema-versioned mart rows in camelCase with native paid-media ids, taxonomy dimensions, metrics, freshness timestamps, and coverage JSON.
+
+### Taxonomy Drift Report
+
+`GET /api/reporting/mmm/taxonomy-drift` supports the same date, mart row type, attribution model, platform, source, and campaign filters as the MMM export endpoint. It also accepts:
+
+- `staleAfterDays`, default `14`, to flag native campaign metadata whose `ad_platform_entity_metadata.last_seen_at` is older than the requested `endDate` minus the threshold.
+- `sampleLimit`, default `10`, capped at `50`, to return the top grouped examples for each drift category.
+
+Responses use `schemaVersion: mmm_taxonomy_drift_report_v1` and include:
+
+- `overall` and `daily` count/rate summaries for unknown source, unmapped source, unknown-or-unmapped source, unknown medium, unmapped medium, unknown-or-unmapped medium, unresolved campaign metadata, and stale campaign metadata.
+- `nativeIdCoverage` for MMM rows eligible for platform-native IDs, including account, campaign, ad set, ad, creative, and account-plus-campaign join key coverage.
+- `samples` grouped by source, medium, campaign, platform, row type, attribution model, account id, and campaign id. Sample categories include `unknown_or_unmapped_source`, `unknown_or_unmapped_medium`, `unresolved_campaign_metadata`, `stale_campaign_metadata`, and `missing_platform_native_campaign_key`.

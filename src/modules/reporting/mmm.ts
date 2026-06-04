@@ -51,6 +51,28 @@ const mmmQuerySchema = z
     }
   });
 
+const taxonomyDriftQuerySchema = z
+  .object({
+    startDate: dateStringSchema,
+    endDate: dateStringSchema,
+    martRowType: z.enum(['paid_media', 'attribution']).optional(),
+    attributionModel: z.enum(ATTRIBUTION_MODELS).optional(),
+    platform: z.enum(['meta', 'google', 'taxonomy']).optional(),
+    source: z.string().trim().min(1).max(200).optional(),
+    campaign: z.string().trim().min(1).max(500).optional(),
+    staleAfterDays: z.coerce.number().int().positive().max(365).optional().default(14),
+    sampleLimit: z.coerce.number().int().positive().max(50).optional().default(10)
+  })
+  .superRefine((value, ctx) => {
+    if (value.startDate > value.endDate) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'startDate must be on or before endDate',
+        path: ['startDate']
+      });
+    }
+  });
+
 const campaignResolverBackfillSchema = z
   .object({
     startDate: dateStringSchema,
@@ -86,6 +108,7 @@ const modelRunsQuerySchema = z
   });
 
 type MmmQueryInput = z.infer<typeof mmmQuerySchema>;
+type TaxonomyDriftQueryInput = z.infer<typeof taxonomyDriftQuerySchema>;
 
 type MmmReadinessStatus = 'ready' | 'partial' | 'not_ready';
 
@@ -188,6 +211,41 @@ type ExposureCoverageRow = {
   latest_exposure_at: Date | null;
 };
 
+type TaxonomyDriftSummaryRow = {
+  metric_date: string | null;
+  total_rows: string | number;
+  unknown_source_rows: string | number;
+  unmapped_source_rows: string | number;
+  unknown_or_unmapped_source_rows: string | number;
+  unknown_medium_rows: string | number;
+  unmapped_medium_rows: string | number;
+  unknown_or_unmapped_medium_rows: string | number;
+  unresolved_campaign_metadata_rows: string | number;
+  stale_campaign_metadata_rows: string | number;
+  native_id_eligible_rows: string | number;
+  account_id_rows: string | number;
+  campaign_id_rows: string | number;
+  adset_id_rows: string | number;
+  ad_id_rows: string | number;
+  creative_id_rows: string | number;
+  platform_native_id_rows: string | number;
+};
+
+type TaxonomyDriftSampleRow = {
+  sample_type: string;
+  row_count: string | number;
+  source: string | null;
+  medium: string | null;
+  campaign: string | null;
+  platform: string | null;
+  mart_row_type: string | null;
+  attribution_model: string | null;
+  account_id: string | null;
+  campaign_id: string | null;
+  metadata_last_seen_at: Date | string | null;
+  metadata_updated_at: Date | string | null;
+};
+
 function parseInput<TSchema extends z.ZodTypeAny>(schema: TSchema, input: unknown): z.infer<TSchema> {
   try {
     return schema.parse(input);
@@ -235,6 +293,41 @@ function buildMmmFilters(input: MmmQueryInput): { sql: string; params: unknown[]
   };
 }
 
+function buildTaxonomyDriftFilters(input: TaxonomyDriftQueryInput): { sql: string; params: unknown[] } {
+  const params: unknown[] = [input.startDate, input.endDate];
+  const filters = ['mart.metric_date BETWEEN $1::date AND $2::date'];
+
+  if (input.martRowType) {
+    params.push(input.martRowType);
+    filters.push(`mart.mart_row_type = $${params.length}`);
+  }
+
+  if (input.attributionModel) {
+    params.push(input.attributionModel);
+    filters.push(`mart.attribution_model = $${params.length}`);
+  }
+
+  if (input.platform) {
+    params.push(input.platform);
+    filters.push(`mart.platform = $${params.length}`);
+  }
+
+  if (input.source) {
+    params.push(input.source);
+    filters.push(`mart.source = $${params.length}`);
+  }
+
+  if (input.campaign) {
+    params.push(input.campaign);
+    filters.push(`mart.campaign = $${params.length}`);
+  }
+
+  return {
+    sql: filters.join('\n            AND '),
+    params
+  };
+}
+
 function toIsoString(value: Date | string | null | undefined): string | null {
   if (value instanceof Date) {
     return value.toISOString();
@@ -249,6 +342,10 @@ function toNumber(value: string | number | null | undefined): number {
   }
 
   return Number(value);
+}
+
+function toNullableRate(numerator: number, denominator: number): number | null {
+  return denominator > 0 ? numerator / denominator : null;
 }
 
 function mapMmmRow(row: MmmExportRow) {
@@ -422,6 +519,78 @@ function mapExposureCoverageRow(row: ExposureCoverageRow) {
   };
 }
 
+function mapTaxonomyDriftSummaryRow(row: TaxonomyDriftSummaryRow) {
+  const totalRows = toNumber(row.total_rows);
+  const nativeIdEligibleRows = toNumber(row.native_id_eligible_rows);
+  const unknownSourceRows = toNumber(row.unknown_source_rows);
+  const unmappedSourceRows = toNumber(row.unmapped_source_rows);
+  const unknownOrUnmappedSourceRows = toNumber(row.unknown_or_unmapped_source_rows);
+  const unknownMediumRows = toNumber(row.unknown_medium_rows);
+  const unmappedMediumRows = toNumber(row.unmapped_medium_rows);
+  const unknownOrUnmappedMediumRows = toNumber(row.unknown_or_unmapped_medium_rows);
+  const unresolvedCampaignMetadataRows = toNumber(row.unresolved_campaign_metadata_rows);
+  const staleCampaignMetadataRows = toNumber(row.stale_campaign_metadata_rows);
+  const accountIdRows = toNumber(row.account_id_rows);
+  const campaignIdRows = toNumber(row.campaign_id_rows);
+  const adsetIdRows = toNumber(row.adset_id_rows);
+  const adIdRows = toNumber(row.ad_id_rows);
+  const creativeIdRows = toNumber(row.creative_id_rows);
+  const platformNativeIdRows = toNumber(row.platform_native_id_rows);
+
+  return {
+    date: row.metric_date,
+    totalRows,
+    unknownSourceRows,
+    unknownSourceRate: toNullableRate(unknownSourceRows, totalRows),
+    unmappedSourceRows,
+    unmappedSourceRate: toNullableRate(unmappedSourceRows, totalRows),
+    unknownOrUnmappedSourceRows,
+    unknownOrUnmappedSourceRate: toNullableRate(unknownOrUnmappedSourceRows, totalRows),
+    unknownMediumRows,
+    unknownMediumRate: toNullableRate(unknownMediumRows, totalRows),
+    unmappedMediumRows,
+    unmappedMediumRate: toNullableRate(unmappedMediumRows, totalRows),
+    unknownOrUnmappedMediumRows,
+    unknownOrUnmappedMediumRate: toNullableRate(unknownOrUnmappedMediumRows, totalRows),
+    unresolvedCampaignMetadataRows,
+    unresolvedCampaignMetadataRate: toNullableRate(unresolvedCampaignMetadataRows, totalRows),
+    staleCampaignMetadataRows,
+    staleCampaignMetadataRate: toNullableRate(staleCampaignMetadataRows, totalRows),
+    nativeIdEligibleRows,
+    nativeIdCoverage: {
+      accountIdRows,
+      accountIdRate: toNullableRate(accountIdRows, nativeIdEligibleRows),
+      campaignIdRows,
+      campaignIdRate: toNullableRate(campaignIdRows, nativeIdEligibleRows),
+      adsetIdRows,
+      adsetIdRate: toNullableRate(adsetIdRows, nativeIdEligibleRows),
+      adIdRows,
+      adIdRate: toNullableRate(adIdRows, nativeIdEligibleRows),
+      creativeIdRows,
+      creativeIdRate: toNullableRate(creativeIdRows, nativeIdEligibleRows),
+      platformNativeIdRows,
+      platformNativeIdRate: toNullableRate(platformNativeIdRows, nativeIdEligibleRows)
+    }
+  };
+}
+
+function mapTaxonomyDriftSampleRow(row: TaxonomyDriftSampleRow) {
+  return {
+    sampleType: row.sample_type,
+    rowCount: toNumber(row.row_count),
+    source: row.source,
+    medium: row.medium,
+    campaign: row.campaign,
+    platform: row.platform,
+    martRowType: row.mart_row_type,
+    attributionModel: row.attribution_model,
+    accountId: row.account_id,
+    campaignId: row.campaign_id,
+    metadataLastSeenAt: toIsoString(row.metadata_last_seen_at),
+    metadataUpdatedAt: toIsoString(row.metadata_updated_at)
+  };
+}
+
 function deriveReadiness(rows: MmmReadinessRow[]) {
   const excludedDateWindows = rows
     .filter((row) => Number(row.matching_row_count) === 0)
@@ -567,6 +736,276 @@ export function createMmmRouter(): Router {
       res.status(202).json({
         schemaVersion: 'campaign_metadata_resolver_v1',
         report
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/taxonomy-drift', async (req, res, next) => {
+    try {
+      const input = parseInput(taxonomyDriftQuerySchema, req.query);
+      const filters = buildTaxonomyDriftFilters(input);
+      const staleAfterDaysParam = filters.params.length + 1;
+      const sampleLimitParam = filters.params.length + 2;
+      const driftCte = `
+        WITH filtered_mart AS (
+          SELECT
+            mart.metric_date,
+            mart.mart_row_type,
+            mart.attribution_model,
+            mart.platform,
+            mart.source,
+            mart.medium,
+            mart.campaign,
+            mart.account_id,
+            mart.campaign_id,
+            mart.adset_id,
+            mart.ad_id,
+            mart.creative_id,
+            mart.resolved_canonical_source,
+            mart.resolved_canonical_medium,
+            mart.resolved_canonical_campaign_name,
+            mart.needs_metadata_qa,
+            campaign_meta.last_seen_at AS metadata_last_seen_at,
+            campaign_meta.updated_at AS metadata_updated_at,
+            lower(btrim(COALESCE(mart.source, ''))) AS normalized_source,
+            lower(btrim(COALESCE(mart.medium, ''))) AS normalized_medium,
+            lower(btrim(COALESCE(mart.resolved_canonical_source, mart.source, ''))) AS normalized_effective_source,
+            lower(btrim(COALESCE(mart.resolved_canonical_medium, mart.medium, ''))) AS normalized_effective_medium,
+            lower(btrim(COALESCE(mart.resolved_canonical_campaign_name, mart.campaign, ''))) AS normalized_effective_campaign,
+            mart.platform IN ('meta', 'google') AS native_id_eligible,
+            campaign_meta.id IS NOT NULL
+              AND campaign_meta.last_seen_at < ($2::date - ($${staleAfterDaysParam}::int * interval '1 day')) AS stale_campaign_metadata
+          FROM mmm_daily_input_mart_v1 mart
+          LEFT JOIN ad_platform_entity_metadata campaign_meta
+            ON campaign_meta.platform = CASE
+                WHEN mart.platform = 'meta' THEN 'meta_ads'
+                WHEN mart.platform = 'google' THEN 'google_ads'
+                ELSE NULL
+              END
+           AND campaign_meta.entity_type = 'campaign'
+           AND campaign_meta.account_id = mart.account_id
+           AND campaign_meta.entity_id = mart.campaign_id
+          WHERE ${filters.sql}
+        ),
+        classified_mart AS (
+          SELECT
+            *,
+            normalized_source IN ('', 'unknown', '(not set)', 'not set', 'null', 'none', 'unassigned')
+              OR normalized_effective_source IN ('', 'unknown', '(not set)', 'not set', 'null', 'none', 'unassigned') AS has_unknown_source,
+            resolved_canonical_source IS NULL AS has_unmapped_source,
+            normalized_medium IN ('', 'unknown', '(not set)', 'not set', 'null', 'none', 'unassigned')
+              OR normalized_effective_medium IN ('', 'unknown', '(not set)', 'not set', 'null', 'none', 'unassigned') AS has_unknown_medium,
+            resolved_canonical_medium IS NULL AS has_unmapped_medium,
+            needs_metadata_qa
+              OR resolved_canonical_campaign_name IS NULL
+              OR normalized_effective_campaign IN ('', 'unknown', '(not set)', 'not set', 'null', 'none', 'unassigned') AS has_unresolved_campaign_metadata,
+            account_id IS NOT NULL AND campaign_id IS NOT NULL AS has_platform_native_campaign_key
+          FROM filtered_mart
+        )
+      `;
+
+      const summaryResult = await query<TaxonomyDriftSummaryRow>(
+        `
+          ${driftCte},
+          daily_summary AS (
+            SELECT
+              metric_date::text,
+              COUNT(*)::bigint AS total_rows,
+              COUNT(*) FILTER (WHERE has_unknown_source)::bigint AS unknown_source_rows,
+              COUNT(*) FILTER (WHERE has_unmapped_source)::bigint AS unmapped_source_rows,
+              COUNT(*) FILTER (WHERE has_unknown_source OR has_unmapped_source)::bigint AS unknown_or_unmapped_source_rows,
+              COUNT(*) FILTER (WHERE has_unknown_medium)::bigint AS unknown_medium_rows,
+              COUNT(*) FILTER (WHERE has_unmapped_medium)::bigint AS unmapped_medium_rows,
+              COUNT(*) FILTER (WHERE has_unknown_medium OR has_unmapped_medium)::bigint AS unknown_or_unmapped_medium_rows,
+              COUNT(*) FILTER (WHERE has_unresolved_campaign_metadata)::bigint AS unresolved_campaign_metadata_rows,
+              COUNT(*) FILTER (WHERE stale_campaign_metadata)::bigint AS stale_campaign_metadata_rows,
+              COUNT(*) FILTER (WHERE native_id_eligible)::bigint AS native_id_eligible_rows,
+              COUNT(*) FILTER (WHERE native_id_eligible AND account_id IS NOT NULL)::bigint AS account_id_rows,
+              COUNT(*) FILTER (WHERE native_id_eligible AND campaign_id IS NOT NULL)::bigint AS campaign_id_rows,
+              COUNT(*) FILTER (WHERE native_id_eligible AND adset_id IS NOT NULL)::bigint AS adset_id_rows,
+              COUNT(*) FILTER (WHERE native_id_eligible AND ad_id IS NOT NULL)::bigint AS ad_id_rows,
+              COUNT(*) FILTER (WHERE native_id_eligible AND creative_id IS NOT NULL)::bigint AS creative_id_rows,
+              COUNT(*) FILTER (WHERE native_id_eligible AND has_platform_native_campaign_key)::bigint AS platform_native_id_rows
+            FROM classified_mart
+            GROUP BY metric_date
+          ),
+          overall_summary AS (
+            SELECT
+              NULL::text AS metric_date,
+              COUNT(*)::bigint AS total_rows,
+              COUNT(*) FILTER (WHERE has_unknown_source)::bigint AS unknown_source_rows,
+              COUNT(*) FILTER (WHERE has_unmapped_source)::bigint AS unmapped_source_rows,
+              COUNT(*) FILTER (WHERE has_unknown_source OR has_unmapped_source)::bigint AS unknown_or_unmapped_source_rows,
+              COUNT(*) FILTER (WHERE has_unknown_medium)::bigint AS unknown_medium_rows,
+              COUNT(*) FILTER (WHERE has_unmapped_medium)::bigint AS unmapped_medium_rows,
+              COUNT(*) FILTER (WHERE has_unknown_medium OR has_unmapped_medium)::bigint AS unknown_or_unmapped_medium_rows,
+              COUNT(*) FILTER (WHERE has_unresolved_campaign_metadata)::bigint AS unresolved_campaign_metadata_rows,
+              COUNT(*) FILTER (WHERE stale_campaign_metadata)::bigint AS stale_campaign_metadata_rows,
+              COUNT(*) FILTER (WHERE native_id_eligible)::bigint AS native_id_eligible_rows,
+              COUNT(*) FILTER (WHERE native_id_eligible AND account_id IS NOT NULL)::bigint AS account_id_rows,
+              COUNT(*) FILTER (WHERE native_id_eligible AND campaign_id IS NOT NULL)::bigint AS campaign_id_rows,
+              COUNT(*) FILTER (WHERE native_id_eligible AND adset_id IS NOT NULL)::bigint AS adset_id_rows,
+              COUNT(*) FILTER (WHERE native_id_eligible AND ad_id IS NOT NULL)::bigint AS ad_id_rows,
+              COUNT(*) FILTER (WHERE native_id_eligible AND creative_id IS NOT NULL)::bigint AS creative_id_rows,
+              COUNT(*) FILTER (WHERE native_id_eligible AND has_platform_native_campaign_key)::bigint AS platform_native_id_rows
+            FROM classified_mart
+          )
+          SELECT * FROM overall_summary
+          UNION ALL
+          SELECT * FROM daily_summary
+          ORDER BY metric_date NULLS FIRST
+        `,
+        [...filters.params, input.staleAfterDays]
+      );
+
+      const samplesResult = await query<TaxonomyDriftSampleRow>(
+        `
+          ${driftCte},
+          sample_candidates AS (
+            SELECT
+              'unknown_or_unmapped_source'::text AS sample_type,
+              COUNT(*)::bigint AS row_count,
+              source,
+              medium,
+              campaign,
+              platform,
+              mart_row_type,
+              attribution_model,
+              account_id,
+              campaign_id,
+              MAX(metadata_last_seen_at) AS metadata_last_seen_at,
+              MAX(metadata_updated_at) AS metadata_updated_at
+            FROM classified_mart
+            WHERE has_unknown_source OR has_unmapped_source
+            GROUP BY source, medium, campaign, platform, mart_row_type, attribution_model, account_id, campaign_id
+
+            UNION ALL
+
+            SELECT
+              'unknown_or_unmapped_medium'::text AS sample_type,
+              COUNT(*)::bigint AS row_count,
+              source,
+              medium,
+              campaign,
+              platform,
+              mart_row_type,
+              attribution_model,
+              account_id,
+              campaign_id,
+              MAX(metadata_last_seen_at) AS metadata_last_seen_at,
+              MAX(metadata_updated_at) AS metadata_updated_at
+            FROM classified_mart
+            WHERE has_unknown_medium OR has_unmapped_medium
+            GROUP BY source, medium, campaign, platform, mart_row_type, attribution_model, account_id, campaign_id
+
+            UNION ALL
+
+            SELECT
+              'unresolved_campaign_metadata'::text AS sample_type,
+              COUNT(*)::bigint AS row_count,
+              source,
+              medium,
+              campaign,
+              platform,
+              mart_row_type,
+              attribution_model,
+              account_id,
+              campaign_id,
+              MAX(metadata_last_seen_at) AS metadata_last_seen_at,
+              MAX(metadata_updated_at) AS metadata_updated_at
+            FROM classified_mart
+            WHERE has_unresolved_campaign_metadata
+            GROUP BY source, medium, campaign, platform, mart_row_type, attribution_model, account_id, campaign_id
+
+            UNION ALL
+
+            SELECT
+              'stale_campaign_metadata'::text AS sample_type,
+              COUNT(*)::bigint AS row_count,
+              source,
+              medium,
+              campaign,
+              platform,
+              mart_row_type,
+              attribution_model,
+              account_id,
+              campaign_id,
+              MAX(metadata_last_seen_at) AS metadata_last_seen_at,
+              MAX(metadata_updated_at) AS metadata_updated_at
+            FROM classified_mart
+            WHERE stale_campaign_metadata
+            GROUP BY source, medium, campaign, platform, mart_row_type, attribution_model, account_id, campaign_id
+
+            UNION ALL
+
+            SELECT
+              'missing_platform_native_campaign_key'::text AS sample_type,
+              COUNT(*)::bigint AS row_count,
+              source,
+              medium,
+              campaign,
+              platform,
+              mart_row_type,
+              attribution_model,
+              account_id,
+              campaign_id,
+              MAX(metadata_last_seen_at) AS metadata_last_seen_at,
+              MAX(metadata_updated_at) AS metadata_updated_at
+            FROM classified_mart
+            WHERE native_id_eligible AND NOT has_platform_native_campaign_key
+            GROUP BY source, medium, campaign, platform, mart_row_type, attribution_model, account_id, campaign_id
+          ),
+          ranked_samples AS (
+            SELECT
+              *,
+              row_number() OVER (
+                PARTITION BY sample_type
+                ORDER BY row_count DESC, source ASC, medium ASC, campaign ASC, platform ASC
+              ) AS sample_rank
+            FROM sample_candidates
+          )
+          SELECT
+            sample_type,
+            row_count,
+            source,
+            medium,
+            campaign,
+            platform,
+            mart_row_type,
+            attribution_model,
+            account_id,
+            campaign_id,
+            metadata_last_seen_at,
+            metadata_updated_at
+          FROM ranked_samples
+          WHERE sample_rank <= $${sampleLimitParam}
+          ORDER BY sample_type ASC, row_count DESC, source ASC, medium ASC, campaign ASC
+        `,
+        [...filters.params, input.staleAfterDays, input.sampleLimit]
+      );
+
+      const [overallRow, ...dailyRows] = summaryResult.rows.map(mapTaxonomyDriftSummaryRow);
+
+      res.status(200).json({
+        schemaVersion: 'mmm_taxonomy_drift_report_v1',
+        range: {
+          startDate: input.startDate,
+          endDate: input.endDate
+        },
+        filters: {
+          martRowType: input.martRowType ?? null,
+          attributionModel: input.attributionModel ?? null,
+          platform: input.platform ?? null,
+          source: input.source ?? null,
+          campaign: input.campaign ?? null,
+          staleAfterDays: input.staleAfterDays,
+          sampleLimit: input.sampleLimit
+        },
+        overall: overallRow,
+        daily: dailyRows,
+        samples: samplesResult.rows.map(mapTaxonomyDriftSampleRow)
       });
     } catch (error) {
       next(error);
