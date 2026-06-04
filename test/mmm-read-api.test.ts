@@ -56,8 +56,13 @@ async function postJson(
 }
 
 type GateQueryMode = 'clean' | 'changed' | 'blocked';
+type TestAuthUser = {
+  email: string;
+  isAdmin?: boolean;
+  id?: number;
+};
 
-function installReadinessGateQueryMock(getMode: () => GateQueryMode = () => 'clean') {
+function installReadinessGateQueryMock(getMode: () => GateQueryMode = () => 'clean', authUser?: TestAuthUser) {
   let gate: Record<string, unknown> | null = null;
 
   function buildGateRow(params: unknown[]) {
@@ -92,6 +97,26 @@ function installReadinessGateQueryMock(getMode: () => GateQueryMode = () => 'cle
   }
 
   pool.query = (async (text: string, params?: unknown[]) => {
+    if (text.includes('FROM app_sessions s')) {
+      return {
+        rows: authUser
+          ? [
+              {
+                session_id: 7,
+                user_id: authUser.id ?? 42,
+                email: authUser.email,
+                display_name: authUser.email,
+                is_admin: authUser.isAdmin ?? false,
+                status: 'active',
+                last_login_at: new Date('2026-04-04T09:00:00.000Z'),
+                created_at: new Date('2026-04-01T00:00:00.000Z'),
+                expires_at: new Date('2026-05-01T00:00:00.000Z')
+              }
+            ]
+          : []
+      };
+    }
+
     if (text.includes('FROM mmm_readiness_gates') && text.includes('WHERE start_date = $1::date')) {
       return { rows: gate ? [gate] : [] };
     }
@@ -940,6 +965,141 @@ test('MMM readiness gate requires every production owner to approve the current 
   }
 });
 
+test('MMM readiness gate rejects authenticated users without owner authorization', async () => {
+  const originalOwnerApprovers = process.env.MMM_READINESS_OWNER_APPROVERS;
+  process.env.MMM_READINESS_OWNER_APPROVERS = 'Product:product@example.com';
+  installReadinessGateQueryMock(() => 'clean', { email: 'viewer@example.com' });
+  const server = createServer();
+
+  try {
+    const response = await postJson(
+      server,
+      '/api/reporting/mmm/readiness-gate/approve',
+      {
+        startDate: '2026-04-01',
+        endDate: '2026-04-01',
+        attributionModel: 'last_touch'
+      },
+      { authorization: 'Bearer viewer-session-token' }
+    );
+
+    assert.equal(response.response.status, 403);
+    assert.equal(response.body.error, 'mmm_readiness_owner_forbidden');
+  } finally {
+    process.env.MMM_READINESS_OWNER_APPROVERS = originalOwnerApprovers;
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
+test('MMM readiness gate prevents users from approving the wrong owner role', async () => {
+  const originalOwnerApprovers = process.env.MMM_READINESS_OWNER_APPROVERS;
+  process.env.MMM_READINESS_OWNER_APPROVERS = 'Analytics:analytics-owner@example.com';
+  installReadinessGateQueryMock(() => 'clean', { email: 'analytics-owner@example.com' });
+  const server = createServer();
+
+  try {
+    const response = await postJson(
+      server,
+      '/api/reporting/mmm/readiness-gate/approve',
+      {
+        startDate: '2026-04-01',
+        endDate: '2026-04-01',
+        attributionModel: 'last_touch',
+        owner: 'Product'
+      },
+      { authorization: 'Bearer analytics-session-token' }
+    );
+
+    assert.equal(response.response.status, 403);
+    assert.equal(response.body.error, 'mmm_readiness_owner_forbidden');
+    assert.equal(response.body.details.requestedOwner, 'Product');
+    assert.deepEqual(response.body.details.allowedOwners, ['Analytics']);
+  } finally {
+    process.env.MMM_READINESS_OWNER_APPROVERS = originalOwnerApprovers;
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
+test('MMM readiness gate derives valid owner approval from authenticated user mapping', async () => {
+  const originalOwnerApprovers = process.env.MMM_READINESS_OWNER_APPROVERS;
+  process.env.MMM_READINESS_OWNER_APPROVERS = 'Analytics:analytics-owner@example.com';
+  installReadinessGateQueryMock(() => 'clean', { email: 'analytics-owner@example.com', id: 77 });
+  const server = createServer();
+  const payload = {
+    startDate: '2026-04-01',
+    endDate: '2026-04-01',
+    attributionModel: 'last_touch'
+  };
+
+  try {
+    const created = await postJson(server, '/api/reporting/mmm/readiness-gate/refresh', payload);
+    const approved = await postJson(
+      server,
+      '/api/reporting/mmm/readiness-gate/approve',
+      {
+        ...payload,
+        evidenceHash: created.body.gate.evidenceHash
+      },
+      { authorization: 'Bearer analytics-session-token' }
+    );
+
+    assert.equal(approved.response.status, 200);
+    const analyticsApproval = approved.body.gate.ownerApprovals.find((approval: { owner: string }) => approval.owner === 'Analytics');
+    assert.equal(analyticsApproval.status, 'pass');
+    assert.equal(analyticsApproval.approvedBy, 'analytics-owner@example.com');
+    assert.equal(analyticsApproval.approvedByUserId, 77);
+    assert.equal(analyticsApproval.approvedByEmail, 'analytics-owner@example.com');
+    assert.equal(analyticsApproval.sourceAction, 'approve');
+  } finally {
+    process.env.MMM_READINESS_OWNER_APPROVERS = originalOwnerApprovers;
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
+test('MMM readiness gate rejects stale evidence hash and duplicate approvals', async () => {
+  installReadinessGateQueryMock();
+  const server = createServer();
+  const payload = {
+    startDate: '2026-04-01',
+    endDate: '2026-04-01',
+    attributionModel: 'last_touch',
+    owner: 'Product'
+  };
+
+  try {
+    const stale = await postJson(server, '/api/reporting/mmm/readiness-gate/approve', {
+      ...payload,
+      evidenceHash: '0'.repeat(64)
+    });
+    assert.equal(stale.response.status, 409);
+    assert.equal(stale.body.error, 'stale_evidence_hash');
+
+    const created = await postJson(server, '/api/reporting/mmm/readiness-gate/refresh', {
+      startDate: '2026-04-01',
+      endDate: '2026-04-01',
+      attributionModel: 'last_touch'
+    });
+    const approved = await postJson(server, '/api/reporting/mmm/readiness-gate/approve', {
+      ...payload,
+      evidenceHash: created.body.gate.evidenceHash
+    });
+    assert.equal(approved.response.status, 200);
+
+    const duplicate = await postJson(server, '/api/reporting/mmm/readiness-gate/approve', {
+      ...payload,
+      evidenceHash: created.body.gate.evidenceHash
+    });
+    assert.equal(duplicate.response.status, 409);
+    assert.equal(duplicate.body.error, 'duplicate_owner_approval');
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
 test('MMM readiness gate audit report returns final gate evidence and approved baseline freeze', async () => {
   installReadinessGateQueryMock();
   const server = createServer();
@@ -1051,7 +1211,8 @@ test('MMM readiness gate waivers clear checklist failures without bypassing requ
       owner: 'Data Platform',
       waiver: {
         checklistKey: 'campaign_resolver_coverage',
-        reason: 'Accepted for one dry run while metadata backfill completes.'
+        reason: 'Accepted for one dry run while metadata backfill completes.',
+        reviewBy: '2026-04-08T00:00:00.000Z'
       }
     });
     assert.equal(waived.response.status, 200);
@@ -1079,16 +1240,23 @@ test('MMM readiness gate stays blocked when all owners approve unresolved eviden
 
   try {
     let latest = await postJson(server, '/api/reporting/mmm/readiness-gate/refresh', payload);
-    for (const owner of ['Product', 'Analytics', 'Backend', 'Data Platform']) {
+    for (const owner of ['Product', 'Analytics', 'Backend']) {
       latest = await postJson(server, '/api/reporting/mmm/readiness-gate/approve', {
         ...payload,
         owner
       });
     }
 
+    const blockedFinal = await postJson(server, '/api/reporting/mmm/readiness-gate/approve', {
+      ...payload,
+      owner: 'Data Platform'
+    });
+
+    assert.equal(blockedFinal.response.status, 409);
+    assert.equal(blockedFinal.body.error, 'blocked_final_gate_state');
     assert.equal(latest.body.gate.gateStatus, 'pending');
     assert.equal(latest.body.gate.finalState, 'blocked');
-    assert.equal(latest.body.gate.ownerApprovals.every((approval: { status: string }) => approval.status === 'pass'), true);
+    assert.equal(latest.body.gate.ownerApprovals.filter((approval: { status: string }) => approval.status === 'pass').length, 3);
     assert.equal(latest.body.gate.unresolvedCriticalIssueCount > 0, true);
   } finally {
     pool.query = originalPoolQuery as typeof pool.query;

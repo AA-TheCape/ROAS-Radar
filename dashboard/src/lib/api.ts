@@ -457,8 +457,11 @@ export type MmmReadinessGateApproval = {
   owner: string;
   status: MmmGateChecklistStatus;
   approvedBy: string | null;
+  approvedByUserId?: number | null;
+  approvedByEmail?: string | null;
   approvedAt: string | null;
   evidenceHash?: string | null;
+  sourceAction?: string | null;
   detail: string;
 };
 
@@ -466,9 +469,14 @@ export type MmmReadinessGateWaiver = {
   checklistKey: string;
   reason: string;
   expiresAt?: string;
+  reviewBy?: string;
+  owner?: string;
   waivedBy: string;
+  waivedByUserId?: number | null;
+  waivedByEmail?: string | null;
   waivedAt: string;
   evidenceHash: string;
+  sourceAction?: string | null;
 };
 
 export type MmmReadinessGate = {
@@ -577,10 +585,12 @@ export type MmmReadinessGateAuditReport = {
 export type MmmReadinessGateDecisionPayload = MmmExportQuery & {
   owner?: string;
   reason?: string;
+  evidenceHash?: string;
   waiver?: {
     checklistKey: string;
     reason: string;
     expiresAt?: string;
+    reviewBy?: string;
   };
 };
 

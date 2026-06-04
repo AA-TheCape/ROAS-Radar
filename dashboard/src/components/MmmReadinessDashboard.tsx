@@ -372,10 +372,11 @@ export default function MmmReadinessDashboard({ reportingTimezone }: MmmReadines
   const [exposureCoverageSection, setExposureCoverageSection] = useState<AsyncSection<ExposureCoverageResponse>>(
     createSection({ loading: true })
   );
-  const [approvalOwner, setApprovalOwner] = useState('Product');
+  const [approvalOwner, setApprovalOwner] = useState('');
   const [decisionReason, setDecisionReason] = useState('');
   const [waiverChecklistKey, setWaiverChecklistKey] = useState('');
   const [waiverReason, setWaiverReason] = useState('');
+  const [waiverReviewBy, setWaiverReviewBy] = useState('');
   const [gateActionError, setGateActionError] = useState<string | null>(null);
   const [gateActionLoading, setGateActionLoading] = useState(false);
 
@@ -515,8 +516,9 @@ export default function MmmReadinessDashboard({ reportingTimezone }: MmmReadines
     try {
       const payload = {
         ...query,
-        owner: approvalOwner,
-        reason: decisionReason.trim() || undefined
+        owner: approvalOwner || undefined,
+        reason: decisionReason.trim() || undefined,
+        evidenceHash: persistedGate?.evidenceHash
       };
       const response =
         action === 'refresh'
@@ -528,7 +530,8 @@ export default function MmmReadinessDashboard({ reportingTimezone }: MmmReadines
                   ...payload,
                   waiver: {
                     checklistKey: waiverChecklistKey,
-                    reason: waiverReason.trim()
+                    reason: waiverReason.trim(),
+                    reviewBy: waiverReviewBy ? `${waiverReviewBy}T23:59:59.000Z` : undefined
                   }
                 })
               : await blockMmmReadinessGate(payload);
@@ -538,6 +541,7 @@ export default function MmmReadinessDashboard({ reportingTimezone }: MmmReadines
       setAuditSection(createSection({ data: auditReport }));
       if (action === 'waive') {
         setWaiverReason('');
+        setWaiverReviewBy('');
       }
       if (action !== 'refresh') {
         setDecisionReason('');
@@ -784,8 +788,9 @@ export default function MmmReadinessDashboard({ reportingTimezone }: MmmReadines
           </CardHeader>
           <div className="grid gap-4">
             <FieldGrid>
-              <Field label="Owner">
+              <Field label="Owner role">
                 <Select value={approvalOwner} onChange={(event) => setApprovalOwner(event.target.value)}>
+                  <option value="">Use my authorized role</option>
                   {['Product', 'Analytics', 'Backend', 'Data Platform'].map((owner) => (
                     <option key={owner} value={owner}>
                       {owner}
@@ -810,6 +815,9 @@ export default function MmmReadinessDashboard({ reportingTimezone }: MmmReadines
               <Field label="Waiver reason">
                 <Input value={waiverReason} onChange={(event) => setWaiverReason(event.target.value)} placeholder="Required for waiver" />
               </Field>
+              <Field label="Waiver review by">
+                <Input type="date" value={waiverReviewBy} onChange={(event) => setWaiverReviewBy(event.target.value)} />
+              </Field>
             </FieldGrid>
             {gateActionError ? <p className="text-body text-danger">{gateActionError}</p> : null}
             <ButtonRow>
@@ -817,12 +825,12 @@ export default function MmmReadinessDashboard({ reportingTimezone }: MmmReadines
                 Refresh evidence
               </Button>
               <Button type="button" onClick={() => void runGateAction('approve')} disabled={gateActionLoading}>
-                Approve owner
+                Approve my role
               </Button>
               <Button
                 type="button"
                 onClick={() => void runGateAction('waive')}
-                disabled={gateActionLoading || !waiverChecklistKey || !waiverReason.trim()}
+                disabled={gateActionLoading || !waiverChecklistKey || !waiverReason.trim() || !waiverReviewBy}
               >
                 Record waiver
               </Button>

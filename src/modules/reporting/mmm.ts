@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { Router } from 'express';
 import { z } from 'zod';
 
+import { env } from '../../config/env.js';
 import { query } from '../../db/pool.js';
 import { attachAuthContext, requireAuthenticated, type AuthContext } from '../auth/index.js';
 import { ATTRIBUTION_MODELS } from '../attribution/engine.js';
@@ -29,6 +30,7 @@ class MmmHttpError extends Error {
 const MMM_SCHEMA_VERSION = 'mmm_daily_input_mart_v1';
 const MMM_READINESS_REQUIRED_OWNERS = ['Product', 'Analytics', 'Backend', 'Data Platform'] as const;
 const MMM_READINESS_REQUIRED_OWNER_SET = new Set<string>(MMM_READINESS_REQUIRED_OWNERS);
+type MmmReadinessRequiredOwner = (typeof MMM_READINESS_REQUIRED_OWNERS)[number];
 
 const dateStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
@@ -127,11 +129,13 @@ const readinessGateQuerySchema = readinessGateBaseSchema.superRefine((value, ctx
 const readinessGateMutationSchema = z.object({
   owner: z.enum(MMM_READINESS_REQUIRED_OWNERS).optional(),
   reason: z.string().trim().min(1).max(1000).optional(),
+  evidenceHash: z.string().regex(/^[0-9a-f]{64}$/).optional(),
   waiver: z
     .object({
       checklistKey: z.string().trim().min(1).max(120),
       reason: z.string().trim().min(1).max(1000),
-      expiresAt: z.string().datetime().optional()
+      expiresAt: z.string().datetime().optional(),
+      reviewBy: z.string().datetime().optional()
     })
     .optional()
 });
@@ -154,6 +158,14 @@ const readinessGateWaiverSchema = readinessGateBaseSchema
         code: z.ZodIssueCode.custom,
         message: 'startDate must be on or before endDate',
         path: ['startDate']
+      });
+    }
+
+    if (!value.waiver.expiresAt && !value.waiver.reviewBy) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Waiver requires expiresAt or reviewBy metadata.',
+        path: ['waiver']
       });
     }
   });
@@ -351,11 +363,14 @@ type MmmBaselineFreezeAuditRow = {
 
 type JsonRecord = Record<string, unknown>;
 type MmmReadinessGateOwnerApproval = {
-  owner: (typeof MMM_READINESS_REQUIRED_OWNERS)[number];
+  owner: MmmReadinessRequiredOwner;
   status: 'pass' | 'pending';
   approvedBy: string | null;
+  approvedByUserId: number | null;
+  approvedByEmail: string | null;
   approvedAt: string | null;
   evidenceHash: string | null;
+  sourceAction: string | null;
   detail: string;
 };
 
@@ -1005,12 +1020,106 @@ function mapMmmModelRun(row: MmmModelRunRow) {
   };
 }
 
-function getActorLabel(auth: AuthContext | null | undefined): string {
+type MmmReadinessActor = {
+  kind: 'internal' | 'user';
+  label: string;
+  userId: number | null;
+  email: string | null;
+  isAdmin: boolean;
+};
+
+function getReadinessActor(auth: AuthContext | null | undefined): MmmReadinessActor {
   if (auth?.kind === 'user') {
-    return auth.user.email;
+    return {
+      kind: 'user',
+      label: auth.user.email,
+      userId: auth.user.id,
+      email: auth.user.email,
+      isAdmin: auth.user.isAdmin
+    };
   }
 
-  return 'internal';
+  return {
+    kind: 'internal',
+    label: 'internal',
+    userId: null,
+    email: 'internal@system',
+    isAdmin: true
+  };
+}
+
+function parseOwnerApproverConfig(raw: string): Map<string, Set<MmmReadinessRequiredOwner>> {
+  const mapping = new Map<string, Set<MmmReadinessRequiredOwner>>();
+
+  for (const entry of raw
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean)) {
+    const [ownerRaw, emailsRaw] = entry.split(':', 2);
+    const owner = ownerRaw?.trim();
+
+    if (!owner || !MMM_READINESS_REQUIRED_OWNER_SET.has(owner) || !emailsRaw) {
+      continue;
+    }
+
+    for (const email of emailsRaw
+      .split(/[|;]/)
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean)) {
+      const owners = mapping.get(email) ?? new Set<MmmReadinessRequiredOwner>();
+      owners.add(owner as MmmReadinessRequiredOwner);
+      mapping.set(email, owners);
+    }
+  }
+
+  return mapping;
+}
+
+function getAllowedOwnerRoles(actor: MmmReadinessActor): MmmReadinessRequiredOwner[] {
+  if (actor.isAdmin || actor.kind === 'internal') {
+    return [...MMM_READINESS_REQUIRED_OWNERS];
+  }
+
+  if (!actor.email) {
+    return [];
+  }
+
+  return [...(parseOwnerApproverConfig(env.MMM_READINESS_OWNER_APPROVERS).get(actor.email.toLowerCase()) ?? [])];
+}
+
+function resolveAuthorizedOwner(
+  actor: MmmReadinessActor,
+  requestedOwner: MmmReadinessRequiredOwner | undefined,
+  action: 'approve' | 'waive' | 'block'
+): MmmReadinessRequiredOwner {
+  const allowedOwners = getAllowedOwnerRoles(actor);
+
+  if (allowedOwners.length === 0) {
+    throw new MmmHttpError(403, 'mmm_readiness_owner_forbidden', `Authorized production owner or admin access is required to ${action} MMM readiness gates.`);
+  }
+
+  if (requestedOwner && !allowedOwners.includes(requestedOwner)) {
+    throw new MmmHttpError(
+      403,
+      'mmm_readiness_owner_forbidden',
+      `Authenticated principal is not authorized to act for the ${requestedOwner} MMM readiness owner role.`,
+      { requestedOwner, allowedOwners }
+    );
+  }
+
+  if (actor.isAdmin || actor.kind === 'internal') {
+    if (!requestedOwner) {
+      throw new MmmHttpError(400, 'invalid_request', 'Admin and internal MMM readiness mutations must include an owner role.');
+    }
+
+    return requestedOwner;
+  }
+
+  if (allowedOwners.length > 1 && !requestedOwner) {
+    throw new MmmHttpError(400, 'invalid_request', 'Multiple authorized MMM readiness owner roles are available; include the owner role to act for.');
+  }
+
+  return requestedOwner ?? allowedOwners[0];
 }
 
 function stableJson(value: unknown): string {
@@ -1118,9 +1227,12 @@ function buildRequiredOwnerApprovals(
     ) as
       | {
           approvedBy?: unknown;
+          approvedByUserId?: unknown;
+          approvedByEmail?: unknown;
           approvedAt?: unknown;
           detail?: unknown;
           evidenceHash?: unknown;
+          sourceAction?: unknown;
         }
       | undefined;
 
@@ -1129,8 +1241,11 @@ function buildRequiredOwnerApprovals(
         owner,
         status: 'pass' as const,
         approvedBy: typeof existing.approvedBy === 'string' ? existing.approvedBy : null,
+        approvedByUserId: typeof existing.approvedByUserId === 'number' ? existing.approvedByUserId : null,
+        approvedByEmail: typeof existing.approvedByEmail === 'string' ? existing.approvedByEmail : typeof existing.approvedBy === 'string' ? existing.approvedBy : null,
         approvedAt: typeof existing.approvedAt === 'string' ? existing.approvedAt : null,
         evidenceHash: typeof existing.evidenceHash === 'string' ? existing.evidenceHash : evidenceHashValue ?? null,
+        sourceAction: typeof existing.sourceAction === 'string' ? existing.sourceAction : 'approve',
         detail: typeof existing.detail === 'string' ? existing.detail : 'Owner approved the persisted MMM readiness evidence.'
       };
     }
@@ -1143,8 +1258,11 @@ function buildRequiredOwnerApprovals(
       owner,
       status: 'pending' as const,
       approvedBy: null,
+      approvedByUserId: null,
+      approvedByEmail: null,
       approvedAt: null,
       evidenceHash: evidenceHashValue ?? null,
+      sourceAction: null,
       detail:
         failedCount > 0
           ? `${failedCount} gate ${failedCount === 1 ? 'item requires' : 'items require'} approval or waiver.`
@@ -1911,8 +2029,8 @@ export function createMmmRouter(): Router {
         return;
       }
 
-      const actor = getActorLabel(res.locals.auth as AuthContext | null | undefined);
-      const gate = await upsertReadinessGate(input, actor);
+      const actor = getReadinessActor(res.locals.auth as AuthContext | null | undefined);
+      const gate = await upsertReadinessGate(input, actor.label);
       res.status(201).json({
         schemaVersion: 'mmm_readiness_gate_v1',
         gate: mapGateRow(gate)
@@ -1936,8 +2054,8 @@ export function createMmmRouter(): Router {
   router.post('/readiness-gate/refresh', async (req, res, next) => {
     try {
       const input = parseInput(readinessGateQuerySchema, req.body);
-      const actor = getActorLabel(res.locals.auth as AuthContext | null | undefined);
-      const gate = await upsertReadinessGate(input, actor);
+      const actor = getReadinessActor(res.locals.auth as AuthContext | null | undefined);
+      const gate = await upsertReadinessGate(input, actor.label);
 
       res.status(200).json({
         schemaVersion: 'mmm_readiness_gate_v1',
@@ -1951,13 +2069,16 @@ export function createMmmRouter(): Router {
   router.post('/readiness-gate/approve', async (req, res, next) => {
     try {
       const input = parseInput(readinessGateDecisionSchema, req.body);
-      const actor = getActorLabel(res.locals.auth as AuthContext | null | undefined);
-      const gate = (await fetchPersistedGate(input)) ?? (await upsertReadinessGate(input, actor));
+      const actor = getReadinessActor(res.locals.auth as AuthContext | null | undefined);
+      const gate = (await fetchPersistedGate(input)) ?? (await upsertReadinessGate(input, actor.label));
       const mapped = mapGateRow(gate);
-      const owner = input.owner;
+      const owner = resolveAuthorizedOwner(actor, input.owner, 'approve');
 
-      if (!owner) {
-        throw new MmmHttpError(400, 'invalid_request', 'Owner approval requires one of Product, Analytics, Backend, or Data Platform.');
+      if (input.evidenceHash && input.evidenceHash !== mapped.evidenceHash) {
+        throw new MmmHttpError(409, 'stale_evidence_hash', 'MMM readiness approval evidence hash is stale; refresh the gate before approving.', {
+          requestedEvidenceHash: input.evidenceHash,
+          currentEvidenceHash: mapped.evidenceHash
+        });
       }
 
       const checklistStatuses = Array.isArray(mapped.checklistStatuses) ? mapped.checklistStatuses : [];
@@ -1969,12 +2090,22 @@ export function createMmmRouter(): Router {
           'owner' in approval &&
           (approval as { owner?: unknown }).owner === owner
       );
+      if (ownerIndex >= 0 && ownerApprovals[ownerIndex]?.status === 'pass') {
+        throw new MmmHttpError(409, 'duplicate_owner_approval', `${owner} has already approved the current MMM readiness evidence hash.`, {
+          owner,
+          evidenceHash: mapped.evidenceHash
+        });
+      }
+
       const approvalRecord = {
         owner,
         status: 'pass' as const,
-        approvedBy: actor,
+        approvedBy: actor.label,
+        approvedByUserId: actor.userId,
+        approvedByEmail: actor.email,
         approvedAt: new Date().toISOString(),
         evidenceHash: mapped.evidenceHash,
+        sourceAction: 'approve',
         detail: input.reason ?? 'Owner approved the persisted MMM readiness evidence.'
       };
 
@@ -1999,6 +2130,14 @@ export function createMmmRouter(): Router {
           !waivedKeys.has(String((item as { key?: unknown }).key))
       ).length;
       const { finalState, gateStatus } = deriveGateDecision(unresolvedFailures, ownerApprovals, mapped.evidenceHash);
+      if (hasAllRequiredOwnerApprovals(ownerApprovals, mapped.evidenceHash) && unresolvedFailures > 0) {
+        throw new MmmHttpError(
+          409,
+          'blocked_final_gate_state',
+          'MMM readiness gate cannot be finally approved while unresolved critical issues remain.',
+          { unresolvedCriticalIssueCount: unresolvedFailures, evidenceHash: mapped.evidenceHash }
+        );
+      }
       const result = await query<MmmReadinessGateRow>(
         `
           UPDATE mmm_readiness_gates
@@ -2047,7 +2186,7 @@ export function createMmmRouter(): Router {
             (finalState === 'approved'
               ? 'All required owners approved the current readiness evidence.'
               : 'Approval recorded; required owners or checklist resolution remain outstanding.'),
-          actor
+          actor.label
         ]
       );
 
@@ -2063,15 +2202,26 @@ export function createMmmRouter(): Router {
   router.post('/readiness-gate/waive', async (req, res, next) => {
     try {
       const input = parseInput(readinessGateWaiverSchema, req.body);
-      const actor = getActorLabel(res.locals.auth as AuthContext | null | undefined);
-      const gate = (await fetchPersistedGate(input)) ?? (await upsertReadinessGate(input, actor));
+      const actor = getReadinessActor(res.locals.auth as AuthContext | null | undefined);
+      const owner = resolveAuthorizedOwner(actor, input.owner, 'waive');
+      const gate = (await fetchPersistedGate(input)) ?? (await upsertReadinessGate(input, actor.label));
       const mapped = mapGateRow(gate);
+      if (input.evidenceHash && input.evidenceHash !== mapped.evidenceHash) {
+        throw new MmmHttpError(409, 'stale_evidence_hash', 'MMM readiness waiver evidence hash is stale; refresh the gate before waiving.', {
+          requestedEvidenceHash: input.evidenceHash,
+          currentEvidenceHash: mapped.evidenceHash
+        });
+      }
       const waivers = Array.isArray(mapped.waivers) ? [...mapped.waivers] : [];
       waivers.push({
         ...input.waiver,
-        waivedBy: actor,
+        owner,
+        waivedBy: actor.label,
+        waivedByUserId: actor.userId,
+        waivedByEmail: actor.email,
         waivedAt: new Date().toISOString(),
-        evidenceHash: mapped.evidenceHash
+        evidenceHash: mapped.evidenceHash,
+        sourceAction: 'waive'
       });
       const checklistStatuses = (Array.isArray(mapped.checklistStatuses) ? mapped.checklistStatuses : []).map((item) => {
         if (
@@ -2144,7 +2294,7 @@ export function createMmmRouter(): Router {
           JSON.stringify(ownerApprovals),
           gateStatus,
           finalState,
-          actor
+          actor.label
         ]
       );
 
@@ -2160,8 +2310,9 @@ export function createMmmRouter(): Router {
   router.post('/readiness-gate/block', async (req, res, next) => {
     try {
       const input = parseInput(readinessGateDecisionSchema, req.body);
-      const actor = getActorLabel(res.locals.auth as AuthContext | null | undefined);
-      const gate = (await fetchPersistedGate(input)) ?? (await upsertReadinessGate(input, actor));
+      const actor = getReadinessActor(res.locals.auth as AuthContext | null | undefined);
+      resolveAuthorizedOwner(actor, input.owner, 'block');
+      const gate = (await fetchPersistedGate(input)) ?? (await upsertReadinessGate(input, actor.label));
       const mapped = mapGateRow(gate);
       const result = await query<MmmReadinessGateRow>(
         `
@@ -2201,7 +2352,7 @@ export function createMmmRouter(): Router {
             created_at,
             updated_at
         `,
-        [mapped.id, input.reason ?? 'Readiness gate blocked by owner review.', actor]
+        [mapped.id, input.reason ?? 'Readiness gate blocked by owner review.', actor.label]
       );
 
       res.status(200).json({
