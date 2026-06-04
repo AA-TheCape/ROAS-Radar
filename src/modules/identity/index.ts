@@ -109,6 +109,15 @@ type IdentityJourneyScoreRow = {
 	latest_observed_at: Date;
 };
 
+export type IdentityJourneyLinkScore = {
+	journeyId: string;
+	maxPrecedenceRank: number;
+	latestObservedAt: string | null;
+	recencyWeight: number;
+	deterministicScore: number;
+	explanation: string;
+};
+
 type IdentityJourneyRow = {
 	id: string;
 	authoritative_shopify_customer_id: string | null;
@@ -184,6 +193,7 @@ const IDENTITY_PRECEDENCE: Record<IdentityNodeType, number> = {
 const ACTIVE_IDENTITY_STATUSES = new Set(["active", "quarantined"]);
 const AUTHORITATIVE_CONFLICT = "authoritative_shopify_customer_conflict";
 const HISTORICAL_IDENTITY_LOOKBACK_DAYS = 30;
+const IDENTITY_PRECEDENCE_SCORE_WEIGHT = 1_000_000_000_000;
 const UUID_PATTERN =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -624,6 +634,15 @@ export async function ingestIdentityEdges(
 			row.journey_id,
 			winnerJourneyId,
 			sourceTimestamp,
+			{
+				reasonCode: journeyResolution.reasonCode,
+				evidenceSource: input.evidenceSource,
+				sourceTable: input.sourceTable,
+				sourceRecordId: input.sourceRecordId,
+				candidateScores: journeyResolution.candidateScores,
+				rehomedNodes,
+				quarantinedNodes: quarantinedNodeIds.size,
+			},
 		);
 	}
 
@@ -1096,6 +1115,7 @@ async function resolveWinningJourney(
 			journeyId: string;
 			created: boolean;
 			reasonCode: IdentityMergeReasonCode;
+			candidateScores: IdentityJourneyLinkScore[];
 	  }
 	| { outcome: "conflict" }
 > {
@@ -1128,6 +1148,7 @@ async function resolveWinningJourney(
 			journeyId,
 			created: true,
 			reasonCode: "created_new_journey",
+			candidateScores: [],
 		};
 	}
 
@@ -1199,6 +1220,10 @@ async function resolveWinningJourney(
 			journeyId: incomingAuthoritativeJourney,
 			created: false,
 			reasonCode: "shopify_customer_id_authoritative_winner",
+			candidateScores: scoreIdentityJourneyLinks(
+				workingCandidates,
+				input.journeyScores,
+			),
 		};
 	}
 
@@ -1208,13 +1233,18 @@ async function resolveWinningJourney(
 			journeyId: candidateJourneyIds[0],
 			created: false,
 			reasonCode: "reused_existing_journey",
+			candidateScores: scoreIdentityJourneyLinks(
+				workingCandidates,
+				input.journeyScores,
+			),
 		};
 	}
 
-	const selectedJourneyId = selectBestJourneyId(
+	const candidateScores = scoreIdentityJourneyLinks(
 		workingCandidates,
 		input.journeyScores,
 	);
+	const selectedJourneyId = candidateScores[0]?.journeyId ?? null;
 
 	if (selectedJourneyId) {
 		return {
@@ -1224,6 +1254,7 @@ async function resolveWinningJourney(
 			reasonCode: input.incomingShopifyCustomerId
 				? "shopify_customer_id_authoritative_winner"
 				: "non_authoritative_precedence_winner",
+			candidateScores,
 		};
 	}
 
@@ -1247,6 +1278,7 @@ async function resolveWinningJourney(
 		journeyId: fallbackJourneyId,
 		created: true,
 		reasonCode: "created_new_journey",
+		candidateScores: [],
 	};
 }
 
@@ -1278,6 +1310,13 @@ function selectBestJourneyId(
 	rows: IdentityJourneyCandidateRow[],
 	journeyScores: Map<string, IdentityJourneyScoreRow>,
 ): string | null {
+	return scoreIdentityJourneyLinks(rows, journeyScores)[0]?.journeyId ?? null;
+}
+
+export function scoreIdentityJourneyLinks(
+	rows: IdentityJourneyCandidateRow[],
+	journeyScores: Map<string, IdentityJourneyScoreRow>,
+): IdentityJourneyLinkScore[] {
 	const candidates = [
 		...new Set(
 			rows
@@ -1287,28 +1326,37 @@ function selectBestJourneyId(
 	];
 
 	if (candidates.length === 0) {
-		return null;
+		return [];
 	}
 
-	return candidates.sort((left, right) => {
-		const leftScore = journeyScores.get(left);
-		const rightScore = journeyScores.get(right);
-		const leftRank = leftScore?.max_precedence_rank ?? 0;
-		const rightRank = rightScore?.max_precedence_rank ?? 0;
+	return candidates
+		.map((journeyId) => {
+			const score = journeyScores.get(journeyId);
+			const maxPrecedenceRank = score?.max_precedence_rank ?? 0;
+			const recencyWeight = score?.latest_observed_at?.getTime() ?? 0;
+			const deterministicScore =
+				maxPrecedenceRank * IDENTITY_PRECEDENCE_SCORE_WEIGHT + recencyWeight;
 
-		if (leftRank !== rightRank) {
-			return rightRank - leftRank;
-		}
+			return {
+				journeyId,
+				maxPrecedenceRank,
+				latestObservedAt: score?.latest_observed_at?.toISOString() ?? null,
+				recencyWeight,
+				deterministicScore,
+				explanation: [
+					`precedence=${maxPrecedenceRank}`,
+					`recencyWeight=${recencyWeight}`,
+					`score=${deterministicScore}`,
+				].join("; "),
+			};
+		})
+		.sort((left, right) => {
+			if (left.deterministicScore !== right.deterministicScore) {
+				return right.deterministicScore - left.deterministicScore;
+			}
 
-		const leftObserved = leftScore?.latest_observed_at?.getTime() ?? 0;
-		const rightObserved = rightScore?.latest_observed_at?.getTime() ?? 0;
-
-		if (leftObserved !== rightObserved) {
-			return rightObserved - leftObserved;
-		}
-
-		return left.localeCompare(right);
-	})[0];
+			return left.journeyId.localeCompare(right.journeyId);
+		});
 }
 
 async function createJourney(
@@ -1613,6 +1661,15 @@ async function markJourneyMergedIfEmpty(
 	journeyId: string,
 	mergedIntoJourneyId: string,
 	sourceTimestamp: Date,
+	audit: {
+		reasonCode: IdentityMergeReasonCode;
+		evidenceSource: string;
+		sourceTable: string | null;
+		sourceRecordId: string | null;
+		candidateScores: IdentityJourneyLinkScore[];
+		rehomedNodes: number;
+		quarantinedNodes: number;
+	},
 ): Promise<void> {
 	const result = await client.query<{ has_active_edges: boolean }>(
 		`
@@ -1641,6 +1698,105 @@ async function markJourneyMergedIfEmpty(
       WHERE id = $1::uuid
     `,
 		[journeyId, mergedIntoJourneyId, sourceTimestamp],
+	);
+
+	await recordIdentityJourneyMergeAudit(client, {
+		winnerJourneyId: mergedIntoJourneyId,
+		loserJourneyId: journeyId,
+		reasonCode: audit.reasonCode,
+		evidenceSource: audit.evidenceSource,
+		sourceTable: audit.sourceTable,
+		sourceRecordId: audit.sourceRecordId,
+		sourceTimestamp,
+		candidateScores: audit.candidateScores,
+		rehomedNodes: audit.rehomedNodes,
+		quarantinedNodes: audit.quarantinedNodes,
+	});
+}
+
+async function recordIdentityJourneyMergeAudit(
+	client: DbClient,
+	input: {
+		winnerJourneyId: string;
+		loserJourneyId: string;
+		reasonCode: IdentityMergeReasonCode;
+		evidenceSource: string;
+		sourceTable: string | null;
+		sourceRecordId: string | null;
+		sourceTimestamp: Date;
+		candidateScores: IdentityJourneyLinkScore[];
+		rehomedNodes: number;
+		quarantinedNodes: number;
+	},
+): Promise<void> {
+	const winnerScore =
+		input.candidateScores.find(
+			(score) => score.journeyId === input.winnerJourneyId,
+		) ?? null;
+	const loserScore =
+		input.candidateScores.find(
+			(score) => score.journeyId === input.loserJourneyId,
+		) ?? null;
+
+	await client.query(
+		`
+      INSERT INTO identity_journey_merge_audits (
+        winner_journey_id,
+        loser_journey_id,
+        merge_reason_code,
+        evidence_source,
+        source_table,
+        source_record_id,
+        source_timestamp,
+        winner_score,
+        loser_score,
+        candidate_scores,
+        rehomed_nodes,
+        quarantined_nodes,
+        created_at
+      )
+      VALUES (
+        $1::uuid,
+        $2::uuid,
+        $3,
+        $4,
+        $5,
+        $6,
+        $7::timestamptz,
+        $8::jsonb,
+        $9::jsonb,
+        $10::jsonb,
+        $11,
+        $12,
+        now()
+      )
+      ON CONFLICT (loser_journey_id) DO UPDATE SET
+        winner_journey_id = EXCLUDED.winner_journey_id,
+        merge_reason_code = EXCLUDED.merge_reason_code,
+        evidence_source = EXCLUDED.evidence_source,
+        source_table = EXCLUDED.source_table,
+        source_record_id = EXCLUDED.source_record_id,
+        source_timestamp = EXCLUDED.source_timestamp,
+        winner_score = EXCLUDED.winner_score,
+        loser_score = EXCLUDED.loser_score,
+        candidate_scores = EXCLUDED.candidate_scores,
+        rehomed_nodes = EXCLUDED.rehomed_nodes,
+        quarantined_nodes = EXCLUDED.quarantined_nodes
+    `,
+		[
+			input.winnerJourneyId,
+			input.loserJourneyId,
+			input.reasonCode,
+			input.evidenceSource,
+			input.sourceTable,
+			input.sourceRecordId,
+			input.sourceTimestamp,
+			JSON.stringify(winnerScore),
+			JSON.stringify(loserScore),
+			JSON.stringify(input.candidateScores),
+			input.rehomedNodes,
+			input.quarantinedNodes,
+		],
 	);
 }
 
