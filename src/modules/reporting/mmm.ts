@@ -334,6 +334,21 @@ type MmmReadinessGateRow = {
   updated_at: Date | string;
 };
 
+type MmmBaselineFreezeAuditRow = {
+  id: string;
+  freeze_schema_version: string;
+  mart_version: string;
+  snapshot_version: string;
+  freeze_status: string;
+  generation_timestamp: Date | string;
+  calibration_start_date: string;
+  calibration_end_date: string;
+  attribution_model: string;
+  evidence_hash: string;
+  approved_by: string | null;
+  approved_at: Date | string | null;
+};
+
 type JsonRecord = Record<string, unknown>;
 type MmmReadinessGateOwnerApproval = {
   owner: (typeof MMM_READINESS_REQUIRED_OWNERS)[number];
@@ -342,6 +357,15 @@ type MmmReadinessGateOwnerApproval = {
   approvedAt: string | null;
   evidenceHash: string | null;
   detail: string;
+};
+
+type MmmReadinessGateChecklistRecord = {
+  key: string;
+  label: string;
+  owner: string;
+  status: GateChecklistStatus;
+  detail: string;
+  waiverReason?: string;
 };
 
 function parseInput<TSchema extends z.ZodTypeAny>(schema: TSchema, input: unknown): z.infer<TSchema> {
@@ -452,6 +476,20 @@ function asRecord(value: unknown): JsonRecord {
 
 function asRecordArray(value: unknown): JsonRecord[] {
   return Array.isArray(value) ? value.filter((entry): entry is JsonRecord => entry !== null && typeof entry === 'object' && !Array.isArray(entry)) : [];
+}
+
+function asChecklistRecordArray(value: unknown): MmmReadinessGateChecklistRecord[] {
+  return asRecordArray(value).filter((entry): entry is MmmReadinessGateChecklistRecord => {
+    const status = entry.status;
+
+    return (
+      typeof entry.key === 'string' &&
+      typeof entry.label === 'string' &&
+      typeof entry.owner === 'string' &&
+      typeof entry.detail === 'string' &&
+      (status === 'pass' || status === 'warn' || status === 'fail' || status === 'pending' || status === 'waived')
+    );
+  });
 }
 
 function toNullableNumber(value: unknown): number | null {
@@ -1005,9 +1043,9 @@ function mapGateRow(row: MmmReadinessGateRow) {
       campaign: row.campaign
     },
     evidencePayload: row.evidence_payload ?? {},
-    checklistStatuses: row.checklist_statuses ?? [],
-    ownerApprovals: row.owner_approvals ?? [],
-    waivers: row.waivers ?? [],
+    checklistStatuses: asChecklistRecordArray(row.checklist_statuses),
+    ownerApprovals: asRecordArray(row.owner_approvals),
+    waivers: asRecordArray(row.waivers),
     unresolvedCriticalIssueCount: toNumber(row.unresolved_critical_issue_count),
     evidenceHash: row.evidence_hash,
     gateStatus: row.gate_status,
@@ -1019,6 +1057,29 @@ function mapGateRow(row: MmmReadinessGateRow) {
     updatedBy: row.updated_by,
     createdAt: toIsoString(row.created_at),
     updatedAt: toIsoString(row.updated_at)
+  };
+}
+
+function mapBaselineFreezeAuditRow(row: MmmBaselineFreezeAuditRow | null) {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    id: row.id,
+    freezeSchemaVersion: row.freeze_schema_version,
+    martVersion: row.mart_version,
+    snapshotVersion: row.snapshot_version,
+    freezeStatus: row.freeze_status,
+    generationTimestamp: toIsoString(row.generation_timestamp),
+    range: {
+      startDate: row.calibration_start_date,
+      endDate: row.calibration_end_date
+    },
+    attributionModel: row.attribution_model,
+    evidenceHash: row.evidence_hash,
+    approvedBy: row.approved_by,
+    approvedAt: toIsoString(row.approved_at)
   };
 }
 
@@ -1200,6 +1261,87 @@ async function fetchPersistedGate(input: z.infer<typeof readinessGateQuerySchema
   );
 
   return result.rows[0] ?? null;
+}
+
+async function fetchApprovedBaselineFreezeForGate(
+  input: z.infer<typeof readinessGateQuerySchema>
+): Promise<MmmBaselineFreezeAuditRow | null> {
+  const result = await query<MmmBaselineFreezeAuditRow>(
+    `
+      SELECT
+        id::text,
+        freeze_schema_version,
+        mart_version,
+        snapshot_version,
+        freeze_status,
+        generation_timestamp,
+        calibration_start_date::text,
+        calibration_end_date::text,
+        attribution_model,
+        evidence_hash,
+        approved_by,
+        approved_at
+      FROM mmm_baseline_calibration_freezes
+      WHERE freeze_status = 'approved'
+        AND ($3::text IS NULL OR attribution_model = $3::text)
+        AND calibration_start_date <= $2::date
+        AND calibration_end_date >= $1::date
+      ORDER BY
+        CASE
+          WHEN calibration_start_date = $1::date AND calibration_end_date = $2::date THEN 0
+          ELSE 1
+        END,
+        approved_at DESC NULLS LAST,
+        generation_timestamp DESC
+      LIMIT 1
+    `,
+    [input.startDate, input.endDate, input.attributionModel ?? null]
+  );
+
+  return result.rows[0] ?? null;
+}
+
+async function buildReadinessGateAuditReport(input: z.infer<typeof readinessGateQuerySchema>) {
+  const gate = (await fetchPersistedGate(input)) ?? (await upsertReadinessGate(input, 'system'));
+  const approvedBaselineFreeze = await fetchApprovedBaselineFreezeForGate(input);
+  const mappedGate = mapGateRow(gate);
+  const requiredOwnerApprovalStatuses = MMM_READINESS_REQUIRED_OWNERS.map((owner) => {
+    const approval = mappedGate.ownerApprovals.find((entry: { owner?: unknown }) => entry.owner === owner);
+
+    return {
+      owner,
+      status:
+        approval &&
+        approval.status === 'pass' &&
+        approval.evidenceHash === mappedGate.evidenceHash
+          ? 'approved'
+          : 'pending',
+      approvedBy: approval?.approvedBy ?? null,
+      approvedAt: approval?.approvedAt ?? null,
+      evidenceHash: approval?.evidenceHash ?? null,
+      detail: approval?.detail ?? 'Owner sign-off is required for this evidence hash.'
+    };
+  });
+
+  return {
+    schemaVersion: 'mmm_readiness_gate_operational_audit_v1',
+    generatedAt: new Date().toISOString(),
+    reviewAudience: [...MMM_READINESS_REQUIRED_OWNERS],
+    productionGateRecord: mappedGate,
+    evidenceHash: mappedGate.evidenceHash,
+    checklistStatuses: mappedGate.checklistStatuses,
+    ownerApprovals: requiredOwnerApprovalStatuses,
+    waivers: mappedGate.waivers,
+    unresolvedCriticalIssueCount: mappedGate.unresolvedCriticalIssueCount,
+    approvedBaselineFreeze: mapBaselineFreezeAuditRow(approvedBaselineFreeze),
+    approvedBaselineFreezeId: approvedBaselineFreeze?.id ?? null,
+    auditStatus:
+      mappedGate.finalState === 'approved' && approvedBaselineFreeze
+        ? 'complete'
+        : mappedGate.finalState === 'approved'
+          ? 'missing_approved_baseline_freeze'
+          : 'gate_not_approved'
+  };
 }
 
 async function buildReadinessEvidence(input: z.infer<typeof readinessGateQuerySchema>) {
@@ -1766,6 +1908,17 @@ export function createMmmRouter(): Router {
     }
   });
 
+  router.get('/readiness-gate/audit-report', async (req, res, next) => {
+    try {
+      const input = parseInput(readinessGateQuerySchema, req.query);
+      const report = await buildReadinessGateAuditReport(input);
+
+      res.json(report);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.post('/readiness-gate/refresh', async (req, res, next) => {
     try {
       const input = parseInput(readinessGateQuerySchema, req.body);
@@ -1915,7 +2068,7 @@ export function createMmmRouter(): Router {
         ) {
           return {
             ...item,
-            status: 'waived',
+            status: 'waived' as const,
             waiverReason: input.waiver.reason
           };
         }

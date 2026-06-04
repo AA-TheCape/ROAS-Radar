@@ -34,6 +34,7 @@ import {
   fetchMmmExport,
   fetchMmmModelRuns,
   fetchMmmReadinessGate,
+  fetchMmmReadinessGateAuditReport,
   refreshMmmReadinessGate,
   waiveMmmReadinessGate,
   type ExposureCoverageResponse,
@@ -42,6 +43,7 @@ import {
   type MmmExportRow,
   type MmmModelRun,
   type MmmModelRunsResponse,
+  type MmmReadinessGateAuditReport,
   type MmmReadinessGateResponse,
   type MmmReadinessStatus
 } from '../lib/api';
@@ -213,8 +215,20 @@ function getCalibrationGovernance(run: MmmModelRun): CalibrationGovernanceSummar
   };
 }
 
-function formatStatus(status: ChecklistStatus | MmmReadinessStatus): string {
+function formatStatus(status: string): string {
   return status.replace(/_/g, ' ');
+}
+
+function auditTone(status: MmmReadinessGateAuditReport['auditStatus'] | undefined): 'success' | 'warning' | 'danger' | 'neutral' {
+  if (status === 'complete') {
+    return 'success';
+  }
+
+  if (status === 'missing_approved_baseline_freeze') {
+    return 'warning';
+  }
+
+  return status === 'gate_not_approved' ? 'danger' : 'neutral';
 }
 
 function isFresh(value: string | null): boolean {
@@ -353,6 +367,7 @@ export default function MmmReadinessDashboard({ reportingTimezone }: MmmReadines
   const [draftQuery, setDraftQuery] = useState<MmmExportQuery>(() => buildDefaultQuery(reportingTimezone));
   const [exportSection, setExportSection] = useState<AsyncSection<MmmExportResponse>>(createSection({ loading: true }));
   const [gateSection, setGateSection] = useState<AsyncSection<MmmReadinessGateResponse>>(createSection({ loading: true }));
+  const [auditSection, setAuditSection] = useState<AsyncSection<MmmReadinessGateAuditReport>>(createSection({ loading: true }));
   const [modelRunsSection, setModelRunsSection] = useState<AsyncSection<MmmModelRunsResponse>>(createSection({ loading: true }));
   const [exposureCoverageSection, setExposureCoverageSection] = useState<AsyncSection<ExposureCoverageResponse>>(
     createSection({ loading: true })
@@ -368,6 +383,7 @@ export default function MmmReadinessDashboard({ reportingTimezone }: MmmReadines
     let cancelled = false;
     setExportSection(createSection({ loading: true }));
     setGateSection(createSection({ loading: true }));
+    setAuditSection(createSection({ loading: true }));
     setModelRunsSection(createSection({ loading: true }));
     setExposureCoverageSection(createSection({ loading: true }));
 
@@ -392,6 +408,18 @@ export default function MmmReadinessDashboard({ reportingTimezone }: MmmReadines
       .catch((error: Error) => {
         if (!cancelled) {
           setGateSection(createSection({ error: error.message }));
+        }
+      });
+
+    fetchMmmReadinessGateAuditReport(query)
+      .then((response) => {
+        if (!cancelled) {
+          setAuditSection(createSection({ data: response }));
+        }
+      })
+      .catch((error: Error) => {
+        if (!cancelled) {
+          setAuditSection(createSection({ error: error.message }));
         }
       });
 
@@ -506,6 +534,8 @@ export default function MmmReadinessDashboard({ reportingTimezone }: MmmReadines
               : await blockMmmReadinessGate(payload);
 
       setGateSection(createSection({ data: response }));
+      const auditReport = await fetchMmmReadinessGateAuditReport(query);
+      setAuditSection(createSection({ data: auditReport }));
       if (action === 'waive') {
         setWaiverReason('');
       }
@@ -517,6 +547,22 @@ export default function MmmReadinessDashboard({ reportingTimezone }: MmmReadines
     } finally {
       setGateActionLoading(false);
     }
+  }
+
+  function downloadAuditReport() {
+    if (!auditSection.data) {
+      return;
+    }
+
+    const blob = new Blob([JSON.stringify(auditSection.data, null, 2)], {
+      type: 'application/json'
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `mmm-readiness-gate-audit-${query.startDate}-${query.endDate}.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
   }
 
   return (
@@ -614,6 +660,86 @@ export default function MmmReadinessDashboard({ reportingTimezone }: MmmReadines
           <MetricCopy>{formatNumber(summary.orders)} blended Shopify and attribution orders.</MetricCopy>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <div>
+            <CardTitle>Operational audit report</CardTitle>
+            <CardDescription>Final production gate, evidence hash, approvals, waivers, blockers, and approved baseline freeze in one export.</CardDescription>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {auditSection.data ? <Badge tone={auditTone(auditSection.data.auditStatus)}>{formatStatus(auditSection.data.auditStatus)}</Badge> : null}
+            <Button type="button" onClick={downloadAuditReport} disabled={!auditSection.data}>
+              Export JSON
+            </Button>
+          </div>
+        </CardHeader>
+        <SectionState
+          loading={auditSection.loading}
+          error={auditSection.error}
+          empty={!auditSection.data}
+          emptyLabel="No operational audit report is available for this window."
+          compact
+        >
+          <div className="grid gap-4">
+            <div className="grid gap-3 lg:grid-cols-4">
+              <div className="rounded-card border border-line/60 bg-surface-alt/65 p-4">
+                <Eyebrow>Final gate</Eyebrow>
+                <MetricValue>{auditSection.data?.productionGateRecord.finalState ?? 'pending'}</MetricValue>
+                <MetricCopy>{auditSection.data?.productionGateRecord.decisionReason ?? 'No final decision reason recorded.'}</MetricCopy>
+              </div>
+              <div className="rounded-card border border-line/60 bg-surface-alt/65 p-4">
+                <Eyebrow>Evidence hash</Eyebrow>
+                <MetricValue className="break-all text-base">{auditSection.data?.evidenceHash.slice(0, 16)}</MetricValue>
+                <MetricCopy>{formatNumber(auditSection.data?.unresolvedCriticalIssueCount)} unresolved critical issues.</MetricCopy>
+              </div>
+              <div className="rounded-card border border-line/60 bg-surface-alt/65 p-4">
+                <Eyebrow>Owner approvals</Eyebrow>
+                <MetricValue>
+                  {formatNumber(auditSection.data?.ownerApprovals.filter((approval) => approval.status === 'approved').length)} /{' '}
+                  {formatNumber(auditSection.data?.ownerApprovals.length)}
+                </MetricValue>
+                <MetricCopy>{auditSection.data?.reviewAudience.join(', ')}</MetricCopy>
+              </div>
+              <div className="rounded-card border border-line/60 bg-surface-alt/65 p-4">
+                <Eyebrow>Baseline freeze</Eyebrow>
+                <MetricValue className="break-all text-base">{auditSection.data?.approvedBaselineFreezeId ?? 'Missing'}</MetricValue>
+                <MetricCopy>
+                  {auditSection.data?.approvedBaselineFreeze
+                    ? `Approved ${formatDateTimeLabel(auditSection.data.approvedBaselineFreeze.approvedAt, reportingTimezone)}.`
+                    : 'No approved baseline freeze is attached.'}
+                </MetricCopy>
+              </div>
+            </div>
+            <TableWrap>
+              <Table caption="MMM operational audit approvals">
+                <TableHead>
+                  <TableRow>
+                    <TableHeaderCell>Owner</TableHeaderCell>
+                    <TableHeaderCell>Status</TableHeaderCell>
+                    <TableHeaderCell>Approved by</TableHeaderCell>
+                    <TableHeaderCell>Approved at</TableHeaderCell>
+                    <TableHeaderCell>Evidence</TableHeaderCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {(auditSection.data?.ownerApprovals ?? []).map((approval) => (
+                    <TableRow key={approval.owner}>
+                      <TableCell>{approval.owner}</TableCell>
+                      <TableCell>
+                        <Badge tone={approval.status === 'approved' ? 'success' : 'neutral'}>{approval.status}</Badge>
+                      </TableCell>
+                      <TableCell>{approval.approvedBy ?? 'Pending'}</TableCell>
+                      <TableCell>{formatDateTimeLabel(approval.approvedAt, reportingTimezone)}</TableCell>
+                      <TableCell>{approval.evidenceHash?.slice(0, 16) ?? 'Pending'}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableWrap>
+          </div>
+        </SectionState>
+      </Card>
 
       <div className="grid gap-card xl:grid-cols-[0.9fr_1.1fr]">
         <Card>

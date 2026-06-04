@@ -537,6 +537,43 @@ export type MmmReadinessGateResponse = {
   gate: MmmReadinessGate;
 };
 
+export type MmmReadinessGateAuditReport = {
+  schemaVersion: 'mmm_readiness_gate_operational_audit_v1';
+  generatedAt: string;
+  reviewAudience: string[];
+  productionGateRecord: MmmReadinessGate;
+  evidenceHash: string;
+  checklistStatuses: MmmReadinessGateChecklistItem[];
+  ownerApprovals: Array<{
+    owner: string;
+    status: 'approved' | 'pending';
+    approvedBy: string | null;
+    approvedAt: string | null;
+    evidenceHash: string | null;
+    detail: string;
+  }>;
+  waivers: MmmReadinessGateWaiver[];
+  unresolvedCriticalIssueCount: number;
+  approvedBaselineFreeze: {
+    id: string;
+    freezeSchemaVersion: 'mmm_baseline_calibration_freeze_v1';
+    martVersion: string;
+    snapshotVersion: string;
+    freezeStatus: 'approved';
+    generationTimestamp: string | null;
+    range: {
+      startDate: string;
+      endDate: string;
+    };
+    attributionModel: string;
+    evidenceHash: string;
+    approvedBy: string | null;
+    approvedAt: string | null;
+  } | null;
+  approvedBaselineFreezeId: string | null;
+  auditStatus: 'complete' | 'missing_approved_baseline_freeze' | 'gate_not_approved';
+};
+
 export type MmmReadinessGateDecisionPayload = MmmExportQuery & {
   owner?: string;
   reason?: string;
@@ -1659,6 +1696,12 @@ export function fetchMmmExport(query: MmmExportQuery) {
 
 export function fetchMmmReadinessGate(query: MmmExportQuery) {
   return requestJson<MmmReadinessGateResponse>('/api/reporting/mmm/readiness-gate', {
+    searchParams: buildMmmExportSearchParams(query)
+  });
+}
+
+export function fetchMmmReadinessGateAuditReport(query: MmmExportQuery) {
+  return requestJson<MmmReadinessGateAuditReport>('/api/reporting/mmm/readiness-gate/audit-report', {
     searchParams: buildMmmExportSearchParams(query)
   });
 }

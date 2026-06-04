@@ -207,6 +207,27 @@ function installReadinessGateQueryMock(getMode: () => GateQueryMode = () => 'cle
       };
     }
 
+    if (text.includes('FROM mmm_baseline_calibration_freezes')) {
+      return {
+        rows: [
+          {
+            id: '22222222-2222-4222-8222-222222222222',
+            freeze_schema_version: 'mmm_baseline_calibration_freeze_v1',
+            mart_version: 'mmm_weekly_channel_input_mart_v1',
+            snapshot_version: 'mmm_weekly_channel_snapshot_v1',
+            freeze_status: 'approved',
+            generation_timestamp: new Date('2026-04-04T09:00:00.000Z'),
+            calibration_start_date: '2026-04-01',
+            calibration_end_date: '2026-04-01',
+            attribution_model: 'last_touch',
+            evidence_hash: 'a'.repeat(64),
+            approved_by: 'analytics@example.com',
+            approved_at: new Date('2026-04-04T09:30:00.000Z')
+          }
+        ]
+      };
+    }
+
     if (text.includes('INSERT INTO mmm_readiness_gates')) {
       const nextGate = buildGateRow(params ?? []);
 
@@ -885,6 +906,52 @@ test('MMM readiness gate requires every production owner to approve the current 
         ['Data Platform', 'pass', created.body.gate.evidenceHash]
       ]
     );
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
+test('MMM readiness gate audit report returns final gate evidence and approved baseline freeze', async () => {
+  installReadinessGateQueryMock();
+  const server = createServer();
+  const payload = {
+    startDate: '2026-04-01',
+    endDate: '2026-04-01',
+    attributionModel: 'last_touch'
+  };
+
+  try {
+    for (const owner of ['Product', 'Analytics', 'Backend', 'Data Platform']) {
+      await postJson(server, '/api/reporting/mmm/readiness-gate/approve', {
+        ...payload,
+        owner
+      });
+    }
+
+    const { response, body } = await requestJson(
+      server,
+      '/api/reporting/mmm/readiness-gate/audit-report?startDate=2026-04-01&endDate=2026-04-01&attributionModel=last_touch'
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(body.schemaVersion, 'mmm_readiness_gate_operational_audit_v1');
+    assert.equal(body.auditStatus, 'complete');
+    assert.equal(body.productionGateRecord.finalState, 'approved');
+    assert.match(body.evidenceHash, /^[0-9a-f]{64}$/);
+    assert.equal(body.unresolvedCriticalIssueCount, 0);
+    assert.equal(body.approvedBaselineFreezeId, '22222222-2222-4222-8222-222222222222');
+    assert.deepEqual(
+      body.ownerApprovals.map((approval: { owner: string; status: string }) => [approval.owner, approval.status]),
+      [
+        ['Product', 'approved'],
+        ['Analytics', 'approved'],
+        ['Backend', 'approved'],
+        ['Data Platform', 'approved']
+      ]
+    );
+    assert.equal(body.checklistStatuses.every((item: { status: string }) => item.status === 'pass' || item.status === 'warn'), true);
+    assert.deepEqual(body.waivers, []);
   } finally {
     pool.query = originalPoolQuery as typeof pool.query;
     await closeServer(server);
