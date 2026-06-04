@@ -382,6 +382,106 @@ test("reporting model comparison returns weekly channel rollups from source attr
 	}
 });
 
+test("reporting model comparison can use MMM weekly channel rows with provenance and uncertainty", async () => {
+	await resetE2EDatabase();
+	const runResult = await pool.query<{ id: string }>(
+		`INSERT INTO mmm_model_runs (
+      model_type,
+      model_version,
+      mart_version,
+      attribution_model,
+      run_status,
+      training_start_date,
+      training_end_date,
+      input_summary,
+      model_artifact,
+      calibration_report,
+      validation_report,
+      completed_at
+    ) VALUES (
+      'baseline_linear_mmm',
+      'baseline_linear_mmm_v1',
+      'mmm_weekly_channel_input_mart_v1',
+      'last_touch',
+      'completed',
+      '2026-04-01',
+      '2026-04-30',
+      '{"snapshotHash":"fixture-hash"}'::jsonb,
+      '{"contributionOutputs":{"channels":[{"source":"google","medium":"cpc","campaign":"spring-sale","contribution":{"mean":2500,"median":2450,"credibleInterval80":{"lower":2100,"upper":2900},"credibleInterval95":{"lower":1800,"upper":3300}},"contributionShare":{"mean":0.62,"median":0.61,"credibleInterval80":{"lower":0.51,"upper":0.7},"credibleInterval95":{"lower":0.44,"upper":0.76}},"posteriorProbabilityPositive":0.97}]}}'::jsonb,
+      '{"governanceStatus":"pass"}'::jsonb,
+      '{"posteriorSanityChecks":{"status":"pass"}}'::jsonb,
+      '2026-05-01T12:00:00.000Z'
+    )
+    RETURNING id::text`,
+	);
+	await pool.query(
+		`INSERT INTO mmm_weekly_channel_input_mart_v1 (
+      week_start_date,
+      week_end_date,
+      attribution_model,
+      channel_key,
+      source,
+      medium,
+      campaign,
+      channel,
+      channel_group,
+      spend,
+      impressions,
+      clicks,
+      shopify_orders,
+      shopify_revenue,
+      attribution_credit_orders,
+      attribution_credit_revenue,
+      source_row_count,
+      generated_at
+    ) VALUES (
+      '2026-04-06',
+      '2026-04-12',
+      'last_touch',
+      'google|cpc|spring-sale|paid_search|search',
+      'google',
+      'cpc',
+      'spring-sale',
+      'paid_search',
+      'search',
+      900,
+      12000,
+      800,
+      18,
+      3000,
+      15,
+      2400,
+      7,
+      '2026-04-13T09:30:00.000Z'
+    )`,
+	);
+
+	const server = createServer();
+
+	try {
+		const { response, body } = await requestJson(
+			server,
+			"/api/reporting/model-comparison?startDate=2026-04-06&endDate=2026-04-12&sourceOfTruth=mmm&source=google&campaign=spring-sale&dateGrain=week",
+		);
+
+		assert.equal(response.status, 200);
+		assert.equal(body.sourceOfTruth, "mmm");
+		assert.deepEqual(body.provenance.modelRunIds, [runResult.rows[0].id]);
+		assert.equal(body.rows.length, 1);
+		assert.equal(body.rows[0].reportingView, "mmm_weekly_channel");
+		assert.equal(body.rows[0].revenue, 2400);
+		assert.equal(body.rows[0].mmmContribution.mean, 2500);
+		assert.equal(body.rows[0].mmmContribution.credibleInterval95.lower, 1800);
+		assert.equal(body.rows[0].posteriorProbabilityPositive, 0.97);
+		assert.equal(body.rows[0].provenance.modelRunId, runResult.rows[0].id);
+		assert.equal(body.rows[0].provenance.martVersion, "mmm_weekly_channel_input_mart_v1");
+		assert.equal(body.rows[0].provenance.sourceRowCount, 7);
+	} finally {
+		await closeServer(server);
+		await resetE2EDatabase();
+	}
+});
+
 test('reporting orders only returns online store Shopify orders', async () => {
   await resetE2EDatabase();
   await pool.query(

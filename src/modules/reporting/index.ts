@@ -109,6 +109,7 @@ const timeseriesQuerySchema = withValidDateRange(
 const modelComparisonQuerySchema = withValidDateRange(
 	optionalModelFiltersObjectSchema.extend({
 		dateGrain: z.enum(["day", "week"]).optional().default("week"),
+		sourceOfTruth: z.enum(["deterministic", "mmm"]).optional().default("deterministic"),
 	}),
 );
 
@@ -187,6 +188,69 @@ type ModelComparisonRow = {
 	strict_deterministic_orders: string | number;
 	fallback_included_orders: string | number;
 	blended_deterministic_orders: string | number;
+};
+
+type MmmContributionSummary = {
+	mean?: number;
+	credibleInterval80?: {
+		lower?: number;
+		upper?: number;
+	};
+	credibleInterval95?: {
+		lower?: number;
+		upper?: number;
+	};
+};
+
+type MmmModelArtifact = {
+	contributionOutputs?: {
+		channels?: Array<{
+			key?: string;
+			source?: string;
+			medium?: string;
+			campaign?: string;
+			contribution?: MmmContributionSummary;
+			contributionShare?: MmmContributionSummary;
+			posteriorProbabilityPositive?: number;
+		}>;
+	};
+};
+
+type MmmModelRunForReportingRow = {
+	id: string;
+	model_type: string;
+	model_version: string;
+	mart_version: string;
+	attribution_model: string;
+	training_start_date: string;
+	training_end_date: string;
+	input_summary: unknown;
+	model_artifact: MmmModelArtifact;
+	calibration_report: unknown;
+	validation_report: unknown;
+	completed_at: Date | string | null;
+};
+
+type MmmWeeklyChannelReportingRow = {
+	bucket: string;
+	week_end_date: string;
+	attribution_model: string;
+	channel_key: string;
+	source: string;
+	medium: string;
+	campaign: string;
+	channel: string;
+	channel_group: string;
+	spend: string | number;
+	impressions: string | number;
+	clicks: string | number;
+	shopify_orders: string | number;
+	shopify_revenue: string | number;
+	attribution_credit_orders: string | number;
+	attribution_credit_revenue: string | number;
+	dq_status: string;
+	source_row_count: string | number;
+	generated_at: Date | string;
 };
 
 type OrderAttributionRow = {
@@ -392,6 +456,45 @@ function buildModelComparisonFilters(input: {
 		sql: filters.length > 0 ? ` AND ${filters.join(" AND ")}` : "",
 		params,
 	};
+}
+
+function buildMmmWeeklyChannelFilters(input: {
+	attributionModel?: string;
+	source?: string;
+	campaign?: string;
+}): { sql: string; params: string[] } {
+	const params: string[] = [];
+	const filters: string[] = [];
+
+	if (input.attributionModel) {
+		params.push(input.attributionModel);
+		filters.push(`attribution_model = $${params.length + 2}`);
+	}
+
+	if (input.source) {
+		params.push(input.source);
+		filters.push(`source = $${params.length + 2}`);
+	}
+
+	if (input.campaign) {
+		params.push(input.campaign);
+		filters.push(`campaign = $${params.length + 2}`);
+	}
+
+	return {
+		sql: filters.length > 0 ? ` AND ${filters.join(" AND ")}` : "",
+		params,
+	};
+}
+
+function toIsoString(value: Date | string | null | undefined): string | null {
+	if (value instanceof Date) {
+		return value.toISOString();
+	}
+
+	return typeof value === "string" && value.length > 0
+		? new Date(value).toISOString()
+		: null;
 }
 
 function normalizeContent(value: string | null): string | null {
@@ -814,6 +917,187 @@ export function createReportingRouter(): Router {
 	router.get("/model-comparison", async (req, res, next) => {
 		try {
 			const input = parseInput(modelComparisonQuerySchema, req.query);
+			if (input.sourceOfTruth === "mmm") {
+				const filters = buildMmmWeeklyChannelFilters(input);
+				const result = await query<MmmWeeklyChannelReportingRow>(
+					`
+          SELECT
+            week_start_date::text AS bucket,
+            week_end_date::text,
+            attribution_model,
+            channel_key,
+            source,
+            medium,
+            campaign,
+            channel,
+            channel_group,
+            COALESCE(SUM(spend), 0) AS spend,
+            COALESCE(SUM(impressions), 0) AS impressions,
+            COALESCE(SUM(clicks), 0) AS clicks,
+            COALESCE(SUM(shopify_orders), 0) AS shopify_orders,
+            COALESCE(SUM(shopify_revenue), 0) AS shopify_revenue,
+            COALESCE(SUM(attribution_credit_orders), 0) AS attribution_credit_orders,
+            COALESCE(SUM(attribution_credit_revenue), 0) AS attribution_credit_revenue,
+            CASE
+              WHEN COUNT(*) FILTER (WHERE dq_status = 'fail') > 0 THEN 'fail'
+              WHEN COUNT(*) FILTER (WHERE dq_status = 'warn') > 0 THEN 'warn'
+              ELSE 'pass'
+            END AS dq_status,
+            COALESCE(SUM(source_row_count), 0) AS source_row_count,
+            MAX(generated_at) AS generated_at
+          FROM mmm_weekly_channel_input_mart_v1
+          WHERE week_start_date <= date_trunc('week', $2::date)::date
+            AND week_end_date >= date_trunc('week', $1::date)::date
+          ${filters.sql}
+          GROUP BY bucket, week_end_date, attribution_model, channel_key, source, medium, campaign, channel, channel_group
+          ORDER BY bucket ASC, source ASC, medium ASC, campaign ASC, attribution_model ASC
+        `,
+					[input.startDate, input.endDate, ...filters.params],
+				);
+				const runResult = await query<MmmModelRunForReportingRow>(
+					`
+          SELECT DISTINCT ON (attribution_model)
+            id::text,
+            model_type,
+            model_version,
+            mart_version,
+            attribution_model,
+            training_start_date::text,
+            training_end_date::text,
+            input_summary,
+            model_artifact,
+            calibration_report,
+            validation_report,
+            completed_at
+          FROM mmm_model_runs
+          WHERE run_status = 'completed'
+            AND mart_version = 'mmm_weekly_channel_input_mart_v1'
+            AND training_end_date >= $1::date
+            AND training_start_date <= $2::date
+            ${input.attributionModel ? "AND attribution_model = $3" : ""}
+          ORDER BY attribution_model, completed_at DESC NULLS LAST, created_at DESC
+        `,
+					input.attributionModel
+						? [input.startDate, input.endDate, input.attributionModel]
+						: [input.startDate, input.endDate],
+				);
+				const runsByAttributionModel = new Map(
+					runResult.rows.map((row) => [row.attribution_model, row]),
+				);
+				const contributionByModelAndChannel = new Map<
+					string,
+					NonNullable<
+						NonNullable<
+							MmmModelArtifact["contributionOutputs"]
+						>["channels"]
+					>[number]
+				>();
+
+				for (const run of runResult.rows) {
+					for (const channel of run.model_artifact?.contributionOutputs?.channels ??
+						[]) {
+						const key = [
+							run.attribution_model,
+							channel.source ?? "unknown",
+							channel.medium ?? "unknown",
+							channel.campaign ?? "unknown",
+						].join("\u0000");
+						contributionByModelAndChannel.set(key, channel);
+					}
+				}
+
+				const rows = result.rows.map((row) => {
+					const metrics = calculatePerformanceMetrics({
+						visits: row.clicks,
+						orders: row.attribution_credit_orders,
+						attributedRevenue: row.attribution_credit_revenue,
+						spend: row.spend,
+					});
+					const run = runsByAttributionModel.get(row.attribution_model);
+					const contribution = contributionByModelAndChannel.get(
+						[
+							row.attribution_model,
+							row.source || "unknown",
+							row.medium || "unknown",
+							row.campaign || "unknown",
+						].join("\u0000"),
+					);
+
+					return {
+						bucket: row.bucket,
+						dateGrain: "week",
+						sourceOfTruth: "mmm",
+						attributionModel: row.attribution_model,
+						reportingView: "mmm_weekly_channel",
+						source: row.source,
+						medium: row.medium,
+						campaign: row.campaign,
+						channel: row.channel,
+						channelGroup: row.channel_group,
+						visits: metrics.visits,
+						orders: metrics.orders,
+						revenue: metrics.attributedRevenue,
+						spend: metrics.spend,
+						conversionRate: metrics.conversionRate,
+						roas: metrics.roas,
+						impressions: Number(row.impressions),
+						clicks: Number(row.clicks),
+						shopifyOrders: Number(row.shopify_orders),
+						shopifyRevenue: Number(row.shopify_revenue),
+						mmmContribution: contribution?.contribution ?? null,
+						mmmContributionShare: contribution?.contributionShare ?? null,
+						posteriorProbabilityPositive:
+							contribution?.posteriorProbabilityPositive ?? null,
+						tierBreakdown: {
+							strictDeterministicOrders: 0,
+							fallbackIncludedOrders: 0,
+							blendedDeterministicOrders: metrics.orders,
+						},
+						provenance: {
+							sourceOfTruth: "mmm",
+							martVersion: "mmm_weekly_channel_input_mart_v1",
+							sourceMartVersion: "mmm_daily_input_mart_v1",
+							modelRunId: run?.id ?? null,
+							modelType: run?.model_type ?? null,
+							modelVersion: run?.model_version ?? null,
+							trainingStartDate: run?.training_start_date ?? null,
+							trainingEndDate: run?.training_end_date ?? null,
+							completedAt: toIsoString(run?.completed_at),
+							generatedAt: toIsoString(row.generated_at),
+							dqStatus: row.dq_status,
+							sourceRowCount: Number(row.source_row_count),
+							inputSummary: run?.input_summary ?? null,
+							calibrationReport: run?.calibration_report ?? null,
+							validationReport: run?.validation_report ?? null,
+						},
+					};
+				});
+
+				res.json({
+					range: {
+						startDate: input.startDate,
+						endDate: input.endDate,
+					},
+					dateGrain: "week",
+					sourceOfTruth: "mmm",
+					provenance: {
+						sourceOfTruth: "mmm",
+						martVersion: "mmm_weekly_channel_input_mart_v1",
+						sourceMartVersion: "mmm_daily_input_mart_v1",
+						modelRunIds: runResult.rows.map((row) => row.id),
+						generatedAt:
+							rows.reduce<string | null>((latest, row) => {
+								const generatedAt = row.provenance.generatedAt;
+								return generatedAt && (!latest || generatedAt > latest)
+									? generatedAt
+									: latest;
+							}, null) ?? null,
+					},
+					rows,
+				});
+				return;
+			}
+
 			const filters = buildModelComparisonFilters(input);
 			const bucketExpr =
 				input.dateGrain === "week"
@@ -855,6 +1139,7 @@ export function createReportingRouter(): Router {
 				return {
 					bucket: row.bucket,
 					dateGrain: input.dateGrain,
+					sourceOfTruth: "deterministic",
 					attributionModel: row.attribution_model,
 					reportingView: row.reporting_view,
 					source: row.source,
@@ -871,6 +1156,23 @@ export function createReportingRouter(): Router {
 						fallbackIncludedOrders: Number(row.fallback_included_orders),
 						blendedDeterministicOrders: Number(row.blended_deterministic_orders),
 					},
+					provenance: {
+						sourceOfTruth: "deterministic",
+						martVersion: "reporting_model_comparison_daily_v1",
+						sourceMartVersion: "daily_reporting_metrics_v1",
+						modelRunId: null,
+						modelType: null,
+						modelVersion: null,
+						trainingStartDate: null,
+						trainingEndDate: null,
+						completedAt: null,
+						generatedAt: null,
+						dqStatus: null,
+						sourceRowCount: null,
+						inputSummary: null,
+						calibrationReport: null,
+						validationReport: null,
+					},
 				};
 			});
 
@@ -880,6 +1182,14 @@ export function createReportingRouter(): Router {
 					endDate: input.endDate,
 				},
 				dateGrain: input.dateGrain,
+				sourceOfTruth: "deterministic",
+				provenance: {
+					sourceOfTruth: "deterministic",
+					martVersion: "reporting_model_comparison_daily_v1",
+					sourceMartVersion: "daily_reporting_metrics_v1",
+					modelRunIds: [],
+					generatedAt: null,
+				},
 				rows,
 			});
 		} catch (error) {

@@ -361,7 +361,7 @@ function normalizeReportingFilters(
 	return filters;
 }
 
-const DASHBOARD_QUERY_PARAM_KEYS = ['startDate', 'endDate', 'source', 'campaign', 'attributionModel', 'attributionTier', 'groupBy'] as const;
+const DASHBOARD_QUERY_PARAM_KEYS = ['startDate', 'endDate', 'source', 'campaign', 'attributionModel', 'attributionTier', 'sourceOfTruth', 'groupBy'] as const;
 const REPORTING_FILTER_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const ATTRIBUTION_MODELS = new Set<
 	NonNullable<ReportingFilters["attributionModel"]>
@@ -379,6 +379,7 @@ export function createDefaultReportingFilters(reportingTimezone = DEFAULT_REPORT
     ...buildRange(30, reportingTimezone),
     source: '',
     campaign: '',
+    sourceOfTruth: 'deterministic',
     attributionTier: ''
   };
 }
@@ -412,6 +413,10 @@ function isAttributionModel(
 	);
 }
 
+function isReportingSourceOfTruth(value: string | null): value is NonNullable<ReportingFilters["sourceOfTruth"]> {
+	return value === "deterministic" || value === "mmm";
+}
+
 export function readDashboardStateFromSearch(
 	search: string,
 	reportingTimezone = DEFAULT_REPORTING_TIMEZONE,
@@ -427,6 +432,7 @@ export function readDashboardStateFromSearch(
   const campaign = params.get('campaign');
   const attributionModel = params.get('attributionModel');
   const attributionTier = params.get('attributionTier');
+  const sourceOfTruth = params.get('sourceOfTruth');
   const groupBy = params.get('groupBy');
 
   return {
@@ -435,6 +441,7 @@ export function readDashboardStateFromSearch(
       endDate: isValidDateInput(endDate) ? endDate : defaults.endDate,
       source: source ?? '',
       campaign: campaign ?? '',
+      sourceOfTruth: isReportingSourceOfTruth(sourceOfTruth) ? sourceOfTruth : defaults.sourceOfTruth,
       attributionModel: isAttributionModel(attributionModel) ? attributionModel : undefined,
       attributionTier: isAttributionTier(attributionTier) ? attributionTier : ''
     }),
@@ -466,6 +473,10 @@ export function applyDashboardStateToSearch(
 
 	if (filters.attributionModel?.trim()) {
 		params.set("attributionModel", filters.attributionModel.trim());
+	}
+
+	if (filters.sourceOfTruth?.trim() && filters.sourceOfTruth !== "deterministic") {
+		params.set("sourceOfTruth", filters.sourceOfTruth.trim());
 	}
 
   if (filters.attributionTier?.trim()) {
@@ -853,10 +864,11 @@ function App() {
       endDate: filters.endDate,
       source: (deferredSource ?? '').trim(),
       campaign: (deferredCampaign ?? '').trim(),
+      sourceOfTruth: filters.sourceOfTruth ?? 'deterministic',
       attributionModel: filters.attributionModel,
       attributionTier: filters.attributionTier ?? ''
     }),
-    [deferredCampaign, deferredSource, filters.attributionModel, filters.attributionTier, filters.endDate, filters.startDate]
+    [deferredCampaign, deferredSource, filters.attributionModel, filters.attributionTier, filters.endDate, filters.sourceOfTruth, filters.startDate]
   );
 
   const dashboard = useDashboardData(appliedFilters, groupBy, authState.user !== null, dashboardRefreshKey);

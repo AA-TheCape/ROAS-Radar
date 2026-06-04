@@ -32,6 +32,7 @@ export type AttributionTier =
 export type ReportingFilters = {
   startDate: string;
   endDate: string;
+  sourceOfTruth?: 'deterministic' | 'mmm';
   attributionTier?: AttributionTier | '';
   attributionModel?:
     | 'first_touch'
@@ -163,21 +164,70 @@ export type TimeseriesResponse = {
 export type ReportingModelComparisonRow = {
 	bucket: string;
 	dateGrain: 'day' | 'week';
+	sourceOfTruth: 'deterministic' | 'mmm';
 	attributionModel: string;
-	reportingView: 'strict_deterministic' | 'fallback_included' | 'blended_deterministic';
+	reportingView: 'strict_deterministic' | 'fallback_included' | 'blended_deterministic' | 'mmm_weekly_channel';
 	source: string;
 	medium: string;
 	campaign: string;
+	channel?: string;
+	channelGroup?: string;
 	visits: number;
 	orders: number;
 	revenue: number;
 	spend: number;
 	conversionRate: number;
 	roas: number | null;
+	impressions?: number;
+	clicks?: number;
+	shopifyOrders?: number;
+	shopifyRevenue?: number;
+	mmmContribution?: {
+		mean: number;
+		median: number;
+		credibleInterval80: {
+			lower: number;
+			upper: number;
+		};
+		credibleInterval95: {
+			lower: number;
+			upper: number;
+		};
+	} | null;
+	mmmContributionShare?: {
+		mean: number;
+		median: number;
+		credibleInterval80: {
+			lower: number;
+			upper: number;
+		};
+		credibleInterval95: {
+			lower: number;
+			upper: number;
+		};
+	} | null;
+	posteriorProbabilityPositive?: number | null;
 	tierBreakdown: {
 		strictDeterministicOrders: number;
 		fallbackIncludedOrders: number;
 		blendedDeterministicOrders: number;
+	};
+	provenance: {
+		sourceOfTruth: 'deterministic' | 'mmm';
+		martVersion: string;
+		sourceMartVersion: string;
+		modelRunId: string | null;
+		modelType: string | null;
+		modelVersion: string | null;
+		trainingStartDate: string | null;
+		trainingEndDate: string | null;
+		completedAt: string | null;
+		generatedAt: string | null;
+		dqStatus: string | null;
+		sourceRowCount: number | null;
+		inputSummary: unknown;
+		calibrationReport: unknown;
+		validationReport: unknown;
 	};
 };
 
@@ -187,6 +237,14 @@ export type ReportingModelComparisonResponse = {
 		endDate: string;
 	};
 	dateGrain: 'day' | 'week';
+	sourceOfTruth: 'deterministic' | 'mmm';
+	provenance: {
+		sourceOfTruth: 'deterministic' | 'mmm';
+		martVersion: string;
+		sourceMartVersion: string;
+		modelRunIds: string[];
+		generatedAt: string | null;
+	};
 	rows: ReportingModelComparisonRow[];
 };
 
@@ -1468,7 +1526,10 @@ export function fetchReportingModelComparison(
 	return requestJson<ReportingModelComparisonResponse>(
 		"/api/reporting/model-comparison",
 		{
-			searchParams: buildSearchParams(filters, { dateGrain }),
+			searchParams: buildSearchParams(filters, {
+				dateGrain,
+				sourceOfTruth: filters.sourceOfTruth ?? "deterministic",
+			}),
 		},
 	);
 }
