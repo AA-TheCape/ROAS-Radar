@@ -6,6 +6,7 @@ import { ATTRIBUTION_MODELS } from '../attribution/engine.js';
 
 export const MMM_WEEKLY_CHANNEL_MART_VERSION = 'mmm_weekly_channel_input_mart_v1';
 export const MMM_WEEKLY_CHANNEL_SNAPSHOT_VERSION = 'mmm_weekly_channel_snapshot_v1';
+export const BAYESIAN_HIERARCHICAL_MMM_INPUT_CONTRACT_VERSION = 'bayesian_hierarchical_mmm_v1';
 
 function normalizeDate(value: string, fieldName: string): string {
   const trimmed = value.trim();
@@ -81,6 +82,10 @@ export type WeeklyMmmSnapshotRow = {
   generated_at: Date | string;
 };
 
+export type BayesianHierarchicalMmmV1FeatureRow = WeeklyMmmSnapshotRow & {
+  input_contract_version: typeof BAYESIAN_HIERARCHICAL_MMM_INPUT_CONTRACT_VERSION;
+};
+
 function normalizeAttributionModels(values: string[] | undefined): string[] {
   const allowed = new Set(ATTRIBUTION_MODELS);
   const normalized = [...new Set((values?.length ? values : ['last_touch']).map((value) => value.trim()).filter(Boolean))];
@@ -122,6 +127,18 @@ export async function refreshWeeklyMmmChannelInputMartWithClient(
       WITH requested_models AS (
         SELECT unnest($3::text[]) AS attribution_model
       ),
+      eligible_weeks AS (
+        SELECT
+          week_start_date,
+          (week_start_date + 6) AS week_end_date
+        FROM generate_series(
+          date_trunc('week', $1::date)::date,
+          date_trunc('week', $2::date)::date,
+          interval '1 week'
+        ) AS generated(week_start_date)
+        WHERE week_start_date >= $1::date
+          AND (week_start_date + 6) <= $2::date
+      ),
       daily_paid AS (
         SELECT
           date_trunc('week', metric_date)::date AS week_start_date,
@@ -135,8 +152,14 @@ export async function refreshWeeklyMmmChannelInputMartWithClient(
           SUM(impressions)::bigint AS impressions,
           SUM(clicks)::bigint AS clicks,
           COUNT(*)::bigint AS source_row_count,
-          MAX(metric_date)::date AS max_source_metric_date
+          MAX(metric_date)::date AS max_source_metric_date,
+          MIN(spend_last_synced_at) AS min_spend_last_synced_at,
+          MAX(spend_last_synced_at) AS max_spend_last_synced_at,
+          MIN(last_computed_at) AS min_last_computed_at,
+          MAX(last_computed_at) AS max_last_computed_at
         FROM mmm_daily_input_mart_v1
+        JOIN eligible_weeks
+          ON metric_date BETWEEN eligible_weeks.week_start_date AND eligible_weeks.week_end_date
         WHERE metric_date BETWEEN $1::date AND $2::date
           AND mart_row_type = 'paid_media'
         GROUP BY 1, 2, 3, 4, 5, 6, 7
@@ -160,8 +183,16 @@ export async function refreshWeeklyMmmChannelInputMartWithClient(
           SUM(new_customer_credit_revenue)::numeric(14, 2) AS new_customer_credit_revenue,
           SUM(returning_customer_credit_revenue)::numeric(14, 2) AS returning_customer_credit_revenue,
           COUNT(*)::bigint AS source_row_count,
-          MAX(metric_date)::date AS max_source_metric_date
+          MAX(metric_date)::date AS max_source_metric_date,
+          MIN(shopify_last_ingested_at) AS min_shopify_last_ingested_at,
+          MAX(shopify_last_ingested_at) AS max_shopify_last_ingested_at,
+          MIN(attribution_last_computed_at) AS min_attribution_last_computed_at,
+          MAX(attribution_last_computed_at) AS max_attribution_last_computed_at,
+          MIN(last_computed_at) AS min_last_computed_at,
+          MAX(last_computed_at) AS max_last_computed_at
         FROM mmm_daily_input_mart_v1
+        JOIN eligible_weeks
+          ON metric_date BETWEEN eligible_weeks.week_start_date AND eligible_weeks.week_end_date
         WHERE metric_date BETWEEN $1::date AND $2::date
           AND mart_row_type = 'attribution'
           AND attribution_model = ANY($3::text[])
@@ -189,6 +220,8 @@ export async function refreshWeeklyMmmChannelInputMartWithClient(
             entry.key AS match_key,
             SUM((entry.value #>> '{}')::numeric)::numeric(14, 8) AS credited_orders
           FROM mmm_daily_input_mart_v1 mart
+          JOIN eligible_weeks
+            ON mart.metric_date BETWEEN eligible_weeks.week_start_date AND eligible_weeks.week_end_date
           CROSS JOIN LATERAL jsonb_each(mart.match_source_coverage) entry
           WHERE mart.metric_date BETWEEN $1::date AND $2::date
             AND mart.mart_row_type = 'attribution'
@@ -219,6 +252,8 @@ export async function refreshWeeklyMmmChannelInputMartWithClient(
             entry.key AS confidence_key,
             SUM((entry.value #>> '{}')::numeric)::numeric(14, 8) AS credited_orders
           FROM mmm_daily_input_mart_v1 mart
+          JOIN eligible_weeks
+            ON mart.metric_date BETWEEN eligible_weeks.week_start_date AND eligible_weeks.week_end_date
           CROSS JOIN LATERAL jsonb_each(mart.confidence_label_coverage) entry
           WHERE mart.metric_date BETWEEN $1::date AND $2::date
             AND mart.mart_row_type = 'attribution'
@@ -277,6 +312,20 @@ export async function refreshWeeklyMmmChannelInputMartWithClient(
           COALESCE(match_coverage.coverage, '{}'::jsonb) AS match_source_coverage,
           COALESCE(confidence_coverage.coverage, '{}'::jsonb) AS confidence_label_coverage,
           COALESCE(paid.source_row_count, 0) + COALESCE(attr.source_row_count, 0) AS source_row_count,
+          paid.min_spend_last_synced_at,
+          paid.max_spend_last_synced_at,
+          attr.min_shopify_last_ingested_at,
+          attr.max_shopify_last_ingested_at,
+          attr.min_attribution_last_computed_at,
+          attr.max_attribution_last_computed_at,
+          LEAST(
+            COALESCE(paid.min_last_computed_at, attr.min_last_computed_at),
+            COALESCE(attr.min_last_computed_at, paid.min_last_computed_at)
+          ) AS min_source_last_computed_at,
+          GREATEST(
+            COALESCE(paid.max_last_computed_at, attr.max_last_computed_at),
+            COALESCE(attr.max_last_computed_at, paid.max_last_computed_at)
+          ) AS max_source_last_computed_at,
           GREATEST(
             COALESCE(paid.max_source_metric_date, attr.max_source_metric_date),
             COALESCE(attr.max_source_metric_date, paid.max_source_metric_date)
@@ -373,6 +422,7 @@ export async function refreshWeeklyMmmChannelInputMartWithClient(
         match_source_coverage,
         confidence_label_coverage,
         jsonb_build_object(
+          'inputContractVersion', 'bayesian_hierarchical_mmm_v1',
           'weekOfYear', EXTRACT(WEEK FROM week_start_date)::int,
           'month', EXTRACT(MONTH FROM week_start_date)::int,
           'quarter', EXTRACT(QUARTER FROM week_start_date)::int,
@@ -380,7 +430,14 @@ export async function refreshWeeklyMmmChannelInputMartWithClient(
           'isNewYearHolidayWindow', EXTRACT(MONTH FROM week_start_date)::int = 1
         ),
         jsonb_build_object(
+          'inputContractVersion', 'bayesian_hierarchical_mmm_v1',
           'attributionModel', attribution_model,
+          'clickLookbackWindowDays', 30,
+          'viewLookbackWindowDays', 7,
+          'lookbackWindows', jsonb_build_object(
+            'click', jsonb_build_object('days', 30, 'rule', '30d_click'),
+            'view', jsonb_build_object('days', 7, 'rule', '7d_view')
+          ),
           'attributionCreditOrders', attribution_credit_orders,
           'attributionCreditRevenue', attribution_credit_revenue,
           'newCustomerCreditRevenue', new_customer_credit_revenue,
@@ -400,6 +457,24 @@ export async function refreshWeeklyMmmChannelInputMartWithClient(
           'hasOutcomeWithoutAttributionCredit', shopify_orders > 0 AND attribution_credit_orders = 0
         ),
         jsonb_build_object(
+          'inputContractVersion', 'bayesian_hierarchical_mmm_v1',
+          'isCompleteWeek', true,
+          'freshness', jsonb_build_object(
+            'minSpendLastSyncedAt', min_spend_last_synced_at,
+            'maxSpendLastSyncedAt', max_spend_last_synced_at,
+            'minShopifyLastIngestedAt', min_shopify_last_ingested_at,
+            'maxShopifyLastIngestedAt', max_shopify_last_ingested_at,
+            'minAttributionLastComputedAt', min_attribution_last_computed_at,
+            'maxAttributionLastComputedAt', max_attribution_last_computed_at,
+            'minSourceLastComputedAt', min_source_last_computed_at,
+            'maxSourceLastComputedAt', max_source_last_computed_at
+          ),
+          'calibrationMetadata', jsonb_build_object(
+            'contractVersion', 'bayesian_hierarchical_mmm_v1',
+            'clickLookbackWindowDays', 30,
+            'viewLookbackWindowDays', 7,
+            'attributionLookbackRules', jsonb_build_array('30d_click', '7d_view')
+          ),
           'maxSourceMetricDate', max_source_metric_date,
           'latestAllowedMetricDate', week_end_date,
           'hasFutureDatedSourceRows', COALESCE(max_source_metric_date > week_end_date, false)
@@ -511,6 +586,18 @@ export async function fetchWeeklyMmmSnapshotRowsWithClient(
   );
 
   return result.rows;
+}
+
+export async function fetchBayesianHierarchicalMmmV1FeatureRowsWithClient(
+  client: PoolClient,
+  input: WeeklyMmmRefreshInput
+): Promise<BayesianHierarchicalMmmV1FeatureRow[]> {
+  const rows = await fetchWeeklyMmmSnapshotRowsWithClient(client, input);
+
+  return rows.map((row) => ({
+    input_contract_version: BAYESIAN_HIERARCHICAL_MMM_INPUT_CONTRACT_VERSION,
+    ...row
+  }));
 }
 
 export async function snapshotWeeklyMmmInputRowsWithClient(
