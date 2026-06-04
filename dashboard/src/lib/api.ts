@@ -160,6 +160,36 @@ export type TimeseriesResponse = {
 	}>;
 };
 
+export type ReportingModelComparisonRow = {
+	bucket: string;
+	dateGrain: 'day' | 'week';
+	attributionModel: string;
+	reportingView: 'strict_deterministic' | 'fallback_included' | 'blended_deterministic';
+	source: string;
+	medium: string;
+	campaign: string;
+	visits: number;
+	orders: number;
+	revenue: number;
+	spend: number;
+	conversionRate: number;
+	roas: number | null;
+	tierBreakdown: {
+		strictDeterministicOrders: number;
+		fallbackIncludedOrders: number;
+		blendedDeterministicOrders: number;
+	};
+};
+
+export type ReportingModelComparisonResponse = {
+	range: {
+		startDate: string;
+		endDate: string;
+	};
+	dateGrain: 'day' | 'week';
+	rows: ReportingModelComparisonRow[];
+};
+
 export type CampaignLabel = {
 	displayName: string;
 	entityId: string | null;
@@ -1192,6 +1222,18 @@ export function fetchTimeseries(
 	return requestJson<TimeseriesResponse>("/api/reporting/timeseries", {
 		searchParams: buildSearchParams(filters, { groupBy }),
 	});
+}
+
+export function fetchReportingModelComparison(
+	filters: ReportingFilters,
+	dateGrain: "day" | "week" = "week",
+) {
+	return requestJson<ReportingModelComparisonResponse>(
+		"/api/reporting/model-comparison",
+		{
+			searchParams: buildSearchParams(filters, { dateGrain }),
+		},
+	);
 }
 
 export function fetchOrders(filters: ReportingFilters, limit = 10) {

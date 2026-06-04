@@ -275,6 +275,11 @@ test("authenticated dashboard, order details, and settings pass automated access
         loading: false,
         error: null
       },
+      modelComparisonSection: {
+        data: [],
+        loading: false,
+        error: null
+      },
       onOpenOrderDetails() {}
     })
   );

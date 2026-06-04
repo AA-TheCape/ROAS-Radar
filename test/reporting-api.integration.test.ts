@@ -11,10 +11,12 @@ process.env.SHOPIFY_WEBHOOK_SECRET ??= "test-webhook-secret";
 const poolModule = await import("../src/db/pool.js");
 const serverModule = await import("../src/server.js");
 const harnessModule = await import("./e2e-harness.js");
+const aggregatesModule = await import("../src/modules/reporting/aggregates.js");
 
 const { pool } = poolModule;
 const { closeServer, createServer } = serverModule;
 const { resetE2EDatabase } = harnessModule;
+const { refreshReportingModelComparisons } = aggregatesModule;
 
 function buildHeaders(): Record<string, string> {
 	return {
@@ -258,6 +260,122 @@ test("reporting spend details and lowest buckets are scoped to the requested dat
 				},
 			],
 		});
+	} finally {
+		await closeServer(server);
+		await resetE2EDatabase();
+	}
+});
+
+test("reporting model comparison returns weekly channel rollups from source attribution tiers", async () => {
+	await resetE2EDatabase();
+	await pool.query(
+		`INSERT INTO daily_reporting_metrics (
+      metric_date,
+      attribution_model,
+      source,
+      medium,
+      campaign,
+      content,
+      term,
+      visits,
+      attributed_orders,
+      attributed_revenue,
+      spend,
+      impressions,
+      clicks,
+      new_customer_orders,
+      returning_customer_orders,
+      new_customer_revenue,
+      returning_customer_revenue,
+      last_computed_at
+    ) VALUES
+      ('2026-04-06', 'last_touch', 'google', 'cpc', 'spring-sale', 'unknown', 'unknown', 20, 0, 0, 30, 0, 0, 0, 0, 0, 0, now()),
+      ('2026-04-07', 'last_touch', 'google', 'cpc', 'spring-sale', 'unknown', 'unknown', 30, 0, 0, 20, 0, 0, 0, 0, 0, 0, now())`,
+	);
+	await pool.query(
+		`INSERT INTO shopify_orders (
+      shopify_order_id,
+      shopify_order_number,
+      currency_code,
+      subtotal_price,
+      total_price,
+      processed_at,
+      source_name,
+      attribution_tier,
+      attribution_source,
+      attribution_reason,
+      raw_payload,
+      payload_source,
+      payload_external_id,
+      payload_size_bytes,
+      payload_hash
+    ) VALUES
+      ('strict-order-1', '19001', 'USD', '100.00', '100.00', '2026-04-06T18:00:00.000Z', 'web', 'deterministic_first_party', 'landing_session_id', 'matched_by_landing_session', '{}'::jsonb, 'shopify_order', 'strict-order-1', 2, '44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a'),
+      ('fallback-order-1', '19002', 'USD', '60.00', '60.00', '2026-04-07T18:00:00.000Z', 'web', 'ga4_fallback', 'ga4_fallback', 'ga4_session_campaign_match', '{}'::jsonb, 'shopify_order', 'fallback-order-1', 2, '44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a')`,
+	);
+	await pool.query(
+		`INSERT INTO attribution_order_credits (
+      shopify_order_id,
+      attribution_model,
+      touchpoint_position,
+      session_id,
+      touchpoint_occurred_at,
+      attributed_source,
+      attributed_medium,
+      attributed_campaign,
+      credit_weight,
+      revenue_credit,
+      is_primary,
+      attribution_reason,
+      match_source,
+      confidence_label,
+      model_version
+    ) VALUES
+      ('strict-order-1', 'last_touch', 1, NULL, '2026-04-06T17:55:00.000Z', 'google', 'cpc', 'spring-sale', '1.0', '100.00', true, 'matched_by_landing_session', 'landing_session_id', 'high', 1),
+      ('fallback-order-1', 'last_touch', 1, NULL, '2026-04-07T17:55:00.000Z', 'google', 'cpc', 'spring-sale', '1.0', '60.00', true, 'ga4_session_campaign_match', 'ga4_fallback', 'medium', 1)`,
+	);
+	await refreshReportingModelComparisons(pool, ["2026-04-06", "2026-04-07"]);
+
+	const server = createServer();
+
+	try {
+		const { response, body } = await requestJson(
+			server,
+			"/api/reporting/model-comparison?startDate=2026-04-06&endDate=2026-04-07&source=google&campaign=spring-sale&dateGrain=week",
+		);
+
+		assert.equal(response.status, 200);
+		const strict = body.rows.find(
+			(row: Record<string, unknown>) =>
+				row.attributionModel === "last_touch" &&
+				row.reportingView === "strict_deterministic",
+		);
+		const fallback = body.rows.find(
+			(row: Record<string, unknown>) =>
+				row.attributionModel === "last_touch" &&
+				row.reportingView === "fallback_included",
+		);
+		const blended = body.rows.find(
+			(row: Record<string, unknown>) =>
+				row.attributionModel === "last_touch" &&
+				row.reportingView === "blended_deterministic",
+		);
+
+		assert.equal(body.dateGrain, "week");
+		assert.equal(strict.bucket, "2026-04-06");
+		assert.equal(strict.orders, 1);
+		assert.equal(strict.revenue, 100);
+		assert.equal(strict.spend, 50);
+		assert.equal(strict.visits, 50);
+		assert.deepEqual(strict.tierBreakdown, {
+			strictDeterministicOrders: 1,
+			fallbackIncludedOrders: 2,
+			blendedDeterministicOrders: 2,
+		});
+		assert.equal(fallback.orders, 2);
+		assert.equal(fallback.revenue, 160);
+		assert.equal(blended.orders, 2);
+		assert.equal(blended.revenue, 160);
 	} finally {
 		await closeServer(server);
 		await resetE2EDatabase();

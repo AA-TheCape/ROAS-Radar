@@ -53,6 +53,7 @@ import {
 	type OrderAttributionBackfillJobResponse,
 	type OrderDetailsResponse,
 	type OrderRow,
+	type ReportingModelComparisonRow,
 	type ReportingFilters,
 	type ShopifyAttributionRecoveryResponse,
 	type ShopifyBackfillResponse,
@@ -78,6 +79,7 @@ import {
 	fetchOrderAttributionBackfillJob,
 	fetchOrderDetails,
 	fetchOrders,
+	fetchReportingModelComparison,
 	fetchShopifyConnection,
 	fetchSpendDetails,
 	fetchSummary,
@@ -127,6 +129,7 @@ type DashboardState = {
 	timeseries: AsyncSection<TimeseriesPoint[]>;
 	orders: AsyncSection<OrderRow[]>;
 	spendDetails: AsyncSection<SpendDetailChannelGroup[]>;
+	modelComparison: AsyncSection<ReportingModelComparisonRow[]>;
 };
 
 type AttributionState = {
@@ -532,6 +535,7 @@ function useDashboardData(
 		timeseries: createLoadingSection(),
 		orders: createLoadingSection(),
 		spendDetails: createLoadingSection(),
+		modelComparison: createLoadingSection(),
 	});
 
 	useEffect(() => {
@@ -548,6 +552,7 @@ function useDashboardData(
 				timeseries: createResolvedSection<TimeseriesPoint[]>([]),
 				orders: createResolvedSection<OrderRow[]>([]),
 				spendDetails: createResolvedSection<SpendDetailChannelGroup[]>([]),
+				modelComparison: createResolvedSection<ReportingModelComparisonRow[]>([]),
 			});
 			return;
 		}
@@ -560,6 +565,7 @@ function useDashboardData(
 			timeseries: createLoadingSection(),
 			orders: createLoadingSection(),
 			spendDetails: createLoadingSection(),
+			modelComparison: createLoadingSection(),
 		});
 
 		fetchSummary(filters)
@@ -648,6 +654,24 @@ function useDashboardData(
 					setState((current) => ({
 						...current,
 						spendDetails: createErroredSection(error.message),
+					}));
+				}
+			});
+
+		fetchReportingModelComparison(filters, "week")
+			.then((response) => {
+				if (!cancelled) {
+					setState((current) => ({
+						...current,
+						modelComparison: createResolvedSection(response.rows),
+					}));
+				}
+			})
+			.catch((error: Error) => {
+				if (!cancelled) {
+					setState((current) => ({
+						...current,
+						modelComparison: createErroredSection(error.message),
 					}));
 				}
 			});
@@ -2138,6 +2162,7 @@ function App() {
             timeseriesSection={dashboard.timeseries}
             ordersSection={dashboard.orders}
             spendDetailsSection={dashboard.spendDetails}
+            modelComparisonSection={dashboard.modelComparison}
             onOpenOrderDetails={(shopifyOrderId) => void openOrderDetails(shopifyOrderId)}
           />
         </Suspense>

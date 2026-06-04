@@ -213,6 +213,7 @@ async function renderSnapshots() {
       timeseriesSection: { data: [], loading: false, error: null },
       ordersSection: { data: [], loading: false, error: null },
       spendDetailsSection: { data: [], loading: false, error: null },
+      modelComparisonSection: { data: [], loading: false, error: null },
       onOpenOrderDetails: noop
     })
   });

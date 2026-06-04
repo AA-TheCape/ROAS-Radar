@@ -71,6 +71,15 @@ const baseFiltersObjectSchema = z.object({
   campaign: z.string().trim().min(1).optional()
 });
 
+const optionalModelFiltersObjectSchema = z.object({
+	startDate: dateStringSchema,
+	endDate: dateStringSchema,
+	attributionModel: z.enum(ATTRIBUTION_MODELS).optional(),
+	attributionTier: attributionTierSchema.optional(),
+	source: z.string().trim().min(1).optional(),
+	campaign: z.string().trim().min(1).optional(),
+});
+
 function withValidDateRange<T extends z.ZodRawShape>(schema: z.ZodObject<T>) {
 	return schema.superRefine((value, ctx) => {
 		if (value.startDate > value.endDate) {
@@ -94,6 +103,12 @@ const campaignsQuerySchema = withValidDateRange(
 const timeseriesQuerySchema = withValidDateRange(
 	baseFiltersObjectSchema.extend({
 		groupBy: z.enum(["day", "source", "campaign"]).optional().default("day"),
+	}),
+);
+
+const modelComparisonQuerySchema = withValidDateRange(
+	optionalModelFiltersObjectSchema.extend({
+		dateGrain: z.enum(["day", "week"]).optional().default("week"),
 	}),
 );
 
@@ -156,6 +171,22 @@ type TimeseriesRow = {
 	orders: string | number;
 	revenue: string | number;
 	spend: string | number;
+};
+
+type ModelComparisonRow = {
+	bucket: string;
+	attribution_model: string;
+	reporting_view: string;
+	source: string;
+	medium: string;
+	campaign: string;
+	visits: string | number;
+	attributed_orders: string | number;
+	attributed_revenue: string | number;
+	spend: string | number;
+	strict_deterministic_orders: string | number;
+	fallback_included_orders: string | number;
+	blended_deterministic_orders: string | number;
 };
 
 type OrderAttributionRow = {
@@ -315,6 +346,52 @@ function buildOrderAttributionFilters(
     sql: filters.length > 0 ? ` AND ${filters.join(' AND ')}` : '',
     params
   };
+}
+
+function buildModelComparisonFilters(input: {
+	attributionModel?: string;
+	source?: string;
+	campaign?: string;
+	attributionTier?: ReportingAttributionTier;
+}): { sql: string; params: string[] } {
+	const params: string[] = [];
+	const filters: string[] = [];
+
+	if (input.attributionModel) {
+		params.push(input.attributionModel);
+		filters.push(`attribution_model = $${params.length + 2}`);
+	}
+
+	if (input.source) {
+		params.push(input.source);
+		filters.push(`source = $${params.length + 2}`);
+	}
+
+	if (input.campaign) {
+		params.push(input.campaign);
+		filters.push(`campaign = $${params.length + 2}`);
+	}
+
+	if (input.attributionTier) {
+		const reportingView =
+			input.attributionTier === "deterministic_first_party"
+				? "strict_deterministic"
+				: input.attributionTier === "unattributed"
+					? null
+					: "fallback_included";
+
+		if (reportingView) {
+			params.push(reportingView);
+			filters.push(`reporting_view = $${params.length + 2}`);
+		} else {
+			filters.push("attributed_orders = 0");
+		}
+	}
+
+	return {
+		sql: filters.length > 0 ? ` AND ${filters.join(" AND ")}` : "",
+		params,
+	};
 }
 
 function normalizeContent(value: string | null): string | null {
@@ -728,6 +805,82 @@ export function createReportingRouter(): Router {
 							left.bucket.localeCompare(right.bucket),
 					)
 					.slice(0, 3),
+			});
+		} catch (error) {
+			next(error);
+		}
+	});
+
+	router.get("/model-comparison", async (req, res, next) => {
+		try {
+			const input = parseInput(modelComparisonQuerySchema, req.query);
+			const filters = buildModelComparisonFilters(input);
+			const bucketExpr =
+				input.dateGrain === "week"
+					? "date_trunc('week', metric_date::timestamp)::date::text"
+					: "metric_date::text";
+			const result = await query<ModelComparisonRow>(
+				`
+          SELECT
+            ${bucketExpr} AS bucket,
+            attribution_model,
+            reporting_view,
+            source,
+            medium,
+            campaign,
+            COALESCE(SUM(visits), 0) AS visits,
+            COALESCE(SUM(attributed_orders), 0) AS attributed_orders,
+            COALESCE(SUM(attributed_revenue), 0) AS attributed_revenue,
+            COALESCE(SUM(spend), 0) AS spend,
+            COALESCE(SUM(strict_deterministic_orders), 0) AS strict_deterministic_orders,
+            COALESCE(SUM(fallback_included_orders), 0) AS fallback_included_orders,
+            COALESCE(SUM(blended_deterministic_orders), 0) AS blended_deterministic_orders
+          FROM reporting_model_comparison_daily
+          WHERE metric_date BETWEEN $1::date AND $2::date
+          ${filters.sql}
+          GROUP BY bucket, attribution_model, reporting_view, source, medium, campaign
+          ORDER BY bucket ASC, source ASC, medium ASC, campaign ASC, attribution_model ASC, reporting_view ASC
+        `,
+				[input.startDate, input.endDate, ...filters.params],
+			);
+
+			const rows = result.rows.map((row) => {
+				const metrics = calculatePerformanceMetrics({
+					visits: row.visits,
+					orders: row.attributed_orders,
+					attributedRevenue: row.attributed_revenue,
+					spend: row.spend,
+				});
+
+				return {
+					bucket: row.bucket,
+					dateGrain: input.dateGrain,
+					attributionModel: row.attribution_model,
+					reportingView: row.reporting_view,
+					source: row.source,
+					medium: row.medium,
+					campaign: row.campaign,
+					visits: metrics.visits,
+					orders: metrics.orders,
+					revenue: metrics.attributedRevenue,
+					spend: metrics.spend,
+					conversionRate: metrics.conversionRate,
+					roas: metrics.roas,
+					tierBreakdown: {
+						strictDeterministicOrders: Number(row.strict_deterministic_orders),
+						fallbackIncludedOrders: Number(row.fallback_included_orders),
+						blendedDeterministicOrders: Number(row.blended_deterministic_orders),
+					},
+				};
+			});
+
+			res.json({
+				range: {
+					startDate: input.startDate,
+					endDate: input.endDate,
+				},
+				dateGrain: input.dateGrain,
+				rows,
 			});
 		} catch (error) {
 			next(error);

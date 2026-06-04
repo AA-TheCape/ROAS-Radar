@@ -24,6 +24,7 @@ import {
 import type {
 	CampaignRow,
 	OrderRow,
+	ReportingModelComparisonRow,
 	ReportingFilters,
 	SpendDetailChannelGroup,
 	SummaryTotals,
@@ -113,6 +114,7 @@ type ReportingDashboardProps = {
 	timeseriesSection: DashboardSection<TimeseriesPoint[]>;
 	ordersSection: DashboardSection<OrderRow[]>;
 	spendDetailsSection: DashboardSection<SpendDetailChannelGroup[]>;
+	modelComparisonSection: DashboardSection<ReportingModelComparisonRow[]>;
 	onOpenOrderDetails: (shopifyOrderId: string) => void;
 };
 
@@ -990,6 +992,148 @@ const TimeseriesTrendPanel = memo(function TimeseriesTrendPanel({
 	);
 });
 
+const REPORTING_VIEW_LABELS: Record<ReportingModelComparisonRow["reportingView"], string> = {
+	strict_deterministic: "Strict deterministic",
+	fallback_included: "Fallback included",
+	blended_deterministic: "Blended deterministic",
+};
+
+function formatModelKey(value: string) {
+	return value
+		.split("_")
+		.filter(Boolean)
+		.map((token) => token.charAt(0).toUpperCase() + token.slice(1))
+		.join(" ");
+}
+
+const ModelComparisonPanel = memo(function ModelComparisonPanel({
+	rows,
+	loading,
+	error,
+	reportingTimezone,
+}: {
+	rows: ReportingModelComparisonRow[];
+	loading: boolean;
+	error: string | null;
+	reportingTimezone: string;
+}) {
+	const visibleRows = useMemo(
+		() =>
+			[...rows]
+				.sort(
+					(left, right) =>
+						right.revenue - left.revenue ||
+						right.orders - left.orders ||
+						left.bucket.localeCompare(right.bucket) ||
+						left.source.localeCompare(right.source) ||
+						left.attributionModel.localeCompare(right.attributionModel) ||
+						left.reportingView.localeCompare(right.reportingView),
+				)
+				.slice(0, 18),
+		[rows],
+	);
+	const uniqueModels = useMemo(
+		() => new Set(rows.map((row) => row.attributionModel)).size,
+		[rows],
+	);
+	const uniqueChannels = useMemo(
+		() => new Set(rows.map((row) => `${row.source}\u0000${row.medium}`)).size,
+		[rows],
+	);
+
+	return (
+		<Panel
+			title="Deterministic model comparison"
+			description="Weekly channel rollups compare attribution models across strict deterministic, fallback-included, and blended deterministic reporting views."
+			wide
+		>
+			<SectionState
+				loading={loading}
+				error={error}
+				empty={!rows.length}
+				emptyLabel="No deterministic model comparison rows were returned for this range."
+			>
+				<>
+					<div className="grid gap-4 md:grid-cols-3">
+						<Card padding="compact" className="border-line/60 bg-surface-alt/70">
+							<Eyebrow>Models</Eyebrow>
+							<p className="mt-3 font-display text-title text-ink">
+								{formatNumber(uniqueModels)}
+							</p>
+						</Card>
+						<Card padding="compact" className="border-line/60 bg-surface-alt/70">
+							<Eyebrow>Channels</Eyebrow>
+							<p className="mt-3 font-display text-title text-ink">
+								{formatNumber(uniqueChannels)}
+							</p>
+						</Card>
+						<Card padding="compact" className="border-line/60 bg-surface-alt/70">
+							<Eyebrow>Rows</Eyebrow>
+							<p className="mt-3 font-display text-title text-ink">
+								{formatNumber(rows.length)}
+							</p>
+						</Card>
+					</div>
+
+					<TableWrap className="mt-6 max-h-[32rem]">
+						<Table caption="Deterministic model comparison rollups">
+							<TableHead>
+								<TableRow>
+									<TableHeaderCell>Week</TableHeaderCell>
+									<TableHeaderCell>Channel</TableHeaderCell>
+									<TableHeaderCell>Model</TableHeaderCell>
+									<TableHeaderCell>Reporting view</TableHeaderCell>
+									<TableHeaderCell>Orders</TableHeaderCell>
+									<TableHeaderCell>Revenue</TableHeaderCell>
+									<TableHeaderCell>ROAS</TableHeaderCell>
+									<TableHeaderCell>Tier counts</TableHeaderCell>
+								</TableRow>
+							</TableHead>
+							<TableBody>
+								{visibleRows.map((row) => (
+									<TableRow
+										key={`${row.bucket}-${row.source}-${row.medium}-${row.campaign}-${row.attributionModel}-${row.reportingView}`}
+									>
+										<TableCell>
+											{formatDateLabel(row.bucket, reportingTimezone)}
+										</TableCell>
+										<TableCell>
+											<PrimaryCell>
+												<strong>{formatChannelLabel(row.source, row.medium)}</strong>
+												<span>{row.campaign}</span>
+											</PrimaryCell>
+										</TableCell>
+										<TableCell>{formatModelKey(row.attributionModel)}</TableCell>
+										<TableCell>
+											<Badge tone={row.reportingView === "strict_deterministic" ? "brand" : row.reportingView === "fallback_included" ? "warning" : "teal"}>
+												{REPORTING_VIEW_LABELS[row.reportingView]}
+											</Badge>
+										</TableCell>
+										<TableCell>{formatNumber(row.orders)}</TableCell>
+										<TableCell>{formatCurrency(row.revenue)}</TableCell>
+										<TableCell>{row.roas == null ? "N/A" : formatNumber(row.roas)}</TableCell>
+										<TableCell>
+											<PrimaryCell className="gap-1">
+												<strong>
+													Strict {formatNumber(row.tierBreakdown.strictDeterministicOrders)}
+												</strong>
+												<span>
+													Fallback {formatNumber(row.tierBreakdown.fallbackIncludedOrders)} · Blended{" "}
+													{formatNumber(row.tierBreakdown.blendedDeterministicOrders)}
+												</span>
+											</PrimaryCell>
+										</TableCell>
+									</TableRow>
+								))}
+							</TableBody>
+						</Table>
+					</TableWrap>
+				</>
+			</SectionState>
+		</Panel>
+	);
+});
+
 const ReportingDashboard = memo(function ReportingDashboard({
 	filters,
 	onFiltersChange,
@@ -1005,12 +1149,14 @@ const ReportingDashboard = memo(function ReportingDashboard({
 	timeseriesSection,
 	ordersSection,
 	spendDetailsSection,
+	modelComparisonSection,
 	onOpenOrderDetails,
 }: ReportingDashboardProps) {
 	const campaigns = campaignsSection.data ?? [];
 	const timeseriesPoints = timeseriesSection.data ?? [];
 	const orders = ordersSection.data ?? [];
 	const spendGroups = spendDetailsSection.data ?? [];
+	const modelComparisonRows = modelComparisonSection.data ?? [];
 	const [campaignSearch, setCampaignSearch] = useState("");
 	const [campaignSort, setCampaignSort] = useState<SortState<CampaignSortKey>>({
 		key: "revenue",
@@ -1196,6 +1342,13 @@ const ReportingDashboard = memo(function ReportingDashboard({
 				reportingTimezone={reportingTimezone}
 				loading={timeseriesSection.loading}
 				error={timeseriesSection.error}
+			/>
+
+			<ModelComparisonPanel
+				rows={modelComparisonRows}
+				loading={modelComparisonSection.loading}
+				error={modelComparisonSection.error}
+				reportingTimezone={reportingTimezone}
 			/>
 
 			<div className="grid gap-section 2xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">

@@ -232,6 +232,169 @@ export async function refreshDailyReportingMetrics(
     `,
 		[normalizedMetricDates, reportingTimezone, ATTRIBUTION_MODELS],
 	);
+
+	await refreshReportingModelComparisons(client, normalizedMetricDates);
+}
+
+export async function refreshReportingModelComparisons(
+	client: PoolClient,
+	metricDates: string[],
+): Promise<void> {
+	const normalizedMetricDates = normalizeMetricDates(metricDates);
+
+	if (normalizedMetricDates.length === 0) {
+		return;
+	}
+
+	const reportingTimezone = await getReportingTimezone(client);
+
+	await client.query("SELECT pg_advisory_xact_lock($1)", [82134723]);
+	await client.query(
+		"DELETE FROM reporting_model_comparison_daily WHERE metric_date = ANY($1::date[])",
+		[normalizedMetricDates],
+	);
+
+	await client.query(
+		`
+      WITH reporting_views AS (
+        SELECT *
+        FROM (
+          VALUES
+            ('strict_deterministic'::text, ARRAY['deterministic_first_party']::text[]),
+            ('fallback_included'::text, ARRAY[
+              'deterministic_first_party',
+              'deterministic_shopify_hint',
+              'ga4_fallback'
+            ]::text[]),
+            ('blended_deterministic'::text, ARRAY[
+              'deterministic_first_party',
+              'deterministic_shopify_hint',
+              'ga4_fallback'
+            ]::text[])
+        ) AS view_definitions(reporting_view, included_tiers)
+      ),
+      metric_context AS (
+        SELECT
+          metric_date,
+          attribution_model,
+          source,
+          medium,
+          campaign,
+          COALESCE(SUM(visits), 0)::int AS visits,
+          COALESCE(SUM(spend), 0)::numeric(12, 2) AS spend
+        FROM daily_reporting_metrics
+        WHERE metric_date = ANY($1::date[])
+        GROUP BY 1, 2, 3, 4, 5
+      ),
+      attributed_credit_rows AS (
+        SELECT
+          DATE(timezone($2::text, COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at))) AS metric_date,
+          c.attribution_model,
+          COALESCE(c.attributed_source, 'unknown') AS source,
+          COALESCE(c.attributed_medium, 'unknown') AS medium,
+          COALESCE(c.attributed_campaign, 'unknown') AS campaign,
+          COALESCE(o.attribution_tier, 'unattributed') AS attribution_tier,
+          COALESCE(SUM(c.credit_weight), 0)::numeric(12, 8) AS attributed_orders,
+          COALESCE(SUM(c.revenue_credit), 0)::numeric(12, 2) AS attributed_revenue
+        FROM attribution_order_credits c
+        INNER JOIN shopify_orders o
+          ON o.shopify_order_id = c.shopify_order_id
+        WHERE COALESCE(o.source_name, '') = 'web'
+          AND DATE(timezone($2::text, COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at))) = ANY($1::date[])
+        GROUP BY 1, 2, 3, 4, 5, 6
+      ),
+      rollup_rows AS (
+        SELECT
+          metric_date,
+          attribution_model,
+          source,
+          medium,
+          campaign,
+          COALESCE(SUM(CASE WHEN attribution_tier = 'deterministic_first_party' THEN attributed_orders ELSE 0 END), 0)::numeric(12, 8) AS strict_deterministic_orders,
+          COALESCE(SUM(CASE WHEN attribution_tier IN ('deterministic_first_party', 'deterministic_shopify_hint', 'ga4_fallback') THEN attributed_orders ELSE 0 END), 0)::numeric(12, 8) AS fallback_included_orders,
+          COALESCE(SUM(CASE WHEN attribution_tier IN ('deterministic_first_party', 'deterministic_shopify_hint', 'ga4_fallback') THEN attributed_orders ELSE 0 END), 0)::numeric(12, 8) AS blended_deterministic_orders
+        FROM attributed_credit_rows
+        GROUP BY 1, 2, 3, 4, 5
+      ),
+      comparison_rows AS (
+        SELECT
+          credits.metric_date,
+          credits.attribution_model,
+          view_definitions.reporting_view,
+          credits.source,
+          credits.medium,
+          credits.campaign,
+          COALESCE(SUM(credits.attributed_orders), 0)::numeric(12, 8) AS attributed_orders,
+          COALESCE(SUM(credits.attributed_revenue), 0)::numeric(12, 2) AS attributed_revenue
+        FROM attributed_credit_rows credits
+        INNER JOIN reporting_views view_definitions
+          ON credits.attribution_tier = ANY(view_definitions.included_tiers)
+        GROUP BY 1, 2, 3, 4, 5, 6
+      ),
+      all_dimensions AS (
+        SELECT metric_date, attribution_model, source, medium, campaign
+        FROM metric_context
+
+        UNION
+
+        SELECT metric_date, attribution_model, source, medium, campaign
+        FROM comparison_rows
+      )
+      INSERT INTO reporting_model_comparison_daily (
+        metric_date,
+        attribution_model,
+        reporting_view,
+        source,
+        medium,
+        campaign,
+        visits,
+        attributed_orders,
+        attributed_revenue,
+        spend,
+        strict_deterministic_orders,
+        fallback_included_orders,
+        blended_deterministic_orders,
+        last_computed_at
+      )
+      SELECT
+        dimensions.metric_date,
+        dimensions.attribution_model,
+        view_definitions.reporting_view,
+        dimensions.source,
+        dimensions.medium,
+        dimensions.campaign,
+        COALESCE(context.visits, 0)::int AS visits,
+        COALESCE(comparison.attributed_orders, 0)::numeric(12, 8) AS attributed_orders,
+        COALESCE(comparison.attributed_revenue, 0)::numeric(12, 2) AS attributed_revenue,
+        COALESCE(context.spend, 0)::numeric(12, 2) AS spend,
+        COALESCE(rollups.strict_deterministic_orders, 0)::numeric(12, 8) AS strict_deterministic_orders,
+        COALESCE(rollups.fallback_included_orders, 0)::numeric(12, 8) AS fallback_included_orders,
+        COALESCE(rollups.blended_deterministic_orders, 0)::numeric(12, 8) AS blended_deterministic_orders,
+        now()
+      FROM all_dimensions dimensions
+      CROSS JOIN reporting_views view_definitions
+      LEFT JOIN metric_context context
+        ON context.metric_date = dimensions.metric_date
+        AND context.attribution_model = dimensions.attribution_model
+        AND context.source = dimensions.source
+        AND context.medium = dimensions.medium
+        AND context.campaign = dimensions.campaign
+      LEFT JOIN comparison_rows comparison
+        ON comparison.metric_date = dimensions.metric_date
+        AND comparison.attribution_model = dimensions.attribution_model
+        AND comparison.reporting_view = view_definitions.reporting_view
+        AND comparison.source = dimensions.source
+        AND comparison.medium = dimensions.medium
+        AND comparison.campaign = dimensions.campaign
+      LEFT JOIN rollup_rows rollups
+        ON rollups.metric_date = dimensions.metric_date
+        AND rollups.attribution_model = dimensions.attribution_model
+        AND rollups.source = dimensions.source
+        AND rollups.medium = dimensions.medium
+        AND rollups.campaign = dimensions.campaign
+    `,
+		[normalizedMetricDates, reportingTimezone],
+	);
 }
 
 export async function refreshAllDailyReportingMetrics(
