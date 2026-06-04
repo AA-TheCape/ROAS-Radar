@@ -54,6 +54,7 @@ import {
 	type OrderAttributionBackfillJobResponse,
 	type OrderDetailsResponse,
 	type OrderRow,
+	type ReportingModelComparisonRow,
 	type ReportingFilters,
 	type SummaryResponse,
 	type ShopifyAttributionRecoveryResponse,
@@ -81,6 +82,7 @@ import {
 	fetchOrderAttributionBackfillJob,
 	fetchOrderDetails,
 	fetchOrders,
+	fetchReportingModelComparison,
 	fetchShopifyConnection,
 	fetchSpendDetails,
 	fetchSummary,
@@ -115,9 +117,11 @@ const ReportingDashboard = lazy(() => import('./components/ReportingDashboard'))
 const AttributionDashboard = lazy(() => import('./components/AttributionDashboard'));
 const AttributionQaToolingView = lazy(() => import('./components/AttributionQaToolingView'));
 const MetaOrderValueView = lazy(() => import('./components/MetaOrderValueView'));
+const MmmReadinessDashboard = lazy(() => import('./components/MmmReadinessDashboard'));
 const OrderDetailsView = lazy(() => import('./components/OrderDetailsView'));
 const SettingsAdminView = lazy(() => import('./components/SettingsAdminView'));
 const IdentityGraphHealthView = lazy(() => import('./components/IdentityGraphHealthView'));
+const AdminDebugToolsView = lazy(() => import('./components/AdminDebugToolsView'));
 const RecoveryJobsView = lazy(() => import('./components/RecoveryJobsView'));
 
 type AsyncSection<T> = {
@@ -132,6 +136,7 @@ type DashboardState = {
 	timeseries: AsyncSection<TimeseriesPoint[]>;
 	orders: AsyncSection<OrderRow[]>;
 	spendDetails: AsyncSection<SpendDetailChannelGroup[]>;
+	modelComparison: AsyncSection<ReportingModelComparisonRow[]>;
 };
 
 type AttributionState = {
@@ -189,7 +194,16 @@ type SettingsForm = {
 	reportingTimezone: string;
 };
 
-type AppPage = 'dashboard' | 'attribution' | 'meta-order-value' | 'identity-health' | 'recovery' | 'settings' | 'order-details';
+type AppPage =
+  | 'dashboard'
+  | 'attribution'
+  | 'meta-order-value'
+  | 'mmm'
+  | 'identity-health'
+  | 'admin-debug'
+  | 'recovery'
+  | 'settings'
+  | 'order-details';
 
 const AUTHENTICATED_NAV_ITEMS: AppShellNavItem[] = [
   {
@@ -208,9 +222,19 @@ const AUTHENTICATED_NAV_ITEMS: AppShellNavItem[] = [
     description: 'Campaign-day Meta attributed revenue, spend, ROAS, and canonical action-type breakdowns.'
   },
   {
+    key: 'mmm',
+    label: 'MMM',
+    description: 'Readiness checklist, owner approvals, freshness telemetry, and baseline model output status.'
+  },
+  {
     key: 'identity-health',
     label: 'Identity health',
     description: 'Merge activity, conflict drill-down, unlinked session pressure, and identity graph backfill status.'
+  },
+  {
+    key: 'admin-debug',
+    label: 'Admin debug',
+    description: 'Internal QA tools for conversion journey trace, resolver explainability, replay, recompute, and audit logs.'
   },
   {
     key: 'recovery',
@@ -223,6 +247,7 @@ const AUTHENTICATED_NAV_ITEMS: AppShellNavItem[] = [
     description: 'Reporting timezone, platform connections, sync actions, and dashboard user access.'
   }
 ];
+const ADMIN_ONLY_PAGE_KEYS = new Set<AppPage>(['identity-health', 'admin-debug', 'recovery']);
 
 const DEFAULT_REPORTING_TIMEZONE = 'America/Los_Angeles';
 const DEFAULT_GROUP_BY: TimeseriesGroupBy = 'day';
@@ -348,7 +373,17 @@ function normalizeReportingFilters(
 	return filters;
 }
 
-const DASHBOARD_QUERY_PARAM_KEYS = ['startDate', 'endDate', 'source', 'campaign', 'attributionModel', 'reportingMode', 'attributionTier', 'groupBy'] as const;
+const DASHBOARD_QUERY_PARAM_KEYS = [
+  'startDate',
+  'endDate',
+  'source',
+  'campaign',
+  'attributionModel',
+  'reportingMode',
+  'attributionTier',
+  'sourceOfTruth',
+  'groupBy'
+] as const;
 const REPORTING_FILTER_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const REPORTING_MODES = new Set<NonNullable<ReportingFilters['reportingMode']>>([
   'combined',
@@ -373,6 +408,7 @@ export function createDefaultReportingFilters(reportingTimezone = DEFAULT_REPORT
     reportingMode: 'clicks',
     source: '',
     campaign: '',
+    sourceOfTruth: 'deterministic',
     attributionTier: ''
   };
 }
@@ -406,6 +442,10 @@ function isAttributionModel(
 	);
 }
 
+function isReportingSourceOfTruth(value: string | null): value is NonNullable<ReportingFilters["sourceOfTruth"]> {
+	return value === "deterministic" || value === "mmm";
+}
+
 function isReportingMode(
 	value: string | null,
 ): value is NonNullable<ReportingFilters["reportingMode"]> {
@@ -414,7 +454,7 @@ function isReportingMode(
 			REPORTING_MODES.has(
 				value as NonNullable<ReportingFilters["reportingMode"]>,
 			),
-	);
+		);
 }
 
 export function readDashboardStateFromSearch(
@@ -433,6 +473,7 @@ export function readDashboardStateFromSearch(
   const attributionModel = params.get('attributionModel');
   const reportingMode = params.get('reportingMode');
   const attributionTier = params.get('attributionTier');
+  const sourceOfTruth = params.get('sourceOfTruth');
   const groupBy = params.get('groupBy');
 
   return {
@@ -441,6 +482,7 @@ export function readDashboardStateFromSearch(
       endDate: isValidDateInput(endDate) ? endDate : defaults.endDate,
       source: source ?? '',
       campaign: campaign ?? '',
+      sourceOfTruth: isReportingSourceOfTruth(sourceOfTruth) ? sourceOfTruth : defaults.sourceOfTruth,
       attributionModel: isAttributionModel(attributionModel) ? attributionModel : undefined,
       reportingMode: isReportingMode(reportingMode) ? reportingMode : defaults.reportingMode,
       attributionTier: isAttributionTier(attributionTier) ? attributionTier : ''
@@ -474,6 +516,10 @@ export function applyDashboardStateToSearch(
 	if (filters.attributionModel?.trim()) {
 		params.set("attributionModel", filters.attributionModel.trim());
 	}
+
+	if (filters.sourceOfTruth?.trim() && filters.sourceOfTruth !== "deterministic") {
+		params.set("sourceOfTruth", filters.sourceOfTruth.trim());
+  }
 
 	if (filters.reportingMode?.trim() && filters.reportingMode !== 'clicks') {
 		params.set("reportingMode", filters.reportingMode.trim());
@@ -561,6 +607,7 @@ function useDashboardData(
 		timeseries: createLoadingSection(),
 		orders: createLoadingSection(),
 		spendDetails: createLoadingSection(),
+		modelComparison: createLoadingSection(),
 	});
 
 	useEffect(() => {
@@ -577,6 +624,7 @@ function useDashboardData(
 				timeseries: createResolvedSection<TimeseriesPoint[]>([]),
 				orders: createResolvedSection<OrderRow[]>([]),
 				spendDetails: createResolvedSection<SpendDetailChannelGroup[]>([]),
+				modelComparison: createResolvedSection<ReportingModelComparisonRow[]>([]),
 			});
 			return;
 		}
@@ -589,6 +637,7 @@ function useDashboardData(
 			timeseries: createLoadingSection(),
 			orders: createLoadingSection(),
 			spendDetails: createLoadingSection(),
+			modelComparison: createLoadingSection(),
 		});
 
 		fetchSummary(filters)
@@ -677,6 +726,24 @@ function useDashboardData(
 					setState((current) => ({
 						...current,
 						spendDetails: createErroredSection(error.message),
+					}));
+				}
+			});
+
+		fetchReportingModelComparison(filters, "week")
+			.then((response) => {
+				if (!cancelled) {
+					setState((current) => ({
+						...current,
+						modelComparison: createResolvedSection(response.rows),
+					}));
+				}
+			})
+			.catch((error: Error) => {
+				if (!cancelled) {
+					setState((current) => ({
+						...current,
+						modelComparison: createErroredSection(error.message),
 					}));
 				}
 			});
@@ -850,10 +917,11 @@ function App() {
       endDate: filters.endDate,
       source: (deferredSource ?? '').trim(),
       campaign: (deferredCampaign ?? '').trim(),
+      sourceOfTruth: filters.sourceOfTruth ?? 'deterministic',
       attributionModel: filters.attributionModel,
       attributionTier: filters.attributionTier ?? ''
     }),
-    [deferredCampaign, deferredSource, filters.attributionModel, filters.attributionTier, filters.endDate, filters.startDate]
+    [deferredCampaign, deferredSource, filters.attributionModel, filters.attributionTier, filters.endDate, filters.sourceOfTruth, filters.startDate]
   );
 
   const dashboard = useDashboardData(appliedFilters, groupBy, authState.user !== null, dashboardRefreshKey);
@@ -2055,7 +2123,7 @@ function App() {
         return;
       }
 
-      if ((key === 'identity-health' || key === 'recovery') && !authState.user?.isAdmin) {
+      if (ADMIN_ONLY_PAGE_KEYS.has(key as AppPage) && !authState.user?.isAdmin) {
         return;
       }
 
@@ -2156,7 +2224,7 @@ function App() {
       ? [
           ...(isAdmin
             ? AUTHENTICATED_NAV_ITEMS
-            : AUTHENTICATED_NAV_ITEMS.filter((item) => !['identity-health', 'recovery'].includes(item.key))),
+            : AUTHENTICATED_NAV_ITEMS.filter((item) => !ADMIN_ONLY_PAGE_KEYS.has(item.key as AppPage))),
           {
             key: 'order-details',
             label: 'Order details',
@@ -2166,7 +2234,7 @@ function App() {
         ]
       : isAdmin
         ? AUTHENTICATED_NAV_ITEMS
-        : AUTHENTICATED_NAV_ITEMS.filter((item) => !['identity-health', 'recovery'].includes(item.key));
+        : AUTHENTICATED_NAV_ITEMS.filter((item) => !ADMIN_ONLY_PAGE_KEYS.has(item.key as AppPage));
   const breadcrumbs: AppShellBreadcrumb[] =
     currentPage === 'dashboard'
       ? [
@@ -2183,10 +2251,20 @@ function App() {
             { label: 'Authenticated app' },
             { label: 'Meta order value', current: true }
           ]
+      : currentPage === 'mmm'
+        ? [
+            { label: 'Authenticated app' },
+            { label: 'MMM', current: true }
+          ]
       : currentPage === 'identity-health'
         ? [
             { label: 'Authenticated app' },
             { label: 'Identity health', current: true }
+          ]
+      : currentPage === 'admin-debug'
+        ? [
+            { label: 'Authenticated app' },
+            { label: 'Admin debug', current: true }
           ]
       : currentPage === 'recovery'
         ? [
@@ -2257,6 +2335,7 @@ function App() {
             timeseriesSection={dashboard.timeseries}
             ordersSection={dashboard.orders}
             spendDetailsSection={dashboard.spendDetails}
+            modelComparisonSection={dashboard.modelComparison}
             onOpenOrderDetails={(shopifyOrderId) => void openOrderDetails(shopifyOrderId)}
           />
         </Suspense>
@@ -2297,6 +2376,19 @@ function App() {
           }
         >
           <MetaOrderValueView reportingTimezone={reportingTimezone} />
+        </Suspense>
+      ) : null}
+
+      {currentPage === 'mmm' ? (
+        <Suspense
+          fallback={
+            <AuthenticatedViewFallback
+              title="MMM"
+              description="Loading readiness checklist, owner approvals, freshness telemetry, and model output status."
+            />
+          }
+        >
+          <MmmReadinessDashboard reportingTimezone={reportingTimezone} />
         </Suspense>
       ) : null}
 
@@ -2370,6 +2462,19 @@ function App() {
             overviewSection={identityHealthOverview}
             conflictsSection={identityHealthConflicts}
           />
+        </Suspense>
+      ) : null}
+
+      {currentPage === 'admin-debug' ? (
+        <Suspense
+          fallback={
+            <AuthenticatedViewFallback
+              title="Admin debug"
+              description="Loading internal debugging tools and recent audit records."
+            />
+          }
+        >
+          <AdminDebugToolsView reportingTimezone={reportingTimezone} />
         </Suspense>
       ) : null}
 

@@ -27,12 +27,20 @@ Use this runbook when deploying or operating the scheduled Cloud Run workers in 
   - `roas-radar-data-quality`
   - `roas-radar-identity-graph-backfill`
   - `roas-radar-order-attribution-materialization`
+  - `roas-radar-mmm-baseline`
+  - `roas-radar-mmm-bayesian`
 - Cloud Scheduler:
   - one scheduler per recurring Cloud Run Job
 
 ## Pre-deploy checks
 
-Run the backend verification contract from a clean Node 22 checkout in this order:
+Run the backend verification contract from a clean Node 22.12.0+ checkout in this order:
+
+1. Confirm the target environment infrastructure plan has no unexpected drift:
+   `terraform -chdir=infra/terraform/gcp-pipeline plan -var-file=environments/<environment>.tfvars`
+2. Confirm Secret Manager has current versions for `DATABASE_URL`, `MIGRATOR_DATABASE_URL`, `REPORTING_API_TOKEN`, and the platform encryption secrets required by the target workloads.
+3. Confirm the previous deploy metadata file is retained under `infra/cloud-run/.deploy-state/` before replacing a live environment.
+4. Confirm production `ALERT_NOTIFICATION_CHANNELS` contains the Cloud Monitoring on-call notification channel resource names before applying monitoring.
 
 For staged releases, prefer:
 
@@ -47,33 +55,6 @@ For staged releases, prefer:
 
 Do not sign off staging or continue to production unless the smoke evidence includes the authenticated Meta order value response contract check.
 
-## Confidence Scoring Rollout
-
-Use this sequence for the confidence-scoring schema and service release. The migration is additive for deployed services: old revisions continue to read the legacy attribution columns and snapshots while the new revision writes and exposes `confidenceScore`, `attributionSource`, `matchingMethod`, and `lastAttributionRunAt`.
-
-1. Confirm `npm run db:migrate:check`, `npm run test:attribution`, and `npm --prefix dashboard run build` pass against the release image source.
-2. Expand staging through `RUN_STAGING_ROLLBACK_DRILL=true sh infra/cloud-run/promote.sh staging`. Migration `0046_add_order_attribution_confidence_metadata.sql` must remain fast: nullable columns, defaults for future writes, and `NOT VALID` constraints only.
-3. Keep compatibility mode during transition by leaving the previous API, worker, and dashboard revisions available in the deploy metadata. Do not run rollback SQL during this phase; the schema expansion is intentionally backward-compatible.
-4. Run the historical metadata backfill outside the migration transaction:
-   `npm run attribution:backfill-confidence -- --dry-run --batch-size 1000`
-   then `npm run attribution:backfill-confidence -- --batch-size 1000`. Resume with `--resume-after-order-row-id 123456` if interrupted.
-5. Create the large indexes with `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/operations/0046_add_order_attribution_confidence_indexes.sql`. Do not run this file through `roas-radar-migrate`; it uses `CREATE INDEX CONCURRENTLY`.
-6. Validate staging smoke output includes `/api/reporting/orders` and confirms bounded `confidenceScore` values plus `attributionSource`, `matchingMethod`, and `lastAttributionRunAt` keys when rows are present.
-7. Validate the dashboard order table renders and can sort by Confidence for the same bounded date window.
-8. After the backfill report is complete and zero incomplete rows remain, run `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/operations/0046_contract_order_attribution_confidence_metadata.sql` to validate constraints and apply `NOT NULL`.
-9. Promote production with `RUN_STAGING_ROLLBACK_DRILL=true sh infra/cloud-run/promote.sh production` and repeat steps 4 through 8 against production before closing the compatibility window.
-10. For 24 hours after production contract, monitor `roas_order_attribution_confidence_backfill_progress`, API latency, and attribution worker backlog.
-
-Rollback path:
-
-1. If the confidence API/UI check fails but `/readyz` is healthy, route services back to the previous revisions with `sh infra/cloud-run/rollback.sh <environment> <deploy-metadata-file> previous`.
-2. Re-run `sh infra/cloud-run/smoke-test.sh <environment>` after rollback. The smoke helper remains valid because previous revisions are compatible with the expanded schema.
-3. Pause only the order-attribution materialization scheduler if confidence writes are producing bad metadata while other services remain healthy: `gcloud scheduler jobs pause <order-attribution-materialization-scheduler> --project=<project> --location=<region>`.
-4. Before contract, prefer service rollback and leave the expanded schema in place. The expanded columns and `NOT VALID` constraints are backward-compatible.
-5. If the backfill fails, stop the command and resume from the last reported `lastOrderRowId`; the job is idempotent.
-6. If a concurrent index build is canceled, drop only the invalid index with `DROP INDEX CONCURRENTLY IF EXISTS <index_name>` and rerun `db/operations/0046_add_order_attribution_confidence_indexes.sql`.
-7. Use `db/rollbacks/0046_add_order_attribution_confidence_metadata.down.sql` only after traffic is pinned to a revision that does not reference the new columns and after confirming no new revision, worker, or job uses confidence metadata. After `db/operations/0046_contract_order_attribution_confidence_metadata.sql` has run, prefer a forward fix unless a maintenance rollback is explicitly approved.
-
 ## Meta Scheduler Controls
 
 - `META_ADS_ORDER_VALUE_SCHEDULER_PAUSED` controls whether deploys leave the hourly Meta order-value scheduler active or paused.
@@ -86,32 +67,43 @@ Rollback path:
 - `META_ADS_ORDER_VALUE_SYNC_ENABLED` is the emergency kill switch for Meta order-value extraction without disabling the broader deploy surface.
 - `META_ADS_METADATA_SCHEDULER_NAME` and `GOOGLE_ADS_METADATA_SCHEDULER_NAME` identify the campaign metadata refresh schedulers created by deploys.
 - `META_ADS_METADATA_REFRESH_REQUESTED_BY` and `GOOGLE_ADS_METADATA_REFRESH_REQUESTED_BY` should appear in `campaign_metadata_sync_job_lifecycle` logs for scheduler-triggered refreshes.
+- `MMM_BASELINE_SCHEDULER_PAUSED` controls whether deploys leave the weekly MMM baseline scheduler active or paused.
+- `MMM_BASELINE_SCHEDULE`, `MMM_BASELINE_TIME_ZONE`, `MMM_BASELINE_LOOKBACK_DAYS`, `MMM_BASELINE_LAG_DAYS`, and `MMM_BASELINE_ATTRIBUTION_MODEL` control the scheduled MMM training window and model anchor.
+- `mmm_baseline_job_lifecycle` logs are the source for MMM failure and drift alerts.
+- `MMM_BAYESIAN_FREEZE_ID` is required before running or enabling the scheduler for `bayesian_hierarchical_mmm_v1`; keep it empty until the approved freeze id is promoted as a release gate.
+- `MMM_BAYESIAN_SCHEDULER_PAUSED`, `MMM_BAYESIAN_SCHEDULE`, `MMM_BAYESIAN_TIME_ZONE`, `MMM_BAYESIAN_LOOKBACK_DAYS`, `MMM_BAYESIAN_LAG_DAYS`, and `MMM_BAYESIAN_ATTRIBUTION_MODEL` control the separate Bayesian job.
+- `MMM_BAYESIAN_JOB_CPU`, `MMM_BAYESIAN_JOB_MEMORY`, `MMM_BAYESIAN_JOB_TIMEOUT_SECONDS`, and `MMM_BAYESIAN_JOB_MAX_RETRIES` control Bayesian Cloud Run resources and retry behavior.
+- `mmm_bayesian_job_lifecycle` logs are the source for Bayesian failure, stale success, diagnostics, and missing artifact alerts.
 
-## Manual Backfill And Recovery
+Recommended operating posture:
 
-Manual recovery jobs are deployed with `--max-retries=0` and job-level invoker grants only. By default the environment deployer service account and attribution worker service account can execute them; add human or break-glass identities through `MANUAL_JOB_INVOKER_MEMBERS` as comma-separated IAM members, such as `group:roas-radar-operators@example.com`.
+- `dev`: scheduler paused
+- `staging`: scheduler active for hourly validation
+- `production`: scheduler active only after staging validation passes
 
-Use dry runs first for every recovery workflow. The application-level recovery queue owns retry classification and dead-letter state; Cloud Run Job retries stay disabled so a failed execution does not duplicate side effects outside the idempotency key.
+## Rollback And Toggle
 
-Use `gcloud run jobs execute` with a complete arg override. Examples:
+1. If the issue is limited to Meta hourly ingestion, pause only the Meta scheduler:
+   `sh infra/cloud-run/scheduler.sh <environment> meta-order-value pause`
+2. If deterministic view/impression extraction is producing bad data, pause that scheduler independently:
+   `sh infra/cloud-run/scheduler.sh <environment> meta-deterministic pause`
+3. If MMM calibration drift or model failures are active, pause the MMM scheduler while upstream freshness is repaired:
+   `sh infra/cloud-run/scheduler.sh <environment> mmm-baseline pause`
+   `sh infra/cloud-run/scheduler.sh <environment> mmm-bayesian pause`
+4. If the scheduler should stay deployed but order-value extraction must stop, set `META_ADS_ORDER_VALUE_SYNC_ENABLED="false"` in the target environment file and rerun `sh infra/cloud-run/deploy.sh <environment>`.
+5. If deterministic extraction must stop but the job should remain deployed, set `META_ADS_DETERMINISTIC_SYNC_ENABLED="false"` and rerun `sh infra/cloud-run/deploy.sh <environment>`.
+6. If the service rollout itself must be reverted, use `sh infra/cloud-run/rollback.sh <environment> <deploy-metadata-file> previous`.
+7. If a schema change must be reversed, apply the matching manual rollback file from `db/rollbacks/` with the migrator database credentials, then rerun the smoke test before resuming schedulers.
+8. After remediation, resume the scheduler:
+   `sh infra/cloud-run/scheduler.sh <environment> meta-order-value resume`
+   `sh infra/cloud-run/scheduler.sh <environment> meta-deterministic resume`
+9. For MMM, manually execute one successful baseline job and then resume:
+   `sh infra/cloud-run/scheduler.sh <environment> mmm-baseline resume`
+   For Bayesian MMM, manually execute one successful `roas-radar-mmm-bayesian-<environment>` job with a promoted `MMM_BAYESIAN_FREEZE_ID`, then resume `sh infra/cloud-run/scheduler.sh <environment> mmm-bayesian resume`.
 
-```sh
-gcloud run jobs execute roas-radar-order-attribution-backfill-staging \
-  --project=roas-radar-staging \
-  --region=us-central1 \
-  --args=run,attribution:backfill-orders:start,--,--from,2026-05-01T00:00:00Z,--to,2026-05-02T00:00:00Z,--requested-by,operator@example.com,--dry-run \
-  --wait
-```
+For upstream metadata quota incidents, pause the affected campaign metadata scheduler with `gcloud scheduler jobs pause`, then use `gcloud scheduler jobs resume` after `campaign_metadata_sync_job_lifecycle` logs show successful manual or scheduler refreshes.
 
-```sh
-gcloud run jobs execute roas-radar-campaign-metadata-backfill-production \
-  --project=roas-radar-production \
-  --region=us-central1 \
-  --args=run,campaign-metadata:backfill:start,--,--mode,api-refresh,--requested-by,operator@example.com,--platforms,meta_ads,--dry-run \
-  --wait
-```
-
-Before running production jobs, confirm the target job service account has only the required Secret Manager bindings in `infra/cloud-run/bootstrap-iam.sh`, then run the same command in staging and retain the execution log URL.
+## Recovery Queue Operations
 
 Automatic recovery queue checks:
 
@@ -124,9 +116,8 @@ Automatic recovery queue checks:
 Dead-letter replay workflow:
 
 1. Find the failed source and window:
-   `gcloud logging read 'jsonPayload.sourceTable="recovery_job_runs" OR jsonPayload.sourceTable="attribution_jobs"' --project=<project> --limit=50 --format=json`
-2. Run replay in dry-run mode first:
-   `gcloud run jobs execute roas-radar-dead-letter-replay-<environment> --project=<project> --region=us-central1 --args=run,dead-letters:replay:start,--,--source-table,recovery_job_runs,--from,2026-05-01T00:00:00Z,--to,2026-05-02T00:00:00Z,--requested-by,operator@example.com,--dry-run --wait`
+   `gcloud logging read 'jsonPayload.event="recovery_record_failure" AND jsonPayload.alertable=true' --project=<project> --limit=50 --format=json`
+2. Run the matching replay command with `--dry-run` first.
 3. Verify `candidateCount` and `dryRunCount` match the intended records, and verify source records were not requeued.
 4. After the upstream issue is fixed, rerun without `--dry-run`; verify `replayedCount` increases, source rows return to queued or pending state, and dead letters are marked replayed.
 5. If replaying Shopify recovery, confirm raw payload hashes and storage URIs remain unchanged. Replay must reprocess the preserved payload, not fetch a fresh replacement unless the job explicitly documents reimport behavior.
@@ -137,22 +128,16 @@ Failure triage:
 - Permanent: invalid schema, unsupported job type, missing immutable source identifiers, malformed preserved raw payload, or exhausted retry attempts. These should be `dead_lettered` with enough payload context to replay after operator correction.
 - Source precedence: Shopify fields win over GA4 fields; GA4 fills only missing Shopify fields; ad-platform metadata refreshes names and hierarchy only.
 
-Recommended operating posture:
+## Promotion Evidence
 
-- `dev`: scheduler paused
-- `staging`: scheduler active for hourly validation
-- `production`: scheduler active only after staging validation passes
+Attach these artifacts to the release record before production sign-off:
 
-## Rollback And Toggle
-
-1. If the issue is limited to Meta hourly ingestion, pause only the Meta scheduler:
-   `sh infra/cloud-run/scheduler.sh <environment> meta-order-value pause`
-2. If deterministic view/impression ingestion is the issue, pause only that scheduler:
-   `sh infra/cloud-run/scheduler.sh <environment> meta-deterministic pause`
-3. If the scheduler should stay deployed but order-value extraction must stop, set `META_ADS_ORDER_VALUE_SYNC_ENABLED="false"` in the target environment file and rerun `sh infra/cloud-run/deploy.sh <environment>`.
-4. If deterministic extraction must stop but the job should remain deployed, set `META_ADS_DETERMINISTIC_SYNC_ENABLED="false"` and rerun `sh infra/cloud-run/deploy.sh <environment>`.
-5. If the service rollout itself must be reverted, use `sh infra/cloud-run/rollback.sh <environment> <deploy-metadata-file> previous`.
-6. After remediation, resume the scheduler:
-   `sh infra/cloud-run/scheduler.sh <environment> meta-order-value resume`
-
-For upstream metadata quota incidents, pause the affected campaign metadata scheduler with `gcloud scheduler jobs pause`, then use `gcloud scheduler jobs resume` after `campaign_metadata_sync_job_lifecycle` logs show successful manual or scheduler refreshes.
+- Terraform plan output for staging and production.
+- Cloud Build URL and image tag promoted by `cloudbuild.release.yaml`.
+- Migration job execution id and final status for staging and production.
+- Smoke-test output for staging and production.
+- Staging rollback drill output when `RUN_STAGING_ROLLBACK_DRILL=true`.
+- Scheduler status for Meta order-value, attribution materialization, identity graph backfill, retention, and data quality jobs.
+- Latest `mmm_model_runs` row for the baseline model after the MMM scheduler or manual job run.
+- Latest `mmm_model_runs` row for `bayesian_hierarchical_mmm_v1` includes `approved_freeze_id`, posterior diagnostics, output artifacts, and calibration status after a Bayesian scheduler or manual run.
+- Monitoring apply output from `npm run ops:monitoring:apply -- <environment>` showing log metrics, alert policies, and the SLO dashboard were updated.

@@ -40,6 +40,15 @@
     "shopify:reimport-orders:start": "node dist/src/admin/reimport-shopify-orders.js",
     "data-quality:check": "tsx src/data-quality-worker.ts",
     "data-quality:check:start": "node dist/src/data-quality-worker.js",
+    "mmm:refresh-weekly": "tsx src/admin/refresh-mmm-weekly-channel-mart.ts",
+    "mmm:refresh-weekly:start": "node dist/src/admin/refresh-mmm-weekly-channel-mart.js",
+    "mmm:freeze-baseline": "tsx src/admin/freeze-mmm-baseline.ts",
+    "mmm:freeze-baseline:start": "node dist/src/admin/freeze-mmm-baseline.js",
+    "mmm:train-baseline": "tsx src/admin/train-mmm-baseline.ts",
+    "mmm:train-baseline:start": "node dist/src/admin/train-mmm-baseline.js",
+    "mmm:train-bayesian": "tsx src/admin/train-mmm-bayesian-hierarchical.ts",
+    "mmm:train-bayesian:start": "node dist/src/admin/train-mmm-bayesian-hierarchical.js",
+    "mmm:backfill-campaign-metadata": "tsx src/admin/backfill-mmm-campaign-metadata.ts",
     "session-attribution:retention": "tsx src/session-attribution-retention-worker.ts",
     "session-attribution:retention:start": "node dist/src/session-attribution-retention-worker.js",
     "attribution-qa:retention": "tsx src/attribution-qa-retention-worker.ts",
@@ -84,6 +93,6 @@
     "typescript": "^5.7.2"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12.0"
   }
 }

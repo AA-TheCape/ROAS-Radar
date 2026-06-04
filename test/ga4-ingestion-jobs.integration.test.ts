@@ -61,6 +61,7 @@ async function resetGa4JobFixtures(): Promise<void> {
       event_replay_runs,
       event_dead_letters,
       ga4_bigquery_hourly_jobs,
+      ga4_fallback_candidates,
       ga4_session_attribution,
       ga4_bigquery_ingestion_state
     RESTART IDENTITY CASCADE

@@ -62,6 +62,11 @@ type HashAnomalyRow = {
 	sample_values: string[];
 };
 
+type RateCheckRow = {
+	total_count: string | number;
+	discrepancy_count: string | number;
+};
+
 type MetaDeterministicReconciliationRow = {
 	account_id: string;
 	campaign_id: string | null;
@@ -110,6 +115,27 @@ function addUtcDays(date: Date, days: number): Date {
 
 function toRunDateEnd(runDate: string): string {
 	return `${toDateString(addUtcDays(new Date(`${runDate}T00:00:00.000Z`), 1))}T00:00:00.000Z`;
+}
+
+function resolveReadinessWindow(runDate: string): {
+	startDate: string;
+	endDate: string;
+	startAt: string;
+	endAt: string;
+	windowDays: number;
+} {
+	const windowDays = Math.max(1, env.MMM_READINESS_WINDOW_DAYS);
+	const end = new Date(`${runDate}T00:00:00.000Z`);
+	const startDate = toDateString(addUtcDays(end, -(windowDays - 1)));
+	const endDate = runDate;
+
+	return {
+		startDate,
+		endDate,
+		startAt: `${startDate}T00:00:00.000Z`,
+		endAt: toRunDateEnd(runDate),
+		windowDays,
+	};
 }
 
 function toNumber(value: string | number): number {
@@ -167,6 +193,72 @@ function evaluateDiscrepancyCount(input: {
 		summary: input.warningSummary,
 		details: input.details,
 		threshold,
+		alertTriggered: false,
+	};
+}
+
+function evaluateMaximumRate(input: {
+	discrepancyCount: number;
+	totalCount: number;
+	maxRate: number;
+	severityOnAlert: DataQualityCheckSeverity;
+	healthySummary: string;
+	warningSummary: string;
+	alertSummary: string;
+	details: Record<string, unknown>;
+}): DataQualityCheckResult {
+	const discrepancyCount = Math.max(0, input.discrepancyCount);
+	const totalCount = Math.max(0, input.totalCount);
+	const maxRate = Math.max(0, input.maxRate);
+	const observedRate = totalCount > 0 ? discrepancyCount / totalCount : 0;
+	const alertTriggered = observedRate > maxRate;
+
+	if (discrepancyCount === 0 || totalCount === 0) {
+		return {
+			checkKey: "",
+			status: "healthy",
+			severity: "info",
+			discrepancyCount,
+			summary: input.healthySummary,
+			details: {
+				...input.details,
+				totalCount,
+				observedRate,
+			},
+			threshold: maxRate,
+			alertTriggered: false,
+		};
+	}
+
+	if (alertTriggered) {
+		return {
+			checkKey: "",
+			status: input.severityOnAlert === "critical" ? "failed" : "warning",
+			severity: input.severityOnAlert,
+			discrepancyCount,
+			summary: input.alertSummary,
+			details: {
+				...input.details,
+				totalCount,
+				observedRate,
+			},
+			threshold: maxRate,
+			alertTriggered: true,
+		};
+	}
+
+	return {
+		checkKey: "",
+		status: "warning",
+		severity: "warning",
+		discrepancyCount,
+		summary: input.warningSummary,
+		details: {
+			...input.details,
+			totalCount,
+			observedRate,
+		},
+		threshold: maxRate,
 		alertTriggered: false,
 	};
 }
@@ -696,6 +788,643 @@ async function buildHashFormatAnomalyCheck(
 		...evaluated,
 		checkKey: "identity_graph_hash_format_anomalies",
 	};
+}
+
+async function buildMmmCaptureCompletenessCheck(
+	runDate: string,
+): Promise<DataQualityCheckResult> {
+	const window = resolveReadinessWindow(runDate);
+	const result = await query<
+		RateCheckRow & {
+			sample_session_ids: string[];
+		}
+	>(
+		`
+      WITH sessions AS (
+        SELECT s.id
+        FROM tracking_sessions s
+        WHERE s.first_seen_at >= $1::timestamptz
+          AND s.first_seen_at < $2::timestamptz
+      ),
+      missing AS (
+        SELECT sessions.id::text AS session_id
+        FROM sessions
+        LEFT JOIN session_attribution_identities sai
+          ON sai.roas_radar_session_id = sessions.id
+        WHERE sai.roas_radar_session_id IS NULL
+      ),
+      sampled AS (
+        SELECT session_id
+        FROM missing
+        ORDER BY session_id ASC
+        LIMIT $3::int
+      )
+      SELECT
+        (SELECT COUNT(*)::text FROM sessions) AS total_count,
+        (SELECT COUNT(*)::text FROM missing) AS discrepancy_count,
+        COALESCE((SELECT array_agg(session_id ORDER BY session_id ASC) FROM sampled), ARRAY[]::text[]) AS sample_session_ids
+    `,
+		[window.startAt, window.endAt, env.DATA_QUALITY_SAMPLE_LIMIT],
+	);
+	const row = result.rows[0];
+	const totalCount = toNumber(row?.total_count ?? 0);
+	const discrepancyCount = toNumber(row?.discrepancy_count ?? 0);
+	const minRate = env.MMM_READINESS_CAPTURE_COMPLETENESS_MIN_RATE;
+	const evaluated = evaluateMaximumRate({
+		discrepancyCount,
+		totalCount,
+		maxRate: 1 - minRate,
+		severityOnAlert: "critical",
+		healthySummary: "MMM capture completeness passed for the readiness window.",
+		warningSummary: `${discrepancyCount} captured ${pluralize("session", discrepancyCount)} lacked a session-attribution identity row but remained within the MMM readiness threshold.`,
+		alertSummary: `MMM capture completeness fell below ${(minRate * 100).toFixed(2)}% for the readiness window.`,
+		details: {
+			window,
+			minCompletenessRate: minRate,
+			sampleSessionIds: row?.sample_session_ids ?? [],
+		},
+	});
+
+	return { ...evaluated, checkKey: "mmm_readiness_capture_completeness" };
+}
+
+async function buildMmmMissingSessionIdRateCheck(
+	runDate: string,
+): Promise<DataQualityCheckResult> {
+	const window = resolveReadinessWindow(runDate);
+	const result = await query<
+		RateCheckRow & {
+			sample_order_ids: string[];
+		}
+	>(
+		`
+      WITH orders AS (
+        SELECT shopify_order_id, landing_session_id
+        FROM shopify_orders
+        WHERE COALESCE(processed_at, created_at_shopify, ingested_at) >= $1::timestamptz
+          AND COALESCE(processed_at, created_at_shopify, ingested_at) < $2::timestamptz
+          AND COALESCE(source_name, '') IN ('web', 'shopify_draft_order', '')
+      ),
+      missing AS (
+        SELECT shopify_order_id
+        FROM orders
+        WHERE landing_session_id IS NULL
+      ),
+      sampled AS (
+        SELECT shopify_order_id
+        FROM missing
+        ORDER BY shopify_order_id ASC
+        LIMIT $3::int
+      )
+      SELECT
+        (SELECT COUNT(*)::text FROM orders) AS total_count,
+        (SELECT COUNT(*)::text FROM missing) AS discrepancy_count,
+        COALESCE((SELECT array_agg(shopify_order_id ORDER BY shopify_order_id ASC) FROM sampled), ARRAY[]::text[]) AS sample_order_ids
+    `,
+		[window.startAt, window.endAt, env.DATA_QUALITY_SAMPLE_LIMIT],
+	);
+	const row = result.rows[0];
+	const discrepancyCount = toNumber(row?.discrepancy_count ?? 0);
+	const evaluated = evaluateMaximumRate({
+		discrepancyCount,
+		totalCount: toNumber(row?.total_count ?? 0),
+		maxRate: env.MMM_READINESS_MISSING_SESSION_ID_MAX_RATE,
+		severityOnAlert: "critical",
+		healthySummary: "MMM missing session-id rate passed for Shopify web orders.",
+		warningSummary: `${discrepancyCount} Shopify web ${pluralize("order", discrepancyCount)} lacked landing session ids but remained within the MMM readiness threshold.`,
+		alertSummary: "MMM missing session-id rate breached the readiness threshold.",
+		details: {
+			window,
+			sampleOrderIds: row?.sample_order_ids ?? [],
+		},
+	});
+
+	return { ...evaluated, checkKey: "mmm_readiness_missing_session_id_rate" };
+}
+
+async function buildMmmDualWriteMismatchCheck(
+	runDate: string,
+): Promise<DataQualityCheckResult> {
+	const window = resolveReadinessWindow(runDate);
+	const result = await query<
+		RateCheckRow & {
+			sample_session_ids: string[];
+		}
+	>(
+		`
+      WITH paired AS (
+        SELECT s.id
+        FROM tracking_sessions s
+        JOIN session_attribution_identities sai
+          ON sai.roas_radar_session_id = s.id
+        WHERE s.first_seen_at >= $1::timestamptz
+          AND s.first_seen_at < $2::timestamptz
+      ),
+      mismatched AS (
+        SELECT s.id::text AS session_id
+        FROM tracking_sessions s
+        JOIN session_attribution_identities sai
+          ON sai.roas_radar_session_id = s.id
+        WHERE s.first_seen_at >= $1::timestamptz
+          AND s.first_seen_at < $2::timestamptz
+          AND (
+            s.landing_page IS DISTINCT FROM sai.landing_url
+            OR s.referrer_url IS DISTINCT FROM sai.referrer_url
+            OR s.initial_utm_source IS DISTINCT FROM sai.initial_utm_source
+            OR s.initial_utm_medium IS DISTINCT FROM sai.initial_utm_medium
+            OR s.initial_utm_campaign IS DISTINCT FROM sai.initial_utm_campaign
+            OR s.initial_utm_content IS DISTINCT FROM sai.initial_utm_content
+            OR s.initial_utm_term IS DISTINCT FROM sai.initial_utm_term
+            OR s.initial_gclid IS DISTINCT FROM sai.initial_gclid
+            OR s.initial_gbraid IS DISTINCT FROM sai.initial_gbraid
+            OR s.initial_wbraid IS DISTINCT FROM sai.initial_wbraid
+            OR s.initial_fbclid IS DISTINCT FROM sai.initial_fbclid
+            OR s.initial_ttclid IS DISTINCT FROM sai.initial_ttclid
+            OR s.initial_msclkid IS DISTINCT FROM sai.initial_msclkid
+          )
+      ),
+      sampled AS (
+        SELECT session_id
+        FROM mismatched
+        ORDER BY session_id ASC
+        LIMIT $3::int
+      )
+      SELECT
+        (SELECT COUNT(*)::text FROM paired) AS total_count,
+        (SELECT COUNT(*)::text FROM mismatched) AS discrepancy_count,
+        COALESCE((SELECT array_agg(session_id ORDER BY session_id ASC) FROM sampled), ARRAY[]::text[]) AS sample_session_ids
+    `,
+		[window.startAt, window.endAt, env.DATA_QUALITY_SAMPLE_LIMIT],
+	);
+	const row = result.rows[0];
+	const discrepancyCount = toNumber(row?.discrepancy_count ?? 0);
+	const evaluated = evaluateMaximumRate({
+		discrepancyCount,
+		totalCount: toNumber(row?.total_count ?? 0),
+		maxRate: env.MMM_READINESS_DUAL_WRITE_MISMATCH_MAX_RATE,
+		severityOnAlert: "critical",
+		healthySummary: "MMM dual-write parity passed for session attribution capture.",
+		warningSummary: `${discrepancyCount} dual-write ${pluralize("mismatch", discrepancyCount)} remained within the MMM readiness threshold.`,
+		alertSummary: "MMM dual-write mismatch rate breached the readiness threshold.",
+		details: {
+			window,
+			sampleSessionIds: row?.sample_session_ids ?? [],
+		},
+	});
+
+	return { ...evaluated, checkKey: "mmm_readiness_dual_write_mismatch" };
+}
+
+async function buildMmmResolverUnattributedRateCheck(
+	runDate: string,
+): Promise<DataQualityCheckResult> {
+	const window = resolveReadinessWindow(runDate);
+	const result = await query<
+		RateCheckRow & {
+			sample_order_ids: string[];
+		}
+	>(
+		`
+      WITH resolved_orders AS (
+        SELECT ar.shopify_order_id, ar.match_source, ar.attribution_reason
+        FROM attribution_results ar
+        JOIN shopify_orders so
+          ON so.shopify_order_id = ar.shopify_order_id
+        WHERE COALESCE(so.processed_at, so.created_at_shopify, so.ingested_at) >= $1::timestamptz
+          AND COALESCE(so.processed_at, so.created_at_shopify, so.ingested_at) < $2::timestamptz
+      ),
+      unattributed AS (
+        SELECT shopify_order_id
+        FROM resolved_orders
+        WHERE match_source = 'unattributed'
+           OR attribution_reason = 'unattributed'
+      ),
+      sampled AS (
+        SELECT shopify_order_id
+        FROM unattributed
+        ORDER BY shopify_order_id ASC
+        LIMIT $3::int
+      )
+      SELECT
+        (SELECT COUNT(*)::text FROM resolved_orders) AS total_count,
+        (SELECT COUNT(*)::text FROM unattributed) AS discrepancy_count,
+        COALESCE((SELECT array_agg(shopify_order_id ORDER BY shopify_order_id ASC) FROM sampled), ARRAY[]::text[]) AS sample_order_ids
+    `,
+		[window.startAt, window.endAt, env.DATA_QUALITY_SAMPLE_LIMIT],
+	);
+	const row = result.rows[0];
+	const discrepancyCount = toNumber(row?.discrepancy_count ?? 0);
+	const evaluated = evaluateMaximumRate({
+		discrepancyCount,
+		totalCount: toNumber(row?.total_count ?? 0),
+		maxRate: env.MMM_READINESS_RESOLVER_UNATTRIBUTED_MAX_RATE,
+		severityOnAlert: "critical",
+		healthySummary: "MMM resolver unattributed rate passed for the readiness window.",
+		warningSummary: `${discrepancyCount} resolved ${pluralize("order", discrepancyCount)} fell through to unattributed but remained within the MMM readiness threshold.`,
+		alertSummary: "MMM resolver unattributed rate breached the readiness threshold.",
+		details: {
+			window,
+			sampleOrderIds: row?.sample_order_ids ?? [],
+		},
+	});
+
+	return { ...evaluated, checkKey: "mmm_readiness_resolver_unattributed_rate" };
+}
+
+async function buildMmmSpendFreshnessCheck(
+	runDate: string,
+): Promise<DataQualityCheckResult> {
+	const window = resolveReadinessWindow(runDate);
+	const result = await query<{
+		platform: string;
+		latest_report_date: string | null;
+		latest_synced_at: Date | null;
+		is_stale: boolean;
+	}>(
+		`
+      WITH active_platforms AS (
+        SELECT 'meta_ads'::text AS platform
+        WHERE EXISTS (SELECT 1 FROM meta_ads_connections WHERE status = 'active')
+        UNION ALL
+        SELECT 'google_ads'::text AS platform
+        WHERE EXISTS (SELECT 1 FROM google_ads_connections WHERE status = 'active')
+      ),
+      spend AS (
+        SELECT 'meta_ads'::text AS platform, MAX(report_date)::text AS latest_report_date, MAX(updated_at) AS latest_synced_at
+        FROM meta_ads_daily_spend
+        WHERE report_date <= $1::date
+        UNION ALL
+        SELECT 'google_ads'::text AS platform, MAX(report_date)::text AS latest_report_date, MAX(updated_at) AS latest_synced_at
+        FROM google_ads_daily_spend
+        WHERE report_date <= $1::date
+      )
+      SELECT
+        active_platforms.platform,
+        spend.latest_report_date,
+        spend.latest_synced_at,
+        (
+          spend.latest_report_date IS NULL
+          OR spend.latest_report_date::date < $1::date
+          OR spend.latest_synced_at < now() - ($2::int * interval '1 hour')
+        ) AS is_stale
+      FROM active_platforms
+      LEFT JOIN spend
+        ON spend.platform = active_platforms.platform
+      ORDER BY active_platforms.platform ASC
+    `,
+		[window.endDate, env.MMM_READINESS_SPEND_FRESHNESS_MAX_LAG_HOURS],
+	);
+	const stalePlatforms = result.rows.filter((row) => row.is_stale);
+	const evaluated = evaluateDiscrepancyCount({
+		discrepancyCount: stalePlatforms.length,
+		threshold: 0,
+		severityOnAlert: "critical",
+		healthySummary: "MMM spend freshness passed for active ad platforms.",
+		warningSummary: "MMM spend freshness had stale platforms within threshold.",
+		alertSummary: `${stalePlatforms.length} active ad ${pluralize("platform", stalePlatforms.length)} breached spend freshness readiness.`,
+		details: {
+			window,
+			maxLagHours: env.MMM_READINESS_SPEND_FRESHNESS_MAX_LAG_HOURS,
+			platforms: result.rows.map((row) => ({
+				platform: row.platform,
+				latestReportDate: row.latest_report_date,
+				latestSyncedAt: row.latest_synced_at?.toISOString() ?? null,
+				isStale: row.is_stale,
+			})),
+		},
+	});
+
+	return { ...evaluated, checkKey: "mmm_readiness_spend_freshness" };
+}
+
+async function buildMmmCampaignMetadataFreshnessCheck(
+	runDate: string,
+): Promise<DataQualityCheckResult> {
+	const window = resolveReadinessWindow(runDate);
+	const result = await query<{
+		discrepancy_count: string;
+		samples: Array<{
+			platform: string;
+			account_id: string;
+			entity_id: string;
+			latest_name: string;
+			last_seen_at: string;
+		}>;
+	}>(
+		`
+      WITH stale AS (
+        SELECT platform, account_id, entity_id, latest_name, last_seen_at
+        FROM ad_platform_entity_metadata
+        WHERE entity_type = 'campaign'
+          AND last_seen_at < now() - ($1::int * interval '1 hour')
+      ),
+      sampled AS (
+        SELECT *
+        FROM stale
+        ORDER BY last_seen_at ASC, platform ASC, entity_id ASC
+        LIMIT $2::int
+      )
+      SELECT
+        (SELECT COUNT(*)::text FROM stale) AS discrepancy_count,
+        COALESCE(
+          (
+            SELECT jsonb_agg(
+              jsonb_build_object(
+                'platform', platform,
+                'account_id', account_id,
+                'entity_id', entity_id,
+                'latest_name', latest_name,
+                'last_seen_at', last_seen_at
+              )
+              ORDER BY last_seen_at ASC, platform ASC, entity_id ASC
+            )
+            FROM sampled
+          ),
+          '[]'::jsonb
+        ) AS samples
+    `,
+		[
+			env.MMM_READINESS_CAMPAIGN_METADATA_MAX_LAG_HOURS,
+			env.DATA_QUALITY_SAMPLE_LIMIT,
+		],
+	);
+	const row = result.rows[0];
+	const discrepancyCount = Number(row?.discrepancy_count ?? 0);
+	const evaluated = evaluateDiscrepancyCount({
+		discrepancyCount,
+		threshold: 0,
+		severityOnAlert: "critical",
+		healthySummary: "MMM campaign metadata freshness passed.",
+		warningSummary: "MMM campaign metadata freshness had stale entities within threshold.",
+		alertSummary: `${discrepancyCount} campaign metadata ${pluralize("entity", discrepancyCount)} breached freshness readiness.`,
+		details: {
+			window,
+			maxLagHours: env.MMM_READINESS_CAMPAIGN_METADATA_MAX_LAG_HOURS,
+			samples: row?.samples ?? [],
+		},
+	});
+
+	return { ...evaluated, checkKey: "mmm_readiness_campaign_metadata_freshness" };
+}
+
+async function buildMmmReportingAggregateFreshnessCheck(
+	runDate: string,
+): Promise<DataQualityCheckResult> {
+	const window = resolveReadinessWindow(runDate);
+	const result = await query<{
+		discrepancy_count: string;
+		samples: Array<{ metric_date: string; last_computed_at: string | null }>;
+	}>(
+		`
+      WITH days AS (
+        SELECT generate_series($1::date, $2::date, interval '1 day')::date AS metric_date
+      ),
+      aggregate_freshness AS (
+        SELECT metric_date, MAX(last_computed_at) AS last_computed_at
+        FROM daily_reporting_metrics
+        WHERE metric_date BETWEEN $1::date AND $2::date
+        GROUP BY metric_date
+      ),
+      stale AS (
+        SELECT days.metric_date::text, aggregate_freshness.last_computed_at
+        FROM days
+        LEFT JOIN aggregate_freshness
+          ON aggregate_freshness.metric_date = days.metric_date
+        WHERE aggregate_freshness.last_computed_at IS NULL
+           OR aggregate_freshness.last_computed_at < now() - ($3::int * interval '1 hour')
+      ),
+      sampled AS (
+        SELECT *
+        FROM stale
+        ORDER BY metric_date ASC
+        LIMIT $4::int
+      )
+      SELECT
+        (SELECT COUNT(*)::text FROM stale) AS discrepancy_count,
+        COALESCE(
+          (
+            SELECT jsonb_agg(
+              jsonb_build_object(
+                'metric_date', metric_date,
+                'last_computed_at', last_computed_at
+              )
+              ORDER BY metric_date ASC
+            )
+            FROM sampled
+          ),
+          '[]'::jsonb
+        ) AS samples
+    `,
+		[
+			window.startDate,
+			window.endDate,
+			env.MMM_READINESS_REPORTING_AGGREGATE_MAX_LAG_HOURS,
+			env.DATA_QUALITY_SAMPLE_LIMIT,
+		],
+	);
+	const row = result.rows[0];
+	const discrepancyCount = Number(row?.discrepancy_count ?? 0);
+	const evaluated = evaluateDiscrepancyCount({
+		discrepancyCount,
+		threshold: 0,
+		severityOnAlert: "critical",
+		healthySummary: "MMM reporting aggregate freshness passed.",
+		warningSummary: "MMM reporting aggregate freshness had stale dates within threshold.",
+		alertSummary: `${discrepancyCount} reporting aggregate ${pluralize("date", discrepancyCount)} breached freshness readiness.`,
+		details: {
+			window,
+			maxLagHours: env.MMM_READINESS_REPORTING_AGGREGATE_MAX_LAG_HOURS,
+			samples: row?.samples ?? [],
+		},
+	});
+
+	return { ...evaluated, checkKey: "mmm_readiness_reporting_aggregate_freshness" };
+}
+
+async function buildMmmDataQualityBlockersCheck(
+	runDate: string,
+): Promise<DataQualityCheckResult> {
+	const lookbackStart = toDateString(
+		addUtcDays(
+			new Date(`${runDate}T00:00:00.000Z`),
+			-(Math.max(1, env.MMM_READINESS_DATA_QUALITY_BLOCKER_LOOKBACK_DAYS) - 1),
+		),
+	);
+	const result = await query<{
+		discrepancy_count: string;
+		samples: Array<{
+			run_date: string;
+			check_key: string;
+			status: string;
+			severity: string;
+			summary: string;
+		}>;
+	}>(
+		`
+      WITH blockers AS (
+        SELECT run_date::text, check_key, status, severity, summary
+        FROM data_quality_check_runs
+        WHERE run_date BETWEEN $1::date AND $2::date
+          AND check_key NOT LIKE 'mmm_readiness_%'
+          AND (status = 'failed' OR severity = 'critical')
+      ),
+      sampled AS (
+        SELECT *
+        FROM blockers
+        ORDER BY run_date DESC, check_key ASC
+        LIMIT $3::int
+      )
+      SELECT
+        (SELECT COUNT(*)::text FROM blockers) AS discrepancy_count,
+        COALESCE(
+          (
+            SELECT jsonb_agg(
+              jsonb_build_object(
+                'run_date', run_date,
+                'check_key', check_key,
+                'status', status,
+                'severity', severity,
+                'summary', summary
+              )
+              ORDER BY run_date DESC, check_key ASC
+            )
+            FROM sampled
+          ),
+          '[]'::jsonb
+        ) AS samples
+    `,
+		[lookbackStart, runDate, env.DATA_QUALITY_SAMPLE_LIMIT],
+	);
+	const row = result.rows[0];
+	const discrepancyCount = Number(row?.discrepancy_count ?? 0);
+	const evaluated = evaluateDiscrepancyCount({
+		discrepancyCount,
+		threshold: 0,
+		severityOnAlert: "critical",
+		healthySummary: "MMM data-quality blocker gate passed.",
+		warningSummary: "MMM data-quality blockers remained within threshold.",
+		alertSummary: `${discrepancyCount} blocking data-quality ${pluralize("check", discrepancyCount)} must be resolved before MMM readiness approval.`,
+		details: {
+			lookbackStart,
+			lookbackEnd: runDate,
+			lookbackDays: env.MMM_READINESS_DATA_QUALITY_BLOCKER_LOOKBACK_DAYS,
+			samples: row?.samples ?? [],
+		},
+	});
+
+	return { ...evaluated, checkKey: "mmm_readiness_data_quality_blockers" };
+}
+
+async function buildMmmGa4FallbackStatusCheck(
+	runDate: string,
+): Promise<DataQualityCheckResult> {
+	const window = resolveReadinessWindow(runDate);
+
+	if (!env.GA4_BIGQUERY_ENABLED) {
+		const discrepancyCount = env.MMM_READINESS_GA4_FALLBACK_REQUIRED ? 1 : 0;
+		const evaluated = evaluateDiscrepancyCount({
+			discrepancyCount,
+			threshold: 0,
+			severityOnAlert: "critical",
+			healthySummary: "MMM GA4 fallback status is not required and GA4 ingestion is disabled.",
+			warningSummary: "MMM GA4 fallback status is disabled within threshold.",
+			alertSummary:
+				"MMM GA4 fallback is required for readiness but GA4 BigQuery ingestion is disabled.",
+			details: {
+				window,
+				ga4BigQueryEnabled: false,
+				required: env.MMM_READINESS_GA4_FALLBACK_REQUIRED,
+			},
+		});
+
+		return { ...evaluated, checkKey: "mmm_readiness_ga4_fallback_status" };
+	}
+
+	const result = await query<{
+		discrepancy_count: string;
+		samples: Array<{
+			hour_start: string;
+			status: string | null;
+			last_run_completed_at: string | null;
+		}>;
+	}>(
+		`
+      WITH hours AS (
+        SELECT generate_series(
+          date_trunc('hour', $1::timestamptz),
+          date_trunc('hour', $2::timestamptz) - interval '1 hour',
+          interval '1 hour'
+        ) AS hour_start
+      ),
+      latest AS (
+        SELECT DISTINCT ON (hour_start)
+          hour_start,
+          status,
+          last_run_completed_at
+        FROM ga4_bigquery_hourly_jobs
+        WHERE hour_start >= $1::timestamptz
+          AND hour_start < $2::timestamptz
+        ORDER BY hour_start, updated_at DESC
+      ),
+      stale AS (
+        SELECT
+          hours.hour_start,
+          latest.status,
+          latest.last_run_completed_at
+        FROM hours
+        LEFT JOIN latest
+          ON latest.hour_start = hours.hour_start
+        WHERE latest.status IS NULL
+           OR latest.status <> 'completed'
+           OR latest.last_run_completed_at < now() - ($3::int * interval '1 hour')
+      ),
+      sampled AS (
+        SELECT *
+        FROM stale
+        ORDER BY hour_start ASC
+        LIMIT $4::int
+      )
+      SELECT
+        (SELECT COUNT(*)::text FROM stale) AS discrepancy_count,
+        COALESCE(
+          (
+            SELECT jsonb_agg(
+              jsonb_build_object(
+                'hour_start', hour_start,
+                'status', status,
+                'last_run_completed_at', last_run_completed_at
+              )
+              ORDER BY hour_start ASC
+            )
+            FROM sampled
+          ),
+          '[]'::jsonb
+        ) AS samples
+    `,
+		[
+			window.startAt,
+			window.endAt,
+			env.MMM_READINESS_GA4_FALLBACK_MAX_LAG_HOURS,
+			env.DATA_QUALITY_SAMPLE_LIMIT,
+		],
+	);
+	const row = result.rows[0];
+	const discrepancyCount = Number(row?.discrepancy_count ?? 0);
+	const evaluated = evaluateDiscrepancyCount({
+		discrepancyCount,
+		threshold: 0,
+		severityOnAlert: "critical",
+		healthySummary: "MMM GA4 fallback status passed.",
+		warningSummary: "MMM GA4 fallback status had incomplete hours within threshold.",
+		alertSummary: `${discrepancyCount} GA4 fallback ingestion ${pluralize("hour", discrepancyCount)} breached readiness.`,
+		details: {
+			window,
+			maxLagHours: env.MMM_READINESS_GA4_FALLBACK_MAX_LAG_HOURS,
+			samples: row?.samples ?? [],
+		},
+	});
+
+	return { ...evaluated, checkKey: "mmm_readiness_ga4_fallback_status" };
 }
 
 function isMetaDeterministicMismatch(input: {
@@ -1272,6 +2001,15 @@ export async function runDailyDataQualityChecks(
 		buildDuplicateCanonicalAssignmentCheck(runDate),
 		buildConflictingShopifyMappingCheck(runDate),
 		buildHashFormatAnomalyCheck(runDate),
+		buildMmmCaptureCompletenessCheck(runDate),
+		buildMmmMissingSessionIdRateCheck(runDate),
+		buildMmmDualWriteMismatchCheck(runDate),
+		buildMmmResolverUnattributedRateCheck(runDate),
+		buildMmmSpendFreshnessCheck(runDate),
+		buildMmmCampaignMetadataFreshnessCheck(runDate),
+		buildMmmReportingAggregateFreshnessCheck(runDate),
+		buildMmmDataQualityBlockersCheck(runDate),
+		buildMmmGa4FallbackStatusCheck(runDate),
 		buildMetaDeterministicReconciliationCheck(runDate),
 	]);
 
@@ -1350,8 +2088,10 @@ export async function runDailyDataQualityChecks(
 
 export const __dataQualityTestUtils = {
 	resolveRunDate,
+	resolveReadinessWindow,
 	buildLookbackDates,
 	detectAnomalyFlags,
 	evaluateDiscrepancyCount,
+	evaluateMaximumRate,
 	isMetaDeterministicMismatch,
 };

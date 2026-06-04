@@ -1,0 +1,27 @@
+{
+  "name": "roas_mmm_baseline_drift",
+  "description": "Distribution of max deterministic-vs-MMM divergence rates from completed baseline runs.",
+  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"mmm_baseline_job_lifecycle\" AND jsonPayload.stage=\"completed\"",
+  "valueExtractor": "EXTRACT(jsonPayload.maxDivergenceRate)",
+  "labelExtractors": {
+    "service": "EXTRACT(jsonPayload.service)",
+    "attribution_model": "EXTRACT(jsonPayload.attributionModel)",
+    "governance_status": "EXTRACT(jsonPayload.governanceStatus)"
+  },
+  "metricDescriptor": {
+    "metricKind": "DELTA",
+    "valueType": "DISTRIBUTION",
+    "unit": "1",
+    "displayName": "ROAS Radar MMM Baseline Drift",
+    "labels": [
+      { "key": "service", "valueType": "STRING", "description": "Service emitting MMM lifecycle telemetry." },
+      { "key": "attribution_model", "valueType": "STRING", "description": "Training attribution model." },
+      { "key": "governance_status", "valueType": "STRING", "description": "Calibration governance status." }
+    ]
+  },
+  "bucketOptions": {
+    "explicitBuckets": {
+      "bounds": [0.05, 0.1, 0.15, 0.25, 0.5, 0.75, 1, 2]
+    }
+  }
+}

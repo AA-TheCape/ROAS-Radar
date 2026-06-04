@@ -27,6 +27,7 @@
 - Use [Deterministic Attribution Behavior](deterministic-attribution-behavior.md) when Clicks, Deterministic Views, Meta view-through, or combined comparison totals need explanation.
 - Use [Attribution Confidence Scoring Runbook](runbooks/attribution-confidence-scoring.md) when attribution source IDs, matching method IDs, confidence scores, confidence contract versions, or `lastAttributionRunAt` disagree between order and result surfaces.
 - Use [Cloud Run Pipelines](runbooks/cloud-run-pipelines.md) for Cloud Run deploy, scheduler, IAM, and rollback operations.
+- Use [MMM Pipelines](runbooks/mmm-pipelines.md) for MMM schedule, freshness, drift, and recovery incidents.
 - Use [Production Manual Backfill And Recovery](runbooks/production-manual-backfill-recovery.md) before any production manual backfill, recovery, or dead-letter replay.
 
 ## Core References
@@ -60,6 +61,7 @@
 - [Ingestion Failures](runbooks/ingestion-failures.md): failed ingestion triage and remediation.
 - [API Latency](runbooks/api-latency.md): API latency investigation and recovery.
 - [Cloud Run Pipelines](runbooks/cloud-run-pipelines.md): staged deploy verification, scheduler validation, least-privilege IAM, and rollback steps.
+- [MMM Pipelines](runbooks/mmm-pipelines.md): scheduled MMM baseline, freshness, drift, and recovery triage.
 - [Production Manual Backfill And Recovery](runbooks/production-manual-backfill-recovery.md): production readiness gates, dry-run-first commands, validation queries, recovery paths, and on-call handoff sign-off.
 - Use [Meta Order Value Ingestion](runbooks/meta-order-value-ingestion.md) when Meta attributed-revenue syncs fail, flatline, or emit null-spike anomalies.
 - [Meta Order Value Ingestion](runbooks/meta-order-value-ingestion.md): Meta attributed-revenue sync failure, zero-ingestion, and null-spike triage.

@@ -1225,6 +1225,7 @@ export const __attributionTestUtils = {
 };
 
 export { loadAttributionPreprocessingSnapshot, preprocessAttributionOrders, preprocessAttributionSnapshot };
+export { CANONICAL_ATTRIBUTION_TIERS, computeCanonicalAttributionTiers } from './canonical-tiers.js';
 export {
   AttributionRunConcurrencyError,
   buildAttributionRunConfigHash,

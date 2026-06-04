@@ -689,6 +689,52 @@ export function createReportingDashboardProps(
       loading: false,
       error: null
     } satisfies AsyncSection<import('../dashboard/src/lib/api').SpendDetailChannelGroup[]>,
+    modelComparisonSection: {
+      data: [
+        {
+          bucket: '2026-04-13',
+          dateGrain: 'week',
+          attributionModel: 'last_touch',
+          reportingView: 'strict_deterministic',
+          source: 'google',
+          medium: 'cpc',
+          campaign: 'spring-search',
+          visits: 4800,
+          orders: 122,
+          revenue: 18320,
+          spend: 5220,
+          conversionRate: 122 / 4800,
+          roas: 18320 / 5220,
+          tierBreakdown: {
+            strictDeterministicOrders: 122,
+            fallbackIncludedOrders: 146,
+            blendedDeterministicOrders: 146
+          }
+        },
+        {
+          bucket: '2026-04-13',
+          dateGrain: 'week',
+          attributionModel: 'last_touch',
+          reportingView: 'fallback_included',
+          source: 'google',
+          medium: 'cpc',
+          campaign: 'spring-search',
+          visits: 4800,
+          orders: 146,
+          revenue: 20640,
+          spend: 5220,
+          conversionRate: 146 / 4800,
+          roas: 20640 / 5220,
+          tierBreakdown: {
+            strictDeterministicOrders: 122,
+            fallbackIncludedOrders: 146,
+            blendedDeterministicOrders: 146
+          }
+        }
+      ],
+      loading: false,
+      error: null
+    } satisfies AsyncSection<import('../dashboard/src/lib/api').ReportingModelComparisonRow[]>,
     onOpenOrderDetails: noop
   };
 

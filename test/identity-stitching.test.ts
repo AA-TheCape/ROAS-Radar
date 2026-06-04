@@ -6,6 +6,7 @@ import {
 	buildIdentityEdgeIngestionMetricsLog,
 	hashIdentityEmail,
 	resolveIdentityStitch,
+	scoreIdentityJourneyLinks,
 } from "../src/modules/identity/index.js";
 
 test("hashIdentityEmail normalizes casing and whitespace before hashing", () => {
@@ -294,4 +295,57 @@ test("selectBestJourneyId breaks ties by precedence, latest observation, then le
 	);
 
 	assert.equal(lexicalWinner, "journey-a");
+});
+
+test("scoreIdentityJourneyLinks returns explainable deterministic recency-weighted scores", () => {
+	const scores = scoreIdentityJourneyLinks(
+		[
+			{
+				node_id: "node-a",
+				node_type: "checkout_token",
+				journey_id: "journey-old",
+				edge_id: "edge-a",
+				edge_type: "deterministic",
+				precedence_rank: 40,
+				authoritative_shopify_customer_id: null,
+				last_observed_at: new Date("2026-04-20T10:00:00.000Z"),
+			},
+			{
+				node_id: "node-b",
+				node_type: "checkout_token",
+				journey_id: "journey-new",
+				edge_id: "edge-b",
+				edge_type: "deterministic",
+				precedence_rank: 40,
+				authoritative_shopify_customer_id: null,
+				last_observed_at: new Date("2026-04-20T12:00:00.000Z"),
+			},
+		],
+		new Map([
+			[
+				"journey-old",
+				{
+					journey_id: "journey-old",
+					max_precedence_rank: 40,
+					latest_observed_at: new Date("2026-04-20T10:00:00.000Z"),
+				},
+			],
+			[
+				"journey-new",
+				{
+					journey_id: "journey-new",
+					max_precedence_rank: 40,
+					latest_observed_at: new Date("2026-04-20T12:00:00.000Z"),
+				},
+			],
+		]),
+	);
+
+	assert.equal(scores[0]?.journeyId, "journey-new");
+	assert.equal(scores[0]?.maxPrecedenceRank, 40);
+	assert.equal(scores[0]?.latestObservedAt, "2026-04-20T12:00:00.000Z");
+	assert.match(scores[0]?.explanation ?? "", /recencyWeight=/);
+	assert.ok(
+		(scores[0]?.deterministicScore ?? 0) > (scores[1]?.deterministicScore ?? 0),
+	);
 });

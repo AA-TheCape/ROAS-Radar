@@ -14,6 +14,7 @@ const {
   emitCampaignMetadataFreshnessSnapshotLog,
   emitCampaignMetadataResolutionCoverageLog,
   emitCampaignMetadataSyncJobLifecycleLog,
+  emitMmmBayesianJobLifecycleLog,
   emitMetaMetadataLookupSummaryLog,
   emitMetaMetadataRawIdFallbackLog,
   emitRecoveryRecordFailureLog,
@@ -614,5 +615,73 @@ test('confidence backfill progress logs expose skipped and recomputed ratios', a
     failedBatches: 0,
     batchesProcessed: 1,
     lastOrderRowId: '42'
+  });
+});
+
+test('Bayesian MMM lifecycle logs expose freeze diagnostics and artifact status', async () => {
+  const startedAt = '2026-05-04T10:00:00.000Z';
+  const completedAt = '2026-05-04T10:05:00.000Z';
+  const { entries } = await captureStructuredLogs(() =>
+    emitMmmBayesianJobLifecycleLog({
+      stage: 'completed',
+      workerId: 'mmm-bayesian-worker',
+      requestedBy: 'cloud-run-scheduler-staging',
+      startedAt,
+      completedAt,
+      durationMs: 300000,
+      trainingStartDate: '2026-02-03',
+      trainingEndDate: '2026-05-03',
+      attributionModel: 'last_touch',
+      modelRunId: 'run-1',
+      modelVersion: 'bayesian_hierarchical_mmm_v1',
+      martVersion: 'mmm_weekly_channel_input_mart_v1',
+      approvedFreezeId: '11111111-1111-4111-8111-111111111111',
+      inputSnapshotHash: 'abc123',
+      artifactPersisted: true,
+      inputRowCount: 12,
+      paidMediaRowCount: 10,
+      observationCount: 6,
+      posteriorMaxRhat: 1.01,
+      posteriorMinEffectiveSampleSize: 250,
+      posteriorSanityStatus: 'pass',
+      holdoutMape: 0.12,
+      holdoutRmse: 42,
+      governanceStatus: 'passed'
+    })
+  );
+
+  assert.equal(entries.length, 1);
+  assert.deepEqual(entries[0], {
+    severity: 'INFO',
+    event: 'mmm_bayesian_job_lifecycle',
+    message: 'mmm_bayesian_job_lifecycle',
+    timestamp: entries[0]?.timestamp,
+    service: 'roas-radar-observability-test',
+    stage: 'completed',
+    workerId: 'mmm-bayesian-worker',
+    requestedBy: 'cloud-run-scheduler-staging',
+    startedAt,
+    completedAt,
+    durationMs: 300000,
+    trainingStartDate: '2026-02-03',
+    trainingEndDate: '2026-05-03',
+    attributionModel: 'last_touch',
+    modelRunId: 'run-1',
+    modelVersion: 'bayesian_hierarchical_mmm_v1',
+    martVersion: 'mmm_weekly_channel_input_mart_v1',
+    approvedFreezeId: '11111111-1111-4111-8111-111111111111',
+    inputSnapshotHash: 'abc123',
+    artifactPersisted: true,
+    inputRowCount: 12,
+    paidMediaRowCount: 10,
+    observationCount: 6,
+    posteriorMaxRhat: 1.01,
+    posteriorMinEffectiveSampleSize: 250,
+    posteriorSanityStatus: 'pass',
+    holdoutMape: 0.12,
+    holdoutRmse: 42,
+    governanceStatus: 'passed',
+    divergenceAlertCount: null,
+    maxDivergenceRate: null
   });
 });

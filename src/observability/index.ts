@@ -130,6 +130,36 @@ type CampaignMetadataSyncJobLifecycleLogInput = {
   error?: unknown;
 };
 
+type MmmBaselineJobLifecycleLogInput = {
+  stage: 'started' | 'completed' | 'failed';
+  workerId: string;
+  requestedBy?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  durationMs?: number | null;
+  trainingStartDate: string;
+  trainingEndDate: string;
+  attributionModel?: string | null;
+  modelRunId?: string | null;
+  modelVersion?: string | null;
+  martVersion?: string | null;
+  approvedFreezeId?: string | null;
+  inputSnapshotHash?: string | null;
+  artifactPersisted?: boolean | null;
+  inputRowCount?: number | null;
+  paidMediaRowCount?: number | null;
+  observationCount?: number | null;
+  posteriorMaxRhat?: number | null;
+  posteriorMinEffectiveSampleSize?: number | null;
+  posteriorSanityStatus?: string | null;
+  holdoutMape?: number | null;
+  holdoutRmse?: number | null;
+  governanceStatus?: string | null;
+  divergenceAlertCount?: number | null;
+  maxDivergenceRate?: number | null;
+  error?: unknown;
+};
+
 type MetaMetadataLookupSummaryLogInput = {
   resolutionScope: 'campaign_adset_metadata';
   requestedCount: number;
@@ -254,7 +284,6 @@ type AttributionConfidenceBackfillProgressLogInput = {
   batchesProcessed: number;
   lastOrderRowId: string | null;
 };
-
 const requestContextStorage = new AsyncLocalStorage<RequestContext>();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1021,6 +1050,119 @@ export function emitCampaignMetadataSyncJobLifecycleLog(input: CampaignMetadataS
   logInfo('campaign_metadata_sync_job_lifecycle', fields);
 }
 
+export function emitMmmBaselineJobLifecycleLog(input: MmmBaselineJobLifecycleLogInput): void {
+  const fields: SerializableFields = {
+    service: process.env.K_SERVICE ?? 'roas-radar-mmm-baseline',
+    stage: input.stage,
+    workerId: input.workerId,
+    requestedBy: input.requestedBy ?? null,
+    startedAt: input.startedAt ?? null,
+    completedAt: input.completedAt ?? null,
+    durationMs: input.durationMs ?? null,
+    trainingStartDate: input.trainingStartDate,
+    trainingEndDate: input.trainingEndDate,
+    attributionModel: input.attributionModel ?? null,
+    modelRunId: input.modelRunId ?? null,
+    modelVersion: input.modelVersion ?? null,
+    martVersion: input.martVersion ?? null,
+    approvedFreezeId: input.approvedFreezeId ?? null,
+    inputSnapshotHash: input.inputSnapshotHash ?? null,
+    artifactPersisted: input.artifactPersisted ?? null,
+    inputRowCount: input.inputRowCount ?? null,
+    paidMediaRowCount: input.paidMediaRowCount ?? null,
+    observationCount: input.observationCount ?? null,
+    posteriorMaxRhat: input.posteriorMaxRhat ?? null,
+    posteriorMinEffectiveSampleSize: input.posteriorMinEffectiveSampleSize ?? null,
+    posteriorSanityStatus: input.posteriorSanityStatus ?? null,
+    holdoutMape: input.holdoutMape ?? null,
+    holdoutRmse: input.holdoutRmse ?? null,
+    governanceStatus: input.governanceStatus ?? null,
+    divergenceAlertCount: input.divergenceAlertCount ?? null,
+    maxDivergenceRate: input.maxDivergenceRate ?? null
+  };
+
+  const shouldAlert =
+    input.stage === 'failed' ||
+    (input.stage === 'completed' &&
+      ((input.governanceStatus !== null && input.governanceStatus !== undefined && input.governanceStatus !== 'passed') ||
+        (input.divergenceAlertCount ?? 0) > 0));
+
+  if (shouldAlert) {
+    fields.alertable = true;
+  }
+
+  if (input.stage === 'failed') {
+    logError('mmm_baseline_job_lifecycle', input.error ?? new Error('MMM baseline job failed'), fields);
+    return;
+  }
+
+  if (shouldAlert) {
+    logWarning('mmm_baseline_job_lifecycle', fields);
+    return;
+  }
+
+  logInfo('mmm_baseline_job_lifecycle', fields);
+}
+
+export function emitMmmBayesianJobLifecycleLog(input: MmmBaselineJobLifecycleLogInput): void {
+  const fields: SerializableFields = {
+    service: process.env.K_SERVICE ?? 'roas-radar-mmm-bayesian',
+    stage: input.stage,
+    workerId: input.workerId,
+    requestedBy: input.requestedBy ?? null,
+    startedAt: input.startedAt ?? null,
+    completedAt: input.completedAt ?? null,
+    durationMs: input.durationMs ?? null,
+    trainingStartDate: input.trainingStartDate,
+    trainingEndDate: input.trainingEndDate,
+    attributionModel: input.attributionModel ?? null,
+    modelRunId: input.modelRunId ?? null,
+    modelVersion: input.modelVersion ?? null,
+    martVersion: input.martVersion ?? null,
+    approvedFreezeId: input.approvedFreezeId ?? null,
+    inputSnapshotHash: input.inputSnapshotHash ?? null,
+    artifactPersisted: input.artifactPersisted ?? null,
+    inputRowCount: input.inputRowCount ?? null,
+    paidMediaRowCount: input.paidMediaRowCount ?? null,
+    observationCount: input.observationCount ?? null,
+    posteriorMaxRhat: input.posteriorMaxRhat ?? null,
+    posteriorMinEffectiveSampleSize: input.posteriorMinEffectiveSampleSize ?? null,
+    posteriorSanityStatus: input.posteriorSanityStatus ?? null,
+    holdoutMape: input.holdoutMape ?? null,
+    holdoutRmse: input.holdoutRmse ?? null,
+    governanceStatus: input.governanceStatus ?? null,
+    divergenceAlertCount: input.divergenceAlertCount ?? null,
+    maxDivergenceRate: input.maxDivergenceRate ?? null
+  };
+
+  const shouldAlert =
+    input.stage === 'failed' ||
+    (input.stage === 'completed' &&
+      (input.artifactPersisted === false ||
+        (input.posteriorSanityStatus !== null &&
+          input.posteriorSanityStatus !== undefined &&
+          input.posteriorSanityStatus !== 'pass') ||
+        (input.governanceStatus !== null &&
+          input.governanceStatus !== undefined &&
+          input.governanceStatus !== 'passed')));
+
+  if (shouldAlert) {
+    fields.alertable = true;
+  }
+
+  if (input.stage === 'failed') {
+    logError('mmm_bayesian_job_lifecycle', input.error ?? new Error('MMM Bayesian job failed'), fields);
+    return;
+  }
+
+  if (shouldAlert) {
+    logWarning('mmm_bayesian_job_lifecycle', fields);
+    return;
+  }
+
+  logInfo('mmm_bayesian_job_lifecycle', fields);
+}
+
 export function emitMetaMetadataLookupSummaryLog(input: MetaMetadataLookupSummaryLogInput): void {
   const normalizedRequestCount = Math.max(0, input.normalizedRequestCount);
   const unresolvedCount = Math.max(0, input.unresolvedCount);
@@ -1156,6 +1298,8 @@ export const __observabilityTestUtils = {
   emitCampaignMetadataResolutionCoverageLog,
   emitCampaignMetadataFreshnessSnapshotLog,
   emitCampaignMetadataSyncJobLifecycleLog,
+  emitMmmBaselineJobLifecycleLog,
+  emitMmmBayesianJobLifecycleLog,
   emitMetaMetadataLookupSummaryLog,
   emitMetaMetadataRawIdFallbackLog,
   emitAttributionRunOrderOutcomeLog,

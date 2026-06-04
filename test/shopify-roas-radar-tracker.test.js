@@ -376,6 +376,8 @@ test("falls back to fetch when sendBeacon is unsupported or returns false", asyn
   assert.match(run.fetchCalls[0].url, /^\/track\/session\?/);
   assert.equal(run.fetchCalls[1].url, "/track");
   assert.equal(run.fetchCalls[1].options.keepalive, true);
+  const payload = JSON.parse(run.fetchCalls[1].options.body);
+  assert.equal(run.fetchCalls[1].options.headers["X-ROAS-Radar-Idempotency-Key"], payload.clientEventId);
 });
 
 test("falls back to XMLHttpRequest when sendBeacon and fetch are unavailable", async () => {
@@ -394,6 +396,9 @@ test("queues failed payloads and retries them on the next page load", async () =
   const firstRun = await runTracker({
     cookieJar,
     localStorageData,
+    config: {
+      maxDeliveryAttempts: 1
+    },
     fetch: createBootstrapFetch(sessionId, "2026-04-23T12:00:00.000Z", async function (url) {
       if (url === "/track") {
         throw new Error("network down");
@@ -421,6 +426,35 @@ test("queues failed payloads and retries them on the next page load", async () =
 
   assert.equal(secondRun.fetchCalls.length, 3);
   assert.equal(secondRun.localStorageData.get("roas_radar_pending_track_events"), "[]");
+});
+
+test("retries transient tracking delivery failures with the same idempotency key", async () => {
+  const sessionId = "123e4567-e89b-42d3-a456-426614174000";
+  let trackAttempts = 0;
+  const run = await runTracker({
+    sendBeacon: () => false,
+    config: {
+      maxDeliveryAttempts: 2,
+      retryDelayMs: 0
+    },
+    XMLHttpRequest: createXmlHttpRequest([], 503),
+    fetch: createBootstrapFetch(sessionId, "2026-04-23T12:00:00.000Z", async function (url) {
+      if (url === "/track") {
+        trackAttempts += 1;
+        return trackAttempts === 1 ? { ok: false, status: 503 } : { ok: true, status: 200 };
+      }
+
+      return createJsonResponse({}, true, 200);
+    })
+  });
+  await flushAsyncWork();
+
+  const trackingCalls = run.fetchCalls.filter((call) => call.url === "/track");
+  assert.equal(trackingCalls.length, 2);
+  assert.equal(
+    trackingCalls[0].options.headers["X-ROAS-Radar-Idempotency-Key"],
+    trackingCalls[1].options.headers["X-ROAS-Radar-Idempotency-Key"]
+  );
 });
 
 test("falls back to a client-generated session when the bootstrap endpoint is unavailable", async () => {

@@ -1,0 +1,32 @@
+{
+  "displayName": "ROAS Radar __ENVIRONMENT__ MMM Baseline Failures",
+  "documentation": {
+    "content": "The scheduled MMM baseline job failed or did not complete cleanly. Inspect `mmm_baseline_job_lifecycle` logs and follow the runbook: __RUNBOOK_URL_MMM__",
+    "mimeType": "text/markdown"
+  },
+  "combiner": "OR",
+  "enabled": true,
+  "severity": "ERROR",
+  "notificationChannels": __ALERT_NOTIFICATION_CHANNELS__,
+  "conditions": [
+    {
+      "displayName": "MMM baseline failure emitted",
+      "conditionThreshold": {
+        "filter": "metric.type=\"logging.googleapis.com/user/roas_mmm_baseline_jobs\" resource.type=\"cloud_run_revision\" metric.labels.stage=\"failed\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 0,
+        "duration": "3600s",
+        "aggregations": [
+          {
+            "alignmentPeriod": "3600s",
+            "perSeriesAligner": "ALIGN_SUM",
+            "crossSeriesReducer": "REDUCE_SUM"
+          }
+        ],
+        "trigger": {
+          "count": 1
+        }
+      }
+    }
+  ]
+}

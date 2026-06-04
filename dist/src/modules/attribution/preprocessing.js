@@ -1,9 +1,8 @@
 import { ATTRIBUTION_SCHEMA_VERSION, normalizeAttributionHintInputV1, normalizeAttributionOrderInputV1, normalizeAttributionString, normalizeAttributionTouchpointInputV1 } from '../../../packages/attribution-schema/index.js';
 import { buildCanonicalTouchpointDimensions } from '../marketing-dimensions/index.js';
 import { extractShopifyHintAttribution } from '../shopify/attribution-hints.js';
+import { lookbackWindowMs, normalizeAttributionLookbackWindows } from './rules.js';
 import { attributionEvidenceSourcePrecedence, compareAttributionEvidenceSources } from './precedence.js';
-const CLICK_LOOKBACK_WINDOW_MS = 28 * 24 * 60 * 60 * 1000;
-const VIEW_LOOKBACK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const CLICK_EVENT_HINTS = new Set([
     'ad_click',
     'click',
@@ -124,7 +123,7 @@ function classifyEngagementType(input) {
 function isDirectTouchpoint(input) {
     return !input.source && !input.medium && !input.campaign && !input.content && !input.term && !input.clickIdValue;
 }
-function determineEligibility(orderOccurredAtUtc, touchpointOccurredAtUtc, engagementType) {
+function determineEligibility(orderOccurredAtUtc, touchpointOccurredAtUtc, engagementType, lookbackWindows = normalizeAttributionLookbackWindows(undefined)) {
     if (engagementType === 'unknown') {
         return {
             isEligible: false,
@@ -138,13 +137,13 @@ function determineEligibility(orderOccurredAtUtc, touchpointOccurredAtUtc, engag
             ineligibilityReason: 'future_touchpoint'
         };
     }
-    if (engagementType === 'click' && deltaMs > CLICK_LOOKBACK_WINDOW_MS) {
+    if (engagementType === 'click' && deltaMs > lookbackWindowMs(lookbackWindows.clickWindowDays)) {
         return {
             isEligible: false,
             ineligibilityReason: 'outside_click_lookback_window'
         };
     }
-    if (engagementType === 'view' && deltaMs > VIEW_LOOKBACK_WINDOW_MS) {
+    if (engagementType === 'view' && deltaMs > lookbackWindowMs(lookbackWindows.viewWindowDays)) {
         return {
             isEligible: false,
             ineligibilityReason: 'outside_view_lookback_window'
@@ -431,7 +430,7 @@ function determineEvidenceSource(order, sessionContext, event) {
     }
     return null;
 }
-function buildFirstTouchCandidate(order, orderOccurredAtUtc, sessionContext) {
+function buildFirstTouchCandidate(order, orderOccurredAtUtc, sessionContext, lookbackWindows) {
     const identity = sessionContext.identity;
     if (!identity) {
         return null;
@@ -466,7 +465,7 @@ function buildFirstTouchCandidate(order, orderOccurredAtUtc, sessionContext) {
         medium: canonicalDimensions.medium,
         campaign: canonicalDimensions.campaign
     });
-    const eligibility = determineEligibility(orderOccurredAtUtc, touchpointOccurredAtUtc, engagementType);
+    const eligibility = determineEligibility(orderOccurredAtUtc, touchpointOccurredAtUtc, engagementType, lookbackWindows);
     const touchpoint = normalizeAttributionTouchpointInputV1({
         schema_version: ATTRIBUTION_SCHEMA_VERSION,
         touchpoint_id: `session:${sessionContext.sessionId}:first_touch`,
@@ -507,7 +506,7 @@ function buildFirstTouchCandidate(order, orderOccurredAtUtc, sessionContext) {
         metadataCompleteness: countMetadataFields(touchpoint)
     };
 }
-function buildEventCandidate(order, orderOccurredAtUtc, sessionContext, event) {
+function buildEventCandidate(order, orderOccurredAtUtc, sessionContext, event, lookbackWindows) {
     const evidence = determineEvidenceSource(order, sessionContext, event);
     if (!evidence) {
         return null;
@@ -540,7 +539,7 @@ function buildEventCandidate(order, orderOccurredAtUtc, sessionContext, event) {
         medium: canonicalDimensions.medium,
         campaign: canonicalDimensions.campaign
     });
-    const eligibility = determineEligibility(orderOccurredAtUtc, touchpointOccurredAtUtc, engagementType);
+    const eligibility = determineEligibility(orderOccurredAtUtc, touchpointOccurredAtUtc, engagementType, lookbackWindows);
     const touchpoint = normalizeAttributionTouchpointInputV1({
         schema_version: ATTRIBUTION_SCHEMA_VERSION,
         touchpoint_id: `event:${event.touchEventId}`,
@@ -581,7 +580,7 @@ function buildEventCandidate(order, orderOccurredAtUtc, sessionContext, event) {
         metadataCompleteness: countMetadataFields(touchpoint)
     };
 }
-function buildHintCandidate(order, orderOccurredAtUtc, hint) {
+function buildHintCandidate(order, orderOccurredAtUtc, hint, lookbackWindows) {
     const engagementType = classifyEngagementType({
         sourceKind: 'shopify_hint',
         clickIdValue: hint.click_id_value,
@@ -589,7 +588,7 @@ function buildHintCandidate(order, orderOccurredAtUtc, hint) {
         medium: hint.medium,
         campaign: hint.campaign
     });
-    const eligibility = determineEligibility(orderOccurredAtUtc, orderOccurredAtUtc, engagementType);
+    const eligibility = determineEligibility(orderOccurredAtUtc, orderOccurredAtUtc, engagementType, lookbackWindows);
     const touchpoint = normalizeAttributionTouchpointInputV1({
         schema_version: ATTRIBUTION_SCHEMA_VERSION,
         touchpoint_id: `shopify_hint:${order.shopifyOrderId}`,
@@ -662,6 +661,7 @@ export function preprocessAttributionSnapshot(snapshot, options) {
     const failures = [];
     const orders = [];
     const touchpointCandidates = [];
+    const lookbackWindows = normalizeAttributionLookbackWindows(options?.lookbackWindows);
     const rawEvidence = [];
     const sessionIdentityById = new Map();
     for (const identity of snapshot.sessionIdentities) {
@@ -745,7 +745,7 @@ export function preprocessAttributionSnapshot(snapshot, options) {
             });
         }
         for (const sessionContext of matchedSessions) {
-            const firstTouchCandidate = buildFirstTouchCandidate(order, occurredAtUtc, sessionContext);
+            const firstTouchCandidate = buildFirstTouchCandidate(order, occurredAtUtc, sessionContext, lookbackWindows);
             if (firstTouchCandidate) {
                 touchpointCandidates.push(firstTouchCandidate);
             }
@@ -762,7 +762,7 @@ export function preprocessAttributionSnapshot(snapshot, options) {
                 });
             }
             for (const event of (eventsBySessionId.get(sessionContext.sessionId) ?? []).slice().sort((left, right) => left.touchEventId.localeCompare(right.touchEventId))) {
-                const eventCandidate = buildEventCandidate(order, occurredAtUtc, sessionContext, event);
+                const eventCandidate = buildEventCandidate(order, occurredAtUtc, sessionContext, event, lookbackWindows);
                 rawEvidence.push(buildRawTrackingEvidence(order, sessionContext, event, eventCandidate?.touchpoint ?? null));
                 if (!eventCandidate) {
                     continue;
@@ -777,7 +777,7 @@ export function preprocessAttributionSnapshot(snapshot, options) {
             capturedAtUtc: occurredAtUtc
         });
         if (hint) {
-            touchpointCandidates.push(buildHintCandidate(order, occurredAtUtc, hint));
+            touchpointCandidates.push(buildHintCandidate(order, occurredAtUtc, hint, lookbackWindows));
         }
         else if (evidence.evidenceStatus === 'malformed') {
             logFailure(failures, options, {

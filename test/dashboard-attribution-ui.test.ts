@@ -19,7 +19,7 @@ const baseResultRow = {
     touchpoint_count_considered: 2,
     eligible_click_count: 2,
     eligible_view_count: 0,
-    lookback_rule_applied: '28d_click' as const,
+    lookback_rule_applied: '30d_click' as const,
     winner_selection_rule: 'last_non_direct' as const,
     direct_suppression_applied: true,
     deterministic_block_applied: false,
@@ -34,7 +34,7 @@ const baseResultRow = {
     submittedBy: 'internal',
     windowStartUtc: '2026-04-01T00:00:00.000Z',
     windowEndUtc: '2026-04-30T23:59:59.000Z',
-    lookbackClickWindowDays: 28,
+    lookbackClickWindowDays: 30,
     lookbackViewWindowDays: 7,
     createdAtUtc: '2026-04-30T12:00:00.000Z',
     completedAtUtc: '2026-04-30T12:05:00.000Z'
@@ -42,7 +42,7 @@ const baseResultRow = {
   model: {
     key: 'last_non_direct' as const,
     winnerSelectionRule: 'last_non_direct' as const,
-    lookbackRuleApplied: '28d_click' as const
+    lookbackRuleApplied: '30d_click' as const
   },
   primaryTouchpoint: {
     run_id: '11111111-1111-4111-8111-111111111111',
@@ -117,7 +117,7 @@ test('attribution dashboard keeps model comparison and per-order rationale expli
               creditWeightTotal: '0.50000000'
             }
           ],
-          lookbackClickWindowDays: 28,
+          lookbackClickWindowDays: 30,
           lookbackViewWindowDays: 7
         },
         loading: false,
@@ -138,7 +138,7 @@ test('attribution dashboard keeps model comparison and per-order rationale expli
   try {
     const text = mounted.container.textContent ?? '';
     assert.match(text, /Alternative views, not one universal truth/);
-    assert.match(text, /28-day click lookback/);
+    assert.match(text, /30-day click lookback/);
     assert.match(text, /Last non-direct/);
     assert.match(text, /Channel comparison/);
     assert.match(text, /google \/ cpc/i);
@@ -197,7 +197,7 @@ test('attribution dashboard renders touchpoints, credits, and explainability whe
               creditWeightTotal: '1.00000000'
             }
           ],
-          lookbackClickWindowDays: 28,
+          lookbackClickWindowDays: 30,
           lookbackViewWindowDays: 7
         },
         loading: false,
@@ -215,7 +215,7 @@ test('attribution dashboard renders touchpoints, credits, and explainability whe
             submittedBy: 'internal',
             windowStartUtc: '2026-04-01T00:00:00.000Z',
             windowEndUtc: '2026-04-30T23:59:59.000Z',
-            lookbackClickWindowDays: 28,
+            lookbackClickWindowDays: 30,
             lookbackViewWindowDays: 7,
             createdAtUtc: '2026-04-30T12:00:00.000Z',
             completedAtUtc: '2026-04-30T12:05:00.000Z'

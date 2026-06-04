@@ -5,6 +5,7 @@ import {
   extractShopifyHintAttribution,
   type ShopifyAttributionHintPayload
 } from '../shopify/attribution-hints.js';
+import { lookupGa4FallbackCandidates } from './ga4-fallback-candidates.js';
 import {
   confidenceScoreForWinner,
   dedupeDeterministicCandidates,
@@ -465,6 +466,37 @@ function compareGa4Candidates(left: AttributionCandidate, right: AttributionCand
   return left.sourceKey.localeCompare(right.sourceKey);
 }
 
+async function loadDefaultGa4Candidates(
+  client: PoolClient,
+  input: { order: AttributionCandidateOrder; orderOccurredAtUtc: Date }
+): Promise<Ga4AttributionCandidateInput[]> {
+  const candidates = await lookupGa4FallbackCandidates(
+    {
+      orderOccurredAt: input.orderOccurredAtUtc.toISOString(),
+      customerIdentityId: input.order.customerIdentityId ?? null,
+      emailHash: input.order.emailHash ?? null,
+      transactionId: input.order.shopifyOrderId
+    },
+    client
+  );
+
+  return candidates.map((candidate) => ({
+    stableIdentifier: candidate.candidateKey,
+    occurredAt: candidate.occurredAt,
+    sessionId: null,
+    sourceTouchEventId: candidate.candidateKey,
+    source: candidate.source,
+    medium: candidate.medium,
+    campaign: candidate.campaign,
+    content: candidate.content,
+    term: candidate.term,
+    clickIdType: candidate.clickIdType,
+    clickIdValue: candidate.clickIdValue,
+    attributionReason: 'ga4_fallback_derived',
+    confidenceScore: candidate.clickIdValue ? 0.35 : 0.25
+  }));
+}
+
 function mapGa4Candidate(
   rawCandidate: Ga4AttributionCandidateInput,
   orderOccurredAtUtc: Date
@@ -662,7 +694,7 @@ export async function extractAttributionCandidatesForOrder(
 
   const rawGa4Candidates = options.loadGa4Candidates
     ? await options.loadGa4Candidates(client, { order, orderOccurredAtUtc })
-    : [];
+    : await loadDefaultGa4Candidates(client, { order, orderOccurredAtUtc });
   const ga4BySourceKey = new Map<string, AttributionCandidate>();
 
   for (const rawCandidate of rawGa4Candidates) {

@@ -394,7 +394,7 @@ test('attribution results return paginated order-model summaries with run and pr
           touchpoint_count_considered: 2,
           eligible_click_count: 2,
           eligible_view_count: 0,
-          lookback_rule_applied: '28d_click',
+          lookback_rule_applied: '30d_click',
           winner_selection_rule: 'last_non_direct',
           direct_suppression_applied: true,
           deterministic_block_applied: false,
@@ -406,7 +406,7 @@ test('attribution results return paginated order-model summaries with run and pr
           submitted_by: 'admin@example.com',
           window_start_utc: new Date('2026-04-01T00:00:00.000Z'),
           window_end_utc: new Date('2026-04-10T23:59:59.000Z'),
-          lookback_click_window_days: 28,
+          lookback_click_window_days: 30,
           lookback_view_window_days: 7,
           run_created_at_utc: new Date('2026-04-10T12:04:00.000Z'),
           completed_at_utc: new Date('2026-04-10T12:06:00.000Z'),
@@ -440,7 +440,7 @@ test('attribution results return paginated order-model summaries with run and pr
           touchpoint_count_considered: 0,
           eligible_click_count: 0,
           eligible_view_count: 0,
-          lookback_rule_applied: '28d_click',
+          lookback_rule_applied: '30d_click',
           winner_selection_rule: 'last_non_direct',
           direct_suppression_applied: false,
           deterministic_block_applied: false,
@@ -452,7 +452,7 @@ test('attribution results return paginated order-model summaries with run and pr
           submitted_by: 'admin@example.com',
           window_start_utc: new Date('2026-04-01T00:00:00.000Z'),
           window_end_utc: new Date('2026-04-10T23:59:59.000Z'),
-          lookback_click_window_days: 28,
+          lookback_click_window_days: 30,
           lookback_view_window_days: 7,
           run_created_at_utc: new Date('2026-04-09T12:04:00.000Z'),
           completed_at_utc: new Date('2026-04-09T12:06:00.000Z'),
@@ -486,7 +486,7 @@ test('attribution results return paginated order-model summaries with run and pr
           touchpoint_count_considered: 1,
           eligible_click_count: 1,
           eligible_view_count: 0,
-          lookback_rule_applied: '28d_click',
+          lookback_rule_applied: '30d_click',
           winner_selection_rule: 'last_non_direct',
           direct_suppression_applied: false,
           deterministic_block_applied: false,
@@ -498,7 +498,7 @@ test('attribution results return paginated order-model summaries with run and pr
           submitted_by: 'admin@example.com',
           window_start_utc: new Date('2026-04-01T00:00:00.000Z'),
           window_end_utc: new Date('2026-04-10T23:59:59.000Z'),
-          lookback_click_window_days: 28,
+          lookback_click_window_days: 30,
           lookback_view_window_days: 7,
           run_created_at_utc: new Date('2026-04-08T12:04:00.000Z'),
           completed_at_utc: new Date('2026-04-08T12:06:00.000Z'),
@@ -532,7 +532,7 @@ test('attribution results return paginated order-model summaries with run and pr
     assert.equal(response.status, 200);
     assert.equal(body.rows.length, 2);
     assert.equal(body.rows[0].record.run_id, '11111111-1111-4111-8111-111111111111');
-    assert.equal(body.rows[0].run.lookbackClickWindowDays, 28);
+    assert.equal(body.rows[0].run.lookbackClickWindowDays, 30);
     assert.equal(body.rows[0].model.key, 'last_non_direct');
     assert.equal(body.rows[0].primaryTouchpoint.touchpoint_id, 'tp-2');
     assert.equal(body.rows[1].primaryTouchpoint, null);
@@ -582,7 +582,7 @@ test('attribution channel totals return side-by-side model aggregates by credite
           order_count: 3,
           revenue_credited: '260.50',
           credit_weight_total: '3.00000000',
-          lookback_click_window_days: 28,
+          lookback_click_window_days: 30,
           lookback_view_window_days: 7
         },
         {
@@ -592,7 +592,7 @@ test('attribution channel totals return side-by-side model aggregates by credite
           order_count: 4,
           revenue_credited: '180.25',
           credit_weight_total: '1.75000000',
-          lookback_click_window_days: 28,
+          lookback_click_window_days: 30,
           lookback_view_window_days: 7
         }
       ]
@@ -608,7 +608,7 @@ test('attribution channel totals return side-by-side model aggregates by credite
     );
 
     assert.equal(response.status, 200);
-    assert.equal(body.lookbackClickWindowDays, 28);
+    assert.equal(body.lookbackClickWindowDays, 30);
     assert.equal(body.lookbackViewWindowDays, 7);
     assert.deepEqual(body.rows, [
       {
@@ -653,7 +653,7 @@ test('attribution explainability returns touchpoints, model summaries, credits, 
             submitted_by: 'internal',
             window_start_utc: new Date('2026-04-01T00:00:00.000Z'),
             window_end_utc: new Date('2026-04-30T23:59:59.000Z'),
-            lookback_click_window_days: 28,
+            lookback_click_window_days: 30,
             lookback_view_window_days: 7,
             created_at_utc: new Date('2026-04-30T12:00:00.000Z'),
             completed_at_utc: new Date('2026-04-30T12:05:00.000Z')
@@ -680,7 +680,7 @@ test('attribution explainability returns touchpoints, model summaries, credits, 
             touchpoint_count_considered: 2,
             eligible_click_count: 2,
             eligible_view_count: 0,
-            lookback_rule_applied: '28d_click',
+            lookback_rule_applied: '30d_click',
             winner_selection_rule: 'last_non_direct',
             direct_suppression_applied: true,
             deterministic_block_applied: false,
@@ -692,7 +692,7 @@ test('attribution explainability returns touchpoints, model summaries, credits, 
             submitted_by: 'internal',
             window_start_utc: new Date('2026-04-01T00:00:00.000Z'),
             window_end_utc: new Date('2026-04-30T23:59:59.000Z'),
-            lookback_click_window_days: 28,
+            lookback_click_window_days: 30,
             lookback_view_window_days: 7,
             run_created_at_utc: new Date('2026-04-30T12:00:00.000Z'),
             completed_at_utc: new Date('2026-04-30T12:05:00.000Z'),

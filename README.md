@@ -4,7 +4,7 @@ ROAS Radar is a Node.js backend plus React dashboard for Shopify attribution, re
 
 ## Runtime baseline
 
-- Backend Node version: `22.x`
+- Backend Node version: `22.12.0+` (`.nvmrc` pins the local baseline)
 - Backend install command: `npm ci --include=dev`
 - Dashboard install command: `npm ci --include=dev --prefix dashboard`
 - Production backend image: root [`Dockerfile`](Dockerfile)

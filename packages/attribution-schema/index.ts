@@ -345,7 +345,7 @@ export const ATTRIBUTION_ALLOCATION_STATUSES = [
   'blocked_by_deterministic',
   'unattributed'
 ] as const;
-export const ATTRIBUTION_LOOKBACK_RULES = ['28d_click', '7d_view', 'mixed'] as const;
+export const ATTRIBUTION_LOOKBACK_RULES = ['30d_click', '7d_view', 'mixed'] as const;
 export const ATTRIBUTION_EXPLAIN_STAGES = ['candidate_extraction', 'eligibility_filter', 'model_scoring', 'fallback'] as const;
 export const ATTRIBUTION_EXPLAIN_DECISIONS = ['included', 'excluded', 'winner', 'fallback_used', 'no_credit'] as const;
 export const ATTRIBUTION_QA_PAYLOAD_SCHEMA_VERSION = 1 as const;
@@ -1634,7 +1634,7 @@ export const attributionQaPayloadV1SuccessFixture = normalizeAttributionQaPayloa
       touchpoint_count_considered: 1,
       eligible_click_count: 1,
       eligible_view_count: 0,
-      lookback_rule_applied: '28d_click',
+      lookback_rule_applied: '30d_click',
       winner_selection_rule: 'last_touch',
       direct_suppression_applied: false,
       deterministic_block_applied: false,
@@ -1746,7 +1746,7 @@ export const attributionQaPayloadV1NoMatchFixture = normalizeAttributionQaPayloa
       touchpoint_count_considered: 0,
       eligible_click_count: 0,
       eligible_view_count: 0,
-      lookback_rule_applied: '28d_click',
+      lookback_rule_applied: '30d_click',
       winner_selection_rule: 'last_touch',
       direct_suppression_applied: false,
       deterministic_block_applied: false,

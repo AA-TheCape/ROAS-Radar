@@ -12,6 +12,7 @@ import { createAttributionReadRouter } from './modules/attribution/read-api.js';
 import { assertGa4BigQueryIngestionConfig } from './modules/attribution/ga4-bigquery-config.js';
 import { createGoogleAdsAdminRouter, createGoogleAdsPublicRouter } from './modules/google-ads/index.js';
 import { createMetaAdsAdminRouter, createMetaAdsPublicRouter } from './modules/meta-ads/index.js';
+import { createMmmRouter } from './modules/reporting/mmm.js';
 import { createMetaOrderValueRouter } from './modules/reporting/meta-order-value.js';
 import { createRecoveryAdminRouter } from './modules/recovery/admin.js';
 import { createReportingRouter } from './modules/reporting/index.js';
@@ -20,6 +21,7 @@ import { createShopifyAdminRouter, createShopifyPublicRouter, createShopifyWebho
 import { createTrackingRouter } from './modules/tracking/index.js';
 import { createIdentityAdminRouter } from './modules/identity/admin.js';
 import { createInternalIdentityRouter } from './modules/identity/read-api.js';
+import { createExposureAdminRouter } from './modules/exposures/index.js';
 import { createRequestLoggingMiddleware, logHttpError } from './observability/index.js';
 
 export function createApp() {
@@ -43,7 +45,7 @@ export function createApp() {
 			res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
 			res.setHeader(
 				"Access-Control-Allow-Headers",
-				"authorization,content-type,x-roas-radar-tenant-id",
+				"authorization,content-type,idempotency-key,x-idempotency-key,x-roas-radar-idempotency-key,x-roas-radar-tenant-id",
 			);
 		}
 
@@ -99,10 +101,12 @@ export function createApp() {
   app.use('/api/auth', createAuthRouter());
   app.use('/api/settings', createSettingsRouter());
   app.use('/api/reporting/meta-order-value', createMetaOrderValueRouter());
+  app.use('/api/reporting/mmm', createMmmRouter());
   app.use('/api/reporting', createReportingRouter());
   app.use('/api/attribution', createAttributionReadRouter());
   app.use('/api/internal/identity', createInternalIdentityRouter());
   app.use('/api/admin/identity', createIdentityAdminRouter());
+  app.use('/api/admin/exposures', createExposureAdminRouter());
   app.use('/api/admin/users', createUserAdminRouter());
   app.use('/api/admin/attribution', createAttributionAdminRouter());
   app.use('/api/admin/recovery', createRecoveryAdminRouter());

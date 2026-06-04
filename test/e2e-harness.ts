@@ -29,6 +29,7 @@ export async function resetE2EDatabase(): Promise<void> {
     'attribution_touchpoint_inputs',
     'attribution_order_inputs',
     'attribution_runs',
+    'mmm_model_runs',
     'ad_sync_api_transactions',
     'google_ads_oauth_states',
     'google_ads_settings',

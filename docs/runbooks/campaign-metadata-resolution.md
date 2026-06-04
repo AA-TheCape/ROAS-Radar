@@ -9,6 +9,8 @@ This runbook covers the latest-name metadata lookup surface and the scheduled me
 
 The scheduled refresh path is the Cloud Run metadata refresh jobs, not the normal spend sync workers.
 
+It also covers the MMM campaign metadata resolver. That resolver maps UTM dimensions and native ad identifiers to canonical campaign/channel hierarchy metadata in `mmm_daily_input_mart_v1`.
+
 ## Meta API Runtime Configuration
 
 Meta campaign and ad set labels are resolved from cached metadata first. On a cache miss, the backend can call the Meta Graph API when one of these runtime credential paths is available:
@@ -31,6 +33,41 @@ Required secrets must come from runtime configuration, not committed files:
 Cloud Run deploys bind `META_ADS_METADATA_ACCESS_TOKEN` from Secret Manager using the environment file value `META_ADS_METADATA_ACCESS_TOKEN_SECRET_NAME`. Treat a missing Secret Manager secret as a deployment blocker for Meta metadata-capable environments, even if the token is only a fallback at runtime.
 
 If both token paths are unavailable, metadata resolution does not fail the reporting request. It logs `meta_metadata_runtime_config_diagnostic` with `fallback="raw_id"` and returns unresolved campaign or ad set ids so callers can display the raw id label.
+
+## Resolver Rules And Overrides
+
+Resolver rules live in `campaign_metadata_resolver_rules`.
+
+- `resolver_version` pins the taxonomy contract used by a model/export.
+- `rule_kind='override'` wins before `rule_kind='rule'`.
+- Lower `priority` wins within the same kind.
+- Exact match columns cover platform, UTM dimensions, account id, campaign id, ad set id, and ad id.
+- `match_expression` supports optional regex keys such as `campaignPattern`, `campaignIdPattern`, and `contentPattern`.
+- Resolved outputs include canonical campaign id/name, canonical source/medium, channel, channel group, hierarchy JSON, confidence, and source.
+
+The synchronous API is:
+
+```bash
+POST /api/reporting/mmm/campaign-resolver/resolve
+```
+
+Unmapped records are upserted into `campaign_metadata_qa_queue` when `enqueueUnmapped` is true or omitted. Operators can close QA rows by adding a matching override/rule and marking the queue row `resolved`.
+
+## Historical MMM Backfill
+
+Run the backfill after adding rules or overrides:
+
+```bash
+npm run mmm:backfill-campaign-metadata -- --start-date 2026-04-01 --end-date 2026-04-30
+```
+
+The same job is available through:
+
+```bash
+POST /api/reporting/mmm/campaign-resolver/backfill
+```
+
+Backfill writes resolver provenance and canonical metadata columns on `mmm_daily_input_mart_v1`, including `resolver_version`, `resolver_source`, `resolver_confidence`, resolved campaign/channel fields, hierarchy JSON, and `needs_metadata_qa`.
 
 ## Required Scheduler Inputs
 

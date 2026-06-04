@@ -4,7 +4,7 @@ This directory contains the checked-in deployment contract for the Node backend,
 
 The root backend `Dockerfile` is the production packaging path for every backend Cloud Run workload in this directory. It builds on `node:22-bookworm-slim` and defaults the API container command to `npm run start:api`.
 
-The deployment flow assumes twenty deployable workloads plus ten Cloud Scheduler triggers:
+The deployment flow assumes these Cloud Run workloads and Cloud Scheduler triggers:
 
 - `roas-radar-api`: public Cloud Run service for `/track`, Shopify webhooks, and authenticated reporting APIs.
 - `roas-radar-dashboard`: public Cloud Run service for the React reporting dashboard.
@@ -12,34 +12,26 @@ The deployment flow assumes twenty deployable workloads plus ten Cloud Scheduler
 - `roas-radar-migrate`: Cloud Run Job that runs `npm run db:migrate:start` with elevated database credentials.
 - `roas-radar-meta-ads-sync`: Cloud Run Job that runs `npm run meta-ads:sync:start` once per invocation.
 - `roas-radar-meta-order-value-sync`: Cloud Run Job that runs `npm run meta-ads:order-value:start` once per invocation.
-- `roas-radar-meta-deterministic-sync`: Cloud Run Job that runs `npm run meta-ads:deterministic:start` once per invocation.
 - `roas-radar-google-ads-sync`: Cloud Run Job that runs `npm run google-ads:sync:start` once per invocation.
-- `roas-radar-ga4-ingestion`: Cloud Run Job that runs `npm run ga4:ingest:start` once per invocation.
-- `roas-radar-campaign-metadata-backfill`: manual Cloud Run Job for `npm run campaign-metadata:backfill:start`.
-- `roas-radar-shopify-order-reimport`: manual Cloud Run Job for `npm run shopify:reimport-orders:start`.
-- `roas-radar-order-attribution-backfill`: manual Cloud Run Job for `npm run attribution:backfill-orders:start`.
-- `roas-radar-shopify-attribution-recovery`: manual Cloud Run Job for `npm run attribution:recover-shopify-hints:start`.
-- `roas-radar-ga4-fallback-recovery`: manual Cloud Run Job for `npm run attribution:recover-ga4-fallback:start`.
-- `roas-radar-dead-letter-replay`: manual Cloud Run Job for `npm run dead-letters:replay:start`.
 - `roas-radar-session-retention`: Cloud Run Job that runs `npm run session-attribution:retention:start` to prune expired attribution-session records.
-- `roas-radar-attribution-qa-retention`: Cloud Run Job that runs `npm run attribution-qa:retention:start` to prune expired Attribution QA raw evidence and embedded QA snapshots.
 - `roas-radar-data-quality`: Cloud Run Job that runs `npm run data-quality:check:start` once per invocation.
 - `roas-radar-identity-graph-backfill`: Cloud Run Job that runs `npm run identity:backfill-graph:start` over a recent window to reconcile graph attachments and catch missed identity stitching.
 - `roas-radar-order-attribution-materialization`: Cloud Run Job that runs `npm run attribution:materialization:start` over a recent order window to recover attribution and refresh reporting aggregates.
+- `roas-radar-mmm-baseline`: Cloud Run Job that runs `npm run mmm:train-baseline:start` over the configured lookback window with an approved baseline freeze id and writes deterministic baseline MMM outputs.
+- `roas-radar-mmm-bayesian`: Cloud Run Job that runs `npm run mmm:train-bayesian:start` for `bayesian_hierarchical_mmm_v1` with an approved freeze id.
 - `roas-radar-meta-ads-sync-scheduler`: Cloud Scheduler job that invokes the Meta Ads Cloud Run Job.
 - `roas-radar-meta-order-value-sync-scheduler`: Cloud Scheduler job that invokes the Meta order-value Cloud Run Job.
-- `roas-radar-meta-deterministic-sync-scheduler`: Cloud Scheduler job that invokes the Meta deterministic view/impression Cloud Run Job.
 - `roas-radar-google-ads-sync-scheduler`: Cloud Scheduler job that invokes the Google Ads Cloud Run Job.
-- `roas-radar-ga4-ingestion-scheduler`: Cloud Scheduler job that invokes the GA4 ingestion Cloud Run Job.
 - `roas-radar-session-retention-scheduler`: Cloud Scheduler job that invokes the session-retention Cloud Run Job.
-- `roas-radar-attribution-qa-retention-scheduler`: Cloud Scheduler job that invokes the Attribution QA retention Cloud Run Job daily.
 - `roas-radar-data-quality-scheduler`: Cloud Scheduler job that invokes the data-quality Cloud Run Job.
 - `roas-radar-identity-graph-backfill-scheduler`: Cloud Scheduler job that invokes the identity-graph backfill Cloud Run Job.
 - `roas-radar-order-attribution-materialization-scheduler`: Cloud Scheduler job that invokes the order-attribution materialization Cloud Run Job.
+- `roas-radar-mmm-baseline-scheduler`: Cloud Scheduler job that invokes the baseline MMM training Cloud Run Job.
+- `roas-radar-mmm-bayesian-scheduler`: Cloud Scheduler job that invokes the Bayesian MMM training Cloud Run Job.
 
 ## Files
 
-Each recurring and manual job now runs as its own service account. Cloud Scheduler uses a dedicated invoker identity, and manual backfill/recovery jobs grant job-level `roles/run.invoker` only to the attribution worker, the environment deployer service account, and any `MANUAL_JOB_INVOKER_MEMBERS` entries. That keeps ads sync, GA4 ingestion, data quality, identity reconciliation, attribution materialization, and operator recovery paths from sharing unnecessary secret access.
+Each recurring job now runs as its own service account. Cloud Scheduler uses a dedicated invoker identity, but job invocation is granted at the individual Cloud Run Job level by `deploy.sh` instead of project-wide `roles/run.invoker`. That keeps ads sync, data quality, identity reconciliation, and attribution materialization from sharing unnecessary secret access.
 
 ## Required environment values
 
@@ -63,12 +55,6 @@ The checked-in env files are valid shell files. Replace the placeholder project 
 - `SHOPIFY_APP_API_VERSION`
 - `SHOPIFY_APP_SCOPES`
 - `SHOPIFY_APP_POST_INSTALL_REDIRECT_URL`
-- `META_ADS_APP_ID`
-- `META_ADS_APP_BASE_URL`
-- `META_ADS_APP_SCOPES`
-- `META_ADS_AD_ACCOUNT_ID`
-- `META_ADS_API_VERSION`
-- `META_ADS_METADATA_ACCESS_TOKEN_SECRET_NAME`
 - `DASHBOARD_API_BASE_URL`
 - `API_CPU`
 - `API_MEMORY`
@@ -80,56 +66,35 @@ The checked-in env files are valid shell files. Replace the placeholder project 
 - `WORKER_TIMEOUT_SECONDS`
 - `META_ADS_JOB_NAME`
 - `META_ADS_ORDER_VALUE_JOB_NAME`
-- `META_ADS_DETERMINISTIC_JOB_NAME`
 - `GOOGLE_ADS_JOB_NAME`
-- `GA4_INGESTION_JOB_NAME`
-- `CAMPAIGN_METADATA_BACKFILL_JOB_NAME`
-- `SHOPIFY_ORDER_REIMPORT_JOB_NAME`
-- `ORDER_ATTRIBUTION_BACKFILL_JOB_NAME`
-- `SHOPIFY_ATTRIBUTION_RECOVERY_JOB_NAME`
-- `GA4_FALLBACK_RECOVERY_JOB_NAME`
-- `DEAD_LETTER_REPLAY_JOB_NAME`
 - `META_ADS_SCHEDULER_JOB_NAME`
 - `META_ADS_ORDER_VALUE_SCHEDULER_JOB_NAME`
-- `META_ADS_DETERMINISTIC_SCHEDULER_JOB_NAME`
 - `GOOGLE_ADS_SCHEDULER_JOB_NAME`
-- `GA4_INGESTION_SCHEDULER_JOB_NAME`
 - `RETENTION_JOB_NAME`
-- `ATTRIBUTION_QA_RETENTION_JOB_NAME`
 - `DATA_QUALITY_JOB_NAME`
 - `IDENTITY_GRAPH_BACKFILL_JOB_NAME`
 - `ORDER_ATTRIBUTION_MATERIALIZATION_JOB_NAME`
+- `MMM_BASELINE_JOB_NAME`
+- `MMM_BAYESIAN_JOB_NAME`
 - `RETENTION_SCHEDULER_JOB_NAME`
-- `ATTRIBUTION_QA_RETENTION_SCHEDULER_JOB_NAME`
 - `DATA_QUALITY_SCHEDULER_JOB_NAME`
 - `IDENTITY_GRAPH_BACKFILL_SCHEDULER_JOB_NAME`
 - `ORDER_ATTRIBUTION_MATERIALIZATION_SCHEDULER_JOB_NAME`
+- `MMM_BASELINE_SCHEDULER_JOB_NAME`
+- `MMM_BAYESIAN_SCHEDULER_JOB_NAME`
 - `RETENTION_JOB_SERVICE_ACCOUNT_NAME`
 - `META_ADS_JOB_SERVICE_ACCOUNT_NAME`
-- `META_ADS_DETERMINISTIC_JOB_SERVICE_ACCOUNT_NAME`
 - `GOOGLE_ADS_JOB_SERVICE_ACCOUNT_NAME`
-- `GA4_INGESTION_JOB_SERVICE_ACCOUNT_NAME`
-- `CAMPAIGN_METADATA_BACKFILL_JOB_SERVICE_ACCOUNT_NAME`
-- `SHOPIFY_ORDER_REIMPORT_JOB_SERVICE_ACCOUNT_NAME`
-- `ORDER_ATTRIBUTION_BACKFILL_JOB_SERVICE_ACCOUNT_NAME`
-- `SHOPIFY_ATTRIBUTION_RECOVERY_JOB_SERVICE_ACCOUNT_NAME`
-- `GA4_FALLBACK_RECOVERY_JOB_SERVICE_ACCOUNT_NAME`
-- `DEAD_LETTER_REPLAY_JOB_SERVICE_ACCOUNT_NAME`
 - `DATA_QUALITY_JOB_SERVICE_ACCOUNT_NAME`
 - `IDENTITY_GRAPH_BACKFILL_JOB_SERVICE_ACCOUNT_NAME`
 - `ORDER_ATTRIBUTION_MATERIALIZATION_JOB_SERVICE_ACCOUNT_NAME`
+- `MMM_BASELINE_JOB_SERVICE_ACCOUNT_NAME`
+- `MMM_BAYESIAN_JOB_SERVICE_ACCOUNT_NAME`
 - `SCHEDULER_INVOKER_SERVICE_ACCOUNT_NAME`
-- `DEPLOYER_SERVICE_ACCOUNT_NAME`
-- `MANUAL_JOB_INVOKER_MEMBERS`
 - `ADS_SYNC_DATABASE_POOL_MAX`
 - `ADS_SYNC_TIME_ZONE`
 - `META_ADS_SYNC_SCHEDULE`
 - `META_ADS_ORDER_VALUE_SYNC_SCHEDULE`
-- `META_ADS_DETERMINISTIC_SYNC_SCHEDULE`
-- `META_ADS_DETERMINISTIC_SCHEDULER_PAUSED`
-- `META_ADS_DETERMINISTIC_SYNC_ENABLED`
-- `META_ADS_DETERMINISTIC_SYNC_INITIAL_LOOKBACK_DAYS`
-- `META_ADS_DETERMINISTIC_SYNC_LOOKBACK_DAYS`
 - `META_ADS_ORDER_VALUE_SCHEDULER_PAUSED`
 - `META_ADS_SCHEDULER_PAUSED`
 - `META_ADS_SCHEDULER_ATTEMPT_DEADLINE`
@@ -146,33 +111,29 @@ The checked-in env files are valid shell files. Replace the placeholder project 
 - `META_ADS_ORDER_VALUE_NULL_SPIKE_MIN_RATIO`
 - `META_ADS_ORDER_VALUE_NULL_SPIKE_RATIO_DELTA`
 - `GOOGLE_ADS_SYNC_SCHEDULE`
-- `GA4_INGESTION_SCHEDULE`
-- `GA4_INGESTION_SCHEDULER_TIME_ZONE`
-- `GA4_INGESTION_SCHEDULER_ENABLED`
-- `GA4_INGESTION_REQUESTED_BY`
-- `GA4_INGESTION_BATCH_SIZE`
-- `GA4_INGESTION_MAX_RETRIES`
-- `GA4_INGESTION_INITIAL_BACKOFF_SECONDS`
-- `GA4_INGESTION_MAX_BACKOFF_SECONDS`
-- `GA4_INGESTION_STALE_LOCK_MINUTES`
-- `GA4_BIGQUERY_PROJECT_ID`
-- `GA4_BIGQUERY_LOCATION`
-- `GA4_BIGQUERY_DATASET`
-- `GA4_BIGQUERY_EVENTS_TABLE_PATTERN`
-- `GA4_BIGQUERY_INTRADAY_TABLE_PATTERN`
-- `GA4_BIGQUERY_LOOKBACK_HOURS`
-- `GA4_BIGQUERY_BACKFILL_HOURS`
-- `GOOGLE_ADS_TRANSFER_BIGQUERY_PROJECT_ID`
-- `GOOGLE_ADS_TRANSFER_BIGQUERY_LOCATION`
-- `GOOGLE_ADS_TRANSFER_BIGQUERY_DATASET`
-- `GOOGLE_ADS_TRANSFER_TABLE_PATTERN`
-- `GOOGLE_ADS_TRANSFER_LOOKBACK_DAYS`
-- `GA4_LINKED_GOOGLE_ADS_CUSTOMER_IDS`
 - `RETENTION_SCHEDULE`
-- `ATTRIBUTION_QA_RETENTION_SCHEDULE`
 - `DATA_QUALITY_SCHEDULE`
 - `IDENTITY_GRAPH_BACKFILL_SCHEDULE`
 - `ORDER_ATTRIBUTION_MATERIALIZATION_SCHEDULE`
+- `MMM_BASELINE_SCHEDULE`
+- `MMM_BASELINE_TIME_ZONE`
+- `MMM_BASELINE_SCHEDULER_PAUSED`
+- `MMM_BASELINE_LOOKBACK_DAYS`
+- `MMM_BASELINE_LAG_DAYS`
+- `MMM_BASELINE_SUBMITTED_BY`
+- `MMM_BASELINE_FREEZE_ID`
+- `MMM_BAYESIAN_SCHEDULE`
+- `MMM_BAYESIAN_TIME_ZONE`
+- `MMM_BAYESIAN_SCHEDULER_PAUSED`
+- `MMM_BAYESIAN_LOOKBACK_DAYS`
+- `MMM_BAYESIAN_LAG_DAYS`
+- `MMM_BAYESIAN_SUBMITTED_BY`
+- `MMM_BAYESIAN_ATTRIBUTION_MODEL`
+- `MMM_BAYESIAN_FREEZE_ID`
+- `MMM_BAYESIAN_JOB_CPU`
+- `MMM_BAYESIAN_JOB_MEMORY`
+- `MMM_BAYESIAN_JOB_TIMEOUT_SECONDS`
+- `MMM_BAYESIAN_JOB_MAX_RETRIES`
 - `IDENTITY_GRAPH_BACKFILL_REQUESTED_BY`
 - `IDENTITY_GRAPH_BACKFILL_LOOKBACK_DAYS`
 - `IDENTITY_GRAPH_BACKFILL_LAG_HOURS`
@@ -199,32 +160,53 @@ The checked-in env files are valid shell files. Replace the placeholder project 
 - `SESSION_ATTRIBUTION_RETENTION_DAYS`
 - `SESSION_ATTRIBUTION_RETENTION_BATCH_SIZE`
 - `SESSION_ATTRIBUTION_RETENTION_MAX_BATCHES`
-- `ATTRIBUTION_QA_RETENTION_DAYS`
-- `ATTRIBUTION_QA_RETENTION_BATCH_SIZE`
-- `ATTRIBUTION_QA_RETENTION_MAX_BATCHES`
-
-Meta deployment blockers:
-
-- `MIGRATOR_DATABASE_URL` must exist in Secret Manager before deploy because the migrator job runs before service rollout by default.
-- `META_ADS_APP_SECRET` and `META_ADS_ENCRYPTION_KEY` must exist in Secret Manager before `bootstrap-iam.sh` or `deploy.sh` can grant/bind them. `META_ADS_METADATA_ACCESS_TOKEN_SECRET_NAME` is optional; leave it empty to use encrypted Meta connection tokens from application storage.
-- `META_ADS_APP_ID`, `META_ADS_AD_ACCOUNT_ID`, `META_ADS_APP_SCOPES`, and `META_ADS_API_VERSION` must be populated in the environment file before enabling Meta sync or metadata schedulers.
-- `CLOUD_SQL_CONNECTION_NAME` must point at the environment Cloud SQL instance; API, worker, migrator, Meta sync, metadata refresh, and campaign metadata backfill workloads all attach it for the metadata cache table.
 
 Run these commands from the repo root on Node 22 before deploying:
 
-1. Provision Cloud SQL and private networking from `infra/cloud-sql/`.
-2. Run `infra/cloud-run/bootstrap-iam.sh ENVIRONMENT` to create service accounts and grant IAM roles.
-3. Create the environment secrets in Secret Manager.
-4. Populate `infra/cloud-run/environments/dev.env`, `staging.env`, and `production.env`.
+1. Provision deterministic GCP infrastructure from `infra/terraform/gcp-pipeline/`.
+2. Populate the Secret Manager secret versions created by Terraform.
+3. Run `db/bootstrap/001_roles.sql` once as a database admin for a new database.
+4. Populate `infra/cloud-run/environments/dev.env`, `staging.env`, and `production.env` with the Terraform outputs.
 5. Deploy with `infra/cloud-run/deploy.sh ENVIRONMENT`.
 6. Apply monitoring with `infra/monitoring/apply.sh ENVIRONMENT`.
 7. Validate the scheduled jobs and schedulers with `docs/runbooks/cloud-run-pipelines.md`.
+
+`infra/cloud-run/bootstrap-iam.sh ENVIRONMENT` remains available for legacy environments that have not adopted Terraform yet. New environments should prefer Terraform so Cloud SQL, IAM, secrets, Cloud Run services/jobs, and schedulers are all reviewed as infrastructure-as-code.
 
 This sequence validates the compiled backend entrypoints, the migration check, the GA4-critical test suite, and the Docker packaging path that Cloud Run consumes.
 
 For one-off environment deploys, run `infra/cloud-run/deploy.sh dev`, `infra/cloud-run/deploy.sh staging`, or `infra/cloud-run/deploy.sh production`.
 
 `infra/cloud-run/deploy.sh` now deploys the migrator job first, runs schema migration before any service rollout, then deploys the API, worker, dashboard, jobs, and schedulers. If `DEPLOY_METADATA_FILE` is set, the script also records the previous and newly deployed Cloud Run revisions for the API, worker, and dashboard so rollback can route traffic back to the prior revision quickly.
+
+`MMM_BASELINE_FREEZE_ID` is intentionally empty in checked-in environment files. Populate it with the approved `mmm_baseline_calibration_freezes.id` promoted for the target calibration window and attribution model before deploying the baseline MMM scheduler or manually executing the baseline Cloud Run Job. The deployment script validates this value before any Cloud Run changes; a config-only check is:
+
+```sh
+VALIDATE_DEPLOY_CONFIG_ONLY=true \
+infra/cloud-run/deploy.sh <environment>
+```
+
+The command-level dry-run check is:
+
+```sh
+DATABASE_URL=postgres://placeholder \
+MMM_BASELINE_FREEZE_ID=<approved-freeze-id> \
+MMM_BASELINE_ATTRIBUTION_MODEL=last_touch \
+MMM_BASELINE_LOOKBACK_DAYS=90 \
+npm run mmm:train-baseline -- --validate-config
+```
+
+Promote a production baseline freeze only after staging has generated or consumed the same approved freeze successfully. Operators should record the selected freeze id, calibration window, attribution model, approver, and evidence hash in the release notes before unpausing or deploying the production baseline scheduler.
+
+`MMM_BAYESIAN_FREEZE_ID` is intentionally empty in checked-in environment files. Populate it only after approving a freeze for the target calibration window and attribution model; that is the release gate for the Bayesian scheduler and manual Cloud Run execution. The dry-run wiring check is:
+
+```sh
+DATABASE_URL=postgres://placeholder \
+MMM_BAYESIAN_FREEZE_ID=<approved-freeze-id> \
+MMM_BAYESIAN_ATTRIBUTION_MODEL=last_touch \
+MMM_BAYESIAN_LOOKBACK_DAYS=90 \
+npm run mmm:train-bayesian -- --validate-config
+```
 
 For staged promotion, use `infra/cloud-run/promote.sh <dev|staging|production>`. The promotion script:
 
@@ -236,7 +218,7 @@ For staged promotion, use `infra/cloud-run/promote.sh <dev|staging|production>`.
 
 - `SKIP_BUILDS=true`: reuse an already-pushed image tag instead of building locally
 - `SHORT_SHA=<tag>` or `IMAGE_TAG=<tag>`: force the image tag that `deploy.sh` references
-- `RUN_MIGRATIONS_ON_DEPLOY=true`: execute the migration job after the job definition is deployed and before API, worker, dashboard, and sync jobs are rolled out
+- `RUN_MIGRATIONS_ON_DEPLOY=true`: execute the migration job after deployment
 - `APPLY_MONITORING_ON_DEPLOY=true`: apply the monitoring assets in `infra/monitoring/`
 
 - `roas-radar-deployer-dev@<project>.iam.gserviceaccount.com` for dev
@@ -252,19 +234,6 @@ The deploy contract for GA4 is:
 5. Keep the Cloud Run Job retry count at `0`; the application owns hour-level retry and dead-letter behavior.
 
 Use `cloudbuild.release.yaml` for the full staged promotion pipeline. Its defaults promote through production, run migrations, apply monitoring, and require a successful staging rollback drill before production deployment continues. Use substitutions to stop at staging or disable the drill when needed.
-
-## Confidence Scoring Release
-
-Confidence scoring rolls out through the same expand/migrate/contract posture as the rest of the Cloud Run pipeline:
-
-1. Expand: deploy and execute `roas-radar-migrate` before traffic moves. Migration `0046_add_order_attribution_confidence_metadata.sql` adds nullable confidence lookup columns, defaults for future writes, and `NOT VALID` constraints without historical backfill, validation, `NOT NULL`, or large index creation.
-2. Migrate: deploy the API, worker, dashboard, and jobs from the same image tag. The deployed services write confidence metadata while legacy fields and attribution snapshots remain populated for old revisions.
-3. Backfill: run `npm run attribution:backfill-confidence -- --dry-run --batch-size 1000`, then the write-enabled pass. Resume with `--resume-after-order-row-id <cursor>` if interrupted.
-4. Index: run `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/operations/0046_add_order_attribution_confidence_indexes.sql` so Cloud SQL builds the large indexes concurrently outside the transactional migration runner.
-5. Compatibility window: keep the deploy metadata file generated by `DEPLOY_METADATA_FILE` and do not run rollback SQL. The previous Cloud Run revisions can be restored with `rollback.sh` because the expanded schema is backward-compatible.
-6. Contract: after backfill completion, smoke tests, dashboard verification, and at least one monitoring window are clean, run `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/operations/0046_contract_order_attribution_confidence_metadata.sql` to validate constraints and apply `NOT NULL`. Removing legacy fields requires a separate migration and release note.
-
-The production smoke helper now validates `/api/reporting/orders` by default. It confirms rows expose `confidenceScore`, `attributionSource`, `matchingMethod`, and `lastAttributionRunAt`, and that confidence scores are either null or in the `0..1` range. Set `SMOKE_TEST_VALIDATE_CONFIDENCE=false` only for emergency diagnosis; do not use that override for release sign-off.
 
 ## Scheduled Pipelines
 
@@ -288,15 +257,7 @@ For Meta order-value specifically:
 - scheduler retries are disabled at the Cloud Scheduler layer (`META_ADS_SCHEDULER_MAX_RETRY_ATTEMPTS="0"`) to avoid duplicate invocations; the Cloud Run Job owns the single retry budget via `META_ADS_JOB_MAX_RETRIES`.
 - the Meta order-value job receives only `DATABASE_URL`, `META_ADS_APP_SECRET`, and `META_ADS_ENCRYPTION_KEY` from Secret Manager, while access tokens remain encrypted in application storage instead of being copied into environment files.
 
-For Meta deterministic view/impression ingestion specifically:
-
-- `staging.env` and `production.env` keep `META_ADS_DETERMINISTIC_SCHEDULER_PAUSED="false"` so scheduled ingestion runs after deploy.
-- `dev.env` keeps the deterministic scheduler paused by default.
-- the deterministic job receives only `DATABASE_URL`, `META_ADS_APP_SECRET`, and `META_ADS_ENCRYPTION_KEY` from Secret Manager.
-- initial backfill breadth is controlled by `META_ADS_DETERMINISTIC_SYNC_INITIAL_LOOKBACK_DAYS`; routine catch-up is controlled by `META_ADS_DETERMINISTIC_SYNC_LOOKBACK_DAYS`.
-- use `docs/runbooks/meta-deterministic-ingestion.md` for restart, pause, and backfill procedures.
-
-Use `sh infra/cloud-run/scheduler.sh <environment> meta-order-value <status|pause|resume>` for the order-value operational toggle without redeploying. Use `sh infra/cloud-run/scheduler.sh <environment> meta-deterministic <status|pause|resume>` for deterministic view/impression ingestion.
+Use `sh infra/cloud-run/scheduler.sh <environment> meta-order-value <status|pause|resume>` for the order-value operational toggle without redeploying.
 
 Check that the job description still shows command `npm`, args `run,ga4:ingest:start`, and `maxRetries: 0`.
 

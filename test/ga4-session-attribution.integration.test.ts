@@ -32,6 +32,7 @@ async function resetGa4Fixtures(): Promise<void> {
 	const { pool } = await import("../src/db/pool.js");
 	await pool.query(`
     TRUNCATE TABLE
+      ga4_fallback_candidates,
       ga4_session_attribution,
       ga4_bigquery_ingestion_state
     RESTART IDENTITY CASCADE
@@ -130,6 +131,9 @@ test("GA4 session attribution ingestion upserts normalized rows idempotently and
 						ga4_user_key: "pseudo-2",
 						ga4_client_id: "pseudo-2",
 						ga4_session_id: "2002",
+						transaction_id: "shopify-order-2002",
+						email_hash:
+							"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 						session_started_at: "2026-04-27T11:03:00.000Z",
 						last_event_at: "2026-04-27T11:22:00.000Z",
 						source: "email",
@@ -217,6 +221,40 @@ test("GA4 session attribution ingestion upserts normalized rows idempotently and
 	assert.equal(
 		await getGa4SessionAttributionWatermark(pool),
 		"2026-04-27T11:00:00.000Z",
+	);
+
+	const [{ lookupGa4FallbackCandidates }] = await Promise.all([
+		import("../src/modules/attribution/ga4-fallback-candidates.js"),
+	]);
+	const fallbackCandidates = await lookupGa4FallbackCandidates(
+		{
+			orderOccurredAt: "2026-04-27T12:00:00.000Z",
+			emailHash:
+				"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			transactionId: "shopify-order-2002",
+		},
+		pool,
+	);
+	assert.deepEqual(
+		fallbackCandidates.map((candidate) => ({
+			ga4SessionId: candidate.ga4SessionId,
+			transactionId: candidate.transactionId,
+			emailHash: candidate.emailHash,
+			source: candidate.source,
+			medium: candidate.medium,
+			sourceTableType: candidate.sourceTableType,
+		})),
+		[
+			{
+				ga4SessionId: "2002",
+				transactionId: "shopify-order-2002",
+				emailHash:
+					"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				source: "email",
+				medium: "newsletter",
+				sourceTableType: "events",
+			},
+		],
 	);
 
 	const secondRun = await ingestGa4SessionAttribution({

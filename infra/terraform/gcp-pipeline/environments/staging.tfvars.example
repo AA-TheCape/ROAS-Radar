@@ -1,0 +1,32 @@
+project_id             = "roas-radar-staging"
+environment            = "staging"
+region                 = "us-central1"
+api_allowed_origins    = "https://thecapemarine.com,https://www.thecapemarine.com,https://capehatterasmarine.myshopify.com,https://roas-radar.thecapemarine.com"
+shopify_app_base_url   = "https://roas-radar.api.thecapemarine.com"
+dashboard_api_base_url = "https://roas-radar.api.thecapemarine.com"
+mmm_baseline_freeze_id = ""
+mmm_bayesian_freeze_id = ""
+
+database_availability_type = "ZONAL"
+database_tier              = "db-custom-2-7680"
+database_disk_size_gb      = 100
+
+service_config = {
+  api_min_instances             = 0
+  api_max_instances             = 3
+  api_concurrency               = 16
+  worker_min_instances          = 1
+  worker_max_instances          = 1
+  worker_concurrency            = 2
+  dashboard_min_instances       = 0
+  dashboard_max_instances       = 2
+  database_pool_max             = 5
+  worker_database_pool_max      = 2
+  ads_sync_database_pool_max    = 2
+}
+
+paused_schedulers = [
+  "meta_ads_metadata",
+  "google_ads_metadata",
+  "mmm_bayesian",
+]

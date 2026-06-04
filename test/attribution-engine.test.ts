@@ -116,10 +116,10 @@ test('clicks_only excludes view-only candidates even when they are newer', () =>
     result.creditsByModel.clicks_only.map((credit) => credit.revenueCredit),
     ['100.00', '0.00']
   );
-  assert.equal(result.summariesByModel.clicks_only.lookbackRuleApplied, '28d_click');
+  assert.equal(result.summariesByModel.clicks_only.lookbackRuleApplied, '30d_click');
 });
 
-test('engine keeps 28-day clicks while excluding views outside the 7-day window', () => {
+test('engine keeps 30-day clicks while excluding views outside the 7-day window', () => {
   const result = execute([
     buildTouchpoint('session-click', '2026-04-03T00:00:00.000Z'),
     buildTouchpoint('session-view-old', '2026-04-21T00:00:00.000Z', {
@@ -134,7 +134,7 @@ test('engine keeps 28-day clicks while excluding views outside the 7-day window'
     ['100.00']
   );
   assert.equal(result.summariesByModel.first_touch.touchpointCountConsidered, 1);
-  assert.equal(result.summariesByModel.first_touch.lookbackRuleApplied, '28d_click');
+  assert.equal(result.summariesByModel.first_touch.lookbackRuleApplied, '30d_click');
   assert.deepEqual(
     result.creditsByModel.linear.map((credit) => credit.revenueCredit),
     ['100.00']

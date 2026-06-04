@@ -102,6 +102,23 @@ type IdentityEdgeRow = {
 	edge_updated_at: Date;
 };
 
+type IdentityMergeAuditRow = {
+	id: string;
+	winner_journey_id: string;
+	loser_journey_id: string;
+	merge_reason_code: string;
+	evidence_source: string;
+	source_table: string | null;
+	source_record_id: string | null;
+	source_timestamp: Date;
+	winner_score: unknown;
+	loser_score: unknown;
+	candidate_scores: unknown;
+	rehomed_nodes: number;
+	quarantined_nodes: number;
+	created_at: Date;
+};
+
 type JourneySessionRow = {
 	session_id: string;
 	session_started_at: Date;
@@ -218,6 +235,29 @@ function mapEdgeRow(row: IdentityEdgeRow) {
 		lastObservedAt: row.last_observed_at.toISOString(),
 		createdAt: row.edge_created_at.toISOString(),
 		updatedAt: row.edge_updated_at.toISOString(),
+	};
+}
+
+function mapMergeAuditRow(row: IdentityMergeAuditRow, journeyId: string) {
+	return {
+		auditId: row.id,
+		role:
+			row.winner_journey_id === journeyId
+				? ("winner" as const)
+				: ("loser" as const),
+		winnerJourneyId: row.winner_journey_id,
+		loserJourneyId: row.loser_journey_id,
+		mergeReasonCode: row.merge_reason_code,
+		evidenceSource: row.evidence_source,
+		sourceTable: row.source_table,
+		sourceRecordId: row.source_record_id,
+		sourceTimestamp: row.source_timestamp.toISOString(),
+		winnerScore: row.winner_score,
+		loserScore: row.loser_score,
+		candidateScores: row.candidate_scores,
+		rehomedNodes: row.rehomed_nodes,
+		quarantinedNodes: row.quarantined_nodes,
+		createdAt: row.created_at.toISOString(),
 	};
 }
 
@@ -382,6 +422,37 @@ async function fetchJourneyEdges(
 	return result.rows;
 }
 
+async function fetchJourneyMergeAudits(
+	journeyId: string,
+): Promise<IdentityMergeAuditRow[]> {
+	const result = await query<IdentityMergeAuditRow>(
+		`
+      SELECT
+        id::text AS id,
+        winner_journey_id::text AS winner_journey_id,
+        loser_journey_id::text AS loser_journey_id,
+        merge_reason_code,
+        evidence_source,
+        source_table,
+        source_record_id,
+        source_timestamp,
+        winner_score,
+        loser_score,
+        candidate_scores,
+        rehomed_nodes,
+        quarantined_nodes,
+        created_at
+      FROM identity_journey_merge_audits
+      WHERE winner_journey_id = $1::uuid
+         OR loser_journey_id = $1::uuid
+      ORDER BY created_at ASC, id ASC
+    `,
+		[journeyId],
+	);
+
+	return result.rows;
+}
+
 async function fetchJourneySessions(
 	journeyId: string,
 ): Promise<JourneySessionRow[]> {
@@ -470,8 +541,9 @@ async function buildJourneyResponse(journeyId: string) {
 		);
 	}
 
-	const [edges, sessions, orders] = await Promise.all([
+	const [edges, mergeAudits, sessions, orders] = await Promise.all([
 		fetchJourneyEdges(journeyId),
+		fetchJourneyMergeAudits(journeyId),
 		fetchJourneySessions(journeyId),
 		fetchJourneyOrders(journeyId),
 	]);
@@ -483,6 +555,10 @@ async function buildJourneyResponse(journeyId: string) {
 			activeCount: edges.filter((edge) => edge.is_active).length,
 			ambiguousCount: edges.filter((edge) => edge.is_ambiguous).length,
 			nodes: edges.map(mapEdgeRow),
+		},
+		lineage: {
+			mergeCount: mergeAudits.length,
+			merges: mergeAudits.map((row) => mapMergeAuditRow(row, journeyId)),
 		},
 		timeline: {
 			sessions: sessions.map(mapSessionRow),

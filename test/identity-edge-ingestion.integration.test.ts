@@ -61,16 +61,17 @@ async function captureStructuredLogs<T>(
 async function fetchJourneyState(journeyId: string) {
 	const { pool } = await import("../src/db/pool.js");
 
-	const [journeyResult, edgeResult, ingestionResult] = await Promise.all([
-		pool.query<{
-			id: string;
-			status: string;
-			authoritative_shopify_customer_id: string | null;
-			primary_email_hash: string | null;
-			primary_phone_hash: string | null;
-			merged_into_journey_id: string | null;
-		}>(
-			`
+	const [journeyResult, edgeResult, ingestionResult, mergeAuditResult] =
+		await Promise.all([
+			pool.query<{
+				id: string;
+				status: string;
+				authoritative_shopify_customer_id: string | null;
+				primary_email_hash: string | null;
+				primary_phone_hash: string | null;
+				merged_into_journey_id: string | null;
+			}>(
+				`
         SELECT
           id::text AS id,
           status,
@@ -81,17 +82,17 @@ async function fetchJourneyState(journeyId: string) {
         FROM identity_journeys
         WHERE id = $1::uuid
       `,
-			[journeyId],
-		),
-		pool.query<{
-			node_type: string;
-			node_key: string;
-			edge_type: string;
-			is_active: boolean;
-			conflict_code: string | null;
-			is_ambiguous: boolean;
-		}>(
-			`
+				[journeyId],
+			),
+			pool.query<{
+				node_type: string;
+				node_key: string;
+				edge_type: string;
+				is_active: boolean;
+				conflict_code: string | null;
+				is_ambiguous: boolean;
+			}>(
+				`
         SELECT
           n.node_type,
           n.node_key,
@@ -104,16 +105,16 @@ async function fetchJourneyState(journeyId: string) {
         WHERE e.journey_id = $1::uuid
         ORDER BY n.node_type ASC, e.created_at ASC
       `,
-			[journeyId],
-		),
-		pool.query<{
-			idempotency_key: string;
-			status: string;
-			outcome_reason: string | null;
-			rehomed_nodes: number;
-			quarantined_nodes: number;
-		}>(
-			`
+				[journeyId],
+			),
+			pool.query<{
+				idempotency_key: string;
+				status: string;
+				outcome_reason: string | null;
+				rehomed_nodes: number;
+				quarantined_nodes: number;
+			}>(
+				`
         SELECT
           idempotency_key,
           status,
@@ -124,14 +125,58 @@ async function fetchJourneyState(journeyId: string) {
         WHERE journey_id = $1::uuid
         ORDER BY id ASC
       `,
-			[journeyId],
-		),
-	]);
+				[journeyId],
+			),
+			pool.query<{
+				winner_journey_id: string;
+				loser_journey_id: string;
+				merge_reason_code: string;
+				winner_score: {
+					journeyId: string;
+					maxPrecedenceRank: number;
+					recencyWeight: number;
+					deterministicScore: number;
+				} | null;
+				loser_score: {
+					journeyId: string;
+					maxPrecedenceRank: number;
+					recencyWeight: number;
+					deterministicScore: number;
+				} | null;
+				candidate_scores: Array<{
+					journeyId: string;
+					maxPrecedenceRank: number;
+					recencyWeight: number;
+					deterministicScore: number;
+					explanation: string;
+				}>;
+				rehomed_nodes: number;
+				quarantined_nodes: number;
+			}>(
+				`
+        SELECT
+          winner_journey_id::text AS winner_journey_id,
+          loser_journey_id::text AS loser_journey_id,
+          merge_reason_code,
+          winner_score,
+          loser_score,
+          candidate_scores,
+          rehomed_nodes,
+          quarantined_nodes
+        FROM identity_journey_merge_audits
+        WHERE winner_journey_id = $1::uuid
+           OR loser_journey_id = $1::uuid
+        ORDER BY created_at ASC, id ASC
+      `,
+				[journeyId],
+			),
+		]);
 
 	return {
 		journey: journeyResult.rows[0] ?? null,
 		edges: edgeResult.rows,
 		ingestions: ingestionResult.rows,
+		mergeAudits: mergeAuditResult.rows,
 	};
 }
 
@@ -618,6 +663,25 @@ test("non-authoritative candidates resolve deterministically by precedence and p
 	);
 	assert.equal(mergeRun?.outcome_reason, "non_authoritative_precedence_winner");
 	assert.equal(mergeRun?.rehomed_nodes, 1);
+
+	const mergeAudit = winnerState.mergeAudits.find(
+		(audit) => audit.loser_journey_id === checkoutJourney.journeyId,
+	);
+	assert.equal(
+		mergeAudit?.merge_reason_code,
+		"non_authoritative_precedence_winner",
+	);
+	assert.equal(mergeAudit?.winner_journey_id, emailJourney.journeyId);
+	assert.equal(mergeAudit?.winner_score?.journeyId, emailJourney.journeyId);
+	assert.equal(mergeAudit?.winner_score?.maxPrecedenceRank, 70);
+	assert.equal(mergeAudit?.loser_score?.journeyId, checkoutJourney.journeyId);
+	assert.equal(mergeAudit?.loser_score?.maxPrecedenceRank, 40);
+	assert.equal(mergeAudit?.rehomed_nodes, 1);
+	assert.ok(
+		mergeAudit?.candidate_scores.some((score) =>
+			score.explanation.includes("recencyWeight="),
+		),
+	);
 });
 
 test("shared phone numbers across authoritative Shopify customers are quarantined instead of merged", async () => {

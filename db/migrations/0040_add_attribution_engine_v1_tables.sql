@@ -211,7 +211,7 @@ CREATE TABLE attribution_model_summaries (
   CHECK (eligible_click_count >= 0),
   CHECK (eligible_view_count >= 0),
   CHECK (normalization_failures_count >= 0),
-  CHECK (lookback_rule_applied IN ('28d_click', '7d_view', 'mixed')),
+  CHECK (lookback_rule_applied IN ('30d_click', '7d_view', 'mixed')),
   CHECK (winner_selection_rule IN (
     'first_touch',
     'last_touch',

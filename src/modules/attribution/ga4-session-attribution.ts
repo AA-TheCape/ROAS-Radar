@@ -14,6 +14,7 @@ import {
 	type Ga4BigQueryIngestionConfig,
 	assertGa4BigQueryIngestionConfig,
 } from "./ga4-bigquery-config.js";
+import { upsertGa4FallbackCandidates } from "./ga4-fallback-candidates.js";
 
 export type Ga4BigQueryExecutor = {
 	runQuery(input: {
@@ -70,6 +71,9 @@ type Ga4RawExtractionRow = Record<string, unknown> & {
 	term?: unknown;
 	click_id_type?: unknown;
 	click_id_value?: unknown;
+	transaction_id?: unknown;
+	email_hash?: unknown;
+	customer_identity_id?: unknown;
 	account_id?: unknown;
 	account_name?: unknown;
 	channel_type?: unknown;
@@ -98,6 +102,9 @@ type Ga4ExtractedRow = {
 	term: string | null;
 	clickIdType: string | null;
 	clickIdValue: string | null;
+	transactionId?: string | null;
+	emailHash?: string | null;
+	customerIdentityId?: string | null;
 	accountId: string | null;
 	accountName: string | null;
 	channelType: string | null;
@@ -333,38 +340,274 @@ export function buildGa4SessionAttributionHourlyQuery(
 		params,
 		query: `
 WITH ga4_events AS (
-  SELECT *
-  FROM ${config.ga4.eventsTableExpression}
-  WHERE _TABLE_SUFFIX BETWEEN @start_date_suffix AND @end_date_suffix
-  UNION ALL
-  SELECT *
-  FROM ${config.ga4.intradayTableExpression}
-  WHERE _TABLE_SUFFIX BETWEEN @start_date_suffix AND @end_date_suffix
-),
-ads_linked_campaigns AS (
-  SELECT *
-  FROM ${config.googleAdsTransfer.tableExpression}
-  WHERE TRUE
-),
-event_params_expanded AS (
   SELECT
     e.*,
-    ep.key,
-    ep.value
-  FROM ga4_events e
-  LEFT JOIN UNNEST(e.event_params) AS ep
-),
-click_id_projection AS (
+    'events' AS source_table_type
+  FROM ${config.ga4.eventsTableExpression}
+  WHERE _TABLE_SUFFIX BETWEEN @start_date_suffix AND @end_date_suffix
+    AND TIMESTAMP_MICROS(event_timestamp) >= TIMESTAMP(@window_start)
+    AND TIMESTAMP_MICROS(event_timestamp) < TIMESTAMP(@window_end)
+  UNION ALL
   SELECT
-    MAX(CASE WHEN LOWER(ep.key) = 'gclid' THEN ep.value.string_value END) AS gclid,
-    MAX(CASE WHEN LOWER(ep.key) = 'dclid' THEN ep.value.string_value END) AS dclid
-  FROM event_params_expanded ep
+    e.*,
+    'intraday' AS source_table_type
+  FROM ${config.ga4.intradayTableExpression}
+  WHERE _TABLE_SUFFIX BETWEEN @start_date_suffix AND @end_date_suffix
+    AND TIMESTAMP_MICROS(event_timestamp) >= TIMESTAMP(@window_start)
+    AND TIMESTAMP_MICROS(event_timestamp) < TIMESTAMP(@window_end)
+),
+ads_linked_campaigns AS (
+  SELECT
+    CAST(customer_id AS STRING) AS customer_id,
+    ANY_VALUE(customer_descriptive_name) AS customer_descriptive_name,
+    CAST(campaign_id AS STRING) AS campaign_id,
+    ANY_VALUE(campaign_name) AS campaign_name,
+    ANY_VALUE(campaign_advertising_channel_type) AS advertising_channel_type,
+    ANY_VALUE(campaign_advertising_channel_sub_type) AS advertising_channel_sub_type
+  FROM ${config.googleAdsTransfer.tableExpression}
+  WHERE (
+      @google_ads_customer_id_count = 0
+      OR CAST(customer_id AS STRING) IN UNNEST(@google_ads_customer_ids)
+    )
+    AND DATE(_DATA_DATE) >= DATE_SUB(DATE(@window_start), INTERVAL @ads_metadata_lookback_days DAY)
+  GROUP BY customer_id, campaign_id
+),
+event_projection AS (
+  SELECT
+    e.user_pseudo_id,
+    NULLIF(TRIM(e.user_id), '') AS user_id,
+    CAST((
+      SELECT value.int_value
+      FROM UNNEST(e.event_params)
+      WHERE key = 'ga_session_id'
+      LIMIT 1
+    ) AS STRING) AS ga4_session_id,
+    TIMESTAMP_MICROS(e.event_timestamp) AS event_at,
+    e.event_timestamp,
+    e.event_params,
+    e.source_table_type,
+    NULLIF(TRIM(e.ecommerce.transaction_id), '') AS ecommerce_transaction_id,
+    NULLIF(TRIM((
+      SELECT value.string_value
+      FROM UNNEST(e.event_params)
+      WHERE LOWER(key) IN ('transaction_id', 'order_id')
+      LIMIT 1
+    )), '') AS param_transaction_id,
+    LOWER(NULLIF(TRIM((
+      SELECT value.string_value
+      FROM UNNEST(e.event_params)
+      WHERE LOWER(key) IN ('email_sha256', 'email_hash', 'hashed_email')
+      LIMIT 1
+    )), '')) AS email_hash,
+    NULLIF(TRIM((
+      SELECT value.string_value
+      FROM UNNEST(e.event_params)
+      WHERE LOWER(key) IN ('customer_identity_id', 'roas_radar_customer_identity_id')
+      LIMIT 1
+    )), '') AS customer_identity_id,
+    LOWER(NULLIF(TRIM(COALESCE(
+      e.collected_traffic_source.manual_source,
+      (
+        SELECT value.string_value
+        FROM UNNEST(e.event_params)
+        WHERE LOWER(key) IN ('source', 'utm_source')
+        LIMIT 1
+      )
+    )), '')) AS source,
+    LOWER(NULLIF(TRIM(COALESCE(
+      e.collected_traffic_source.manual_medium,
+      (
+        SELECT value.string_value
+        FROM UNNEST(e.event_params)
+        WHERE LOWER(key) IN ('medium', 'utm_medium')
+        LIMIT 1
+      )
+    )), '')) AS medium,
+    NULLIF(TRIM(COALESCE(
+      e.collected_traffic_source.manual_campaign_id,
+      e.session_traffic_source_last_click.google_ads_campaign.campaign_id,
+      (
+        SELECT value.string_value
+        FROM UNNEST(e.event_params)
+        WHERE LOWER(key) IN ('campaign_id', 'utm_id')
+        LIMIT 1
+      )
+    )), '') AS campaign_id,
+    NULLIF(TRIM(COALESCE(
+      e.collected_traffic_source.manual_campaign_name,
+      e.session_traffic_source_last_click.google_ads_campaign.campaign_name,
+      (
+        SELECT value.string_value
+        FROM UNNEST(e.event_params)
+        WHERE LOWER(key) IN ('campaign', 'utm_campaign')
+        LIMIT 1
+      )
+    )), '') AS campaign,
+    NULLIF(TRIM(COALESCE(
+      e.collected_traffic_source.manual_content,
+      (
+        SELECT value.string_value
+        FROM UNNEST(e.event_params)
+        WHERE LOWER(key) IN ('content', 'utm_content')
+        LIMIT 1
+      )
+    )), '') AS content,
+    NULLIF(TRIM(COALESCE(
+      e.collected_traffic_source.manual_term,
+      (
+        SELECT value.string_value
+        FROM UNNEST(e.event_params)
+        WHERE LOWER(key) IN ('term', 'utm_term')
+        LIMIT 1
+      )
+    )), '') AS term,
+    NULLIF(TRIM(COALESCE(
+      e.collected_traffic_source.gclid,
+      (
+        SELECT value.string_value
+        FROM UNNEST(e.event_params)
+        WHERE LOWER(key) = 'gclid'
+        LIMIT 1
+      )
+    )), '') AS gclid,
+    NULLIF(TRIM(COALESCE(
+      e.collected_traffic_source.dclid,
+      (
+        SELECT value.string_value
+        FROM UNNEST(e.event_params)
+        WHERE LOWER(key) = 'dclid'
+        LIMIT 1
+      )
+    )), '') AS dclid,
+    NULLIF(TRIM((
+      SELECT value.string_value
+      FROM UNNEST(e.event_params)
+      WHERE LOWER(key) = 'gbraid'
+      LIMIT 1
+    )), '') AS gbraid,
+    NULLIF(TRIM((
+      SELECT value.string_value
+      FROM UNNEST(e.event_params)
+      WHERE LOWER(key) = 'wbraid'
+      LIMIT 1
+    )), '') AS wbraid,
+    NULLIF(TRIM((
+      SELECT value.string_value
+      FROM UNNEST(e.event_params)
+      WHERE LOWER(key) = 'fbclid'
+      LIMIT 1
+    )), '') AS fbclid,
+    NULLIF(TRIM((
+      SELECT value.string_value
+      FROM UNNEST(e.event_params)
+      WHERE LOWER(key) = 'ttclid'
+      LIMIT 1
+    )), '') AS ttclid,
+    NULLIF(TRIM((
+      SELECT value.string_value
+      FROM UNNEST(e.event_params)
+      WHERE LOWER(key) = 'msclkid'
+      LIMIT 1
+    )), '') AS msclkid,
+    NULLIF(TRIM(e.session_traffic_source_last_click.google_ads_campaign.customer_id), '') AS linked_account_id,
+    NULLIF(TRIM(e.session_traffic_source_last_click.google_ads_campaign.account_name), '') AS linked_account_name,
+    NULLIF(TRIM(e.session_traffic_source_last_click.google_ads_campaign.advertising_channel_type), '') AS linked_channel_type,
+    NULLIF(TRIM(e.session_traffic_source_last_click.google_ads_campaign.advertising_channel_sub_type), '') AS linked_channel_subtype
+  FROM ga4_events e
+),
+session_rollup AS (
+  SELECT
+    user_pseudo_id,
+    ga4_session_id,
+    COALESCE(NULLIF(ARRAY_AGG(user_id IGNORE NULLS ORDER BY event_timestamp DESC LIMIT 1)[SAFE_OFFSET(0)], ''), user_pseudo_id) AS ga4_user_key,
+    MIN(event_at) AS session_started_at,
+    MAX(event_at) AS last_event_at,
+    ARRAY_AGG(source IGNORE NULLS ORDER BY event_timestamp DESC LIMIT 1)[SAFE_OFFSET(0)] AS source,
+    ARRAY_AGG(medium IGNORE NULLS ORDER BY event_timestamp DESC LIMIT 1)[SAFE_OFFSET(0)] AS medium,
+    ARRAY_AGG(campaign_id IGNORE NULLS ORDER BY event_timestamp DESC LIMIT 1)[SAFE_OFFSET(0)] AS campaign_id,
+    ARRAY_AGG(campaign IGNORE NULLS ORDER BY event_timestamp DESC LIMIT 1)[SAFE_OFFSET(0)] AS campaign,
+    ARRAY_AGG(content IGNORE NULLS ORDER BY event_timestamp DESC LIMIT 1)[SAFE_OFFSET(0)] AS content,
+    ARRAY_AGG(term IGNORE NULLS ORDER BY event_timestamp DESC LIMIT 1)[SAFE_OFFSET(0)] AS term,
+    ARRAY_AGG(gclid IGNORE NULLS ORDER BY event_timestamp DESC LIMIT 1)[SAFE_OFFSET(0)] AS gclid,
+    ARRAY_AGG(dclid IGNORE NULLS ORDER BY event_timestamp DESC LIMIT 1)[SAFE_OFFSET(0)] AS dclid,
+    ARRAY_AGG(gbraid IGNORE NULLS ORDER BY event_timestamp DESC LIMIT 1)[SAFE_OFFSET(0)] AS gbraid,
+    ARRAY_AGG(wbraid IGNORE NULLS ORDER BY event_timestamp DESC LIMIT 1)[SAFE_OFFSET(0)] AS wbraid,
+    ARRAY_AGG(fbclid IGNORE NULLS ORDER BY event_timestamp DESC LIMIT 1)[SAFE_OFFSET(0)] AS fbclid,
+    ARRAY_AGG(ttclid IGNORE NULLS ORDER BY event_timestamp DESC LIMIT 1)[SAFE_OFFSET(0)] AS ttclid,
+    ARRAY_AGG(msclkid IGNORE NULLS ORDER BY event_timestamp DESC LIMIT 1)[SAFE_OFFSET(0)] AS msclkid,
+    ARRAY_AGG(COALESCE(ecommerce_transaction_id, param_transaction_id) IGNORE NULLS ORDER BY event_timestamp DESC LIMIT 1)[SAFE_OFFSET(0)] AS transaction_id,
+    ARRAY_AGG(email_hash IGNORE NULLS ORDER BY event_timestamp DESC LIMIT 1)[SAFE_OFFSET(0)] AS email_hash,
+    ARRAY_AGG(customer_identity_id IGNORE NULLS ORDER BY event_timestamp DESC LIMIT 1)[SAFE_OFFSET(0)] AS customer_identity_id,
+    ARRAY_AGG(linked_account_id IGNORE NULLS ORDER BY event_timestamp DESC LIMIT 1)[SAFE_OFFSET(0)] AS linked_account_id,
+    ARRAY_AGG(linked_account_name IGNORE NULLS ORDER BY event_timestamp DESC LIMIT 1)[SAFE_OFFSET(0)] AS linked_account_name,
+    ARRAY_AGG(linked_channel_type IGNORE NULLS ORDER BY event_timestamp DESC LIMIT 1)[SAFE_OFFSET(0)] AS linked_channel_type,
+    ARRAY_AGG(linked_channel_subtype IGNORE NULLS ORDER BY event_timestamp DESC LIMIT 1)[SAFE_OFFSET(0)] AS linked_channel_subtype,
+    MIN(source_table_type) AS source_table_type
+  FROM event_projection
+  WHERE user_pseudo_id IS NOT NULL
+    AND ga4_session_id IS NOT NULL
+  GROUP BY user_pseudo_id, ga4_session_id
 )
-SELECT *
-FROM ga4_events e
+SELECT
+  CONCAT(session_rollup.user_pseudo_id, ':', session_rollup.ga4_session_id) AS ga4_session_key,
+  session_rollup.ga4_user_key,
+  session_rollup.user_pseudo_id AS ga4_client_id,
+  session_rollup.ga4_session_id,
+  session_rollup.session_started_at,
+  session_rollup.last_event_at,
+  session_rollup.source,
+  session_rollup.medium,
+  COALESCE(ads_linked_campaigns.campaign_id, session_rollup.campaign_id) AS campaign_id,
+  COALESCE(ads_linked_campaigns.campaign_name, session_rollup.campaign) AS campaign,
+  session_rollup.content,
+  session_rollup.term,
+  CASE
+    WHEN session_rollup.gclid IS NOT NULL THEN 'gclid'
+    WHEN session_rollup.dclid IS NOT NULL THEN 'dclid'
+    WHEN session_rollup.gbraid IS NOT NULL THEN 'gbraid'
+    WHEN session_rollup.wbraid IS NOT NULL THEN 'wbraid'
+    WHEN session_rollup.fbclid IS NOT NULL THEN 'fbclid'
+    WHEN session_rollup.ttclid IS NOT NULL THEN 'ttclid'
+    WHEN session_rollup.msclkid IS NOT NULL THEN 'msclkid'
+    ELSE NULL
+  END AS click_id_type,
+  COALESCE(
+    session_rollup.gclid,
+    session_rollup.dclid,
+    session_rollup.gbraid,
+    session_rollup.wbraid,
+    session_rollup.fbclid,
+    session_rollup.ttclid,
+    session_rollup.msclkid
+  ) AS click_id_value,
+  session_rollup.transaction_id,
+  session_rollup.email_hash,
+  session_rollup.customer_identity_id,
+  COALESCE(ads_linked_campaigns.customer_id, session_rollup.linked_account_id) AS account_id,
+  COALESCE(ads_linked_campaigns.customer_descriptive_name, session_rollup.linked_account_name) AS account_name,
+  COALESCE(ads_linked_campaigns.advertising_channel_type, session_rollup.linked_channel_type) AS channel_type,
+  COALESCE(ads_linked_campaigns.advertising_channel_sub_type, session_rollup.linked_channel_subtype) AS channel_subtype,
+  CASE
+    WHEN ads_linked_campaigns.campaign_id IS NOT NULL THEN 'google_ads_transfer'
+    WHEN session_rollup.campaign_id IS NOT NULL OR session_rollup.campaign IS NOT NULL THEN 'ga4_raw'
+    ELSE 'unresolved'
+  END AS campaign_metadata_source,
+  CASE
+    WHEN ads_linked_campaigns.customer_id IS NOT NULL THEN 'google_ads_transfer'
+    WHEN session_rollup.linked_account_id IS NOT NULL OR session_rollup.linked_account_name IS NOT NULL THEN 'ga4_raw'
+    ELSE 'unresolved'
+  END AS account_metadata_source,
+  CASE
+    WHEN ads_linked_campaigns.advertising_channel_type IS NOT NULL THEN 'google_ads_transfer'
+    WHEN session_rollup.linked_channel_type IS NOT NULL OR session_rollup.linked_channel_subtype IS NOT NULL THEN 'ga4_raw'
+    ELSE 'unresolved'
+  END AS channel_metadata_source,
+  TIMESTAMP(@window_start) AS source_export_hour,
+  '${config.ga4.dataset}' AS source_dataset,
+  session_rollup.source_table_type
+FROM session_rollup
 LEFT JOIN ads_linked_campaigns
-  ON TRUE
-WHERE TRUE
+  ON session_rollup.campaign_id = ads_linked_campaigns.campaign_id
 `.trim(),
 	};
 }
@@ -559,6 +802,15 @@ function normalizeRawExtractionRow(raw: unknown): Ga4ExtractedRow {
 		term: normalizeNullableString(row.term),
 		clickIdType: clickId.clickIdType,
 		clickIdValue: clickId.clickIdValue,
+		...(normalizeNullableString(row.transaction_id)
+			? { transactionId: normalizeNullableString(row.transaction_id) }
+			: {}),
+		...(normalizeNullableString(row.email_hash)
+			? { emailHash: normalizeLowercaseString(row.email_hash) }
+			: {}),
+		...(normalizeNullableString(row.customer_identity_id)
+			? { customerIdentityId: normalizeNullableString(row.customer_identity_id) }
+			: {}),
 		accountId: normalizeNullableString(row.account_id),
 		accountName: normalizeNullableString(row.account_name),
 		channelType: normalizeUppercaseString(row.channel_type),
@@ -577,6 +829,29 @@ function normalizeRawExtractionRow(raw: unknown): Ga4ExtractedRow {
 			normalizeLowercaseString(row.source_table_type) === "intraday"
 				? "intraday"
 				: "events",
+	};
+}
+
+function mapNormalizedRowForFallbackCandidate(row: Ga4ExtractedRow) {
+	return {
+		occurredAt: row.lastEventAt,
+		ga4UserKey: row.ga4UserKey,
+		ga4ClientId: row.ga4ClientId,
+		ga4SessionId: row.ga4SessionId,
+		transactionId: row.transactionId ?? null,
+		emailHash: row.emailHash ?? null,
+		customerIdentityId: row.customerIdentityId ?? null,
+		source: row.source,
+		medium: row.medium,
+		campaign: row.campaign,
+		content: row.content,
+		term: row.term,
+		clickIdType: row.clickIdType,
+		clickIdValue: row.clickIdValue,
+		sessionHasRequiredFields: Boolean(row.ga4UserKey && row.ga4SessionId),
+		sourceExportHour: row.sourceExportHour,
+		sourceDataset: row.sourceDataset,
+		sourceTableType: row.sourceTableType,
 	};
 }
 
@@ -950,6 +1225,9 @@ async function ingestExplicitHours(
 	const rowsToPersist = hourlyResults
 		.flatMap((result) => result.rows)
 		.map(mapNormalizedRowForPersistence);
+	const fallbackCandidates = hourlyResults
+		.flatMap((result) => result.rows)
+		.map(mapNormalizedRowForFallbackCandidate);
 	const watermarkAfter =
 		explicitHours.length > 0
 			? explicitHours[explicitHours.length - 1]
@@ -959,6 +1237,7 @@ async function ingestExplicitHours(
 		for (const row of rowsToPersist) {
 			await upsertGa4SessionAttributionRow(client, row);
 		}
+		await upsertGa4FallbackCandidates(fallbackCandidates, client);
 		if (input.beforeCommit) {
 			await input.beforeCommit(client);
 		}

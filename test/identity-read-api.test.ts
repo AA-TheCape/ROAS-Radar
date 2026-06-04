@@ -219,6 +219,46 @@ test("internal identity journey lookup returns canonical identity, linked identi
 			};
 		}
 
+		if (/FROM identity_journey_merge_audits/.test(text)) {
+			assert.deepEqual(params, [journeyId]);
+			return {
+				rows: [
+					{
+						id: "1",
+						winner_journey_id: journeyId,
+						loser_journey_id: "33333333-3333-4333-8333-333333333333",
+						merge_reason_code: "non_authoritative_precedence_winner",
+						evidence_source: "tracking_event",
+						source_table: "tracking_events",
+						source_record_id: "event-merge",
+						source_timestamp: new Date("2026-04-25T12:00:00.000Z"),
+						winner_score: {
+							journeyId,
+							maxPrecedenceRank: 70,
+							latestObservedAt: "2026-04-25T12:00:00.000Z",
+							recencyWeight: 1777118400000,
+							deterministicScore: 71777118400000,
+							explanation:
+								"precedence=70; recencyWeight=1777118400000; score=71777118400000",
+						},
+						loser_score: {
+							journeyId: "33333333-3333-4333-8333-333333333333",
+							maxPrecedenceRank: 40,
+							latestObservedAt: "2026-04-24T12:00:00.000Z",
+							recencyWeight: 1777032000000,
+							deterministicScore: 41777032000000,
+							explanation:
+								"precedence=40; recencyWeight=1777032000000; score=41777032000000",
+						},
+						candidate_scores: [],
+						rehomed_nodes: 1,
+						quarantined_nodes: 0,
+						created_at: new Date("2026-04-25T12:01:00.000Z"),
+					},
+				],
+			};
+		}
+
 		if (/FROM customer_journey/.test(text)) {
 			assert.deepEqual(params, [journeyId]);
 			return {
@@ -304,6 +344,13 @@ test("internal identity journey lookup returns canonical identity, linked identi
 		assert.equal(body.journey.primaryIdentifiers.hashedEmail, hashedEmail);
 		assert.equal(body.journey.primaryIdentifiers.phoneHash, phoneHash);
 		assert.equal(body.identifiers.activeCount, 2);
+		assert.equal(body.lineage.mergeCount, 1);
+		assert.equal(body.lineage.merges[0].role, "winner");
+		assert.equal(
+			body.lineage.merges[0].mergeReasonCode,
+			"non_authoritative_precedence_winner",
+		);
+		assert.equal(body.lineage.merges[0].winnerScore.maxPrecedenceRank, 70);
 		assert.equal(body.timeline.sessions.length, 1);
 		assert.equal(body.timeline.orders.length, 1);
 		assert.equal(body.timeline.orders[0].emailHash, hashedEmail);

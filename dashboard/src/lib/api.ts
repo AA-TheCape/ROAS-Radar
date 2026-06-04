@@ -33,6 +33,7 @@ export type AttributionTier =
 export type ReportingFilters = {
   startDate: string;
   endDate: string;
+  sourceOfTruth?: 'deterministic' | 'mmm';
   reportingMode?: ReportingMode;
   attributionTier?: AttributionTier | '';
   attributionModel?:
@@ -196,6 +197,93 @@ export type TimeseriesResponse = {
 	}>;
 };
 
+export type ReportingModelComparisonRow = {
+	bucket: string;
+	dateGrain: 'day' | 'week';
+	sourceOfTruth: 'deterministic' | 'mmm';
+	attributionModel: string;
+	reportingView: 'strict_deterministic' | 'fallback_included' | 'blended_deterministic' | 'mmm_weekly_channel';
+	source: string;
+	medium: string;
+	campaign: string;
+	channel?: string;
+	channelGroup?: string;
+	visits: number;
+	orders: number;
+	revenue: number;
+	spend: number;
+	conversionRate: number;
+	roas: number | null;
+	impressions?: number;
+	clicks?: number;
+	shopifyOrders?: number;
+	shopifyRevenue?: number;
+	mmmContribution?: {
+		mean: number;
+		median: number;
+		credibleInterval80: {
+			lower: number;
+			upper: number;
+		};
+		credibleInterval95: {
+			lower: number;
+			upper: number;
+		};
+	} | null;
+	mmmContributionShare?: {
+		mean: number;
+		median: number;
+		credibleInterval80: {
+			lower: number;
+			upper: number;
+		};
+		credibleInterval95: {
+			lower: number;
+			upper: number;
+		};
+	} | null;
+	posteriorProbabilityPositive?: number | null;
+	tierBreakdown: {
+		strictDeterministicOrders: number;
+		fallbackIncludedOrders: number;
+		blendedDeterministicOrders: number;
+	};
+	provenance: {
+		sourceOfTruth: 'deterministic' | 'mmm';
+		martVersion: string;
+		sourceMartVersion: string;
+		modelRunId: string | null;
+		modelType: string | null;
+		modelVersion: string | null;
+		trainingStartDate: string | null;
+		trainingEndDate: string | null;
+		completedAt: string | null;
+		generatedAt: string | null;
+		dqStatus: string | null;
+		sourceRowCount: number | null;
+		inputSummary: unknown;
+		calibrationReport: unknown;
+		validationReport: unknown;
+	};
+};
+
+export type ReportingModelComparisonResponse = {
+	range: {
+		startDate: string;
+		endDate: string;
+	};
+	dateGrain: 'day' | 'week';
+	sourceOfTruth: 'deterministic' | 'mmm';
+	provenance: {
+		sourceOfTruth: 'deterministic' | 'mmm';
+		martVersion: string;
+		sourceMartVersion: string;
+		modelRunIds: string[];
+		generatedAt: string | null;
+	};
+	rows: ReportingModelComparisonRow[];
+};
+
 export type CampaignLabel = {
 	displayName: string;
 	source: string;
@@ -307,6 +395,309 @@ export type MetaOrderValueQuery = {
   sortDirection?: MetaOrderValueSortDirection;
   limit?: number;
   offset?: number;
+};
+
+export type MmmReadinessStatus = 'ready' | 'partial' | 'not_ready';
+
+export type MmmExcludedDateWindow = {
+  startDate: string;
+  endDate: string;
+  reason: 'no_mmm_mart_rows' | 'no_rows_matching_filters';
+};
+
+export type MmmExportRow = {
+  date: string;
+  martVersion: string;
+  martRowType: 'paid_media' | 'attribution';
+  attributionModel: string;
+  platform: 'meta' | 'google' | 'taxonomy';
+  platformConnectionId: number | null;
+  granularity: string;
+  entityKey: string;
+  accountId: string | null;
+  accountName: string | null;
+  campaignId: string | null;
+  campaignName: string | null;
+  adsetId: string | null;
+  adsetName: string | null;
+  adId: string | null;
+  adName: string | null;
+  creativeId: string | null;
+  creativeName: string | null;
+  source: string;
+  medium: string;
+  campaign: string;
+  content: string;
+  term: string;
+  currency: string | null;
+  spend: number;
+  impressions: number;
+  clicks: number;
+  shopifyOrders: number;
+  shopifyRevenue: number;
+  attributionCreditOrders: number;
+  attributionCreditRevenue: number;
+  newCustomerCreditOrders: number;
+  returningCustomerCreditOrders: number;
+  newCustomerCreditRevenue: number;
+  returningCustomerCreditRevenue: number;
+  matchSourceCoverage: unknown;
+  confidenceLabelCoverage: unknown;
+  spendLastSyncedAt: string | null;
+  shopifyLastIngestedAt: string | null;
+  attributionLastComputedAt: string | null;
+  lastComputedAt: string | null;
+};
+
+export type MmmExportResponse = {
+  schemaVersion: 'mmm_daily_input_mart_v1';
+  range: {
+    startDate: string;
+    endDate: string;
+  };
+  filters: {
+    martRowType: 'paid_media' | 'attribution' | null;
+    attributionModel: string | null;
+    platform: 'meta' | 'google' | 'taxonomy' | null;
+    source: string | null;
+    campaign: string | null;
+  };
+  readiness: {
+    status: MmmReadinessStatus;
+    generationTimestamp: string | null;
+    includedDateCount: number;
+    excludedDateWindows: MmmExcludedDateWindow[];
+  };
+  pagination: {
+    limit: number;
+    offset: number;
+    returned: number;
+    totalRows: number;
+    hasMore: boolean;
+  };
+  rows: MmmExportRow[];
+};
+
+export type MmmExportQuery = {
+  startDate: string;
+  endDate: string;
+  martRowType?: 'paid_media' | 'attribution';
+  attributionModel?: string;
+  platform?: 'meta' | 'google' | 'taxonomy';
+  source?: string;
+  campaign?: string;
+  limit?: number;
+  offset?: number;
+};
+
+export type MmmGateChecklistStatus = 'pass' | 'warn' | 'fail' | 'pending' | 'waived';
+
+export type MmmReadinessGateChecklistItem = {
+  key: string;
+  label: string;
+  owner: string;
+  status: MmmGateChecklistStatus;
+  detail: string;
+  waiverReason?: string;
+};
+
+export type MmmReadinessGateApproval = {
+  owner: string;
+  status: MmmGateChecklistStatus;
+  approvedBy: string | null;
+  approvedByUserId?: number | null;
+  approvedByEmail?: string | null;
+  approvedAt: string | null;
+  evidenceHash?: string | null;
+  sourceAction?: string | null;
+  detail: string;
+};
+
+export type MmmReadinessGateWaiver = {
+  checklistKey: string;
+  reason: string;
+  expiresAt?: string;
+  reviewBy?: string;
+  owner?: string;
+  waivedBy: string;
+  waivedByUserId?: number | null;
+  waivedByEmail?: string | null;
+  waivedAt: string;
+  evidenceHash: string;
+  sourceAction?: string | null;
+};
+
+export type MmmReadinessGate = {
+  id: string;
+  gateVersion: 'mmm_readiness_gate_v1';
+  range: {
+    startDate: string;
+    endDate: string;
+  };
+  filters: {
+    martRowType: 'paid_media' | 'attribution' | null;
+    attributionModel: string | null;
+    platform: 'meta' | 'google' | 'taxonomy' | null;
+    source: string | null;
+    campaign: string | null;
+  };
+  evidencePayload: {
+    exportReadiness?: MmmExportResponse['readiness'];
+    exportSummary?: {
+      totalRows: number;
+      paidMediaRows: number;
+      attributionRows: number;
+      totalSpend: number;
+      totalImpressions: number;
+      totalClicks: number;
+      totalShopifyOrders: number;
+      totalShopifyRevenue: number;
+      totalAttributionCreditOrders: number;
+      totalAttributionCreditRevenue: number;
+      latestSpendLastSyncedAt: string | null;
+      latestShopifyLastIngestedAt: string | null;
+      latestAttributionLastComputedAt: string | null;
+      latestLastComputedAt: string | null;
+      unresolvedMetadataRows: number;
+    };
+    exposureCoverage?: ExposureCoverageResponse['totals'] & { latestExposureAt: string | null };
+    taxonomyDrift?: Record<string, unknown> | null;
+    dataQualityBlockers?: Array<{
+      checkKey: string;
+      status: string;
+      severity: string;
+      discrepancyCount: number;
+      summary: string;
+      checkedAt: string | null;
+    }>;
+    latestModelRun?: MmmModelRun | null;
+  };
+  checklistStatuses: MmmReadinessGateChecklistItem[];
+  ownerApprovals: MmmReadinessGateApproval[];
+  waivers: MmmReadinessGateWaiver[];
+  unresolvedCriticalIssueCount: number;
+  evidenceHash: string;
+  gateStatus: 'pending' | 'approved' | 'blocked';
+  finalState: 'approved' | 'blocked';
+  decisionReason: string | null;
+  decidedBy: string | null;
+  decidedAt: string | null;
+  createdBy: string;
+  updatedBy: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type MmmReadinessGateResponse = {
+  schemaVersion: 'mmm_readiness_gate_v1';
+  gate: MmmReadinessGate;
+};
+
+export type MmmReadinessGateAuditReport = {
+  schemaVersion: 'mmm_readiness_gate_operational_audit_v1';
+  generatedAt: string;
+  reviewAudience: string[];
+  productionGateRecord: MmmReadinessGate;
+  evidenceHash: string;
+  checklistStatuses: MmmReadinessGateChecklistItem[];
+  ownerApprovals: Array<{
+    owner: string;
+    status: 'approved' | 'pending';
+    approvedBy: string | null;
+    approvedAt: string | null;
+    evidenceHash: string | null;
+    detail: string;
+  }>;
+  waivers: MmmReadinessGateWaiver[];
+  unresolvedCriticalIssueCount: number;
+  approvedBaselineFreeze: {
+    id: string;
+    freezeSchemaVersion: 'mmm_baseline_calibration_freeze_v1';
+    martVersion: string;
+    snapshotVersion: string;
+    freezeStatus: 'approved';
+    generationTimestamp: string | null;
+    range: {
+      startDate: string;
+      endDate: string;
+    };
+    attributionModel: string;
+    evidenceHash: string;
+    approvedBy: string | null;
+    approvedAt: string | null;
+  } | null;
+  approvedBaselineFreezeId: string | null;
+  auditStatus: 'complete' | 'missing_approved_baseline_freeze' | 'gate_not_approved';
+};
+
+export type MmmReadinessGateDecisionPayload = MmmExportQuery & {
+  owner?: string;
+  reason?: string;
+  evidenceHash?: string;
+  waiver?: {
+    checklistKey: string;
+    reason: string;
+    expiresAt?: string;
+    reviewBy?: string;
+  };
+};
+
+export type MmmModelRun = {
+  id: string;
+  modelType: 'baseline_linear_mmm' | 'bayesian_hierarchical_mmm';
+  modelVersion: 'baseline_linear_mmm_v1' | 'bayesian_hierarchical_mmm_v1';
+  martVersion: 'mmm_daily_input_mart_v1' | 'mmm_weekly_channel_input_mart_v1';
+  attributionModel: string;
+  runStatus: 'completed' | 'failed';
+  trainingStartDate: string;
+  trainingEndDate: string;
+  holdoutStartDate: string | null;
+  holdoutEndDate: string | null;
+  runConfig: Record<string, unknown>;
+  inputSummary: Record<string, unknown>;
+  modelArtifact: Record<string, unknown>;
+  calibrationReport: Record<string, unknown>;
+  validationReport: Record<string, unknown>;
+  errorCode: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+  startedAt: string;
+  completedAt: string | null;
+};
+
+export type MmmModelRunsResponse = {
+  schemaVersion: 'mmm_model_runs_v1';
+  rows: MmmModelRun[];
+};
+
+export type ExposureCoverageRow = {
+  date: string;
+  sourcePlatform: 'meta_ads' | 'google_ads' | 'tiktok_ads' | 'pinterest_ads' | 'snapchat_ads' | 'unknown';
+  exposureType: 'impression' | 'view';
+  totalExposures: number;
+  validExposures: number;
+  invalidExposures: number;
+  identityResolvedExposures: number;
+  identityUnresolvedExposures: number;
+  identityResolutionRate: number | null;
+  campaignJoinableExposures: number;
+  campaignMetadataResolvedExposures: number;
+  campaignMetadataResolutionRate: number | null;
+  latestExposureAt: string | null;
+};
+
+export type ExposureCoverageResponse = {
+  schemaVersion: 'ad_exposure_coverage_v1';
+  range: {
+    startDate: string;
+    endDate: string;
+  };
+  filters: {
+    sourcePlatform: ExposureCoverageRow['sourcePlatform'] | null;
+    exposureType: ExposureCoverageRow['exposureType'] | null;
+  };
+  totals: Omit<ExposureCoverageRow, 'date' | 'sourcePlatform' | 'exposureType' | 'latestExposureAt'>;
+  rows: ExposureCoverageRow[];
 };
 
 export type OrderDetailLineItem = {
@@ -970,6 +1361,242 @@ export type IdentityConflictsResponse = {
 	conflicts: IdentityConflictRow[];
 };
 
+export type AdminDebugJourneyResponse = {
+  order: {
+    shopifyOrderId: string;
+    shopifyOrderNumber: string | null;
+    shopifyCustomerId: string | null;
+    currencyCode: string;
+    subtotalPrice: number;
+    totalPrice: number;
+    processedAt: string | null;
+    createdAtShopify: string | null;
+    landingSessionId: string | null;
+    checkoutToken: string | null;
+    cartToken: string | null;
+    identityJourneyId: string | null;
+    currentAttribution: {
+      attributionModel: string | null;
+      source: string | null;
+      medium: string | null;
+      campaign: string | null;
+      content: string | null;
+      term: string | null;
+      confidenceScore: number | null;
+      attributionReason: string | null;
+      attributedAt: string | null;
+    };
+  };
+  run: {
+    runId: string;
+    status: string;
+    triggerSource: string;
+    createdAt: string;
+    completedAt: string | null;
+    orderOccurredAt: string;
+  } | null;
+  events: Array<{
+    sourceTable: string;
+    id: string;
+    sessionId: string;
+    eventType: string;
+    occurredAt: string;
+    pageUrl: string | null;
+    referrerUrl: string | null;
+    utmSource: string | null;
+    utmMedium: string | null;
+    utmCampaign: string | null;
+    gclid: string | null;
+    fbclid: string | null;
+    shopifyCartToken: string | null;
+    shopifyCheckoutToken: string | null;
+    ingestionSource: string | null;
+  }>;
+  identity: {
+    journey: {
+      id: string;
+      authoritativeShopifyCustomerId: string | null;
+      status: string;
+      mergeVersion: number;
+      mergedIntoJourneyId: string | null;
+      primaryEmailHash: string | null;
+      primaryPhoneHash: string | null;
+      lookbackWindowStartedAt: string;
+      lookbackWindowExpiresAt: string;
+      lastTouchEligibleAt: string;
+      firstSourceSystem: string | null;
+      lastSourceSystem: string | null;
+      createdAt: string;
+      updatedAt: string;
+    } | null;
+    edges: Array<{
+      edgeId: string;
+      nodeType: string;
+      nodeKey: string;
+      edgeType: string;
+      precedenceRank: number;
+      evidenceSource: string;
+      sourceTable: string | null;
+      sourceRecordId: string | null;
+      isActive: boolean;
+      conflictCode: string | null;
+      firstObservedAt: string;
+      lastObservedAt: string;
+    }>;
+    mergeAudits: Array<{
+      id: string;
+      winnerJourneyId: string;
+      loserJourneyId: string;
+      mergeReasonCode: string;
+      evidenceSource: string;
+      sourceTable: string | null;
+      sourceRecordId: string | null;
+      sourceTimestamp: string;
+      winnerScore: unknown;
+      loserScore: unknown;
+      candidateScores: unknown;
+      rehomedNodes: number;
+      quarantinedNodes: number;
+      createdAt: string;
+    }>;
+  };
+  attribution: {
+    touchpoints: Array<{
+      touchpointId: string;
+      sessionId: string | null;
+      identityJourneyId: string | null;
+      occurredAt: string;
+      capturedAt: string;
+      sourceKind: string;
+      ingestionSource: string;
+      source: string | null;
+      medium: string | null;
+      campaign: string | null;
+      evidenceSource: string;
+      isDirect: boolean;
+      engagementType: string;
+      isSynthetic: boolean;
+      isEligible: boolean;
+      ineligibilityReason: string | null;
+      attributionReason: string | null;
+      attributionHint: unknown;
+    }>;
+    modelSummaries: Array<{
+      modelKey: string;
+      allocationStatus: string;
+      winnerTouchpointId: string | null;
+      winnerEvidenceSource: string | null;
+      winnerAttributionReason: string | null;
+      totalCreditWeight: number;
+      totalRevenueCredited: number;
+      touchpointCountConsidered: number;
+      eligibleClickCount: number;
+      eligibleViewCount: number;
+      winnerSelectionRule: string;
+      directSuppressionApplied: boolean;
+      deterministicBlockApplied: boolean;
+      normalizationFailuresCount: number;
+    }>;
+    credits: Array<{
+      modelKey: string;
+      touchpointId: string;
+      touchpointPosition: number;
+      occurredAt: string;
+      source: string | null;
+      medium: string | null;
+      campaign: string | null;
+      evidenceSource: string;
+      attributionReason: string;
+      creditWeight: number;
+      revenueCredit: number;
+      isPrimary: boolean;
+      confidenceLabel: string;
+    }>;
+    explainRecords: Array<{
+      touchpointId: string | null;
+      modelKey: string | null;
+      explainStage: string;
+      decision: string;
+      decisionReason: string;
+      details: unknown;
+      createdAt: string;
+    }>;
+  };
+};
+
+export type CampaignResolverDebugPayload = {
+  resolverVersion?: string;
+  platform?: string | null;
+  source?: string | null;
+  medium?: string | null;
+  campaign?: string | null;
+  content?: string | null;
+  term?: string | null;
+  accountId?: string | null;
+  campaignId?: string | null;
+  adsetId?: string | null;
+  adId?: string | null;
+  occurredAt?: string | null;
+  enqueueUnmapped?: boolean;
+};
+
+export type CampaignResolverDebugResponse = {
+  resolution: {
+    status: 'resolved' | 'fallback' | 'unmapped';
+    resolverVersion: string;
+    source: 'override' | 'rule' | 'heuristic' | 'unmapped';
+    confidence: number;
+    ruleId: string | null;
+    canonical: {
+      campaignId: string | null;
+      campaignName: string | null;
+      source: string | null;
+      medium: string | null;
+      channel: string | null;
+      channelGroup: string | null;
+      hierarchy: Record<string, unknown>;
+    };
+    qaQueueId: string | null;
+  };
+};
+
+export type AdminDebugReplayPayload = {
+  eventType?: string;
+  sourceTable?: string;
+  fromTime?: string;
+  toTime?: string;
+  limit?: number;
+  dryRun?: boolean;
+};
+
+export type AdminDebugReplayResponse = {
+  replay: {
+    replayRunId: number;
+    candidateCount: number;
+    replayedCount: number;
+    skippedCount: number;
+    failedCount: number;
+    dryRunCount: number;
+  };
+};
+
+export type AdminDebugAuditRow = {
+  id: string;
+  actorKind: 'internal' | 'user';
+  actorUserId: number | null;
+  actorEmail: string;
+  action: string;
+  targetType: string;
+  targetId: string | null;
+  requestPayload: unknown;
+  resultSummary: unknown;
+  createdAt: string;
+};
+
+export type AdminDebugAuditResponse = {
+  rows: AdminDebugAuditRow[];
+};
+
 declare global {
 	interface Window {
 		__ROAS_RADAR_RUNTIME_CONFIG__?: {
@@ -1132,6 +1759,43 @@ function buildMetaOrderValueSearchParams(query: MetaOrderValueQuery): URLSearchP
   return params;
 }
 
+function buildMmmExportSearchParams(query: MmmExportQuery): URLSearchParams {
+  const params = new URLSearchParams({
+    startDate: query.startDate,
+    endDate: query.endDate
+  });
+
+  if (query.martRowType) {
+    params.set('martRowType', query.martRowType);
+  }
+
+  if (query.attributionModel?.trim()) {
+    params.set('attributionModel', query.attributionModel.trim());
+  }
+
+  if (query.platform) {
+    params.set('platform', query.platform);
+  }
+
+  if (query.source?.trim()) {
+    params.set('source', query.source.trim());
+  }
+
+  if (query.campaign?.trim()) {
+    params.set('campaign', query.campaign.trim());
+  }
+
+  if (typeof query.limit === 'number') {
+    params.set('limit', `${query.limit}`);
+  }
+
+  if (typeof query.offset === 'number') {
+    params.set('offset', `${query.offset}`);
+  }
+
+  return params;
+}
+
 function buildHeaders(includeJsonBody: boolean): Record<string, string> {
 	const headers: Record<string, string> = {
 		"x-roas-radar-tenant-id": TENANT_ID,
@@ -1245,6 +1909,21 @@ export function fetchTimeseries(
 	});
 }
 
+export function fetchReportingModelComparison(
+	filters: ReportingFilters,
+	dateGrain: "day" | "week" = "week",
+) {
+	return requestJson<ReportingModelComparisonResponse>(
+		"/api/reporting/model-comparison",
+		{
+			searchParams: buildSearchParams(filters, {
+				dateGrain,
+				sourceOfTruth: filters.sourceOfTruth ?? "deterministic",
+			}),
+		},
+	);
+}
+
 export function fetchOrders(filters: ReportingFilters, limit = 10) {
 	return requestJson<OrdersResponse>("/api/reporting/orders", {
 		searchParams: buildSearchParams(filters, { limit: `${limit}` }),
@@ -1254,6 +1933,105 @@ export function fetchOrders(filters: ReportingFilters, limit = 10) {
 export function fetchMetaOrderValue(query: MetaOrderValueQuery) {
   return requestJson<MetaOrderValueResponse>('/api/reporting/meta-order-value', {
     searchParams: buildMetaOrderValueSearchParams(query)
+  });
+}
+
+export function fetchMmmExport(query: MmmExportQuery) {
+  return requestJson<MmmExportResponse>('/api/reporting/mmm', {
+    searchParams: buildMmmExportSearchParams(query)
+  });
+}
+
+export function fetchMmmReadinessGate(query: MmmExportQuery) {
+  return requestJson<MmmReadinessGateResponse>('/api/reporting/mmm/readiness-gate', {
+    searchParams: buildMmmExportSearchParams(query)
+  });
+}
+
+export function fetchMmmReadinessGateAuditReport(query: MmmExportQuery) {
+  return requestJson<MmmReadinessGateAuditReport>('/api/reporting/mmm/readiness-gate/audit-report', {
+    searchParams: buildMmmExportSearchParams(query)
+  });
+}
+
+export function refreshMmmReadinessGate(query: MmmExportQuery) {
+  return requestJson<MmmReadinessGateResponse>('/api/reporting/mmm/readiness-gate/refresh', {
+    method: 'POST',
+    body: query
+  });
+}
+
+export function approveMmmReadinessGate(payload: MmmReadinessGateDecisionPayload) {
+  return requestJson<MmmReadinessGateResponse>('/api/reporting/mmm/readiness-gate/approve', {
+    method: 'POST',
+    body: payload
+  });
+}
+
+export function waiveMmmReadinessGate(payload: MmmReadinessGateDecisionPayload & { waiver: NonNullable<MmmReadinessGateDecisionPayload['waiver']> }) {
+  return requestJson<MmmReadinessGateResponse>('/api/reporting/mmm/readiness-gate/waive', {
+    method: 'POST',
+    body: payload
+  });
+}
+
+export function blockMmmReadinessGate(payload: MmmReadinessGateDecisionPayload) {
+  return requestJson<MmmReadinessGateResponse>('/api/reporting/mmm/readiness-gate/block', {
+    method: 'POST',
+    body: payload
+  });
+}
+
+export function fetchMmmModelRuns(query: {
+  startDate?: string;
+  endDate?: string;
+  attributionModel?: string;
+  limit?: number;
+} = {}) {
+  const searchParams = new URLSearchParams();
+
+  if (query.startDate) {
+    searchParams.set('startDate', query.startDate);
+  }
+
+  if (query.endDate) {
+    searchParams.set('endDate', query.endDate);
+  }
+
+  if (query.attributionModel?.trim()) {
+    searchParams.set('attributionModel', query.attributionModel.trim());
+  }
+
+  if (typeof query.limit === 'number') {
+    searchParams.set('limit', `${query.limit}`);
+  }
+
+  return requestJson<MmmModelRunsResponse>('/api/reporting/mmm/model-runs', {
+    searchParams
+  });
+}
+
+export function fetchExposureCoverage(query: {
+  startDate: string;
+  endDate: string;
+  sourcePlatform?: ExposureCoverageRow['sourcePlatform'];
+  exposureType?: ExposureCoverageRow['exposureType'];
+}) {
+  const searchParams = new URLSearchParams({
+    startDate: query.startDate,
+    endDate: query.endDate
+  });
+
+  if (query.sourcePlatform) {
+    searchParams.set('sourcePlatform', query.sourcePlatform);
+  }
+
+  if (query.exposureType) {
+    searchParams.set('exposureType', query.exposureType);
+  }
+
+  return requestJson<ExposureCoverageResponse>('/api/reporting/mmm/exposure-coverage', {
+    searchParams
   });
 }
 
@@ -1582,4 +2360,41 @@ export function fetchIdentityHealthConflicts(
 			}),
 		},
 	);
+}
+
+export function fetchAdminDebugJourney(shopifyOrderId: string) {
+  return requestJson<AdminDebugJourneyResponse>(
+    `/api/admin/attribution/debug/journeys/${encodeURIComponent(shopifyOrderId)}`
+  );
+}
+
+export function debugCampaignResolver(payload: CampaignResolverDebugPayload) {
+  return requestJson<CampaignResolverDebugResponse>('/api/admin/attribution/debug/campaign-resolver', {
+    method: 'POST',
+    body: payload
+  });
+}
+
+export function triggerAdminDebugReplay(payload: AdminDebugReplayPayload) {
+  return requestJson<AdminDebugReplayResponse>('/api/admin/attribution/debug/replay', {
+    method: 'POST',
+    body: payload
+  });
+}
+
+export function triggerAdminDebugRecompute(payload: OrderAttributionBackfillRequest) {
+  const request = orderAttributionBackfillRequestSchema.parse(payload);
+
+  return requestJson<OrderAttributionBackfillEnqueueResponse>('/api/admin/attribution/debug/recompute', {
+    method: 'POST',
+    body: request,
+    parse: (response) => orderAttributionBackfillEnqueueResponseSchema.parse(response)
+  });
+}
+
+export function fetchAdminDebugAudit(limit = 25) {
+  const searchParams = new URLSearchParams({ limit: `${limit}` });
+  return requestJson<AdminDebugAuditResponse>('/api/admin/attribution/debug/audit', {
+    searchParams
+  });
 }

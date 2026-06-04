@@ -1,0 +1,32 @@
+{
+  "displayName": "ROAS Radar __ENVIRONMENT__ MMM Bayesian Diagnostics",
+  "documentation": {
+    "content": "Bayesian MMM posterior diagnostics failed or artifacts were not persisted. Inspect `posteriorSanityStatus`, `posteriorMaxRhat`, `posteriorMinEffectiveSampleSize`, and `artifactPersisted` in `mmm_bayesian_job_lifecycle` logs. Runbook: __RUNBOOK_URL_MMM__",
+    "mimeType": "text/markdown"
+  },
+  "combiner": "OR",
+  "enabled": true,
+  "severity": "ERROR",
+  "notificationChannels": __ALERT_NOTIFICATION_CHANNELS__,
+  "conditions": [
+    {
+      "displayName": "Bayesian diagnostics or artifact persistence alert",
+      "conditionThreshold": {
+        "filter": "metric.type=\"logging.googleapis.com/user/roas_mmm_bayesian_jobs\" resource.type=\"cloud_run_revision\" metric.labels.stage=\"completed\" (metric.labels.posterior_sanity_status!=\"pass\" OR metric.labels.artifact_persisted=\"false\")",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 0,
+        "duration": "3600s",
+        "aggregations": [
+          {
+            "alignmentPeriod": "3600s",
+            "perSeriesAligner": "ALIGN_SUM",
+            "crossSeriesReducer": "REDUCE_SUM"
+          }
+        ],
+        "trigger": {
+          "count": 1
+        }
+      }
+    }
+  ]
+}

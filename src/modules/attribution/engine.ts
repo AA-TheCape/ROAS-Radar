@@ -1,8 +1,10 @@
 import {
   inferEngagementType,
+  normalizeAttributionLookbackWindows,
   isDirectTouchpoint,
   isWithinLookbackWindow,
-  qualifiesSyntheticHintSignal
+  qualifiesSyntheticHintSignal,
+  type AttributionLookbackWindows
 } from './rules.js';
 import {
   compareAttributionEvidenceSources,
@@ -28,7 +30,7 @@ export type AttributionAllocationStatus =
   | 'no_eligible_touches'
   | 'blocked_by_deterministic'
   | 'unattributed';
-export type AttributionLookbackRule = '28d_click' | '7d_view' | 'mixed';
+export type AttributionLookbackRule = '30d_click' | '7d_view' | 'mixed';
 
 export type AttributionTouchpoint = {
   touchpointId?: string | null;
@@ -56,6 +58,7 @@ export type AttributionEngineOptions = {
   orderRevenue: number | string;
   attributionModels?: readonly AttributionModel[];
   normalizationFailuresCount?: number;
+  lookbackWindows?: Partial<AttributionLookbackWindows>;
 };
 
 export type AttributionCredit = {
@@ -332,7 +335,11 @@ function qualifiesSyntheticHint(touchpoint: NormalizedTouchpoint): boolean {
   return qualifiesSyntheticHintSignal(touchpoint);
 }
 
-function normalizeTouchpoints(rawTouchpoints: AttributionTouchpoint[], orderOccurredAt: Date): NormalizedTouchpoint[] {
+function normalizeTouchpoints(
+  rawTouchpoints: AttributionTouchpoint[],
+  orderOccurredAt: Date,
+  lookbackWindows: AttributionLookbackWindows
+): NormalizedTouchpoint[] {
   return rawTouchpoints
     .map((touchpoint, index) => ({
       ...touchpoint,
@@ -353,12 +360,15 @@ function normalizeTouchpoints(rawTouchpoints: AttributionTouchpoint[], orderOccu
       isSynthetic: Boolean(touchpoint.isSynthetic ?? touchpoint.isForced)
     }))
     .filter((touchpoint) => Number.isFinite(touchpoint.occurredAt.getTime()))
-    .filter((touchpoint) => isWithinLookbackWindow(orderOccurredAt, touchpoint.occurredAt, touchpoint.engagementType))
+    .filter((touchpoint) =>
+      isWithinLookbackWindow(orderOccurredAt, touchpoint.occurredAt, touchpoint.engagementType, lookbackWindows)
+    )
     .sort(compareTimelineOrder);
 }
 
 function buildStrategyContext(rawTouchpoints: AttributionTouchpoint[], options: AttributionEngineOptions): StrategyContext {
-  const eligibleTouchpoints = normalizeTouchpoints(rawTouchpoints, options.orderOccurredAt);
+  const lookbackWindows = normalizeAttributionLookbackWindows(options.lookbackWindows);
+  const eligibleTouchpoints = normalizeTouchpoints(rawTouchpoints, options.orderOccurredAt, lookbackWindows);
   const eligibleClicks = eligibleTouchpoints.filter((touchpoint) => touchpoint.engagementType === 'click');
   const eligibleViews = eligibleTouchpoints.filter((touchpoint) => touchpoint.engagementType === 'view');
   const deterministicTouchpoints = eligibleTouchpoints.filter((touchpoint) =>
@@ -403,7 +413,7 @@ function resolveLookbackRule(clickCount: number, viewCount: number): Attribution
     return '7d_view';
   }
 
-  return '28d_click';
+  return '30d_click';
 }
 
 function summarizePool(touchpoints: readonly NormalizedTouchpoint[]): {
@@ -526,7 +536,7 @@ const attributionStrategies: Record<AttributionModel, AttributionStrategy> = {
       allocationStatus: winner ? 'attributed' : 'no_eligible_touches',
       directSuppressionApplied: nonDirectClicks.length > 0,
       deterministicBlockApplied: false,
-      lookbackRuleApplied: '28d_click'
+      lookbackRuleApplied: '30d_click'
     };
   },
   hinted_fallback_only(context) {

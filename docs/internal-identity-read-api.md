@@ -92,6 +92,42 @@ Returns the same response shape when the canonical `identity_journey_id` is alre
       }
     ]
   },
+  "lineage": {
+    "mergeCount": 1,
+    "merges": [
+      {
+        "auditId": "1",
+        "role": "winner",
+        "winnerJourneyId": "11111111-1111-4111-8111-111111111111",
+        "loserJourneyId": "33333333-3333-4333-8333-333333333333",
+        "mergeReasonCode": "non_authoritative_precedence_winner",
+        "evidenceSource": "tracking_event",
+        "sourceTable": "tracking_events",
+        "sourceRecordId": "event-merge",
+        "sourceTimestamp": "2026-04-25T12:00:00.000Z",
+        "winnerScore": {
+          "journeyId": "11111111-1111-4111-8111-111111111111",
+          "maxPrecedenceRank": 70,
+          "latestObservedAt": "2026-04-25T12:00:00.000Z",
+          "recencyWeight": 1777118400000,
+          "deterministicScore": 71777118400000,
+          "explanation": "precedence=70; recencyWeight=1777118400000; score=71777118400000"
+        },
+        "loserScore": {
+          "journeyId": "33333333-3333-4333-8333-333333333333",
+          "maxPrecedenceRank": 40,
+          "latestObservedAt": "2026-04-24T12:00:00.000Z",
+          "recencyWeight": 1777032000000,
+          "deterministicScore": 41777032000000,
+          "explanation": "precedence=40; recencyWeight=1777032000000; score=41777032000000"
+        },
+        "candidateScores": [],
+        "rehomedNodes": 1,
+        "quarantinedNodes": 0,
+        "createdAt": "2026-04-25T12:01:00.000Z"
+      }
+    ]
+  },
   "timeline": {
     "sessions": [
       {

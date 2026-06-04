@@ -7,9 +7,15 @@ process.env.DATABASE_URL ??= 'postgres://postgres:postgres@127.0.0.1:5432/roas_r
 
 const poolModule = await import("../src/db/pool.js");
 const reportingModule = await import("../src/modules/reporting/aggregates.js");
+const weeklyMmmModule = await import('../src/modules/mmm/weekly-mart.js');
 
 const { pool } = poolModule;
-const { refreshDailyReportingMetrics } = reportingModule;
+const { refreshDailyMmmInputMart, refreshDailyReportingMetrics } = reportingModule;
+const {
+  fetchWeeklyMmmSnapshotRowsWithClient,
+  refreshWeeklyMmmChannelInputMartWithClient,
+  snapshotWeeklyMmmInputRowsWithClient
+} = weeklyMmmModule;
 
 async function seedGoogleConnection() {
   const rawCustomerFixture = buildRawPayloadFixture({ customerId: 'test-customer' }, 'test-customer');
@@ -46,6 +52,48 @@ async function seedGoogleSyncJob(connectionId: number, syncDate: string) {
 	);
 
 	return jobResult.rows[0].id;
+}
+
+async function seedMetaConnection() {
+  const accountFixture = buildRawPayloadFixture({ accountId: 'acct-meta' }, 'acct-meta');
+  const connectionResult = await pool.query<{ id: number }>(
+    `
+      INSERT INTO meta_ads_connections (
+        ad_account_id,
+        access_token_encrypted,
+        status,
+        raw_account_data,
+        raw_account_source,
+        raw_account_received_at,
+        raw_account_external_id,
+        raw_account_payload_size_bytes,
+        raw_account_payload_hash
+      )
+      VALUES ('acct-meta', '\\x00'::bytea, 'active', $1::jsonb, 'meta_ads_account', now(), $2, $3, $4)
+      RETURNING id
+    `,
+    [
+      accountFixture.rawPayloadJson,
+      accountFixture.payloadExternalId,
+      accountFixture.payloadSizeBytes,
+      accountFixture.payloadHash
+    ]
+  );
+
+  return connectionResult.rows[0].id;
+}
+
+async function seedMetaSyncJob(connectionId: number, syncDate: string) {
+  const jobResult = await pool.query<{ id: number }>(
+    `
+      INSERT INTO meta_ads_sync_jobs (connection_id, sync_date, status, completed_at)
+      VALUES ($1, $2::date, 'completed', $2::date + time '23:00')
+      RETURNING id
+    `,
+    [connectionId, syncDate]
+  );
+
+  return jobResult.rows[0].id;
 }
 
 test("refreshDailyReportingMetrics includes campaign-only Google spend when no creative rows exist", async () => {
@@ -251,6 +299,519 @@ test('refreshDailyReportingMetrics excludes non-online-store Shopify orders from
     'daily_reporting_metrics',
     'attribution_order_credits',
     'shopify_orders'
+  ]);
+});
+
+test('refreshDailyMmmInputMart builds versioned paid and attribution rows with coverage fields', async () => {
+  const metricDate = '2026-05-02';
+
+  await resetIntegrationTables(pool, [
+    'mmm_daily_input_mart_v1',
+    'meta_ads_daily_spend',
+    'meta_ads_raw_spend_records',
+    'meta_ads_sync_jobs',
+    'meta_ads_connections',
+    'attribution_order_credits',
+    'shopify_orders'
+  ]);
+
+  const connectionId = await seedMetaConnection();
+  const syncJobId = await seedMetaSyncJob(connectionId, metricDate);
+  const orderPayload = buildRawPayloadFixture({ id: 'mmm-order-1' }, 'mmm-order-1');
+
+  await pool.query(
+    `
+      INSERT INTO meta_ads_daily_spend (
+        connection_id,
+        sync_job_id,
+        report_date,
+        granularity,
+        entity_key,
+        account_id,
+        account_name,
+        campaign_id,
+        campaign_name,
+        adset_id,
+        adset_name,
+        ad_id,
+        ad_name,
+        creative_id,
+        creative_name,
+        canonical_source,
+        canonical_medium,
+        canonical_campaign,
+        canonical_content,
+        canonical_term,
+        currency,
+        spend,
+        impressions,
+        clicks,
+        updated_at,
+        raw_payload
+      )
+      VALUES (
+        $1,
+        $2,
+        $3::date,
+        'creative',
+        'creative-1',
+        'acct-meta',
+        'Meta Account',
+        'campaign-1',
+        'Prospecting US',
+        'adset-1',
+        'Broad',
+        'ad-1',
+        'Static One',
+        'creative-1',
+        'Static One',
+        'meta',
+        'paid_social',
+        'prospecting-us',
+        'static-one',
+        'unknown',
+        'USD',
+        125.50,
+        10000,
+        325,
+        $3::date + time '23:30',
+        '{}'::jsonb
+      )
+    `,
+    [connectionId, syncJobId, metricDate]
+  );
+
+  await pool.query(
+    `
+      INSERT INTO shopify_orders (
+        shopify_order_id,
+        shopify_order_number,
+        currency_code,
+        subtotal_price,
+        total_price,
+        processed_at,
+        source_name,
+        raw_payload,
+        payload_external_id,
+        payload_size_bytes,
+        payload_hash,
+        ingested_at
+      )
+      VALUES (
+        'mmm-order-1',
+        '19001',
+        'USD',
+        90.00,
+        100.00,
+        $1::timestamptz,
+        'web',
+        $2::jsonb,
+        $3,
+        $4,
+        $5,
+        $6::timestamptz
+      )
+    `,
+    [
+      `${metricDate}T18:00:00.000Z`,
+      orderPayload.rawPayloadJson,
+      orderPayload.payloadExternalId,
+      orderPayload.payloadSizeBytes,
+      orderPayload.payloadHash,
+      `${metricDate}T18:05:00.000Z`
+    ]
+  );
+
+  await pool.query(
+    `
+      INSERT INTO attribution_order_credits (
+        shopify_order_id,
+        attribution_model,
+        touchpoint_position,
+        session_id,
+        touchpoint_occurred_at,
+        attributed_source,
+        attributed_medium,
+        attributed_campaign,
+        attributed_content,
+        attributed_term,
+        credit_weight,
+        revenue_credit,
+        is_primary,
+        attribution_reason,
+        match_source,
+        confidence_label,
+        model_version,
+        created_at
+      )
+      VALUES (
+        'mmm-order-1',
+        'last_touch',
+        1,
+        NULL,
+        $1::timestamptz,
+        'meta',
+        'paid_social',
+        'prospecting-us',
+        'static-one',
+        'unknown',
+        1.0,
+        100.00,
+        true,
+        'matched_by_checkout_token',
+        'checkout_token',
+        'high',
+        1,
+        $2::timestamptz
+      )
+    `,
+    [`${metricDate}T17:55:00.000Z`, `${metricDate}T18:10:00.000Z`]
+  );
+
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+    await refreshDailyMmmInputMart(client, [metricDate]);
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  const result = await pool.query(
+    `
+      SELECT
+        mart_version,
+        mart_row_type,
+        attribution_model,
+        platform,
+        platform_connection_id::text,
+        granularity,
+        entity_key,
+        account_id,
+        campaign_id,
+        adset_id,
+        ad_id,
+        creative_id,
+        source,
+        medium,
+        campaign,
+        content,
+        term,
+        currency,
+        spend,
+        impressions::text,
+        clicks::text,
+        shopify_orders::text,
+        shopify_revenue,
+        attribution_credit_orders,
+        attribution_credit_revenue,
+        match_source_coverage,
+        confidence_label_coverage,
+        spend_last_synced_at IS NOT NULL AS has_spend_freshness,
+        shopify_last_ingested_at IS NOT NULL AS has_shopify_freshness,
+        attribution_last_computed_at IS NOT NULL AS has_attribution_freshness
+      FROM mmm_daily_input_mart_v1
+      WHERE metric_date = $1::date
+      ORDER BY mart_row_type DESC, platform ASC
+    `,
+    [metricDate]
+  );
+
+  assert.deepEqual(result.rows, [
+    {
+      mart_version: 'v1',
+      mart_row_type: 'paid_media',
+      attribution_model: 'none',
+      platform: 'meta',
+      platform_connection_id: String(connectionId),
+      granularity: 'creative',
+      entity_key: 'creative-1',
+      account_id: 'acct-meta',
+      campaign_id: 'campaign-1',
+      adset_id: 'adset-1',
+      ad_id: 'ad-1',
+      creative_id: 'creative-1',
+      source: 'meta',
+      medium: 'paid_social',
+      campaign: 'prospecting-us',
+      content: 'static-one',
+      term: 'unknown',
+      currency: 'USD',
+      spend: '125.50',
+      impressions: '10000',
+      clicks: '325',
+      shopify_orders: '0',
+      shopify_revenue: '0.00',
+      attribution_credit_orders: '0.00000000',
+      attribution_credit_revenue: '0.00',
+      match_source_coverage: {},
+      confidence_label_coverage: {},
+      has_spend_freshness: true,
+      has_shopify_freshness: false,
+      has_attribution_freshness: false
+    },
+    {
+      mart_version: 'v1',
+      mart_row_type: 'attribution',
+      attribution_model: 'last_touch',
+      platform: 'taxonomy',
+      platform_connection_id: null,
+      granularity: 'taxonomy',
+      entity_key: 'meta|paid_social|prospecting-us|static-one|unknown',
+      account_id: null,
+      campaign_id: null,
+      adset_id: null,
+      ad_id: null,
+      creative_id: null,
+      source: 'meta',
+      medium: 'paid_social',
+      campaign: 'prospecting-us',
+      content: 'static-one',
+      term: 'unknown',
+      currency: null,
+      spend: '0.00',
+      impressions: '0',
+      clicks: '0',
+      shopify_orders: '1',
+      shopify_revenue: '100.00',
+      attribution_credit_orders: '1.00000000',
+      attribution_credit_revenue: '100.00',
+      match_source_coverage: { checkout_token: 1 },
+      confidence_label_coverage: { high: 1 },
+      has_spend_freshness: false,
+      has_shopify_freshness: true,
+      has_attribution_freshness: true
+    }
+  ]);
+
+  await resetIntegrationTables(pool, [
+    'mmm_daily_input_mart_v1',
+    'meta_ads_daily_spend',
+    'meta_ads_raw_spend_records',
+    'meta_ads_sync_jobs',
+    'meta_ads_connections',
+    'attribution_order_credits',
+    'shopify_orders'
+  ]);
+});
+
+test('refreshWeeklyMmmChannelInputMart builds weekly channel rows with DQ checks and snapshots', async () => {
+  await resetIntegrationTables(pool, [
+    'mmm_model_run_input_snapshots',
+    'mmm_model_runs',
+    'mmm_weekly_channel_input_mart_v1',
+    'mmm_daily_input_mart_v1'
+  ]);
+
+  await pool.query(
+    `
+      INSERT INTO mmm_daily_input_mart_v1 (
+        metric_date,
+        mart_row_type,
+        attribution_model,
+        platform,
+        granularity,
+        entity_key,
+        source,
+        medium,
+        campaign,
+        content,
+        term,
+        spend,
+        impressions,
+        clicks,
+        shopify_orders,
+        shopify_revenue,
+        attribution_credit_orders,
+        attribution_credit_revenue,
+        new_customer_credit_orders,
+        returning_customer_credit_orders,
+        new_customer_credit_revenue,
+        returning_customer_credit_revenue,
+        match_source_coverage,
+        confidence_label_coverage,
+        resolved_canonical_channel,
+        resolved_canonical_channel_group
+      )
+      VALUES
+        ('2026-05-04', 'paid_media', 'none', 'meta', 'creative', 'creative-1', 'meta', 'paid_social', 'prospecting', 'static', 'unknown', 100.00, 1000, 50, 0, 0, 0, 0, 0, 0, 0, 0, '{}'::jsonb, '{}'::jsonb, 'paid_social', 'paid'),
+        ('2026-05-05', 'paid_media', 'none', 'meta', 'creative', 'creative-2', 'meta', 'paid_social', 'prospecting', 'video', 'unknown', 125.00, 1500, 75, 0, 0, 0, 0, 0, 0, 0, 0, '{}'::jsonb, '{}'::jsonb, 'paid_social', 'paid'),
+        ('2026-05-06', 'attribution', 'last_touch', 'taxonomy', 'taxonomy', 'meta|paid_social|prospecting|unknown|unknown', 'meta', 'paid_social', 'prospecting', 'unknown', 'unknown', 0, 0, 0, 3, 360.00, 3.00000000, 360.00, 2.00000000, 1.00000000, 240.00, 120.00, '{"checkout_token": 3}'::jsonb, '{"high": 3}'::jsonb, 'paid_social', 'paid')
+    `
+  );
+
+  const client = await pool.connect();
+  let modelRunId: string | null = null;
+
+  try {
+    await client.query('BEGIN');
+    const summary = await refreshWeeklyMmmChannelInputMartWithClient(client, {
+      startDate: '2026-05-04',
+      endDate: '2026-05-10',
+      attributionModels: ['last_touch']
+    });
+    assert.deepEqual(summary, {
+      rowCount: 1,
+      failCount: 0,
+      warnCount: 0,
+      unknownDimensionRowCount: 0,
+      futureDatedSourceRowCount: 0
+    });
+
+    const runResult = await client.query<{ id: string }>(
+      `
+        INSERT INTO mmm_model_runs (
+          model_type,
+          model_version,
+          mart_version,
+          attribution_model,
+          training_start_date,
+          training_end_date
+        )
+        VALUES (
+          'baseline_linear_mmm',
+          'baseline_linear_mmm_v1',
+          'mmm_weekly_channel_input_mart_v1',
+          'last_touch',
+          '2026-05-04',
+          '2026-05-10'
+        )
+        RETURNING id
+      `
+    );
+    modelRunId = runResult.rows[0].id;
+    const snapshotRows = await fetchWeeklyMmmSnapshotRowsWithClient(client, {
+      startDate: '2026-05-04',
+      endDate: '2026-05-10',
+      attributionModels: ['last_touch']
+    });
+    const snapshot = await snapshotWeeklyMmmInputRowsWithClient(client, modelRunId, snapshotRows);
+    assert.equal(snapshot.snapshotRowCount, 1);
+    assert.match(snapshot.snapshotHash, /^[a-f0-9]{64}$/);
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  const weeklyRows = await pool.query(
+    `
+      SELECT
+        week_start_date::text,
+        week_end_date::text,
+        attribution_model,
+        channel_key,
+        spend,
+        impressions::text,
+        clicks::text,
+        shopify_orders::text,
+        shopify_revenue,
+        attribution_credit_orders,
+        attribution_credit_revenue,
+        deterministic_anchors,
+        missingness_report,
+        leakage_report,
+        dq_status,
+        source_row_count::text
+      FROM mmm_weekly_channel_input_mart_v1
+    `
+  );
+  assert.equal(weeklyRows.rowCount, 1);
+  const weeklyRow = weeklyRows.rows[0] as {
+    deterministic_anchors: Record<string, unknown>;
+    leakage_report: Record<string, unknown>;
+  };
+  const freshness = weeklyRow.leakage_report.freshness as Record<string, unknown>;
+  assert.match(String(freshness.minSourceLastComputedAt), /^\d{4}-\d{2}-\d{2}T/);
+  assert.match(String(freshness.maxSourceLastComputedAt), /^\d{4}-\d{2}-\d{2}T/);
+  freshness.minSourceLastComputedAt = '<timestamp>';
+  freshness.maxSourceLastComputedAt = '<timestamp>';
+
+  assert.deepEqual(weeklyRows.rows, [
+    {
+      week_start_date: '2026-05-04',
+      week_end_date: '2026-05-10',
+      attribution_model: 'last_touch',
+      channel_key: 'meta|paid_social|prospecting|paid_social|paid',
+      spend: '225.00',
+      impressions: '2500',
+      clicks: '125',
+      shopify_orders: '3',
+      shopify_revenue: '360.00',
+      attribution_credit_orders: '3.00000000',
+      attribution_credit_revenue: '360.00',
+      deterministic_anchors: {
+        lookbackWindows: {
+          view: {
+            days: 7,
+            rule: '7d_view'
+          },
+          click: {
+            days: 30,
+            rule: '30d_click'
+          }
+        },
+        attributionModel: 'last_touch',
+        matchSourceCoverage: { checkout_token: 3 },
+        inputContractVersion: 'bayesian_hierarchical_mmm_v1',
+        viewLookbackWindowDays: 7,
+        clickLookbackWindowDays: 30,
+        attributionCreditOrders: 3,
+        attributionCreditRevenue: 360,
+        newCustomerCreditRevenue: 240,
+        returningCustomerCreditRevenue: 120,
+        confidenceLabelCoverage: { high: 3 }
+      },
+      missingness_report: {
+        missingDimensions: [],
+        hasSpendWithoutDelivery: false,
+        hasOutcomeWithoutAttributionCredit: false
+      },
+      leakage_report: {
+        calibrationMetadata: {
+          attributionLookbackRules: ['30d_click', '7d_view'],
+          clickLookbackWindowDays: 30,
+          contractVersion: 'bayesian_hierarchical_mmm_v1',
+          viewLookbackWindowDays: 7
+        },
+        freshness: {
+          maxAttributionLastComputedAt: null,
+          maxShopifyLastIngestedAt: null,
+          maxSourceLastComputedAt: '<timestamp>',
+          maxSpendLastSyncedAt: null,
+          minAttributionLastComputedAt: null,
+          minShopifyLastIngestedAt: null,
+          minSourceLastComputedAt: '<timestamp>',
+          minSpendLastSyncedAt: null
+        },
+        maxSourceMetricDate: '2026-05-06',
+        latestAllowedMetricDate: '2026-05-10',
+        hasFutureDatedSourceRows: false,
+        inputContractVersion: 'bayesian_hierarchical_mmm_v1',
+        isCompleteWeek: true
+      },
+      dq_status: 'pass',
+      source_row_count: '3'
+    }
+  ]);
+
+  const snapshotCount = await pool.query<{ count: string }>(
+    'SELECT COUNT(*)::text AS count FROM mmm_model_run_input_snapshots WHERE model_run_id = $1::uuid',
+    [modelRunId]
+  );
+  assert.equal(snapshotCount.rows[0].count, '1');
+
+  await resetIntegrationTables(pool, [
+    'mmm_model_run_input_snapshots',
+    'mmm_model_runs',
+    'mmm_weekly_channel_input_mart_v1',
+    'mmm_daily_input_mart_v1'
   ]);
 });
 

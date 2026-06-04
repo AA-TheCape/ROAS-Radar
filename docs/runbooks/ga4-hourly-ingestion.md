@@ -57,6 +57,25 @@ ORDER BY updated_at DESC
 LIMIT 50;
 ```
 
+## Normalized schema mapping
+
+The hourly worker reads GA4 daily and intraday export rows for one complete UTC hour, rolls them up to session grain, and writes two internal stores in one database transaction:
+
+| GA4 source | Internal field |
+| --- | --- |
+| `user_pseudo_id` + `ga_session_id` event param | `ga4_session_key`, `ga4_client_id`, `ga4_session_id` |
+| `user_id`, falling back to `user_pseudo_id` | `ga4_user_key` |
+| min/max `event_timestamp` in the session | `session_started_at`, `last_event_at`, fallback `occurred_at` |
+| `collected_traffic_source.manual_*` and matching `utm_*` event params | canonical `source`, `medium`, `campaign_id`, `campaign`, `content`, `term` |
+| supported click ID params (`gclid`, `dclid`, `gbraid`, `wbraid`, `fbclid`, `ttclid`, `msclkid`) | `click_id_type`, `click_id_value` |
+| `ecommerce.transaction_id` or `transaction_id`/`order_id` event params | fallback `transaction_id` lookup |
+| `email_sha256`, `email_hash`, or `hashed_email` event params | fallback `email_hash` lookup |
+| `customer_identity_id` or `roas_radar_customer_identity_id` event params | fallback `customer_identity_id` lookup |
+| linked GA4 Google Ads campaign fields, enriched from the configured transfer table when possible | `account_id`, `account_name`, `channel_type`, `channel_subtype`, metadata source tags |
+| export family and hour | `source_dataset`, `source_table_type`, `source_export_hour` |
+
+Rows are source-tagged through `campaign_metadata_source`, `account_metadata_source`, and `channel_metadata_source` as `google_ads_transfer`, `ga4_raw`, or `unresolved`. The same normalized rows are also upserted into `ga4_fallback_candidates`; fallback lookup only returns candidates with required session fields and at least one attribution signal.
+
 ## Targeted replay
 
 Replay dead letters after the underlying cause is fixed:

@@ -144,6 +144,14 @@ function buildClientQueryHandler(
 			return { rows: [] };
 		}
 
+		if (text.includes("DELETE FROM reporting_model_comparison_daily")) {
+			return { rows: [] };
+		}
+
+		if (text.includes("INSERT INTO reporting_model_comparison_daily")) {
+			return { rows: [] };
+		}
+
 		if (text.includes("SELECT DISTINCT o.shopify_order_id")) {
 			return { rowCount: 0, rows: [] };
 		}
@@ -153,6 +161,21 @@ function buildClientQueryHandler(
 		}
 
 		if (text.includes("INSERT INTO tracking_events")) {
+			return { rows: [] };
+		}
+
+		if (text.includes("INSERT INTO identity_edge_ingestion_runs")) {
+			return {
+				rowCount: 1,
+				rows: [{ id: 99 }],
+			};
+		}
+
+		if (text.includes("INSERT INTO identity_edges")) {
+			return { rows: [] };
+		}
+
+		if (text.includes("UPDATE identity_edge_ingestion_runs")) {
 			return { rows: [] };
 		}
 

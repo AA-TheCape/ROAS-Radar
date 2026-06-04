@@ -30,6 +30,7 @@ import {
   type RawPayloadIntegrityRow
 } from '../../shared/raw-payload-storage.js';
 import { enqueueAttributionForTrackingTouchpoint } from '../attribution/index.js';
+import { recordDeadLetter } from '../dead-letters/index.js';
 import { ingestIdentityEdges } from '../identity/index.js';
 import { buildCanonicalTouchpointDimensions } from '../marketing-dimensions/index.js';
 import { refreshDailyReportingMetrics } from '../reporting/aggregates.js';
@@ -41,6 +42,8 @@ const MAX_USER_AGENT_LENGTH = 1024;
 const MAX_LANGUAGE_LENGTH = 64;
 const MAX_SCREEN_LENGTH = 64;
 const MAX_CLIENT_EVENT_ID_LENGTH = 128;
+const BOT_USER_AGENT_PATTERN =
+  /\b(bot|crawler|crawl|spider|preview|validator|monitoring|pingdom|uptimerobot|headlesschrome|lighthouse|pagespeed|slurp|bingbot|googlebot|adsbot|facebookexternalhit|twitterbot|linkedinbot)\b/i;
 type TrackingEventType = (typeof EVENT_TYPES)[number];
 type TrackingRawPayload = Record<string, unknown>;
 
@@ -326,11 +329,13 @@ function hashTrackingFingerprint(input: SanitizedTrackingEventInput): string {
 function hashAttributionFingerprint(
   capture: AttributionCaptureV1,
   eventType: TrackingEventType,
-  ingestionSource: 'server' | 'request_query'
+  ingestionSource: 'server' | 'request_query',
+  idempotencyKey: string | null = null
 ): string {
   return createHash('sha256')
     .update(
       JSON.stringify({
+        idempotencyKey,
         schemaVersion: capture.schema_version,
         sessionId: capture.roas_radar_session_id,
         eventType,
@@ -1133,6 +1138,7 @@ async function ingestAttributionCapture(
     ingestionSource: 'server' | 'request_query';
     requestIp?: string | null;
     userAgent?: string | null;
+    idempotencyKey?: string | null;
     shopifyCartToken?: string | null;
     shopifyCheckoutToken?: string | null;
   },
@@ -1140,7 +1146,12 @@ async function ingestAttributionCapture(
     precheckDuplicates: boolean;
   }
 ): Promise<AttributionIngestResult> {
-  const ingestionFingerprint = hashAttributionFingerprint(input.capture, input.eventType, input.ingestionSource);
+  const ingestionFingerprint = hashAttributionFingerprint(
+    input.capture,
+    input.eventType,
+    input.ingestionSource,
+    input.idempotencyKey ?? null
+  );
 
   if (options.precheckDuplicates) {
     const existing = await findExistingAttributionTouchEventByFingerprint(ingestionFingerprint);
@@ -1471,6 +1482,69 @@ function buildSessionBootstrapRawPayload(req: Request): TrackingRawPayload {
   return rawPayload;
 }
 
+function normalizeIdempotencyKey(value: string | null | undefined): string | null {
+  const normalized = normalizeNullableString(value);
+  return normalized && normalized.length <= MAX_CLIENT_EVENT_ID_LENGTH ? normalized : null;
+}
+
+function resolveIdempotencyKey(req: Request, rawPayload: TrackingRawPayload): string | null {
+  const headerKey =
+    normalizeIdempotencyKey(req.header('x-roas-radar-idempotency-key')) ??
+    normalizeIdempotencyKey(req.header('idempotency-key')) ??
+    normalizeIdempotencyKey(req.header('x-idempotency-key'));
+
+  if (headerKey) {
+    return headerKey;
+  }
+
+  const payloadKey =
+    typeof rawPayload.clientEventId === 'string'
+      ? rawPayload.clientEventId
+      : typeof rawPayload.idempotencyKey === 'string'
+        ? rawPayload.idempotencyKey
+        : null;
+
+  return normalizeIdempotencyKey(payloadKey);
+}
+
+function isBotRequest(req: Request, rawPayload?: TrackingRawPayload): boolean {
+  const payloadContext =
+    rawPayload?.context && typeof rawPayload.context === 'object' && !Array.isArray(rawPayload.context)
+      ? (rawPayload.context as Record<string, unknown>)
+      : null;
+  const userAgent =
+    normalizeNullableString(req.header('user-agent')) ??
+    (typeof payloadContext?.userAgent === 'string' ? normalizeNullableString(payloadContext.userAgent) : null);
+
+  return Boolean(userAgent && BOT_USER_AGENT_PATTERN.test(userAgent));
+}
+
+async function recordTrackingDeadLetter(input: {
+  eventType: string;
+  sourceRecordId: string;
+  sourceQueueKey?: string | null;
+  rawPayload: TrackingRawPayload;
+  error: unknown;
+}): Promise<void> {
+  try {
+    await withTransaction(async (client) => {
+      await recordDeadLetter(client, {
+        eventType: input.eventType,
+        sourceTable: 'tracking_capture_requests',
+        sourceRecordId: input.sourceRecordId,
+        sourceQueueKey: input.sourceQueueKey,
+        payload: input.rawPayload,
+        error: input.error
+      });
+    });
+  } catch (deadLetterError) {
+    logError('tracking_dead_letter_record_failed', deadLetterError, {
+      eventType: input.eventType,
+      sourceRecordId: input.sourceRecordId
+    });
+  }
+}
+
 function enforceRateLimit(req: Request): void {
   const requestIp = resolveRequestIp(req);
   const body = typeof req.body === 'object' && req.body !== null ? (req.body as Record<string, unknown>) : {};
@@ -1534,6 +1608,7 @@ async function emitDerivedAttributionFromBrowserEvent(
         ingestionSource: 'server',
         requestIp,
         userAgent: input.context.userAgent,
+        idempotencyKey: input.clientEventId,
         shopifyCartToken: input.shopifyCartToken,
         shopifyCheckoutToken: input.shopifyCheckoutToken
       },
@@ -1648,7 +1723,16 @@ export function createTrackingRouter() {
       enforceRateLimit(req);
 
       const rawPayload = cloneTrackingRawPayload(parseTrackingRequestBody(req.body));
+      if (isBotRequest(req, rawPayload)) {
+        logInfo('tracking_attribution_bot_filtered', {
+          userAgent: normalizeNullableString(req.header('user-agent'))
+        });
+        res.status(204).end();
+        return;
+      }
+
       const parsed = parseAttributionCaptureRequest(rawPayload);
+      const idempotencyKey = resolveIdempotencyKey(req, rawPayload);
       const result = await ingestAttributionCapture(
         {
           capture: parsed.capture,
@@ -1657,7 +1741,8 @@ export function createTrackingRouter() {
           consentState: parsed.consentState,
           ingestionSource: 'server',
           requestIp: resolveRequestIp(req),
-          userAgent: normalizeNullableString(req.header('user-agent'))
+          userAgent: normalizeNullableString(req.header('user-agent')),
+          idempotencyKey
         },
         { precheckDuplicates: true }
       );
@@ -1693,6 +1778,21 @@ export function createTrackingRouter() {
         });
       }
 
+      const rawPayload =
+        req.body && typeof req.body === 'object' && !Array.isArray(req.body)
+          ? cloneTrackingRawPayload(req.body as TrackingRawPayload)
+          : {};
+      const sourceQueueKey = resolveIdempotencyKey(req, rawPayload);
+      const sourceRecordId = sourceQueueKey ?? createHash('sha256').update(JSON.stringify(rawPayload)).digest('hex');
+
+      await recordTrackingDeadLetter({
+        eventType: 'tracking_attribution_capture',
+        sourceRecordId,
+        sourceQueueKey,
+        rawPayload,
+        error
+      });
+
       next(error);
     }
   });
@@ -1704,6 +1804,19 @@ export function createTrackingRouter() {
       enforceRateLimit(req);
 
       const rawPayload = cloneTrackingRawPayload(parseTrackingRequestBody(req.body));
+      if (isBotRequest(req, rawPayload)) {
+        logInfo('tracking_ingest_bot_filtered', {
+          userAgent: normalizeNullableString(req.header('user-agent'))
+        });
+        res.status(204).end();
+        return;
+      }
+
+      const idempotencyKey = resolveIdempotencyKey(req, rawPayload);
+      if (idempotencyKey && typeof rawPayload.clientEventId !== 'string') {
+        rawPayload.clientEventId = idempotencyKey;
+      }
+
       const { sanitized: sanitizedInput } = parseTrackingEventRequest(rawPayload);
       const requestIp = resolveRequestIp(req);
       const browserResult = await ingestTrackingEvent(sanitizedInput, rawPayload, requestIp);
@@ -1755,6 +1868,21 @@ export function createTrackingRouter() {
           path: req.baseUrl ? `${req.baseUrl}${req.path}` : req.path
         });
       }
+
+      const rawPayload =
+        req.body && typeof req.body === 'object' && !Array.isArray(req.body)
+          ? cloneTrackingRawPayload(req.body as TrackingRawPayload)
+          : {};
+      const sourceQueueKey = resolveIdempotencyKey(req, rawPayload);
+      const sourceRecordId = sourceQueueKey ?? createHash('sha256').update(JSON.stringify(rawPayload)).digest('hex');
+
+      await recordTrackingDeadLetter({
+        eventType: 'tracking_browser_event',
+        sourceRecordId,
+        sourceQueueKey,
+        rawPayload,
+        error
+      });
 
       next(error);
     }
