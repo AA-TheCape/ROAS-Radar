@@ -1,0 +1,32 @@
+{
+  "displayName": "ROAS Radar __ENVIRONMENT__ MMM Baseline Drift",
+  "documentation": {
+    "content": "MMM baseline calibration drift breached the deterministic anchor threshold. Compare the latest `mmm_model_runs` calibration report with deterministic attribution and follow the runbook: __RUNBOOK_URL_MMM__",
+    "mimeType": "text/markdown"
+  },
+  "combiner": "OR",
+  "enabled": true,
+  "severity": "WARNING",
+  "notificationChannels": __ALERT_NOTIFICATION_CHANNELS__,
+  "conditions": [
+    {
+      "displayName": "MMM max divergence exceeds 25 percent",
+      "conditionThreshold": {
+        "filter": "metric.type=\"logging.googleapis.com/user/roas_mmm_baseline_drift\" resource.type=\"cloud_run_revision\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 0.25,
+        "duration": "3600s",
+        "aggregations": [
+          {
+            "alignmentPeriod": "3600s",
+            "perSeriesAligner": "ALIGN_PERCENTILE_99",
+            "crossSeriesReducer": "REDUCE_MAX"
+          }
+        ],
+        "trigger": {
+          "count": 1
+        }
+      }
+    }
+  ]
+}

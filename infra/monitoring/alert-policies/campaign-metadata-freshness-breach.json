@@ -1,4 +1,32 @@
-New warning alert:
-- `ROAS Radar __ENVIRONMENT__ Campaign Metadata Freshness Breach`
-
-Triggers when stale metadata entity count is above 0 for 30 minutes.
+{
+  "displayName": "ROAS Radar __ENVIRONMENT__ Campaign Metadata Freshness Breach",
+  "documentation": {
+    "content": "Campaign metadata freshness breached the configured threshold. Check `campaign_metadata_freshness_snapshot` and follow the runbook: __RUNBOOK_URL_DATA_QUALITY__",
+    "mimeType": "text/markdown"
+  },
+  "combiner": "OR",
+  "enabled": true,
+  "severity": "WARNING",
+  "notificationChannels": __ALERT_NOTIFICATION_CHANNELS__,
+  "conditions": [
+    {
+      "displayName": "Stale metadata entities present for 30 minutes",
+      "conditionThreshold": {
+        "filter": "metric.type=\"logging.googleapis.com/user/roas_campaign_metadata_stale_count\" resource.type=\"cloud_run_revision\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 0,
+        "duration": "1800s",
+        "aggregations": [
+          {
+            "alignmentPeriod": "1800s",
+            "perSeriesAligner": "ALIGN_PERCENTILE_99",
+            "crossSeriesReducer": "REDUCE_MAX"
+          }
+        ],
+        "trigger": {
+          "count": 1
+        }
+      }
+    }
+  ]
+}

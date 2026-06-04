@@ -1,0 +1,23 @@
+{
+  "name": "roas_mmm_baseline_jobs",
+  "description": "Counts MMM baseline training lifecycle events by stage and governance status.",
+  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"mmm_baseline_job_lifecycle\"",
+  "labelExtractors": {
+    "service": "EXTRACT(jsonPayload.service)",
+    "stage": "EXTRACT(jsonPayload.stage)",
+    "attribution_model": "EXTRACT(jsonPayload.attributionModel)",
+    "governance_status": "EXTRACT(jsonPayload.governanceStatus)"
+  },
+  "metricDescriptor": {
+    "metricKind": "DELTA",
+    "valueType": "INT64",
+    "unit": "1",
+    "displayName": "ROAS Radar MMM Baseline Jobs",
+    "labels": [
+      { "key": "service", "valueType": "STRING", "description": "Service emitting MMM lifecycle telemetry." },
+      { "key": "stage", "valueType": "STRING", "description": "Lifecycle stage." },
+      { "key": "attribution_model", "valueType": "STRING", "description": "Training attribution model." },
+      { "key": "governance_status", "valueType": "STRING", "description": "Calibration governance status." }
+    ]
+  }
+}

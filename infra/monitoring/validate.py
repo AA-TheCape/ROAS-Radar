@@ -15,7 +15,17 @@ DASHBOARD_PATH = ROOT / "dashboard.json"
 
 def load_json(path: pathlib.Path) -> dict:
     raw = path.read_text()
+    raw = raw.replace('"__ALERT_NOTIFICATION_CHANNELS__"', "[]")
     raw = raw.replace("__ALERT_NOTIFICATION_CHANNELS__", "[]")
+    raw = raw.replace("__ENVIRONMENT__", "test")
+    raw = raw.replace("__RUNBOOK_URL_INGESTION__", "docs/runbooks/ingestion-failures.md")
+    raw = raw.replace("__RUNBOOK_URL_META_ORDER_VALUE__", "docs/runbooks/meta-order-value-ingestion.md")
+    raw = raw.replace("__RUNBOOK_URL_ATTRIBUTION__", "docs/runbooks/attribution-worker-backlog.md")
+    raw = raw.replace("__RUNBOOK_URL_ATTRIBUTION_COMPLETENESS__", "docs/runbooks/attribution-completeness.md")
+    raw = raw.replace("__RUNBOOK_URL_API_LATENCY__", "docs/runbooks/api-latency.md")
+    raw = raw.replace("__RUNBOOK_URL_DATA_QUALITY__", "docs/runbooks/identity-data-quality.md")
+    raw = raw.replace("__RUNBOOK_URL_MMM__", "docs/runbooks/mmm-pipelines.md")
+    raw = raw.replace("__DASHBOARD_DISPLAY_NAME__", "ROAS Radar Test Pipeline Health")
     return json.loads(raw)
 
 

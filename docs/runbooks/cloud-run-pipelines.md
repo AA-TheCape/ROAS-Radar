@@ -31,6 +31,7 @@ Run the backend verification contract from a clean Node 22 checkout in this orde
    `terraform -chdir=infra/terraform/gcp-pipeline plan -var-file=environments/<environment>.tfvars`
 2. Confirm Secret Manager has current versions for `DATABASE_URL`, `MIGRATOR_DATABASE_URL`, `REPORTING_API_TOKEN`, and the platform encryption secrets required by the target workloads.
 3. Confirm the previous deploy metadata file is retained under `infra/cloud-run/.deploy-state/` before replacing a live environment.
+4. Confirm production `ALERT_NOTIFICATION_CHANNELS` contains the Cloud Monitoring on-call notification channel resource names before applying monitoring.
 
 For staged releases, prefer:
 
@@ -53,6 +54,9 @@ Do not sign off staging or continue to production unless the smoke evidence incl
 - `META_ADS_ORDER_VALUE_SYNC_ENABLED` is the emergency kill switch for Meta order-value extraction without disabling the broader deploy surface.
 - `META_ADS_METADATA_SCHEDULER_NAME` and `GOOGLE_ADS_METADATA_SCHEDULER_NAME` identify the campaign metadata refresh schedulers created by deploys.
 - `META_ADS_METADATA_REFRESH_REQUESTED_BY` and `GOOGLE_ADS_METADATA_REFRESH_REQUESTED_BY` should appear in `campaign_metadata_sync_job_lifecycle` logs for scheduler-triggered refreshes.
+- `MMM_BASELINE_SCHEDULER_PAUSED` controls whether deploys leave the weekly MMM baseline scheduler active or paused.
+- `MMM_BASELINE_SCHEDULE`, `MMM_BASELINE_TIME_ZONE`, `MMM_BASELINE_LOOKBACK_DAYS`, `MMM_BASELINE_LAG_DAYS`, and `MMM_BASELINE_ATTRIBUTION_MODEL` control the scheduled MMM training window and model anchor.
+- `mmm_baseline_job_lifecycle` logs are the source for MMM failure and drift alerts.
 
 Recommended operating posture:
 
@@ -64,11 +68,15 @@ Recommended operating posture:
 
 1. If the issue is limited to Meta hourly ingestion, pause only the Meta scheduler:
    `sh infra/cloud-run/scheduler.sh <environment> meta-order-value pause`
-2. If the scheduler should stay deployed but order-value extraction must stop, set `META_ADS_ORDER_VALUE_SYNC_ENABLED="false"` in the target environment file and rerun `sh infra/cloud-run/deploy.sh <environment>`.
-3. If the service rollout itself must be reverted, use `sh infra/cloud-run/rollback.sh <environment> <deploy-metadata-file> previous`.
-4. If a schema change must be reversed, apply the matching manual rollback file from `db/rollbacks/` with the migrator database credentials, then rerun the smoke test before resuming schedulers.
-5. After remediation, resume the scheduler:
+2. If MMM calibration drift or model failures are active, pause the MMM scheduler while upstream freshness is repaired:
+   `sh infra/cloud-run/scheduler.sh <environment> mmm-baseline pause`
+3. If the scheduler should stay deployed but order-value extraction must stop, set `META_ADS_ORDER_VALUE_SYNC_ENABLED="false"` in the target environment file and rerun `sh infra/cloud-run/deploy.sh <environment>`.
+4. If the service rollout itself must be reverted, use `sh infra/cloud-run/rollback.sh <environment> <deploy-metadata-file> previous`.
+5. If a schema change must be reversed, apply the matching manual rollback file from `db/rollbacks/` with the migrator database credentials, then rerun the smoke test before resuming schedulers.
+6. After remediation, resume the scheduler:
    `sh infra/cloud-run/scheduler.sh <environment> meta-order-value resume`
+7. For MMM, manually execute one successful baseline job and then resume:
+   `sh infra/cloud-run/scheduler.sh <environment> mmm-baseline resume`
 
 For upstream metadata quota incidents, pause the affected campaign metadata scheduler with `gcloud scheduler jobs pause`, then use `gcloud scheduler jobs resume` after `campaign_metadata_sync_job_lifecycle` logs show successful manual or scheduler refreshes.
 
@@ -83,3 +91,4 @@ Attach these artifacts to the release record before production sign-off:
 - Staging rollback drill output when `RUN_STAGING_ROLLBACK_DRILL=true`.
 - Scheduler status for Meta order-value, attribution materialization, identity graph backfill, retention, and data quality jobs.
 - Latest `mmm_model_runs` row for the baseline model after the MMM scheduler or manual job run.
+- Monitoring apply output from `npm run ops:monitoring:apply -- <environment>` showing log metrics, alert policies, and the SLO dashboard were updated.

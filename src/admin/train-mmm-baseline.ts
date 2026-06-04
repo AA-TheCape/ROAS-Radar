@@ -1,5 +1,8 @@
+import { randomUUID } from 'node:crypto';
+
 import { pool } from '../db/pool.js';
 import { trainBaselineMmmModel } from '../modules/mmm/baseline.js';
+import { emitMmmBaselineJobLifecycleLog } from '../observability/index.js';
 
 function readFlag(name: string): string | null {
   const prefixed = `--${name}`;
@@ -79,41 +82,111 @@ function resolveTrainingWindow() {
 
 async function main() {
   const { startDate, endDate } = resolveTrainingWindow();
+  const startedAt = new Date();
+  const workerId = `mmm-baseline-${randomUUID()}`;
+  const requestedBy = readFlag('submitted-by')?.trim() || process.env.MMM_BASELINE_SUBMITTED_BY?.trim() || 'admin-cli';
+  const attributionModel =
+    readFlag('attribution-model')?.trim() || process.env.MMM_BASELINE_ATTRIBUTION_MODEL?.trim() || undefined;
 
-  const run = await trainBaselineMmmModel({
-    startDate,
-    endDate,
-    attributionModel: readFlag('attribution-model')?.trim() || process.env.MMM_BASELINE_ATTRIBUTION_MODEL?.trim() || undefined,
-    maxSegments: readNumberFlag('max-segments') ?? readNumberEnv('MMM_BASELINE_MAX_SEGMENTS'),
-    adstockDecay: readNumberFlag('adstock-decay') ?? readNumberEnv('MMM_BASELINE_ADSTOCK_DECAY'),
-    ridgeLambda: readNumberFlag('ridge-lambda') ?? readNumberEnv('MMM_BASELINE_RIDGE_LAMBDA'),
-    posteriorDraws: readNumberFlag('posterior-draws') ?? readNumberEnv('MMM_BASELINE_POSTERIOR_DRAWS'),
-    posteriorChains: readNumberFlag('posterior-chains') ?? readNumberEnv('MMM_BASELINE_POSTERIOR_CHAINS'),
-    holdoutRatio: readNumberFlag('holdout-ratio') ?? readNumberEnv('MMM_BASELINE_HOLDOUT_RATIO'),
-    calibrationWarnDivergenceRate:
-      readNumberFlag('calibration-warn-divergence-rate') ?? readNumberEnv('MMM_BASELINE_CALIBRATION_WARN_DIVERGENCE_RATE'),
-    calibrationAlertDivergenceRate:
-      readNumberFlag('calibration-alert-divergence-rate') ??
-      readNumberEnv('MMM_BASELINE_CALIBRATION_ALERT_DIVERGENCE_RATE'),
-    submittedBy: readFlag('submitted-by')?.trim() || process.env.MMM_BASELINE_SUBMITTED_BY?.trim() || 'admin-cli'
+  emitMmmBaselineJobLifecycleLog({
+    stage: 'started',
+    workerId,
+    requestedBy,
+    startedAt: startedAt.toISOString(),
+    trainingStartDate: startDate,
+    trainingEndDate: endDate,
+    attributionModel: attributionModel ?? null
   });
 
-  process.stdout.write(
-    `${JSON.stringify(
-      {
-        id: run.id,
-        modelVersion: run.modelVersion,
-        attributionModel: run.attributionModel,
-        trainingStartDate: run.trainingStartDate,
-        trainingEndDate: run.trainingEndDate,
-        inputSummary: run.inputSummary,
-        calibrationReport: run.calibrationReport,
-        validationReport: run.validationReport
-      },
-      null,
-      2
-    )}\n`
-  );
+  try {
+    const run = await trainBaselineMmmModel({
+      startDate,
+      endDate,
+      attributionModel,
+      maxSegments: readNumberFlag('max-segments') ?? readNumberEnv('MMM_BASELINE_MAX_SEGMENTS'),
+      adstockDecay: readNumberFlag('adstock-decay') ?? readNumberEnv('MMM_BASELINE_ADSTOCK_DECAY'),
+      ridgeLambda: readNumberFlag('ridge-lambda') ?? readNumberEnv('MMM_BASELINE_RIDGE_LAMBDA'),
+      posteriorDraws: readNumberFlag('posterior-draws') ?? readNumberEnv('MMM_BASELINE_POSTERIOR_DRAWS'),
+      posteriorChains: readNumberFlag('posterior-chains') ?? readNumberEnv('MMM_BASELINE_POSTERIOR_CHAINS'),
+      holdoutRatio: readNumberFlag('holdout-ratio') ?? readNumberEnv('MMM_BASELINE_HOLDOUT_RATIO'),
+      calibrationWarnDivergenceRate:
+        readNumberFlag('calibration-warn-divergence-rate') ??
+        readNumberEnv('MMM_BASELINE_CALIBRATION_WARN_DIVERGENCE_RATE'),
+      calibrationAlertDivergenceRate:
+        readNumberFlag('calibration-alert-divergence-rate') ??
+        readNumberEnv('MMM_BASELINE_CALIBRATION_ALERT_DIVERGENCE_RATE'),
+      submittedBy: requestedBy
+    });
+    const completedAt = new Date();
+    const divergenceAlerts = Array.isArray(run.calibrationReport.divergenceAlerts)
+      ? run.calibrationReport.divergenceAlerts
+      : [];
+    const maxDivergenceRate = divergenceAlerts.reduce((max, alert) => {
+      if (!alert || typeof alert !== 'object' || !('divergenceRate' in alert)) {
+        return max;
+      }
+
+      const rate = Number((alert as { divergenceRate?: unknown }).divergenceRate);
+      return Number.isFinite(rate) ? Math.max(max, rate) : max;
+    }, 0);
+    const holdout = run.validationReport.holdout as { mape?: unknown; rmse?: unknown } | undefined;
+
+    emitMmmBaselineJobLifecycleLog({
+      stage: 'completed',
+      workerId,
+      requestedBy,
+      startedAt: startedAt.toISOString(),
+      completedAt: completedAt.toISOString(),
+      durationMs: completedAt.getTime() - startedAt.getTime(),
+      trainingStartDate: run.trainingStartDate,
+      trainingEndDate: run.trainingEndDate,
+      attributionModel: run.attributionModel,
+      modelRunId: run.id,
+      modelVersion: run.modelVersion,
+      martVersion: run.martVersion,
+      inputRowCount: Number(run.inputSummary.rowCount ?? 0),
+      paidMediaRowCount: Number(run.inputSummary.paidMediaRowCount ?? 0),
+      observationCount: Number(run.inputSummary.observationCount ?? 0),
+      holdoutMape: typeof holdout?.mape === 'number' ? holdout.mape : null,
+      holdoutRmse: typeof holdout?.rmse === 'number' ? holdout.rmse : null,
+      governanceStatus:
+        typeof run.calibrationReport.governanceStatus === 'string' ? run.calibrationReport.governanceStatus : null,
+      divergenceAlertCount: divergenceAlerts.length,
+      maxDivergenceRate
+    });
+
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          id: run.id,
+          modelVersion: run.modelVersion,
+          attributionModel: run.attributionModel,
+          trainingStartDate: run.trainingStartDate,
+          trainingEndDate: run.trainingEndDate,
+          inputSummary: run.inputSummary,
+          calibrationReport: run.calibrationReport,
+          validationReport: run.validationReport
+        },
+        null,
+        2
+      )}\n`
+    );
+  } catch (error) {
+    const completedAt = new Date();
+    emitMmmBaselineJobLifecycleLog({
+      stage: 'failed',
+      workerId,
+      requestedBy,
+      startedAt: startedAt.toISOString(),
+      completedAt: completedAt.toISOString(),
+      durationMs: completedAt.getTime() - startedAt.getTime(),
+      trainingStartDate: startDate,
+      trainingEndDate: endDate,
+      attributionModel: attributionModel ?? null,
+      error
+    });
+    throw error;
+  }
 }
 
 main()
