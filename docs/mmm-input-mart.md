@@ -24,6 +24,8 @@ Run it after the mart has been refreshed:
 npm run mmm:train-baseline -- --start-date 2026-04-01 --end-date 2026-04-30 --attribution-model last_touch
 ```
 
+For Cloud Run scheduling, the same trainer reads `MMM_BASELINE_LOOKBACK_DAYS`, `MMM_BASELINE_LAG_DAYS`, `MMM_BASELINE_SUBMITTED_BY`, and optional model tuning environment variables. The checked-in deployment contract runs `roas-radar-mmm-baseline-<environment>` weekly after attribution materialization so baseline model outputs are promoted through the same staging and production path as the rest of the pipeline.
+
 The trainer reads only `mmm_daily_input_mart_v1`:
 
 - `paid_media` rows become media features using `log1p(adstock(spend))`.

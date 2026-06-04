@@ -4,7 +4,7 @@ This directory contains the checked-in deployment contract for the Node backend,
 
 The root backend `Dockerfile` is the production packaging path for every backend Cloud Run workload in this directory. It builds on `node:22-bookworm-slim` and defaults the API container command to `npm run start:api`.
 
-The deployment flow assumes eleven deployable workloads plus seven Cloud Scheduler triggers:
+The deployment flow assumes these Cloud Run workloads and Cloud Scheduler triggers:
 
 - `roas-radar-api`: public Cloud Run service for `/track`, Shopify webhooks, and authenticated reporting APIs.
 - `roas-radar-dashboard`: public Cloud Run service for the React reporting dashboard.
@@ -17,6 +17,7 @@ The deployment flow assumes eleven deployable workloads plus seven Cloud Schedul
 - `roas-radar-data-quality`: Cloud Run Job that runs `npm run data-quality:check:start` once per invocation.
 - `roas-radar-identity-graph-backfill`: Cloud Run Job that runs `npm run identity:backfill-graph:start` over a recent window to reconcile graph attachments and catch missed identity stitching.
 - `roas-radar-order-attribution-materialization`: Cloud Run Job that runs `npm run attribution:materialization:start` over a recent order window to recover attribution and refresh reporting aggregates.
+- `roas-radar-mmm-baseline`: Cloud Run Job that runs `npm run mmm:train-baseline:start` over the configured lookback window and writes deterministic baseline MMM outputs.
 - `roas-radar-meta-ads-sync-scheduler`: Cloud Scheduler job that invokes the Meta Ads Cloud Run Job.
 - `roas-radar-meta-order-value-sync-scheduler`: Cloud Scheduler job that invokes the Meta order-value Cloud Run Job.
 - `roas-radar-google-ads-sync-scheduler`: Cloud Scheduler job that invokes the Google Ads Cloud Run Job.
@@ -24,6 +25,7 @@ The deployment flow assumes eleven deployable workloads plus seven Cloud Schedul
 - `roas-radar-data-quality-scheduler`: Cloud Scheduler job that invokes the data-quality Cloud Run Job.
 - `roas-radar-identity-graph-backfill-scheduler`: Cloud Scheduler job that invokes the identity-graph backfill Cloud Run Job.
 - `roas-radar-order-attribution-materialization-scheduler`: Cloud Scheduler job that invokes the order-attribution materialization Cloud Run Job.
+- `roas-radar-mmm-baseline-scheduler`: Cloud Scheduler job that invokes the baseline MMM training Cloud Run Job.
 
 ## Files
 
@@ -70,16 +72,19 @@ The checked-in env files are valid shell files. Replace the placeholder project 
 - `DATA_QUALITY_JOB_NAME`
 - `IDENTITY_GRAPH_BACKFILL_JOB_NAME`
 - `ORDER_ATTRIBUTION_MATERIALIZATION_JOB_NAME`
+- `MMM_BASELINE_JOB_NAME`
 - `RETENTION_SCHEDULER_JOB_NAME`
 - `DATA_QUALITY_SCHEDULER_JOB_NAME`
 - `IDENTITY_GRAPH_BACKFILL_SCHEDULER_JOB_NAME`
 - `ORDER_ATTRIBUTION_MATERIALIZATION_SCHEDULER_JOB_NAME`
+- `MMM_BASELINE_SCHEDULER_JOB_NAME`
 - `RETENTION_JOB_SERVICE_ACCOUNT_NAME`
 - `META_ADS_JOB_SERVICE_ACCOUNT_NAME`
 - `GOOGLE_ADS_JOB_SERVICE_ACCOUNT_NAME`
 - `DATA_QUALITY_JOB_SERVICE_ACCOUNT_NAME`
 - `IDENTITY_GRAPH_BACKFILL_JOB_SERVICE_ACCOUNT_NAME`
 - `ORDER_ATTRIBUTION_MATERIALIZATION_JOB_SERVICE_ACCOUNT_NAME`
+- `MMM_BASELINE_JOB_SERVICE_ACCOUNT_NAME`
 - `SCHEDULER_INVOKER_SERVICE_ACCOUNT_NAME`
 - `ADS_SYNC_DATABASE_POOL_MAX`
 - `ADS_SYNC_TIME_ZONE`
@@ -105,6 +110,12 @@ The checked-in env files are valid shell files. Replace the placeholder project 
 - `DATA_QUALITY_SCHEDULE`
 - `IDENTITY_GRAPH_BACKFILL_SCHEDULE`
 - `ORDER_ATTRIBUTION_MATERIALIZATION_SCHEDULE`
+- `MMM_BASELINE_SCHEDULE`
+- `MMM_BASELINE_TIME_ZONE`
+- `MMM_BASELINE_SCHEDULER_PAUSED`
+- `MMM_BASELINE_LOOKBACK_DAYS`
+- `MMM_BASELINE_LAG_DAYS`
+- `MMM_BASELINE_SUBMITTED_BY`
 - `IDENTITY_GRAPH_BACKFILL_REQUESTED_BY`
 - `IDENTITY_GRAPH_BACKFILL_LOOKBACK_DAYS`
 - `IDENTITY_GRAPH_BACKFILL_LAG_HOURS`
@@ -134,13 +145,15 @@ The checked-in env files are valid shell files. Replace the placeholder project 
 
 Run these commands from the repo root on Node 22 before deploying:
 
-1. Provision Cloud SQL and private networking from `infra/cloud-sql/`.
-2. Run `infra/cloud-run/bootstrap-iam.sh ENVIRONMENT` to create service accounts and grant IAM roles.
-3. Create the environment secrets in Secret Manager.
-4. Populate `infra/cloud-run/environments/dev.env`, `staging.env`, and `production.env`.
+1. Provision deterministic GCP infrastructure from `infra/terraform/gcp-pipeline/`.
+2. Populate the Secret Manager secret versions created by Terraform.
+3. Run `db/bootstrap/001_roles.sql` once as a database admin for a new database.
+4. Populate `infra/cloud-run/environments/dev.env`, `staging.env`, and `production.env` with the Terraform outputs.
 5. Deploy with `infra/cloud-run/deploy.sh ENVIRONMENT`.
 6. Apply monitoring with `infra/monitoring/apply.sh ENVIRONMENT`.
 7. Validate the scheduled jobs and schedulers with `docs/runbooks/cloud-run-pipelines.md`.
+
+`infra/cloud-run/bootstrap-iam.sh ENVIRONMENT` remains available for legacy environments that have not adopted Terraform yet. New environments should prefer Terraform so Cloud SQL, IAM, secrets, Cloud Run services/jobs, and schedulers are all reviewed as infrastructure-as-code.
 
 This sequence validates the compiled backend entrypoints, the migration check, the GA4-critical test suite, and the Docker packaging path that Cloud Run consumes.
 

@@ -19,12 +19,18 @@ Use this runbook when deploying or operating the scheduled Cloud Run workers in 
   - `roas-radar-data-quality`
   - `roas-radar-identity-graph-backfill`
   - `roas-radar-order-attribution-materialization`
+  - `roas-radar-mmm-baseline`
 - Cloud Scheduler:
   - one scheduler per recurring Cloud Run Job
 
 ## Pre-deploy checks
 
 Run the backend verification contract from a clean Node 22 checkout in this order:
+
+1. Confirm the target environment infrastructure plan has no unexpected drift:
+   `terraform -chdir=infra/terraform/gcp-pipeline plan -var-file=environments/<environment>.tfvars`
+2. Confirm Secret Manager has current versions for `DATABASE_URL`, `MIGRATOR_DATABASE_URL`, `REPORTING_API_TOKEN`, and the platform encryption secrets required by the target workloads.
+3. Confirm the previous deploy metadata file is retained under `infra/cloud-run/.deploy-state/` before replacing a live environment.
 
 For staged releases, prefer:
 
@@ -60,7 +66,20 @@ Recommended operating posture:
    `sh infra/cloud-run/scheduler.sh <environment> meta-order-value pause`
 2. If the scheduler should stay deployed but order-value extraction must stop, set `META_ADS_ORDER_VALUE_SYNC_ENABLED="false"` in the target environment file and rerun `sh infra/cloud-run/deploy.sh <environment>`.
 3. If the service rollout itself must be reverted, use `sh infra/cloud-run/rollback.sh <environment> <deploy-metadata-file> previous`.
-4. After remediation, resume the scheduler:
+4. If a schema change must be reversed, apply the matching manual rollback file from `db/rollbacks/` with the migrator database credentials, then rerun the smoke test before resuming schedulers.
+5. After remediation, resume the scheduler:
    `sh infra/cloud-run/scheduler.sh <environment> meta-order-value resume`
 
 For upstream metadata quota incidents, pause the affected campaign metadata scheduler with `gcloud scheduler jobs pause`, then use `gcloud scheduler jobs resume` after `campaign_metadata_sync_job_lifecycle` logs show successful manual or scheduler refreshes.
+
+## Promotion Evidence
+
+Attach these artifacts to the release record before production sign-off:
+
+- Terraform plan output for staging and production.
+- Cloud Build URL and image tag promoted by `cloudbuild.release.yaml`.
+- Migration job execution id and final status for staging and production.
+- Smoke-test output for staging and production.
+- Staging rollback drill output when `RUN_STAGING_ROLLBACK_DRILL=true`.
+- Scheduler status for Meta order-value, attribution materialization, identity graph backfill, retention, and data quality jobs.
+- Latest `mmm_model_runs` row for the baseline model after the MMM scheduler or manual job run.
