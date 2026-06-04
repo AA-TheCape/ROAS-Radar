@@ -28,15 +28,21 @@ import {
   TableWrap
 } from './AuthenticatedUi';
 import {
+  approveMmmReadinessGate,
+  blockMmmReadinessGate,
   fetchExposureCoverage,
   fetchMmmExport,
   fetchMmmModelRuns,
+  fetchMmmReadinessGate,
+  refreshMmmReadinessGate,
+  waiveMmmReadinessGate,
   type ExposureCoverageResponse,
   type MmmExportQuery,
   type MmmExportResponse,
   type MmmExportRow,
   type MmmModelRun,
   type MmmModelRunsResponse,
+  type MmmReadinessGateResponse,
   type MmmReadinessStatus
 } from '../lib/api';
 import { formatCurrency, formatDateLabel, formatDateTimeLabel, formatNumber, formatPercent } from '../lib/format';
@@ -51,7 +57,7 @@ type MmmReadinessDashboardProps = {
   reportingTimezone: string;
 };
 
-type ChecklistStatus = 'pass' | 'warn' | 'fail' | 'pending';
+type ChecklistStatus = 'pass' | 'warn' | 'fail' | 'pending' | 'waived';
 
 type ChecklistItem = {
   label: string;
@@ -64,6 +70,8 @@ type OwnerApproval = {
   owner: string;
   status: ChecklistStatus;
   detail: string;
+  approvedBy?: string | null;
+  approvedAt?: string | null;
 };
 
 type CalibrationGovernanceSummary = {
@@ -161,7 +169,7 @@ function statusTone(status: ChecklistStatus): 'success' | 'warning' | 'danger' |
     return 'danger';
   }
 
-  return 'neutral';
+  return status === 'waived' ? 'teal' : 'neutral';
 }
 
 function readinessTone(status: MmmReadinessStatus): 'success' | 'warning' | 'danger' {
@@ -343,14 +351,22 @@ export default function MmmReadinessDashboard({ reportingTimezone }: MmmReadines
   const [query, setQuery] = useState<MmmExportQuery>(() => buildDefaultQuery(reportingTimezone));
   const [draftQuery, setDraftQuery] = useState<MmmExportQuery>(() => buildDefaultQuery(reportingTimezone));
   const [exportSection, setExportSection] = useState<AsyncSection<MmmExportResponse>>(createSection({ loading: true }));
+  const [gateSection, setGateSection] = useState<AsyncSection<MmmReadinessGateResponse>>(createSection({ loading: true }));
   const [modelRunsSection, setModelRunsSection] = useState<AsyncSection<MmmModelRunsResponse>>(createSection({ loading: true }));
   const [exposureCoverageSection, setExposureCoverageSection] = useState<AsyncSection<ExposureCoverageResponse>>(
     createSection({ loading: true })
   );
+  const [approvalOwner, setApprovalOwner] = useState('Product');
+  const [decisionReason, setDecisionReason] = useState('');
+  const [waiverChecklistKey, setWaiverChecklistKey] = useState('');
+  const [waiverReason, setWaiverReason] = useState('');
+  const [gateActionError, setGateActionError] = useState<string | null>(null);
+  const [gateActionLoading, setGateActionLoading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     setExportSection(createSection({ loading: true }));
+    setGateSection(createSection({ loading: true }));
     setModelRunsSection(createSection({ loading: true }));
     setExposureCoverageSection(createSection({ loading: true }));
 
@@ -363,6 +379,18 @@ export default function MmmReadinessDashboard({ reportingTimezone }: MmmReadines
       .catch((error: Error) => {
         if (!cancelled) {
           setExportSection(createSection({ error: error.message }));
+        }
+      });
+
+    fetchMmmReadinessGate(query)
+      .then((response) => {
+        if (!cancelled) {
+          setGateSection(createSection({ data: response }));
+        }
+      })
+      .catch((error: Error) => {
+        if (!cancelled) {
+          setGateSection(createSection({ error: error.message }));
         }
       });
 
@@ -403,10 +431,38 @@ export default function MmmReadinessDashboard({ reportingTimezone }: MmmReadines
     };
   }, [query]);
 
-  const checklist = useMemo(() => deriveMmmChecklist(exportSection.data), [exportSection.data]);
+  useEffect(() => {
+    const firstFailedKey = gateSection.data?.gate.checklistStatuses.find((item) => item.status === 'fail')?.key;
+    if (firstFailedKey && !waiverChecklistKey) {
+      setWaiverChecklistKey(firstFailedKey);
+    }
+  }, [gateSection.data?.gate.checklistStatuses, waiverChecklistKey]);
+
+  const persistedGate = gateSection.data?.gate;
+  const checklist = useMemo(
+    () =>
+      persistedGate
+        ? persistedGate.checklistStatuses.map((item) => ({
+            label: item.label,
+            owner: item.owner,
+            status: item.status,
+            detail: item.waiverReason ? `${item.detail} Waiver: ${item.waiverReason}` : item.detail
+          }))
+        : deriveMmmChecklist(exportSection.data),
+    [exportSection.data, persistedGate]
+  );
   const approvals = useMemo(
-    () => deriveOwnerApprovals(checklist, modelRunsSection.data),
-    [checklist, modelRunsSection.data]
+    () =>
+      persistedGate
+        ? persistedGate.ownerApprovals.map((approval) => ({
+            owner: approval.owner,
+            status: approval.status,
+            detail: approval.detail,
+            approvedBy: approval.approvedBy,
+            approvedAt: approval.approvedAt
+          }))
+        : deriveOwnerApprovals(checklist, modelRunsSection.data),
+    [checklist, modelRunsSection.data, persistedGate]
   );
   const summary = useMemo(() => summarizeRows(exportSection.data?.rows ?? []), [exportSection.data?.rows]);
   const latestSpendSync = latestDate((exportSection.data?.rows ?? []).map((row) => row.spendLastSyncedAt));
@@ -421,6 +477,45 @@ export default function MmmReadinessDashboard({ reportingTimezone }: MmmReadines
       ...draftQuery,
       limit: DEFAULT_LIMIT
     });
+  }
+
+  async function runGateAction(action: 'refresh' | 'approve' | 'waive' | 'block') {
+    setGateActionError(null);
+    setGateActionLoading(true);
+
+    try {
+      const payload = {
+        ...query,
+        owner: approvalOwner,
+        reason: decisionReason.trim() || undefined
+      };
+      const response =
+        action === 'refresh'
+          ? await refreshMmmReadinessGate(query)
+          : action === 'approve'
+            ? await approveMmmReadinessGate(payload)
+            : action === 'waive'
+              ? await waiveMmmReadinessGate({
+                  ...payload,
+                  waiver: {
+                    checklistKey: waiverChecklistKey,
+                    reason: waiverReason.trim()
+                  }
+                })
+              : await blockMmmReadinessGate(payload);
+
+      setGateSection(createSection({ data: response }));
+      if (action === 'waive') {
+        setWaiverReason('');
+      }
+      if (action !== 'refresh') {
+        setDecisionReason('');
+      }
+    } catch (error) {
+      setGateActionError(error instanceof Error ? error.message : 'MMM readiness gate action failed');
+    } finally {
+      setGateActionLoading(false);
+    }
   }
 
   return (
@@ -519,6 +614,99 @@ export default function MmmReadinessDashboard({ reportingTimezone }: MmmReadines
         </Card>
       </div>
 
+      <div className="grid gap-card xl:grid-cols-[0.9fr_1.1fr]">
+        <Card>
+          <CardHeader>
+            <div>
+              <CardTitle>Persisted gate</CardTitle>
+              <CardDescription>Stored readiness decision, evidence hash, unresolved critical count, and final approved or blocked state.</CardDescription>
+            </div>
+            {persistedGate ? <Badge tone={persistedGate.finalState === 'approved' ? 'success' : 'danger'}>{persistedGate.finalState}</Badge> : null}
+          </CardHeader>
+          <SectionState
+            loading={gateSection.loading}
+            error={gateSection.error}
+            empty={!persistedGate}
+            emptyLabel="No persisted MMM readiness gate is available for this window."
+            compact
+          >
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="rounded-card border border-line/60 bg-surface-alt/65 p-4">
+                <Eyebrow>Gate status</Eyebrow>
+                <MetricValue>{persistedGate?.gateStatus ?? 'pending'}</MetricValue>
+                <MetricCopy>{persistedGate?.decisionReason ?? 'Awaiting owner decision.'}</MetricCopy>
+              </div>
+              <div className="rounded-card border border-line/60 bg-surface-alt/65 p-4">
+                <Eyebrow>Evidence hash</Eyebrow>
+                <MetricValue className="break-all text-base">{persistedGate?.evidenceHash.slice(0, 16)}</MetricValue>
+                <MetricCopy>
+                  {formatNumber(persistedGate?.unresolvedCriticalIssueCount)} unresolved critical issues, updated{' '}
+                  {formatDateTimeLabel(persistedGate?.updatedAt, reportingTimezone)}.
+                </MetricCopy>
+              </div>
+            </div>
+          </SectionState>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <div>
+              <CardTitle>Gate actions</CardTitle>
+              <CardDescription>Refresh evidence, record owner approval, create a waiver, or explicitly block this gate.</CardDescription>
+            </div>
+          </CardHeader>
+          <div className="grid gap-4">
+            <FieldGrid>
+              <Field label="Owner">
+                <Select value={approvalOwner} onChange={(event) => setApprovalOwner(event.target.value)}>
+                  {['Product', 'Analytics', 'Frontend', 'Data Platform', 'Modeling'].map((owner) => (
+                    <option key={owner} value={owner}>
+                      {owner}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field label="Decision note">
+                <Input value={decisionReason} onChange={(event) => setDecisionReason(event.target.value)} placeholder="Optional approval or block note" />
+              </Field>
+              <Field label="Waiver item">
+                <Select value={waiverChecklistKey} onChange={(event) => setWaiverChecklistKey(event.target.value)}>
+                  {(persistedGate?.checklistStatuses ?? [])
+                    .filter((item) => item.status === 'fail' || item.status === 'waived')
+                    .map((item) => (
+                      <option key={item.key} value={item.key}>
+                        {item.label}
+                      </option>
+                    ))}
+                </Select>
+              </Field>
+              <Field label="Waiver reason">
+                <Input value={waiverReason} onChange={(event) => setWaiverReason(event.target.value)} placeholder="Required for waiver" />
+              </Field>
+            </FieldGrid>
+            {gateActionError ? <p className="text-body text-danger">{gateActionError}</p> : null}
+            <ButtonRow>
+              <Button type="button" onClick={() => void runGateAction('refresh')} disabled={gateActionLoading}>
+                Refresh evidence
+              </Button>
+              <Button type="button" onClick={() => void runGateAction('approve')} disabled={gateActionLoading}>
+                Approve owner
+              </Button>
+              <Button
+                type="button"
+                onClick={() => void runGateAction('waive')}
+                disabled={gateActionLoading || !waiverChecklistKey || !waiverReason.trim()}
+              >
+                Record waiver
+              </Button>
+              <Button type="button" onClick={() => void runGateAction('block')} disabled={gateActionLoading}>
+                Block gate
+              </Button>
+            </ButtonRow>
+          </div>
+        </Card>
+      </div>
+
       <div className="grid gap-card xl:grid-cols-[1.1fr_0.9fr]">
         <Card>
           <CardHeader>
@@ -566,6 +754,11 @@ export default function MmmReadinessDashboard({ reportingTimezone }: MmmReadines
                   <Badge tone={statusTone(approval.status)}>{formatStatus(approval.status)}</Badge>
                 </div>
                 <p className="mt-2 text-body text-ink-muted">{approval.detail}</p>
+                {approval.approvedBy ? (
+                  <p className="mt-2 text-caption text-ink-soft">
+                    {approval.approvedBy} at {formatDateTimeLabel(approval.approvedAt, reportingTimezone)}
+                  </p>
+                ) : null}
               </div>
             ))}
           </div>

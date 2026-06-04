@@ -1,8 +1,10 @@
+import { createHash } from 'node:crypto';
+
 import { Router } from 'express';
 import { z } from 'zod';
 
 import { query } from '../../db/pool.js';
-import { attachAuthContext, requireAuthenticated } from '../auth/index.js';
+import { attachAuthContext, requireAuthenticated, type AuthContext } from '../auth/index.js';
 import { ATTRIBUTION_MODELS } from '../attribution/engine.js';
 import {
   backfillMmmCampaignMetadata,
@@ -28,19 +30,20 @@ const MMM_SCHEMA_VERSION = 'mmm_daily_input_mart_v1';
 
 const dateStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
-const mmmQuerySchema = z
-  .object({
-    startDate: dateStringSchema,
-    endDate: dateStringSchema,
-    martRowType: z.enum(['paid_media', 'attribution']).optional(),
-    attributionModel: z.enum(ATTRIBUTION_MODELS).optional(),
-    platform: z.enum(['meta', 'google', 'taxonomy']).optional(),
-    source: z.string().trim().min(1).max(200).optional(),
-    campaign: z.string().trim().min(1).max(500).optional(),
-    format: z.enum(['json', 'csv']).optional().default('json'),
-    limit: z.coerce.number().int().positive().max(10000).optional().default(1000),
-    offset: z.coerce.number().int().min(0).optional().default(0)
-  })
+const mmmQueryBaseSchema = z.object({
+  startDate: dateStringSchema,
+  endDate: dateStringSchema,
+  martRowType: z.enum(['paid_media', 'attribution']).optional(),
+  attributionModel: z.enum(ATTRIBUTION_MODELS).optional(),
+  platform: z.enum(['meta', 'google', 'taxonomy']).optional(),
+  source: z.string().trim().min(1).max(200).optional(),
+  campaign: z.string().trim().min(1).max(500).optional(),
+  format: z.enum(['json', 'csv']).optional().default('json'),
+  limit: z.coerce.number().int().positive().max(10000).optional().default(1000),
+  offset: z.coerce.number().int().min(0).optional().default(0)
+});
+
+const mmmQuerySchema = mmmQueryBaseSchema
   .superRefine((value, ctx) => {
     if (value.startDate > value.endDate) {
       ctx.addIssue({
@@ -107,10 +110,57 @@ const modelRunsQuerySchema = z
     }
   });
 
+const readinessGateBaseSchema = mmmQueryBaseSchema.omit({ format: true, limit: true, offset: true });
+
+const readinessGateQuerySchema = readinessGateBaseSchema.superRefine((value, ctx) => {
+  if (value.startDate > value.endDate) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'startDate must be on or before endDate',
+      path: ['startDate']
+    });
+  }
+});
+
+const readinessGateMutationSchema = z.object({
+  owner: z.string().trim().min(1).max(120).optional(),
+  reason: z.string().trim().min(1).max(1000).optional(),
+  waiver: z
+    .object({
+      checklistKey: z.string().trim().min(1).max(120),
+      reason: z.string().trim().min(1).max(1000),
+      expiresAt: z.string().datetime().optional()
+    })
+    .optional()
+});
+
+const readinessGateDecisionSchema = readinessGateBaseSchema.merge(readinessGateMutationSchema).superRefine((value, ctx) => {
+  if (value.startDate > value.endDate) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'startDate must be on or before endDate',
+      path: ['startDate']
+    });
+  }
+});
+
+const readinessGateWaiverSchema = readinessGateBaseSchema
+  .merge(readinessGateMutationSchema.required({ waiver: true }))
+  .superRefine((value, ctx) => {
+    if (value.startDate > value.endDate) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'startDate must be on or before endDate',
+        path: ['startDate']
+      });
+    }
+  });
+
 type MmmQueryInput = z.infer<typeof mmmQuerySchema>;
 type TaxonomyDriftQueryInput = z.infer<typeof taxonomyDriftQuerySchema>;
 
 type MmmReadinessStatus = 'ready' | 'partial' | 'not_ready';
+type GateChecklistStatus = 'pass' | 'warn' | 'fail' | 'pending' | 'waived';
 
 type MmmReadinessRow = {
   metric_date: string;
@@ -244,6 +294,42 @@ type TaxonomyDriftSampleRow = {
   campaign_id: string | null;
   metadata_last_seen_at: Date | string | null;
   metadata_updated_at: Date | string | null;
+};
+
+type DataQualityBlockerRow = {
+  check_key: string;
+  status: string;
+  severity: string;
+  discrepancy_count: string | number;
+  summary: string;
+  checked_at: Date | string;
+};
+
+type MmmReadinessGateRow = {
+  id: string;
+  gate_version: string;
+  start_date: string;
+  end_date: string;
+  mart_row_type: string | null;
+  attribution_model: string | null;
+  platform: string | null;
+  source: string | null;
+  campaign: string | null;
+  evidence_payload: unknown;
+  checklist_statuses: unknown;
+  owner_approvals: unknown;
+  waivers: unknown;
+  unresolved_critical_issue_count: string | number;
+  evidence_hash: string;
+  gate_status: string;
+  final_state: string;
+  decision_reason: string | null;
+  decided_by: string | null;
+  decided_at: Date | string | null;
+  created_by: string;
+  updated_by: string;
+  created_at: Date | string;
+  updated_at: Date | string;
 };
 
 function parseInput<TSchema extends z.ZodTypeAny>(schema: TSchema, input: unknown): z.infer<TSchema> {
@@ -644,6 +730,681 @@ function mapMmmModelRun(row: MmmModelRunRow) {
   };
 }
 
+function getActorLabel(auth: AuthContext | null | undefined): string {
+  if (auth?.kind === 'user') {
+    return auth.user.email;
+  }
+
+  return 'internal';
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableJson).join(',')}]`;
+  }
+
+  if (value && typeof value === 'object') {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => `${JSON.stringify(key)}:${stableJson(entry)}`)
+      .join(',')}}`;
+  }
+
+  return JSON.stringify(value);
+}
+
+function evidenceHash(value: unknown): string {
+  return createHash('sha256').update(stableJson(value)).digest('hex');
+}
+
+function buildGateFilters(input: z.infer<typeof readinessGateQuerySchema>): MmmQueryInput {
+  return {
+    ...input,
+    format: 'json',
+    limit: 1000,
+    offset: 0
+  };
+}
+
+function mapGateRow(row: MmmReadinessGateRow) {
+  return {
+    id: row.id,
+    gateVersion: row.gate_version,
+    range: {
+      startDate: row.start_date,
+      endDate: row.end_date
+    },
+    filters: {
+      martRowType: row.mart_row_type,
+      attributionModel: row.attribution_model,
+      platform: row.platform,
+      source: row.source,
+      campaign: row.campaign
+    },
+    evidencePayload: row.evidence_payload ?? {},
+    checklistStatuses: row.checklist_statuses ?? [],
+    ownerApprovals: row.owner_approvals ?? [],
+    waivers: row.waivers ?? [],
+    unresolvedCriticalIssueCount: toNumber(row.unresolved_critical_issue_count),
+    evidenceHash: row.evidence_hash,
+    gateStatus: row.gate_status,
+    finalState: row.final_state,
+    decisionReason: row.decision_reason,
+    decidedBy: row.decided_by,
+    decidedAt: toIsoString(row.decided_at),
+    createdBy: row.created_by,
+    updatedBy: row.updated_by,
+    createdAt: toIsoString(row.created_at),
+    updatedAt: toIsoString(row.updated_at)
+  };
+}
+
+async function fetchPersistedGate(input: z.infer<typeof readinessGateQuerySchema>): Promise<MmmReadinessGateRow | null> {
+  const result = await query<MmmReadinessGateRow>(
+    `
+      SELECT
+        id::text,
+        gate_version,
+        start_date::text,
+        end_date::text,
+        mart_row_type,
+        attribution_model,
+        platform,
+        source,
+        campaign,
+        evidence_payload,
+        checklist_statuses,
+        owner_approvals,
+        waivers,
+        unresolved_critical_issue_count,
+        evidence_hash,
+        gate_status,
+        final_state,
+        decision_reason,
+        decided_by,
+        decided_at,
+        created_by,
+        updated_by,
+        created_at,
+        updated_at
+      FROM mmm_readiness_gates
+      WHERE start_date = $1::date
+        AND end_date = $2::date
+        AND COALESCE(mart_row_type, '') = COALESCE($3::text, '')
+        AND COALESCE(attribution_model, '') = COALESCE($4::text, '')
+        AND COALESCE(platform, '') = COALESCE($5::text, '')
+        AND COALESCE(source, '') = COALESCE($6::text, '')
+        AND COALESCE(campaign, '') = COALESCE($7::text, '')
+      LIMIT 1
+    `,
+    [
+      input.startDate,
+      input.endDate,
+      input.martRowType ?? null,
+      input.attributionModel ?? null,
+      input.platform ?? null,
+      input.source ?? null,
+      input.campaign ?? null
+    ]
+  );
+
+  return result.rows[0] ?? null;
+}
+
+async function buildReadinessEvidence(input: z.infer<typeof readinessGateQuerySchema>) {
+  const gateInput = buildGateFilters(input);
+  const filters = buildMmmFilters(gateInput);
+  const driftFilters = buildTaxonomyDriftFilters({
+    ...input,
+    staleAfterDays: 14,
+    sampleLimit: 5
+  });
+
+  const [readinessResult, summaryResult, exposureResult, driftResult, blockerResult, modelRunsResult] = await Promise.all([
+    query<MmmReadinessRow>(
+      `
+        WITH requested_dates AS (
+          SELECT generate_series($1::date, $2::date, interval '1 day')::date AS metric_date
+        ),
+        filtered_rows AS (
+          SELECT
+            metric_date,
+            COUNT(*) AS row_count,
+            MAX(last_computed_at) AS generation_timestamp
+          FROM mmm_daily_input_mart_v1
+          WHERE ${filters.sql}
+          GROUP BY metric_date
+        ),
+        mart_rows AS (
+          SELECT
+            metric_date,
+            COUNT(*) AS row_count
+          FROM mmm_daily_input_mart_v1
+          WHERE metric_date BETWEEN $1::date AND $2::date
+          GROUP BY metric_date
+        )
+        SELECT
+          requested_dates.metric_date::text,
+          COALESCE(filtered_rows.row_count, 0) AS matching_row_count,
+          COALESCE(mart_rows.row_count, 0) AS mart_row_count,
+          filtered_rows.generation_timestamp
+        FROM requested_dates
+        LEFT JOIN filtered_rows ON filtered_rows.metric_date = requested_dates.metric_date
+        LEFT JOIN mart_rows ON mart_rows.metric_date = requested_dates.metric_date
+        ORDER BY requested_dates.metric_date ASC
+      `,
+      filters.params
+    ),
+    query<{
+      total_rows: string | number;
+      paid_media_rows: string | number;
+      attribution_rows: string | number;
+      total_spend: string | number;
+      total_impressions: string | number;
+      total_clicks: string | number;
+      total_shopify_orders: string | number;
+      total_shopify_revenue: string | number;
+      total_attribution_credit_orders: string | number;
+      total_attribution_credit_revenue: string | number;
+      latest_spend_last_synced_at: Date | null;
+      latest_shopify_last_ingested_at: Date | null;
+      latest_attribution_last_computed_at: Date | null;
+      latest_last_computed_at: Date | null;
+      unresolved_metadata_rows: string | number;
+    }>(
+      `
+        SELECT
+          COUNT(*)::bigint AS total_rows,
+          COUNT(*) FILTER (WHERE mart_row_type = 'paid_media')::bigint AS paid_media_rows,
+          COUNT(*) FILTER (WHERE mart_row_type = 'attribution')::bigint AS attribution_rows,
+          COALESCE(SUM(spend), 0) AS total_spend,
+          COALESCE(SUM(impressions), 0) AS total_impressions,
+          COALESCE(SUM(clicks), 0) AS total_clicks,
+          COALESCE(SUM(shopify_orders), 0) AS total_shopify_orders,
+          COALESCE(SUM(shopify_revenue), 0) AS total_shopify_revenue,
+          COALESCE(SUM(attribution_credit_orders), 0) AS total_attribution_credit_orders,
+          COALESCE(SUM(attribution_credit_revenue), 0) AS total_attribution_credit_revenue,
+          MAX(spend_last_synced_at) AS latest_spend_last_synced_at,
+          MAX(shopify_last_ingested_at) AS latest_shopify_last_ingested_at,
+          MAX(attribution_last_computed_at) AS latest_attribution_last_computed_at,
+          MAX(last_computed_at) AS latest_last_computed_at,
+          COUNT(*) FILTER (WHERE needs_metadata_qa OR resolved_canonical_campaign_name IS NULL)::bigint AS unresolved_metadata_rows
+        FROM mmm_daily_input_mart_v1
+        WHERE ${filters.sql}
+      `,
+      filters.params
+    ),
+    query<{
+      total_exposures: string | number;
+      valid_exposures: string | number;
+      identity_resolved_exposures: string | number;
+      campaign_joinable_exposures: string | number;
+      campaign_metadata_resolved_exposures: string | number;
+      latest_exposure_at: Date | null;
+    }>(
+      `
+        SELECT
+          COUNT(*)::bigint AS total_exposures,
+          COUNT(*) FILTER (WHERE e.validity_status = 'valid')::bigint AS valid_exposures,
+          COUNT(*) FILTER (WHERE e.identity_journey_id IS NOT NULL)::bigint AS identity_resolved_exposures,
+          COUNT(*) FILTER (
+            WHERE e.validity_status = 'valid'
+              AND e.account_id IS NOT NULL
+              AND e.campaign_id IS NOT NULL
+          )::bigint AS campaign_joinable_exposures,
+          COUNT(*) FILTER (WHERE campaign_meta.id IS NOT NULL)::bigint AS campaign_metadata_resolved_exposures,
+          MAX(e.occurred_at) AS latest_exposure_at
+        FROM ad_exposure_events e
+        LEFT JOIN ad_platform_entity_metadata campaign_meta
+          ON campaign_meta.platform = e.source_platform
+         AND campaign_meta.entity_type = 'campaign'
+         AND campaign_meta.account_id = e.account_id
+         AND campaign_meta.entity_id = e.campaign_id
+         AND COALESCE(campaign_meta.tenant_id, '') = COALESCE(e.tenant_id, '')
+         AND COALESCE(campaign_meta.workspace_id, '') = COALESCE(e.workspace_id, '')
+        WHERE e.occurred_at >= $1::date
+          AND e.occurred_at < ($2::date + interval '1 day')
+      `,
+      [input.startDate, input.endDate]
+    ),
+    query<TaxonomyDriftSummaryRow>(
+      `
+        WITH filtered_mart AS (
+          SELECT
+            mart.metric_date,
+            mart.mart_row_type,
+            mart.attribution_model,
+            mart.platform,
+            mart.source,
+            mart.medium,
+            mart.campaign,
+            mart.account_id,
+            mart.campaign_id,
+            mart.adset_id,
+            mart.ad_id,
+            mart.creative_id,
+            mart.resolved_canonical_source,
+            mart.resolved_canonical_medium,
+            mart.resolved_canonical_campaign_name,
+            mart.needs_metadata_qa,
+            campaign_meta.last_seen_at AS metadata_last_seen_at,
+            lower(btrim(COALESCE(mart.source, ''))) AS normalized_source,
+            lower(btrim(COALESCE(mart.medium, ''))) AS normalized_medium,
+            lower(btrim(COALESCE(mart.resolved_canonical_source, mart.source, ''))) AS normalized_effective_source,
+            lower(btrim(COALESCE(mart.resolved_canonical_medium, mart.medium, ''))) AS normalized_effective_medium,
+            lower(btrim(COALESCE(mart.resolved_canonical_campaign_name, mart.campaign, ''))) AS normalized_effective_campaign,
+            mart.platform IN ('meta', 'google') AS native_id_eligible,
+            campaign_meta.id IS NOT NULL
+              AND campaign_meta.last_seen_at < ($2::date - (14::int * interval '1 day')) AS stale_campaign_metadata
+          FROM mmm_daily_input_mart_v1 mart
+          LEFT JOIN ad_platform_entity_metadata campaign_meta
+            ON campaign_meta.platform = CASE
+                WHEN mart.platform = 'meta' THEN 'meta_ads'
+                WHEN mart.platform = 'google' THEN 'google_ads'
+                ELSE NULL
+              END
+           AND campaign_meta.entity_type = 'campaign'
+           AND campaign_meta.account_id = mart.account_id
+           AND campaign_meta.entity_id = mart.campaign_id
+          WHERE ${driftFilters.sql}
+        ),
+        classified_mart AS (
+          SELECT
+            *,
+            normalized_source IN ('', 'unknown', '(not set)', 'not set', 'null', 'none', 'unassigned')
+              OR normalized_effective_source IN ('', 'unknown', '(not set)', 'not set', 'null', 'none', 'unassigned') AS has_unknown_source,
+            resolved_canonical_source IS NULL AS has_unmapped_source,
+            normalized_medium IN ('', 'unknown', '(not set)', 'not set', 'null', 'none', 'unassigned')
+              OR normalized_effective_medium IN ('', 'unknown', '(not set)', 'not set', 'null', 'none', 'unassigned') AS has_unknown_medium,
+            resolved_canonical_medium IS NULL AS has_unmapped_medium,
+            needs_metadata_qa
+              OR resolved_canonical_campaign_name IS NULL
+              OR normalized_effective_campaign IN ('', 'unknown', '(not set)', 'not set', 'null', 'none', 'unassigned') AS has_unresolved_campaign_metadata,
+            account_id IS NOT NULL AND campaign_id IS NOT NULL AS has_platform_native_campaign_key
+          FROM filtered_mart
+        )
+        SELECT
+          NULL::text AS metric_date,
+          COUNT(*)::bigint AS total_rows,
+          COUNT(*) FILTER (WHERE has_unknown_source)::bigint AS unknown_source_rows,
+          COUNT(*) FILTER (WHERE has_unmapped_source)::bigint AS unmapped_source_rows,
+          COUNT(*) FILTER (WHERE has_unknown_source OR has_unmapped_source)::bigint AS unknown_or_unmapped_source_rows,
+          COUNT(*) FILTER (WHERE has_unknown_medium)::bigint AS unknown_medium_rows,
+          COUNT(*) FILTER (WHERE has_unmapped_medium)::bigint AS unmapped_medium_rows,
+          COUNT(*) FILTER (WHERE has_unknown_medium OR has_unmapped_medium)::bigint AS unknown_or_unmapped_medium_rows,
+          COUNT(*) FILTER (WHERE has_unresolved_campaign_metadata)::bigint AS unresolved_campaign_metadata_rows,
+          COUNT(*) FILTER (WHERE stale_campaign_metadata)::bigint AS stale_campaign_metadata_rows,
+          COUNT(*) FILTER (WHERE native_id_eligible)::bigint AS native_id_eligible_rows,
+          COUNT(*) FILTER (WHERE native_id_eligible AND account_id IS NOT NULL)::bigint AS account_id_rows,
+          COUNT(*) FILTER (WHERE native_id_eligible AND campaign_id IS NOT NULL)::bigint AS campaign_id_rows,
+          COUNT(*) FILTER (WHERE native_id_eligible AND adset_id IS NOT NULL)::bigint AS adset_id_rows,
+          COUNT(*) FILTER (WHERE native_id_eligible AND ad_id IS NOT NULL)::bigint AS ad_id_rows,
+          COUNT(*) FILTER (WHERE native_id_eligible AND creative_id IS NOT NULL)::bigint AS creative_id_rows,
+          COUNT(*) FILTER (WHERE native_id_eligible AND has_platform_native_campaign_key)::bigint AS platform_native_id_rows
+        FROM classified_mart
+      `,
+      driftFilters.params
+    ),
+    query<DataQualityBlockerRow>(
+      `
+        SELECT DISTINCT ON (check_key)
+          check_key,
+          status,
+          severity,
+          discrepancy_count,
+          summary,
+          checked_at
+        FROM data_quality_check_runs
+        WHERE run_date BETWEEN $1::date AND $2::date
+          AND (
+            check_key LIKE 'mmm_readiness_%'
+            OR severity = 'critical'
+          )
+          AND status <> 'healthy'
+        ORDER BY check_key, checked_at DESC
+      `,
+      [input.startDate, input.endDate]
+    ),
+    query<MmmModelRunRow>(
+      `
+        SELECT
+          id::text,
+          model_type,
+          model_version,
+          mart_version,
+          attribution_model,
+          run_status,
+          training_start_date::text,
+          training_end_date::text,
+          holdout_start_date::text,
+          holdout_end_date::text,
+          run_config,
+          input_summary,
+          model_artifact,
+          calibration_report,
+          validation_report,
+          error_code,
+          error_message,
+          created_at,
+          started_at,
+          completed_at
+        FROM mmm_model_runs
+        WHERE training_end_date >= $1::date
+          AND training_start_date <= $2::date
+          ${input.attributionModel ? 'AND attribution_model = $3' : ''}
+        ORDER BY created_at DESC
+        LIMIT 1
+      `,
+      input.attributionModel ? [input.startDate, input.endDate, input.attributionModel] : [input.startDate, input.endDate]
+    )
+  ]);
+
+  const readiness = deriveReadiness(readinessResult.rows);
+  const summary = summaryResult.rows[0];
+  const exposure = exposureResult.rows[0];
+  const drift = driftResult.rows[0] ? mapTaxonomyDriftSummaryRow(driftResult.rows[0]) : null;
+  const latestModelRun = modelRunsResult.rows[0] ? mapMmmModelRun(modelRunsResult.rows[0]) : null;
+  const exposureTotals = {
+    totalExposures: toNumber(exposure?.total_exposures),
+    validExposures: toNumber(exposure?.valid_exposures),
+    identityResolvedExposures: toNumber(exposure?.identity_resolved_exposures),
+    campaignJoinableExposures: toNumber(exposure?.campaign_joinable_exposures),
+    campaignMetadataResolvedExposures: toNumber(exposure?.campaign_metadata_resolved_exposures),
+    identityResolutionRate: toNullableRate(toNumber(exposure?.identity_resolved_exposures), toNumber(exposure?.total_exposures)),
+    campaignMetadataResolutionRate: toNullableRate(
+      toNumber(exposure?.campaign_metadata_resolved_exposures),
+      toNumber(exposure?.campaign_joinable_exposures)
+    ),
+    latestExposureAt: toIsoString(exposure?.latest_exposure_at)
+  };
+  const dataQualityBlockers = blockerResult.rows.map((row) => ({
+    checkKey: row.check_key,
+    status: row.status,
+    severity: row.severity,
+    discrepancyCount: toNumber(row.discrepancy_count),
+    summary: row.summary,
+    checkedAt: toIsoString(row.checked_at)
+  }));
+  const criticalDataQualityCount = dataQualityBlockers.filter(
+    (row) => row.severity === 'critical' || row.checkKey.startsWith('mmm_readiness_')
+  ).length;
+
+  const evidencePayload = {
+    schemaVersion: 'mmm_readiness_gate_evidence_v1',
+    range: {
+      startDate: input.startDate,
+      endDate: input.endDate
+    },
+    filters: {
+      martRowType: input.martRowType ?? null,
+      attributionModel: input.attributionModel ?? null,
+      platform: input.platform ?? null,
+      source: input.source ?? null,
+      campaign: input.campaign ?? null
+    },
+    exportReadiness: readiness,
+    exportSummary: {
+      totalRows: toNumber(summary?.total_rows),
+      paidMediaRows: toNumber(summary?.paid_media_rows),
+      attributionRows: toNumber(summary?.attribution_rows),
+      totalSpend: toNumber(summary?.total_spend),
+      totalImpressions: toNumber(summary?.total_impressions),
+      totalClicks: toNumber(summary?.total_clicks),
+      totalShopifyOrders: toNumber(summary?.total_shopify_orders),
+      totalShopifyRevenue: toNumber(summary?.total_shopify_revenue),
+      totalAttributionCreditOrders: toNumber(summary?.total_attribution_credit_orders),
+      totalAttributionCreditRevenue: toNumber(summary?.total_attribution_credit_revenue),
+      latestSpendLastSyncedAt: toIsoString(summary?.latest_spend_last_synced_at),
+      latestShopifyLastIngestedAt: toIsoString(summary?.latest_shopify_last_ingested_at),
+      latestAttributionLastComputedAt: toIsoString(summary?.latest_attribution_last_computed_at),
+      latestLastComputedAt: toIsoString(summary?.latest_last_computed_at),
+      unresolvedMetadataRows: toNumber(summary?.unresolved_metadata_rows)
+    },
+    exposureCoverage: exposureTotals,
+    taxonomyDrift: drift,
+    dataQualityBlockers,
+    latestModelRun
+  };
+
+  const checklistStatuses = [
+    {
+      key: 'mmm_export_readiness',
+      label: 'MMM export window coverage',
+      owner: 'Product',
+      status: readiness.status === 'ready' ? 'pass' : readiness.status === 'partial' ? 'warn' : 'fail',
+      detail: `${readiness.includedDateCount} included days, ${readiness.excludedDateWindows.length} excluded windows.`
+    },
+    {
+      key: 'mmm_input_rows',
+      label: 'MMM input rows',
+      owner: 'Analytics',
+      status: toNumber(summary?.paid_media_rows) > 0 && toNumber(summary?.attribution_rows) > 0 ? 'pass' : 'fail',
+      detail: `${toNumber(summary?.paid_media_rows)} paid media rows and ${toNumber(summary?.attribution_rows)} attribution rows.`
+    },
+    {
+      key: 'campaign_resolver_coverage',
+      label: 'Campaign resolver coverage',
+      owner: 'Analytics',
+      status: toNumber(summary?.unresolved_metadata_rows) === 0 ? 'pass' : 'fail',
+      detail: `${toNumber(summary?.unresolved_metadata_rows)} rows still need metadata QA.`
+    },
+    {
+      key: 'exposure_coverage',
+      label: 'Exposure coverage',
+      owner: 'Frontend',
+      status:
+        exposureTotals.totalExposures === 0
+          ? 'warn'
+          : (exposureTotals.identityResolutionRate ?? 0) >= 0.8 &&
+              (exposureTotals.campaignMetadataResolutionRate ?? 0) >= 0.8
+            ? 'pass'
+            : 'fail',
+      detail: `${exposureTotals.totalExposures} exposures, identity ${exposureTotals.identityResolutionRate ?? 0}, metadata ${
+        exposureTotals.campaignMetadataResolutionRate ?? 0
+      }.`
+    },
+    {
+      key: 'taxonomy_drift',
+      label: 'Taxonomy drift',
+      owner: 'Analytics',
+      status: drift && drift.unresolvedCampaignMetadataRows === 0 && drift.unknownOrUnmappedSourceRows === 0 ? 'pass' : 'fail',
+      detail: `${drift?.unresolvedCampaignMetadataRows ?? 0} unresolved campaign metadata rows, ${
+        drift?.unknownOrUnmappedSourceRows ?? 0
+      } unknown or unmapped source rows.`
+    },
+    {
+      key: 'data_quality_blockers',
+      label: 'Data-quality blockers',
+      owner: 'Data Platform',
+      status: criticalDataQualityCount === 0 ? 'pass' : 'fail',
+      detail: `${criticalDataQualityCount} unresolved critical data-quality checks.`
+    },
+    {
+      key: 'model_run_governance',
+      label: 'Baseline model governance',
+      owner: 'Modeling',
+      status: latestModelRun?.runStatus === 'completed' ? 'pass' : 'pending',
+      detail: latestModelRun ? `${latestModelRun.modelVersion} ${latestModelRun.runStatus}.` : 'No model run overlaps this window.'
+    }
+  ] satisfies Array<{
+    key: string;
+    label: string;
+    owner: string;
+    status: GateChecklistStatus;
+    detail: string;
+  }>;
+  const ownerApprovals = ['Product', 'Analytics', 'Frontend', 'Data Platform', 'Modeling'].map((owner) => {
+    const ownerItems = checklistStatuses.filter((item) => item.owner === owner);
+    const failedCount = ownerItems.filter((item) => item.status === 'fail').length;
+    const pendingCount = ownerItems.filter((item) => item.status === 'pending').length;
+
+    return {
+      owner,
+      status: failedCount > 0 ? 'pending' : pendingCount > 0 ? 'pending' : 'pass',
+      approvedBy: null,
+      approvedAt: null,
+      detail:
+        failedCount > 0
+          ? `${failedCount} gate ${failedCount === 1 ? 'item requires' : 'items require'} approval or waiver.`
+          : pendingCount > 0
+            ? `${pendingCount} gate ${pendingCount === 1 ? 'item is' : 'items are'} pending.`
+            : 'Owner evidence is ready for sign-off.'
+    };
+  });
+
+  return {
+    evidencePayload,
+    checklistStatuses,
+    ownerApprovals,
+    unresolvedCriticalIssueCount:
+      checklistStatuses.filter((item) => item.status === 'fail' && item.key !== 'data_quality_blockers').length +
+      criticalDataQualityCount,
+    evidenceHash: evidenceHash(evidencePayload)
+  };
+}
+
+async function upsertReadinessGate(input: z.infer<typeof readinessGateQuerySchema>, actor: string) {
+  const evidence = await buildReadinessEvidence(input);
+  const finalState = evidence.unresolvedCriticalIssueCount === 0 ? 'approved' : 'blocked';
+  const gateStatus = finalState === 'approved' ? 'approved' : 'pending';
+  const result = await query<MmmReadinessGateRow>(
+    `
+      INSERT INTO mmm_readiness_gates (
+        start_date,
+        end_date,
+        mart_row_type,
+        attribution_model,
+        platform,
+        source,
+        campaign,
+        evidence_payload,
+        checklist_statuses,
+        owner_approvals,
+        unresolved_critical_issue_count,
+        evidence_hash,
+        gate_status,
+        final_state,
+        decision_reason,
+        decided_by,
+        decided_at,
+        created_by,
+        updated_by
+      )
+      VALUES (
+        $1::date,
+        $2::date,
+        $3,
+        $4,
+        $5,
+        $6,
+        $7,
+        $8::jsonb,
+        $9::jsonb,
+        $10::jsonb,
+        $11,
+        $12,
+        $13,
+        $14,
+        $15,
+        $16,
+        CASE WHEN $13 = 'approved' THEN now() ELSE NULL END,
+        $17,
+        $17
+      )
+      ON CONFLICT (
+        start_date,
+        end_date,
+        COALESCE(mart_row_type, ''),
+        COALESCE(attribution_model, ''),
+        COALESCE(platform, ''),
+        COALESCE(source, ''),
+        COALESCE(campaign, '')
+      )
+      DO UPDATE SET
+        evidence_payload = EXCLUDED.evidence_payload,
+        checklist_statuses = EXCLUDED.checklist_statuses,
+        owner_approvals = CASE
+          WHEN mmm_readiness_gates.evidence_hash = EXCLUDED.evidence_hash THEN mmm_readiness_gates.owner_approvals
+          ELSE EXCLUDED.owner_approvals
+        END,
+        waivers = CASE
+          WHEN mmm_readiness_gates.evidence_hash = EXCLUDED.evidence_hash THEN mmm_readiness_gates.waivers
+          ELSE '[]'::jsonb
+        END,
+        unresolved_critical_issue_count = EXCLUDED.unresolved_critical_issue_count,
+        evidence_hash = EXCLUDED.evidence_hash,
+        gate_status = CASE
+          WHEN mmm_readiness_gates.evidence_hash = EXCLUDED.evidence_hash THEN mmm_readiness_gates.gate_status
+          ELSE EXCLUDED.gate_status
+        END,
+        final_state = CASE
+          WHEN mmm_readiness_gates.evidence_hash = EXCLUDED.evidence_hash THEN mmm_readiness_gates.final_state
+          ELSE EXCLUDED.final_state
+        END,
+        decision_reason = CASE
+          WHEN mmm_readiness_gates.evidence_hash = EXCLUDED.evidence_hash THEN mmm_readiness_gates.decision_reason
+          ELSE EXCLUDED.decision_reason
+        END,
+        decided_by = CASE
+          WHEN mmm_readiness_gates.evidence_hash = EXCLUDED.evidence_hash THEN mmm_readiness_gates.decided_by
+          ELSE EXCLUDED.decided_by
+        END,
+        decided_at = CASE
+          WHEN mmm_readiness_gates.evidence_hash = EXCLUDED.evidence_hash THEN mmm_readiness_gates.decided_at
+          ELSE EXCLUDED.decided_at
+        END,
+        updated_by = EXCLUDED.updated_by,
+        updated_at = now()
+      RETURNING
+        id::text,
+        gate_version,
+        start_date::text,
+        end_date::text,
+        mart_row_type,
+        attribution_model,
+        platform,
+        source,
+        campaign,
+        evidence_payload,
+        checklist_statuses,
+        owner_approvals,
+        waivers,
+        unresolved_critical_issue_count,
+        evidence_hash,
+        gate_status,
+        final_state,
+        decision_reason,
+        decided_by,
+        decided_at,
+        created_by,
+        updated_by,
+        created_at,
+        updated_at
+    `,
+    [
+      input.startDate,
+      input.endDate,
+      input.martRowType ?? null,
+      input.attributionModel ?? null,
+      input.platform ?? null,
+      input.source ?? null,
+      input.campaign ?? null,
+      JSON.stringify(evidence.evidencePayload),
+      JSON.stringify(evidence.checklistStatuses),
+      JSON.stringify(evidence.ownerApprovals),
+      evidence.unresolvedCriticalIssueCount,
+      evidence.evidenceHash,
+      gateStatus,
+      finalState,
+      gateStatus === 'approved' ? 'All readiness gates passed during evidence refresh.' : null,
+      gateStatus === 'approved' ? actor : null,
+      actor
+    ]
+  );
+
+  return result.rows[0];
+}
+
 export function createMmmRouter(): Router {
   const router = Router();
 
@@ -652,6 +1413,286 @@ export function createMmmRouter(): Router {
   router.use((_req, res, next) => {
     res.setHeader('X-ROAS-Radar-MMM-Schema', MMM_SCHEMA_VERSION);
     next();
+  });
+
+  router.get('/readiness-gate', async (req, res, next) => {
+    try {
+      const input = parseInput(readinessGateQuerySchema, req.query);
+      const existing = await fetchPersistedGate(input);
+
+      if (existing) {
+        res.status(200).json({
+          schemaVersion: 'mmm_readiness_gate_v1',
+          gate: mapGateRow(existing)
+        });
+        return;
+      }
+
+      const actor = getActorLabel(res.locals.auth as AuthContext | null | undefined);
+      const gate = await upsertReadinessGate(input, actor);
+      res.status(201).json({
+        schemaVersion: 'mmm_readiness_gate_v1',
+        gate: mapGateRow(gate)
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/readiness-gate/refresh', async (req, res, next) => {
+    try {
+      const input = parseInput(readinessGateQuerySchema, req.body);
+      const actor = getActorLabel(res.locals.auth as AuthContext | null | undefined);
+      const gate = await upsertReadinessGate(input, actor);
+
+      res.status(200).json({
+        schemaVersion: 'mmm_readiness_gate_v1',
+        gate: mapGateRow(gate)
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/readiness-gate/approve', async (req, res, next) => {
+    try {
+      const input = parseInput(readinessGateDecisionSchema, req.body);
+      const actor = getActorLabel(res.locals.auth as AuthContext | null | undefined);
+      const gate = (await fetchPersistedGate(input)) ?? (await upsertReadinessGate(input, actor));
+      const mapped = mapGateRow(gate);
+      const owner = input.owner ?? actor;
+      const ownerApprovals = Array.isArray(mapped.ownerApprovals) ? [...mapped.ownerApprovals] : [];
+      const ownerIndex = ownerApprovals.findIndex(
+        (approval) =>
+          approval &&
+          typeof approval === 'object' &&
+          'owner' in approval &&
+          (approval as { owner?: unknown }).owner === owner
+      );
+      const approvalRecord = {
+        owner,
+        status: 'pass',
+        approvedBy: actor,
+        approvedAt: new Date().toISOString(),
+        detail: input.reason ?? 'Owner approved the persisted MMM readiness evidence.'
+      };
+
+      if (ownerIndex >= 0) {
+        ownerApprovals[ownerIndex] = approvalRecord;
+      } else {
+        ownerApprovals.push(approvalRecord);
+      }
+
+      const checklistStatuses = Array.isArray(mapped.checklistStatuses) ? mapped.checklistStatuses : [];
+      const waivers = Array.isArray(mapped.waivers) ? mapped.waivers : [];
+      const waivedKeys = new Set(
+        waivers
+          .filter((waiver) => waiver && typeof waiver === 'object' && 'checklistKey' in waiver)
+          .map((waiver) => (waiver as { checklistKey?: unknown }).checklistKey)
+          .filter((key): key is string => typeof key === 'string')
+      );
+      const unresolvedFailures = checklistStatuses.filter(
+        (item) =>
+          item &&
+          typeof item === 'object' &&
+          (item as { status?: unknown }).status === 'fail' &&
+          !waivedKeys.has(String((item as { key?: unknown }).key))
+      ).length;
+      const finalState = unresolvedFailures === 0 ? 'approved' : 'blocked';
+      const gateStatus = finalState === 'approved' ? 'approved' : 'pending';
+      const result = await query<MmmReadinessGateRow>(
+        `
+          UPDATE mmm_readiness_gates
+          SET
+            owner_approvals = $2::jsonb,
+            gate_status = $3,
+            final_state = $4,
+            decision_reason = $5,
+            decided_by = CASE WHEN $3 = 'approved' THEN $6 ELSE decided_by END,
+            decided_at = CASE WHEN $3 = 'approved' THEN now() ELSE decided_at END,
+            updated_by = $6,
+            updated_at = now()
+          WHERE id = $1::uuid
+          RETURNING
+            id::text,
+            gate_version,
+            start_date::text,
+            end_date::text,
+            mart_row_type,
+            attribution_model,
+            platform,
+            source,
+            campaign,
+            evidence_payload,
+            checklist_statuses,
+            owner_approvals,
+            waivers,
+            unresolved_critical_issue_count,
+            evidence_hash,
+            gate_status,
+            final_state,
+            decision_reason,
+            decided_by,
+            decided_at,
+            created_by,
+            updated_by,
+            created_at,
+            updated_at
+        `,
+        [
+          mapped.id,
+          JSON.stringify(ownerApprovals),
+          gateStatus,
+          finalState,
+          input.reason ?? (finalState === 'approved' ? 'Owner approvals completed.' : 'Approval recorded with unresolved gate failures.'),
+          actor
+        ]
+      );
+
+      res.status(200).json({
+        schemaVersion: 'mmm_readiness_gate_v1',
+        gate: mapGateRow(result.rows[0])
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/readiness-gate/waive', async (req, res, next) => {
+    try {
+      const input = parseInput(readinessGateWaiverSchema, req.body);
+      const actor = getActorLabel(res.locals.auth as AuthContext | null | undefined);
+      const gate = (await fetchPersistedGate(input)) ?? (await upsertReadinessGate(input, actor));
+      const mapped = mapGateRow(gate);
+      const waivers = Array.isArray(mapped.waivers) ? [...mapped.waivers] : [];
+      waivers.push({
+        ...input.waiver,
+        waivedBy: actor,
+        waivedAt: new Date().toISOString(),
+        evidenceHash: mapped.evidenceHash
+      });
+      const checklistStatuses = (Array.isArray(mapped.checklistStatuses) ? mapped.checklistStatuses : []).map((item) => {
+        if (
+          item &&
+          typeof item === 'object' &&
+          (item as { key?: unknown }).key === input.waiver.checklistKey &&
+          (item as { status?: unknown }).status === 'fail'
+        ) {
+          return {
+            ...item,
+            status: 'waived',
+            waiverReason: input.waiver.reason
+          };
+        }
+
+        return item;
+      });
+      const unresolvedFailures = checklistStatuses.filter(
+        (item) => item && typeof item === 'object' && (item as { status?: unknown }).status === 'fail'
+      ).length;
+      const result = await query<MmmReadinessGateRow>(
+        `
+          UPDATE mmm_readiness_gates
+          SET
+            waivers = $2::jsonb,
+            checklist_statuses = $3::jsonb,
+            unresolved_critical_issue_count = $4,
+            final_state = CASE WHEN $4 = 0 AND gate_status = 'approved' THEN 'approved' ELSE 'blocked' END,
+            updated_by = $5,
+            updated_at = now()
+          WHERE id = $1::uuid
+          RETURNING
+            id::text,
+            gate_version,
+            start_date::text,
+            end_date::text,
+            mart_row_type,
+            attribution_model,
+            platform,
+            source,
+            campaign,
+            evidence_payload,
+            checklist_statuses,
+            owner_approvals,
+            waivers,
+            unresolved_critical_issue_count,
+            evidence_hash,
+            gate_status,
+            final_state,
+            decision_reason,
+            decided_by,
+            decided_at,
+            created_by,
+            updated_by,
+            created_at,
+            updated_at
+        `,
+        [mapped.id, JSON.stringify(waivers), JSON.stringify(checklistStatuses), unresolvedFailures, actor]
+      );
+
+      res.status(200).json({
+        schemaVersion: 'mmm_readiness_gate_v1',
+        gate: mapGateRow(result.rows[0])
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/readiness-gate/block', async (req, res, next) => {
+    try {
+      const input = parseInput(readinessGateDecisionSchema, req.body);
+      const actor = getActorLabel(res.locals.auth as AuthContext | null | undefined);
+      const gate = (await fetchPersistedGate(input)) ?? (await upsertReadinessGate(input, actor));
+      const mapped = mapGateRow(gate);
+      const result = await query<MmmReadinessGateRow>(
+        `
+          UPDATE mmm_readiness_gates
+          SET
+            gate_status = 'blocked',
+            final_state = 'blocked',
+            decision_reason = $2,
+            decided_by = $3,
+            decided_at = now(),
+            updated_by = $3,
+            updated_at = now()
+          WHERE id = $1::uuid
+          RETURNING
+            id::text,
+            gate_version,
+            start_date::text,
+            end_date::text,
+            mart_row_type,
+            attribution_model,
+            platform,
+            source,
+            campaign,
+            evidence_payload,
+            checklist_statuses,
+            owner_approvals,
+            waivers,
+            unresolved_critical_issue_count,
+            evidence_hash,
+            gate_status,
+            final_state,
+            decision_reason,
+            decided_by,
+            decided_at,
+            created_by,
+            updated_by,
+            created_at,
+            updated_at
+        `,
+        [mapped.id, input.reason ?? 'Readiness gate blocked by owner review.', actor]
+      );
+
+      res.status(200).json({
+        schemaVersion: 'mmm_readiness_gate_v1',
+        gate: mapGateRow(result.rows[0])
+      });
+    } catch (error) {
+      next(error);
+    }
   });
 
   router.get('/model-runs', async (req, res, next) => {

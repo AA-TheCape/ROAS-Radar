@@ -442,6 +442,110 @@ export type MmmExportQuery = {
   offset?: number;
 };
 
+export type MmmGateChecklistStatus = 'pass' | 'warn' | 'fail' | 'pending' | 'waived';
+
+export type MmmReadinessGateChecklistItem = {
+  key: string;
+  label: string;
+  owner: string;
+  status: MmmGateChecklistStatus;
+  detail: string;
+  waiverReason?: string;
+};
+
+export type MmmReadinessGateApproval = {
+  owner: string;
+  status: MmmGateChecklistStatus;
+  approvedBy: string | null;
+  approvedAt: string | null;
+  detail: string;
+};
+
+export type MmmReadinessGateWaiver = {
+  checklistKey: string;
+  reason: string;
+  expiresAt?: string;
+  waivedBy: string;
+  waivedAt: string;
+  evidenceHash: string;
+};
+
+export type MmmReadinessGate = {
+  id: string;
+  gateVersion: 'mmm_readiness_gate_v1';
+  range: {
+    startDate: string;
+    endDate: string;
+  };
+  filters: {
+    martRowType: 'paid_media' | 'attribution' | null;
+    attributionModel: string | null;
+    platform: 'meta' | 'google' | 'taxonomy' | null;
+    source: string | null;
+    campaign: string | null;
+  };
+  evidencePayload: {
+    exportReadiness?: MmmExportResponse['readiness'];
+    exportSummary?: {
+      totalRows: number;
+      paidMediaRows: number;
+      attributionRows: number;
+      totalSpend: number;
+      totalImpressions: number;
+      totalClicks: number;
+      totalShopifyOrders: number;
+      totalShopifyRevenue: number;
+      totalAttributionCreditOrders: number;
+      totalAttributionCreditRevenue: number;
+      latestSpendLastSyncedAt: string | null;
+      latestShopifyLastIngestedAt: string | null;
+      latestAttributionLastComputedAt: string | null;
+      latestLastComputedAt: string | null;
+      unresolvedMetadataRows: number;
+    };
+    exposureCoverage?: ExposureCoverageResponse['totals'] & { latestExposureAt: string | null };
+    taxonomyDrift?: Record<string, unknown> | null;
+    dataQualityBlockers?: Array<{
+      checkKey: string;
+      status: string;
+      severity: string;
+      discrepancyCount: number;
+      summary: string;
+      checkedAt: string | null;
+    }>;
+    latestModelRun?: MmmModelRun | null;
+  };
+  checklistStatuses: MmmReadinessGateChecklistItem[];
+  ownerApprovals: MmmReadinessGateApproval[];
+  waivers: MmmReadinessGateWaiver[];
+  unresolvedCriticalIssueCount: number;
+  evidenceHash: string;
+  gateStatus: 'pending' | 'approved' | 'blocked';
+  finalState: 'approved' | 'blocked';
+  decisionReason: string | null;
+  decidedBy: string | null;
+  decidedAt: string | null;
+  createdBy: string;
+  updatedBy: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type MmmReadinessGateResponse = {
+  schemaVersion: 'mmm_readiness_gate_v1';
+  gate: MmmReadinessGate;
+};
+
+export type MmmReadinessGateDecisionPayload = MmmExportQuery & {
+  owner?: string;
+  reason?: string;
+  waiver?: {
+    checklistKey: string;
+    reason: string;
+    expiresAt?: string;
+  };
+};
+
 export type MmmModelRun = {
   id: string;
   modelType: 'baseline_linear_mmm';
@@ -1549,6 +1653,40 @@ export function fetchMetaOrderValue(query: MetaOrderValueQuery) {
 export function fetchMmmExport(query: MmmExportQuery) {
   return requestJson<MmmExportResponse>('/api/reporting/mmm', {
     searchParams: buildMmmExportSearchParams(query)
+  });
+}
+
+export function fetchMmmReadinessGate(query: MmmExportQuery) {
+  return requestJson<MmmReadinessGateResponse>('/api/reporting/mmm/readiness-gate', {
+    searchParams: buildMmmExportSearchParams(query)
+  });
+}
+
+export function refreshMmmReadinessGate(query: MmmExportQuery) {
+  return requestJson<MmmReadinessGateResponse>('/api/reporting/mmm/readiness-gate/refresh', {
+    method: 'POST',
+    body: query
+  });
+}
+
+export function approveMmmReadinessGate(payload: MmmReadinessGateDecisionPayload) {
+  return requestJson<MmmReadinessGateResponse>('/api/reporting/mmm/readiness-gate/approve', {
+    method: 'POST',
+    body: payload
+  });
+}
+
+export function waiveMmmReadinessGate(payload: MmmReadinessGateDecisionPayload & { waiver: NonNullable<MmmReadinessGateDecisionPayload['waiver']> }) {
+  return requestJson<MmmReadinessGateResponse>('/api/reporting/mmm/readiness-gate/waive', {
+    method: 'POST',
+    body: payload
+  });
+}
+
+export function blockMmmReadinessGate(payload: MmmReadinessGateDecisionPayload) {
+  return requestJson<MmmReadinessGateResponse>('/api/reporting/mmm/readiness-gate/block', {
+    method: 'POST',
+    body: payload
   });
 }
 
