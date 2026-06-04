@@ -916,6 +916,242 @@ export type IdentityConflictsResponse = {
 	conflicts: IdentityConflictRow[];
 };
 
+export type AdminDebugJourneyResponse = {
+  order: {
+    shopifyOrderId: string;
+    shopifyOrderNumber: string | null;
+    shopifyCustomerId: string | null;
+    currencyCode: string;
+    subtotalPrice: number;
+    totalPrice: number;
+    processedAt: string | null;
+    createdAtShopify: string | null;
+    landingSessionId: string | null;
+    checkoutToken: string | null;
+    cartToken: string | null;
+    identityJourneyId: string | null;
+    currentAttribution: {
+      attributionModel: string | null;
+      source: string | null;
+      medium: string | null;
+      campaign: string | null;
+      content: string | null;
+      term: string | null;
+      confidenceScore: number | null;
+      attributionReason: string | null;
+      attributedAt: string | null;
+    };
+  };
+  run: {
+    runId: string;
+    status: string;
+    triggerSource: string;
+    createdAt: string;
+    completedAt: string | null;
+    orderOccurredAt: string;
+  } | null;
+  events: Array<{
+    sourceTable: string;
+    id: string;
+    sessionId: string;
+    eventType: string;
+    occurredAt: string;
+    pageUrl: string | null;
+    referrerUrl: string | null;
+    utmSource: string | null;
+    utmMedium: string | null;
+    utmCampaign: string | null;
+    gclid: string | null;
+    fbclid: string | null;
+    shopifyCartToken: string | null;
+    shopifyCheckoutToken: string | null;
+    ingestionSource: string | null;
+  }>;
+  identity: {
+    journey: {
+      id: string;
+      authoritativeShopifyCustomerId: string | null;
+      status: string;
+      mergeVersion: number;
+      mergedIntoJourneyId: string | null;
+      primaryEmailHash: string | null;
+      primaryPhoneHash: string | null;
+      lookbackWindowStartedAt: string;
+      lookbackWindowExpiresAt: string;
+      lastTouchEligibleAt: string;
+      firstSourceSystem: string | null;
+      lastSourceSystem: string | null;
+      createdAt: string;
+      updatedAt: string;
+    } | null;
+    edges: Array<{
+      edgeId: string;
+      nodeType: string;
+      nodeKey: string;
+      edgeType: string;
+      precedenceRank: number;
+      evidenceSource: string;
+      sourceTable: string | null;
+      sourceRecordId: string | null;
+      isActive: boolean;
+      conflictCode: string | null;
+      firstObservedAt: string;
+      lastObservedAt: string;
+    }>;
+    mergeAudits: Array<{
+      id: string;
+      winnerJourneyId: string;
+      loserJourneyId: string;
+      mergeReasonCode: string;
+      evidenceSource: string;
+      sourceTable: string | null;
+      sourceRecordId: string | null;
+      sourceTimestamp: string;
+      winnerScore: unknown;
+      loserScore: unknown;
+      candidateScores: unknown;
+      rehomedNodes: number;
+      quarantinedNodes: number;
+      createdAt: string;
+    }>;
+  };
+  attribution: {
+    touchpoints: Array<{
+      touchpointId: string;
+      sessionId: string | null;
+      identityJourneyId: string | null;
+      occurredAt: string;
+      capturedAt: string;
+      sourceKind: string;
+      ingestionSource: string;
+      source: string | null;
+      medium: string | null;
+      campaign: string | null;
+      evidenceSource: string;
+      isDirect: boolean;
+      engagementType: string;
+      isSynthetic: boolean;
+      isEligible: boolean;
+      ineligibilityReason: string | null;
+      attributionReason: string | null;
+      attributionHint: unknown;
+    }>;
+    modelSummaries: Array<{
+      modelKey: string;
+      allocationStatus: string;
+      winnerTouchpointId: string | null;
+      winnerEvidenceSource: string | null;
+      winnerAttributionReason: string | null;
+      totalCreditWeight: number;
+      totalRevenueCredited: number;
+      touchpointCountConsidered: number;
+      eligibleClickCount: number;
+      eligibleViewCount: number;
+      winnerSelectionRule: string;
+      directSuppressionApplied: boolean;
+      deterministicBlockApplied: boolean;
+      normalizationFailuresCount: number;
+    }>;
+    credits: Array<{
+      modelKey: string;
+      touchpointId: string;
+      touchpointPosition: number;
+      occurredAt: string;
+      source: string | null;
+      medium: string | null;
+      campaign: string | null;
+      evidenceSource: string;
+      attributionReason: string;
+      creditWeight: number;
+      revenueCredit: number;
+      isPrimary: boolean;
+      confidenceLabel: string;
+    }>;
+    explainRecords: Array<{
+      touchpointId: string | null;
+      modelKey: string | null;
+      explainStage: string;
+      decision: string;
+      decisionReason: string;
+      details: unknown;
+      createdAt: string;
+    }>;
+  };
+};
+
+export type CampaignResolverDebugPayload = {
+  resolverVersion?: string;
+  platform?: string | null;
+  source?: string | null;
+  medium?: string | null;
+  campaign?: string | null;
+  content?: string | null;
+  term?: string | null;
+  accountId?: string | null;
+  campaignId?: string | null;
+  adsetId?: string | null;
+  adId?: string | null;
+  occurredAt?: string | null;
+  enqueueUnmapped?: boolean;
+};
+
+export type CampaignResolverDebugResponse = {
+  resolution: {
+    status: 'resolved' | 'fallback' | 'unmapped';
+    resolverVersion: string;
+    source: 'override' | 'rule' | 'heuristic' | 'unmapped';
+    confidence: number;
+    ruleId: string | null;
+    canonical: {
+      campaignId: string | null;
+      campaignName: string | null;
+      source: string | null;
+      medium: string | null;
+      channel: string | null;
+      channelGroup: string | null;
+      hierarchy: Record<string, unknown>;
+    };
+    qaQueueId: string | null;
+  };
+};
+
+export type AdminDebugReplayPayload = {
+  eventType?: string;
+  sourceTable?: string;
+  fromTime?: string;
+  toTime?: string;
+  limit?: number;
+  dryRun?: boolean;
+};
+
+export type AdminDebugReplayResponse = {
+  replay: {
+    replayRunId: number;
+    candidateCount: number;
+    replayedCount: number;
+    skippedCount: number;
+    failedCount: number;
+    dryRunCount: number;
+  };
+};
+
+export type AdminDebugAuditRow = {
+  id: string;
+  actorKind: 'internal' | 'user';
+  actorUserId: number | null;
+  actorEmail: string;
+  action: string;
+  targetType: string;
+  targetId: string | null;
+  requestPayload: unknown;
+  resultSummary: unknown;
+  createdAt: string;
+};
+
+export type AdminDebugAuditResponse = {
+  rows: AdminDebugAuditRow[];
+};
+
 declare global {
 	interface Window {
 		__ROAS_RADAR_RUNTIME_CONFIG__?: {
@@ -1562,4 +1798,41 @@ export function fetchIdentityHealthConflicts(
 			}),
 		},
 	);
+}
+
+export function fetchAdminDebugJourney(shopifyOrderId: string) {
+  return requestJson<AdminDebugJourneyResponse>(
+    `/api/admin/attribution/debug/journeys/${encodeURIComponent(shopifyOrderId)}`
+  );
+}
+
+export function debugCampaignResolver(payload: CampaignResolverDebugPayload) {
+  return requestJson<CampaignResolverDebugResponse>('/api/admin/attribution/debug/campaign-resolver', {
+    method: 'POST',
+    body: payload
+  });
+}
+
+export function triggerAdminDebugReplay(payload: AdminDebugReplayPayload) {
+  return requestJson<AdminDebugReplayResponse>('/api/admin/attribution/debug/replay', {
+    method: 'POST',
+    body: payload
+  });
+}
+
+export function triggerAdminDebugRecompute(payload: OrderAttributionBackfillRequest) {
+  const request = orderAttributionBackfillRequestSchema.parse(payload);
+
+  return requestJson<OrderAttributionBackfillEnqueueResponse>('/api/admin/attribution/debug/recompute', {
+    method: 'POST',
+    body: request,
+    parse: (response) => orderAttributionBackfillEnqueueResponseSchema.parse(response)
+  });
+}
+
+export function fetchAdminDebugAudit(limit = 25) {
+  const searchParams = new URLSearchParams({ limit: `${limit}` });
+  return requestJson<AdminDebugAuditResponse>('/api/admin/attribution/debug/audit', {
+    searchParams
+  });
 }

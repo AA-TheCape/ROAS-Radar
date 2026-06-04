@@ -116,6 +116,7 @@ const MmmReadinessDashboard = lazy(() => import('./components/MmmReadinessDashbo
 const OrderDetailsView = lazy(() => import('./components/OrderDetailsView'));
 const SettingsAdminView = lazy(() => import('./components/SettingsAdminView'));
 const IdentityGraphHealthView = lazy(() => import('./components/IdentityGraphHealthView'));
+const AdminDebugToolsView = lazy(() => import('./components/AdminDebugToolsView'));
 
 type AsyncSection<T> = {
 	data: T | null;
@@ -187,7 +188,15 @@ type SettingsForm = {
 	reportingTimezone: string;
 };
 
-type AppPage = 'dashboard' | 'attribution' | 'meta-order-value' | 'mmm' | 'identity-health' | 'settings' | 'order-details';
+type AppPage =
+  | 'dashboard'
+  | 'attribution'
+  | 'meta-order-value'
+  | 'mmm'
+  | 'identity-health'
+  | 'admin-debug'
+  | 'settings'
+  | 'order-details';
 
 const AUTHENTICATED_NAV_ITEMS: AppShellNavItem[] = [
   {
@@ -216,11 +225,17 @@ const AUTHENTICATED_NAV_ITEMS: AppShellNavItem[] = [
     description: 'Merge activity, conflict drill-down, unlinked session pressure, and identity graph backfill status.'
   },
   {
+    key: 'admin-debug',
+    label: 'Admin debug',
+    description: 'Internal QA tools for conversion journey trace, resolver explainability, replay, recompute, and audit logs.'
+  },
+  {
     key: 'settings',
     label: 'Settings',
     description: 'Reporting timezone, platform connections, sync actions, and dashboard user access.'
   }
 ];
+const ADMIN_ONLY_PAGE_KEYS = new Set<AppPage>(['identity-health', 'admin-debug']);
 
 const DEFAULT_REPORTING_TIMEZONE = 'America/Los_Angeles';
 const DEFAULT_GROUP_BY: TimeseriesGroupBy = 'day';
@@ -1960,7 +1975,7 @@ function App() {
         return;
       }
 
-      if (key === 'identity-health' && !authState.user?.isAdmin) {
+      if (ADMIN_ONLY_PAGE_KEYS.has(key as AppPage) && !authState.user?.isAdmin) {
         return;
       }
 
@@ -2061,7 +2076,7 @@ function App() {
       ? [
           ...(isAdmin
             ? AUTHENTICATED_NAV_ITEMS
-            : AUTHENTICATED_NAV_ITEMS.filter((item) => item.key !== 'identity-health')),
+            : AUTHENTICATED_NAV_ITEMS.filter((item) => !ADMIN_ONLY_PAGE_KEYS.has(item.key as AppPage))),
           {
             key: 'order-details',
             label: 'Order details',
@@ -2071,7 +2086,7 @@ function App() {
         ]
       : isAdmin
         ? AUTHENTICATED_NAV_ITEMS
-        : AUTHENTICATED_NAV_ITEMS.filter((item) => item.key !== 'identity-health');
+        : AUTHENTICATED_NAV_ITEMS.filter((item) => !ADMIN_ONLY_PAGE_KEYS.has(item.key as AppPage));
   const breadcrumbs: AppShellBreadcrumb[] =
     currentPage === 'dashboard'
       ? [
@@ -2097,6 +2112,11 @@ function App() {
         ? [
             { label: 'Authenticated app' },
             { label: 'Identity health', current: true }
+          ]
+      : currentPage === 'admin-debug'
+        ? [
+            { label: 'Authenticated app' },
+            { label: 'Admin debug', current: true }
           ]
       : currentPage === 'settings'
         ? [
@@ -2267,6 +2287,19 @@ function App() {
             overviewSection={identityHealthOverview}
             conflictsSection={identityHealthConflicts}
           />
+        </Suspense>
+      ) : null}
+
+      {currentPage === 'admin-debug' ? (
+        <Suspense
+          fallback={
+            <AuthenticatedViewFallback
+              title="Admin debug"
+              description="Loading internal debugging tools and recent audit records."
+            />
+          }
+        >
+          <AdminDebugToolsView reportingTimezone={reportingTimezone} />
         </Suspense>
       ) : null}
 

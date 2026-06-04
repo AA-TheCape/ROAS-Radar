@@ -397,6 +397,90 @@ test('order attribution backfill admin route returns persisted partial reports f
   }
 });
 
+test('admin debug campaign resolver route is admin guarded and writes an audit entry', async () => {
+  const capturedQueries: Array<{ text: string; params?: unknown[] }> = [];
+
+  pool.query = (async (text: string, params?: unknown[]) => {
+    capturedQueries.push({ text, params });
+
+    if (/FROM campaign_metadata_resolver_rules/.test(text)) {
+      return {
+        rows: [
+          {
+            id: 'rule-1',
+            resolver_version: 'campaign_metadata_resolver_v1',
+            rule_kind: 'override',
+            priority: 1,
+            match_platform: 'google_ads',
+            match_source: null,
+            match_medium: null,
+            match_campaign: null,
+            match_content: null,
+            match_term: null,
+            match_account_id: 'acct-1',
+            match_campaign_id: 'cmp-1',
+            match_adset_id: null,
+            match_ad_id: null,
+            match_expression: {},
+            canonical_campaign_id: 'cmp-1',
+            canonical_campaign_name: 'Brand Search',
+            canonical_source: 'google',
+            canonical_medium: 'cpc',
+            canonical_channel: 'paid_search',
+            canonical_channel_group: 'paid_media',
+            hierarchy_metadata: {
+              accountId: 'acct-1'
+            },
+            confidence: '0.9900',
+            source_label: 'qa_override'
+          }
+        ]
+      };
+    }
+
+    return { rows: [] };
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(server, '/api/admin/attribution/debug/campaign-resolver', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer test-reporting-token'
+      },
+      body: {
+        platform: 'google_ads',
+        accountId: 'acct-1',
+        campaignId: 'cmp-1',
+        enqueueUnmapped: false
+      }
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(body.resolution.status, 'resolved');
+    assert.equal(body.resolution.ruleId, 'rule-1');
+    assert.equal(body.resolution.canonical.campaignName, 'Brand Search');
+
+    const auditQuery = capturedQueries.find((call) => /INSERT INTO admin_debug_audit_log/.test(call.text));
+    assert.ok(auditQuery);
+    assert.equal(auditQuery.params?.[0], 'internal');
+    assert.equal(auditQuery.params?.[2], 'internal@system');
+    assert.equal(auditQuery.params?.[3], 'campaign_resolver_debug');
+    assert.equal(auditQuery.params?.[4], 'campaign_metadata');
+    assert.equal(auditQuery.params?.[5], 'cmp-1');
+    assert.deepEqual(JSON.parse(String(auditQuery.params?.[7])), {
+      status: 'resolved',
+      source: 'override',
+      ruleId: 'rule-1',
+      qaQueueId: null
+    });
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
 test('order attribution backfill admin route returns queued and completed polling payloads with the shared status contract', async () => {
   const rowsByJobId = new Map([
     [

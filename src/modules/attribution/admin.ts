@@ -8,6 +8,7 @@ import {
 import { emitOrderAttributionBackfillJobLifecycleLog } from '../../observability/index.js';
 import { attachAuthContext, requireAdmin, type AuthContext } from '../auth/index.js';
 import { enqueueOrderAttributionBackfillRun, getOrderAttributionBackfillRun } from './backfill-run-store.js';
+import { createAttributionAdminDebugRouter } from './admin-debug.js';
 
 class AttributionAdminHttpError extends Error {
   statusCode: number;
@@ -67,6 +68,8 @@ export function createAttributionAdminRouter(): Router {
 
   router.use(attachAuthContext);
   router.use(requireAdmin);
+
+  router.use('/debug', createAttributionAdminDebugRouter());
 
   router.post('/orders/backfill', async (req, res, next) => {
     try {
