@@ -141,9 +141,15 @@ type MmmBaselineJobLifecycleLogInput = {
   modelRunId?: string | null;
   modelVersion?: string | null;
   martVersion?: string | null;
+  approvedFreezeId?: string | null;
+  inputSnapshotHash?: string | null;
+  artifactPersisted?: boolean | null;
   inputRowCount?: number | null;
   paidMediaRowCount?: number | null;
   observationCount?: number | null;
+  posteriorMaxRhat?: number | null;
+  posteriorMinEffectiveSampleSize?: number | null;
+  posteriorSanityStatus?: string | null;
   holdoutMape?: number | null;
   holdoutRmse?: number | null;
   governanceStatus?: string | null;
@@ -699,9 +705,15 @@ export function emitMmmBaselineJobLifecycleLog(input: MmmBaselineJobLifecycleLog
     modelRunId: input.modelRunId ?? null,
     modelVersion: input.modelVersion ?? null,
     martVersion: input.martVersion ?? null,
+    approvedFreezeId: input.approvedFreezeId ?? null,
+    inputSnapshotHash: input.inputSnapshotHash ?? null,
+    artifactPersisted: input.artifactPersisted ?? null,
     inputRowCount: input.inputRowCount ?? null,
     paidMediaRowCount: input.paidMediaRowCount ?? null,
     observationCount: input.observationCount ?? null,
+    posteriorMaxRhat: input.posteriorMaxRhat ?? null,
+    posteriorMinEffectiveSampleSize: input.posteriorMinEffectiveSampleSize ?? null,
+    posteriorSanityStatus: input.posteriorSanityStatus ?? null,
     holdoutMape: input.holdoutMape ?? null,
     holdoutRmse: input.holdoutRmse ?? null,
     governanceStatus: input.governanceStatus ?? null,
@@ -732,6 +744,65 @@ export function emitMmmBaselineJobLifecycleLog(input: MmmBaselineJobLifecycleLog
   logInfo('mmm_baseline_job_lifecycle', fields);
 }
 
+export function emitMmmBayesianJobLifecycleLog(input: MmmBaselineJobLifecycleLogInput): void {
+  const fields: SerializableFields = {
+    service: process.env.K_SERVICE ?? 'roas-radar-mmm-bayesian',
+    stage: input.stage,
+    workerId: input.workerId,
+    requestedBy: input.requestedBy ?? null,
+    startedAt: input.startedAt ?? null,
+    completedAt: input.completedAt ?? null,
+    durationMs: input.durationMs ?? null,
+    trainingStartDate: input.trainingStartDate,
+    trainingEndDate: input.trainingEndDate,
+    attributionModel: input.attributionModel ?? null,
+    modelRunId: input.modelRunId ?? null,
+    modelVersion: input.modelVersion ?? null,
+    martVersion: input.martVersion ?? null,
+    approvedFreezeId: input.approvedFreezeId ?? null,
+    inputSnapshotHash: input.inputSnapshotHash ?? null,
+    artifactPersisted: input.artifactPersisted ?? null,
+    inputRowCount: input.inputRowCount ?? null,
+    paidMediaRowCount: input.paidMediaRowCount ?? null,
+    observationCount: input.observationCount ?? null,
+    posteriorMaxRhat: input.posteriorMaxRhat ?? null,
+    posteriorMinEffectiveSampleSize: input.posteriorMinEffectiveSampleSize ?? null,
+    posteriorSanityStatus: input.posteriorSanityStatus ?? null,
+    holdoutMape: input.holdoutMape ?? null,
+    holdoutRmse: input.holdoutRmse ?? null,
+    governanceStatus: input.governanceStatus ?? null,
+    divergenceAlertCount: input.divergenceAlertCount ?? null,
+    maxDivergenceRate: input.maxDivergenceRate ?? null
+  };
+
+  const shouldAlert =
+    input.stage === 'failed' ||
+    (input.stage === 'completed' &&
+      (input.artifactPersisted === false ||
+        (input.posteriorSanityStatus !== null &&
+          input.posteriorSanityStatus !== undefined &&
+          input.posteriorSanityStatus !== 'pass') ||
+        (input.governanceStatus !== null &&
+          input.governanceStatus !== undefined &&
+          input.governanceStatus !== 'passed')));
+
+  if (shouldAlert) {
+    fields.alertable = true;
+  }
+
+  if (input.stage === 'failed') {
+    logError('mmm_bayesian_job_lifecycle', input.error ?? new Error('MMM Bayesian job failed'), fields);
+    return;
+  }
+
+  if (shouldAlert) {
+    logWarning('mmm_bayesian_job_lifecycle', fields);
+    return;
+  }
+
+  logInfo('mmm_bayesian_job_lifecycle', fields);
+}
+
 export function buildAttributionBacklogLog(snapshot: AttributionBacklogSnapshot): string {
   return JSON.stringify({
     severity: 'INFO',
@@ -756,5 +827,6 @@ export const __observabilityTestUtils = {
   emitCampaignMetadataResolutionCoverageLog,
   emitCampaignMetadataFreshnessSnapshotLog,
   emitCampaignMetadataSyncJobLifecycleLog,
-  emitMmmBaselineJobLifecycleLog
+  emitMmmBaselineJobLifecycleLog,
+  emitMmmBayesianJobLifecycleLog
 };

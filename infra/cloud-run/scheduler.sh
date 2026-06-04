@@ -3,7 +3,7 @@
 set -eu
 
 if [ "$#" -ne 3 ]; then
-  echo "usage: $0 <environment> <meta-ads|meta-order-value|google-ads|retention|data-quality|identity-graph-backfill|order-attribution-materialization|mmm-baseline> <status|pause|resume>" >&2
+  echo "usage: $0 <environment> <meta-ads|meta-order-value|google-ads|retention|data-quality|identity-graph-backfill|order-attribution-materialization|mmm-baseline|mmm-bayesian> <status|pause|resume>" >&2
   exit 1
 fi
 
@@ -56,6 +56,9 @@ case "$PIPELINE" in
     ;;
   mmm-baseline)
     JOB_NAME="$MMM_BASELINE_SCHEDULER_JOB_NAME"
+    ;;
+  mmm-bayesian)
+    JOB_NAME="$MMM_BAYESIAN_SCHEDULER_JOB_NAME"
     ;;
   *)
     echo "unsupported pipeline: $PIPELINE" >&2

@@ -78,9 +78,20 @@ Deterministic attribution credit is retained as a calibration anchor only. It in
 
 Each completed Bayesian run persists `posteriorCoefficients`, `posteriorGroupEffects`, `posteriorSigma`, aggregate channel contribution intervals, weekly x channel contribution intervals, calibration inputs, and diagnostics through `mmm_model_runs`. `run_config.posteriorEngine = gibbs_sampler_conjugate_gaussian_hierarchical_v1` identifies the inference path.
 
+Production Bayesian training is gated on the same approved immutable calibration freeze used by MMM governance. Cloud Run requires `MMM_BAYESIAN_FREEZE_ID`, `MMM_BAYESIAN_ATTRIBUTION_MODEL`, `MMM_BAYESIAN_LOOKBACK_DAYS`, `MMM_BAYESIAN_LAG_DAYS`, and `DATABASE_URL`. The trainer validates that the freeze is approved and matches the requested calibration window plus attribution model, stores `approved_freeze_id`, and includes freeze evidence in `input_summary`.
+
 Diagnostics are computed from retained Markov chains, not from synthetic independent draws. The run fails before completion when R-hat exceeds `1.1`, minimum effective sample size is below `100`, or posterior contribution sanity checks fail. Failed diagnostics therefore keep the run out of production-ready API readiness.
 
-Cloud Run assumptions: use Node 22, at least 1 vCPU, and 1 GiB memory for default `MMM_BAYESIAN_POSTERIOR_CHAINS=4`, `MMM_BAYESIAN_POSTERIOR_DRAWS=1000`, `MMM_BAYESIAN_POSTERIOR_WARMUP_DRAWS=500`, and up to 12 selected channels. Increase timeout, CPU, or reduce `MMM_BAYESIAN_MAX_CHANNELS` before increasing chains/draws on wide channel windows. Use `MMM_BAYESIAN_RANDOM_SEED` only for reproducible validation runs.
+Cloud Run assumptions: use Node 22, at least 1 vCPU, and 1 GiB memory for default `MMM_BAYESIAN_POSTERIOR_CHAINS=4`, `MMM_BAYESIAN_POSTERIOR_DRAWS=1000`, `MMM_BAYESIAN_POSTERIOR_WARMUP_DRAWS=500`, and up to 12 selected channels. Increase `MMM_BAYESIAN_JOB_TIMEOUT_SECONDS`, `MMM_BAYESIAN_JOB_CPU`, or reduce `MMM_BAYESIAN_MAX_CHANNELS` before increasing chains/draws on wide channel windows. Use `MMM_BAYESIAN_RANDOM_SEED` only for reproducible validation runs.
+
+Manual release gate:
+
+```sh
+MMM_BAYESIAN_FREEZE_ID=<approved-freeze-id> npm run mmm:train-bayesian -- --validate-config
+gcloud run jobs execute roas-radar-mmm-bayesian-<environment> --region <region> --wait
+```
+
+The scheduler is deployed as `roas-radar-mmm-bayesian-scheduler-<environment>` but should remain paused until staging produces a successful `mmm_bayesian_job_lifecycle` completion with `posteriorSanityStatus="pass"` and `artifactPersisted=true`.
 
 Completed model runs are stored in `mmm_model_runs` with versioned `run_config`, `input_summary`, `model_artifact`, `calibration_report`, `validation_report`, and `approved_freeze_id`. Every completed run also writes immutable row-level inputs to `mmm_model_run_input_snapshots` with `snapshot_version = mmm_weekly_channel_snapshot_v1`, per-row hashes, and a run-level snapshot hash in `input_summary`. Baseline training fails when the approved freeze contains DQ status `fail`; warning counts and freeze evidence are retained in `input_summary`.
 

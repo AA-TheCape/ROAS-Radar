@@ -44,6 +44,7 @@ export type BayesianHierarchicalMmmTrainingInput = {
 	startDate: string;
 	endDate: string;
 	attributionModel?: string;
+	approvedFreezeId?: string;
 	refreshMart?: boolean;
 	maxChannels?: number;
 	adstockDecay?: number;
@@ -125,6 +126,7 @@ export type BayesianHierarchicalMmmModelRun = {
 	modelArtifact: Record<string, unknown>;
 	calibrationReport: Record<string, unknown>;
 	validationReport: Record<string, unknown>;
+	approvedFreezeId: string | null;
 };
 
 function toNumber(value: string | number | null | undefined): number {
@@ -140,6 +142,23 @@ function normalizeDate(value: string, fieldName: string): string {
 	const trimmed = value.trim();
 	if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
 		throw new Error(`${fieldName} must use YYYY-MM-DD format`);
+	}
+
+	return trimmed;
+}
+
+function normalizeFreezeId(value: string | undefined): string | null {
+	const trimmed = value?.trim();
+	if (!trimmed) {
+		return null;
+	}
+
+	if (
+		!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+			trimmed,
+		)
+	) {
+		throw new Error("approvedFreezeId must be a valid UUID");
 	}
 
 	return trimmed;
@@ -1555,6 +1574,90 @@ export function buildBayesianHierarchicalMmmArtifact(
 			},
 			posteriorSanityChecks,
 		},
+		approvedFreezeId: normalizeFreezeId(input.approvedFreezeId),
+	};
+}
+
+async function fetchApprovedFreezeEvidenceWithClient(
+	client: PoolClient,
+	input: {
+		freezeId: string;
+		startDate: string;
+		endDate: string;
+		attributionModel: string;
+	},
+): Promise<Record<string, unknown>> {
+	const result = await client.query<{
+		id: string;
+		freeze_schema_version: string;
+		mart_version: string;
+		snapshot_version: string;
+		generation_timestamp: string;
+		calibration_start_date: string;
+		calibration_end_date: string;
+		attribution_model: string;
+		row_counts: Record<string, unknown>;
+		data_quality_checks: Record<string, unknown>;
+		evidence_hash: string;
+		approved_by: string | null;
+		approved_at: string | null;
+	}>(
+		`
+      SELECT
+        id,
+        freeze_schema_version,
+        mart_version,
+        snapshot_version,
+        generation_timestamp,
+        calibration_start_date::text,
+        calibration_end_date::text,
+        attribution_model,
+        row_counts,
+        data_quality_checks,
+        evidence_hash,
+        approved_by,
+        approved_at
+      FROM mmm_baseline_calibration_freezes
+      WHERE id = $1::uuid
+        AND freeze_status = 'approved'
+      LIMIT 1
+    `,
+		[input.freezeId],
+	);
+	const row = result.rows[0];
+	if (!row) {
+		throw new Error(
+			`bayesian_hierarchical_mmm_v1 training requires an approved freeze id; no approved freeze found for ${input.freezeId}`,
+		);
+	}
+
+	if (
+		row.calibration_start_date !== input.startDate ||
+		row.calibration_end_date !== input.endDate ||
+		row.attribution_model !== input.attributionModel
+	) {
+		throw new Error(
+			"approvedFreezeId does not match the requested Bayesian MMM training window and attribution model",
+		);
+	}
+
+	if (
+		row.freeze_schema_version !== "mmm_baseline_calibration_freeze_v1" ||
+		row.mart_version !== MMM_WEEKLY_CHANNEL_MART_VERSION ||
+		row.snapshot_version !== "mmm_weekly_channel_snapshot_v1"
+	) {
+		throw new Error("approvedFreezeId uses an unsupported MMM freeze schema or mart version");
+	}
+
+	return {
+		approvedFreezeId: row.id,
+		freezeSchemaVersion: row.freeze_schema_version,
+		freezeGenerationTimestamp: row.generation_timestamp,
+		freezeEvidenceHash: row.evidence_hash,
+		freezeRowCounts: row.row_counts,
+		freezeDataQualityChecks: row.data_quality_checks,
+		approvedBy: row.approved_by,
+		approvedAt: row.approved_at,
 	};
 }
 
@@ -1565,6 +1668,18 @@ export async function trainBayesianHierarchicalMmmModelWithClient(
 	const startDate = normalizeDate(input.startDate, "startDate");
 	const endDate = normalizeDate(input.endDate, "endDate");
 	const attributionModel = input.attributionModel?.trim() || "last_touch";
+	const approvedFreezeId = normalizeFreezeId(input.approvedFreezeId);
+	if (!approvedFreezeId) {
+		throw new Error(
+			"bayesian_hierarchical_mmm_v1 training requires approvedFreezeId",
+		);
+	}
+	const freezeEvidence = await fetchApprovedFreezeEvidenceWithClient(client, {
+		freezeId: approvedFreezeId,
+		startDate,
+		endDate,
+		attributionModel,
+	});
 	if (input.refreshMart ?? true) {
 		await refreshWeeklyMmmChannelInputMartWithClient(client, {
 			startDate,
@@ -1586,7 +1701,17 @@ export async function trainBayesianHierarchicalMmmModelWithClient(
 		startDate,
 		endDate,
 		attributionModel,
+		approvedFreezeId,
 	});
+	const runConfig = {
+		...run.runConfig,
+		approvedFreezeId,
+		modelVersion: BAYESIAN_HIERARCHICAL_MMM_MODEL_VERSION,
+	};
+	const initialInputSummary = {
+		...run.inputSummary,
+		...freezeEvidence,
+	};
 	const insertResult = await client.query<{ id: string }>(
 		`
       INSERT INTO mmm_model_runs (
@@ -1594,6 +1719,7 @@ export async function trainBayesianHierarchicalMmmModelWithClient(
         model_version,
         mart_version,
         attribution_model,
+        approved_freeze_id,
         run_status,
         training_start_date,
         training_end_date,
@@ -1611,16 +1737,17 @@ export async function trainBayesianHierarchicalMmmModelWithClient(
         $2,
         $3,
         $4,
+        $5::uuid,
         'completed',
-        $5::date,
         $6::date,
         $7::date,
         $8::date,
-        $9::jsonb,
+        $9::date,
         $10::jsonb,
         $11::jsonb,
         $12::jsonb,
         $13::jsonb,
+        $14::jsonb,
         now()
       )
       RETURNING id
@@ -1630,12 +1757,13 @@ export async function trainBayesianHierarchicalMmmModelWithClient(
 			run.modelVersion,
 			run.martVersion,
 			run.attributionModel,
+			approvedFreezeId,
 			run.trainingStartDate,
 			run.trainingEndDate,
 			run.holdoutStartDate,
 			run.holdoutEndDate,
-			JSON.stringify(run.runConfig),
-			JSON.stringify(run.inputSummary),
+			JSON.stringify(runConfig),
+			JSON.stringify(initialInputSummary),
 			JSON.stringify(run.modelArtifact),
 			JSON.stringify(run.calibrationReport),
 			JSON.stringify(run.validationReport),
@@ -1657,7 +1785,7 @@ export async function trainBayesianHierarchicalMmmModelWithClient(
 		snapshotRows,
 	);
 	const inputSummary = {
-		...run.inputSummary,
+		...initialInputSummary,
 		inputContractVersion: BAYESIAN_HIERARCHICAL_MMM_INPUT_CONTRACT_VERSION,
 		snapshotVersion: "mmm_weekly_channel_snapshot_v1",
 		snapshotRowCount: snapshot.snapshotRowCount,
@@ -1675,7 +1803,9 @@ export async function trainBayesianHierarchicalMmmModelWithClient(
 	return {
 		...run,
 		id: modelRunId,
+		runConfig,
 		inputSummary,
+		approvedFreezeId,
 	};
 }
 

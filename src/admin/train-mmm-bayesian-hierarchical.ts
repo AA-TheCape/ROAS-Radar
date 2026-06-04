@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
 
 import { pool } from "../db/pool.js";
-import { trainBayesianHierarchicalMmmModel } from "../modules/mmm/bayesian-hierarchical.js";
-import { emitMmmBaselineJobLifecycleLog } from "../observability/index.js";
+import {
+	BAYESIAN_HIERARCHICAL_MMM_MODEL_VERSION,
+	trainBayesianHierarchicalMmmModel,
+} from "../modules/mmm/bayesian-hierarchical.js";
+import { emitMmmBayesianJobLifecycleLog } from "../observability/index.js";
 
 function readFlag(name: string): string | null {
 	const prefixed = `--${name}`;
@@ -29,6 +32,10 @@ function readBooleanFlag(name: string): boolean | undefined {
 	}
 
 	throw new Error(`--${name} must be boolean`);
+}
+
+function hasFlag(name: string): boolean {
+	return process.argv.includes(`--${name}`);
 }
 
 function readBooleanEnv(name: string): boolean | undefined {
@@ -117,6 +124,29 @@ function resolveTrainingWindow() {
 	);
 }
 
+function requireRuntimeConfig(input: {
+	approvedFreezeId?: string;
+	attributionModel?: string;
+}) {
+	if (!process.env.DATABASE_URL?.trim()) {
+		throw new Error(
+			"bayesian_hierarchical_mmm_v1 training requires DATABASE_URL",
+		);
+	}
+
+	if (!input.approvedFreezeId?.trim()) {
+		throw new Error(
+			"bayesian_hierarchical_mmm_v1 training requires --freeze-id or MMM_BAYESIAN_FREEZE_ID",
+		);
+	}
+
+	if (!input.attributionModel?.trim()) {
+		throw new Error(
+			"bayesian_hierarchical_mmm_v1 training requires --attribution-model or MMM_BAYESIAN_ATTRIBUTION_MODEL",
+		);
+	}
+}
+
 async function main() {
 	const { startDate, endDate } = resolveTrainingWindow();
 	const startedAt = new Date();
@@ -129,8 +159,30 @@ async function main() {
 		readFlag("attribution-model")?.trim() ||
 		process.env.MMM_BAYESIAN_ATTRIBUTION_MODEL?.trim() ||
 		undefined;
+	const approvedFreezeId =
+		readFlag("freeze-id")?.trim() || process.env.MMM_BAYESIAN_FREEZE_ID?.trim();
 
-	emitMmmBaselineJobLifecycleLog({
+	requireRuntimeConfig({
+		approvedFreezeId,
+		attributionModel,
+	});
+
+	if (hasFlag("validate-config")) {
+		process.stdout.write(
+			`${JSON.stringify({
+				ok: true,
+				command: "mmm:train-bayesian:start",
+				modelVersion: BAYESIAN_HIERARCHICAL_MMM_MODEL_VERSION,
+				startDate,
+				endDate,
+				attributionModel,
+				approvedFreezeId,
+			})}\n`,
+		);
+		return;
+	}
+
+	emitMmmBayesianJobLifecycleLog({
 		stage: "started",
 		workerId,
 		requestedBy,
@@ -138,6 +190,8 @@ async function main() {
 		trainingStartDate: startDate,
 		trainingEndDate: endDate,
 		attributionModel: attributionModel ?? null,
+		approvedFreezeId: approvedFreezeId ?? null,
+		modelVersion: BAYESIAN_HIERARCHICAL_MMM_MODEL_VERSION,
 	});
 
 	try {
@@ -185,14 +239,21 @@ async function main() {
 				readFlag("random-seed")?.trim() ||
 				process.env.MMM_BAYESIAN_RANDOM_SEED?.trim() ||
 				undefined,
+			approvedFreezeId,
 			submittedBy: requestedBy,
 		});
 		const completedAt = new Date();
 		const holdout = run.validationReport.holdout as
 			| { mape?: unknown; rmse?: unknown }
 			| undefined;
+		const posteriorDiagnostics = run.validationReport.posteriorDiagnostics as
+			| { maxRhat?: unknown; minEffectiveSampleSize?: unknown }
+			| undefined;
+		const posteriorSanityChecks = run.validationReport.posteriorSanityChecks as
+			| { status?: unknown }
+			| undefined;
 
-		emitMmmBaselineJobLifecycleLog({
+		emitMmmBayesianJobLifecycleLog({
 			stage: "completed",
 			workerId,
 			requestedBy,
@@ -205,9 +266,27 @@ async function main() {
 			modelRunId: run.id,
 			modelVersion: run.modelVersion,
 			martVersion: run.martVersion,
+			approvedFreezeId: run.approvedFreezeId,
+			inputSnapshotHash:
+				typeof run.inputSummary.snapshotHash === "string"
+					? run.inputSummary.snapshotHash
+					: null,
+			artifactPersisted: Boolean(run.id),
 			inputRowCount: Number(run.inputSummary.rowCount ?? 0),
 			paidMediaRowCount: Number(run.inputSummary.paidMediaRowCount ?? 0),
 			observationCount: Number(run.inputSummary.observationCount ?? 0),
+			posteriorMaxRhat:
+				typeof posteriorDiagnostics?.maxRhat === "number"
+					? posteriorDiagnostics.maxRhat
+					: null,
+			posteriorMinEffectiveSampleSize:
+				typeof posteriorDiagnostics?.minEffectiveSampleSize === "number"
+					? posteriorDiagnostics.minEffectiveSampleSize
+					: null,
+			posteriorSanityStatus:
+				typeof posteriorSanityChecks?.status === "string"
+					? posteriorSanityChecks.status
+					: null,
 			holdoutMape: typeof holdout?.mape === "number" ? holdout.mape : null,
 			holdoutRmse: typeof holdout?.rmse === "number" ? holdout.rmse : null,
 			governanceStatus:
@@ -222,6 +301,7 @@ async function main() {
 			`${JSON.stringify(
 				{
 					id: run.id,
+					approvedFreezeId: run.approvedFreezeId,
 					modelVersion: run.modelVersion,
 					attributionModel: run.attributionModel,
 					trainingStartDate: run.trainingStartDate,
@@ -236,7 +316,7 @@ async function main() {
 		);
 	} catch (error) {
 		const completedAt = new Date();
-		emitMmmBaselineJobLifecycleLog({
+		emitMmmBayesianJobLifecycleLog({
 			stage: "failed",
 			workerId,
 			requestedBy,
@@ -246,6 +326,8 @@ async function main() {
 			trainingStartDate: startDate,
 			trainingEndDate: endDate,
 			attributionModel: attributionModel ?? null,
+			approvedFreezeId: approvedFreezeId ?? null,
+			modelVersion: BAYESIAN_HIERARCHICAL_MMM_MODEL_VERSION,
 			error,
 		});
 		throw error;

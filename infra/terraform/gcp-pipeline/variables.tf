@@ -142,6 +142,7 @@ variable "schedules" {
     identity_graph_backfill          = string
     order_attribution_materialization = string
     mmm_baseline                     = string
+    mmm_bayesian                     = string
   })
   description = "Cloud Scheduler cron expressions."
   default = {
@@ -155,7 +156,14 @@ variable "schedules" {
     identity_graph_backfill           = "35 3 * * *"
     order_attribution_materialization = "50 3 * * *"
     mmm_baseline                      = "15 4 * * 1"
+    mmm_bayesian                      = "45 5 * * 1"
   }
+}
+
+variable "mmm_bayesian_freeze_id" {
+  type        = string
+  description = "Approved MMM calibration freeze id used by the bayesian_hierarchical_mmm_v1 Cloud Run Job. Leave empty until the release gate approves a freeze."
+  default     = ""
 }
 
 variable "scheduler_time_zone" {

@@ -99,6 +99,7 @@ for var in \
   IDENTITY_GRAPH_BACKFILL_JOB_SERVICE_ACCOUNT_NAME \
   ORDER_ATTRIBUTION_MATERIALIZATION_JOB_SERVICE_ACCOUNT_NAME \
   MMM_BASELINE_JOB_SERVICE_ACCOUNT_NAME \
+  MMM_BAYESIAN_JOB_SERVICE_ACCOUNT_NAME \
   SCHEDULER_INVOKER_SERVICE_ACCOUNT_NAME \
   DEPLOYER_SERVICE_ACCOUNT_NAME
 do
@@ -116,6 +117,7 @@ ensure_service_account "$DATA_QUALITY_JOB_SERVICE_ACCOUNT_NAME" "ROAS Radar data
 ensure_service_account "$IDENTITY_GRAPH_BACKFILL_JOB_SERVICE_ACCOUNT_NAME" "ROAS Radar identity graph backfill $ENVIRONMENT"
 ensure_service_account "$ORDER_ATTRIBUTION_MATERIALIZATION_JOB_SERVICE_ACCOUNT_NAME" "ROAS Radar attribution materialization $ENVIRONMENT"
 ensure_service_account "$MMM_BASELINE_JOB_SERVICE_ACCOUNT_NAME" "ROAS Radar MMM baseline $ENVIRONMENT"
+ensure_service_account "$MMM_BAYESIAN_JOB_SERVICE_ACCOUNT_NAME" "ROAS Radar MMM Bayesian $ENVIRONMENT"
 ensure_service_account "$SCHEDULER_INVOKER_SERVICE_ACCOUNT_NAME" "ROAS Radar scheduler invoker $ENVIRONMENT"
 ensure_service_account "$DEPLOYER_SERVICE_ACCOUNT_NAME" "ROAS Radar deployer $ENVIRONMENT"
 
@@ -130,6 +132,7 @@ grant_roles_csv "$DATA_QUALITY_JOB_SERVICE_ACCOUNT_NAME" "${DATA_QUALITY_JOB_SER
 grant_roles_csv "$IDENTITY_GRAPH_BACKFILL_JOB_SERVICE_ACCOUNT_NAME" "${IDENTITY_GRAPH_BACKFILL_JOB_SERVICE_ACCOUNT_ROLES:-roles/cloudsql.client,roles/logging.logWriter,roles/monitoring.metricWriter}"
 grant_roles_csv "$ORDER_ATTRIBUTION_MATERIALIZATION_JOB_SERVICE_ACCOUNT_NAME" "${ORDER_ATTRIBUTION_MATERIALIZATION_JOB_SERVICE_ACCOUNT_ROLES:-roles/cloudsql.client,roles/logging.logWriter,roles/monitoring.metricWriter}"
 grant_roles_csv "$MMM_BASELINE_JOB_SERVICE_ACCOUNT_NAME" "${MMM_BASELINE_JOB_SERVICE_ACCOUNT_ROLES:-roles/cloudsql.client,roles/logging.logWriter,roles/monitoring.metricWriter}"
+grant_roles_csv "$MMM_BAYESIAN_JOB_SERVICE_ACCOUNT_NAME" "${MMM_BAYESIAN_JOB_SERVICE_ACCOUNT_ROLES:-roles/cloudsql.client,roles/logging.logWriter,roles/monitoring.metricWriter}"
 grant_roles_csv "$SCHEDULER_INVOKER_SERVICE_ACCOUNT_NAME" "${SCHEDULER_INVOKER_SERVICE_ACCOUNT_ROLES:-roles/logging.logWriter}"
 grant_roles_csv "$DEPLOYER_SERVICE_ACCOUNT_NAME" "${DEPLOYER_SERVICE_ACCOUNT_ROLES:-roles/run.admin,roles/cloudscheduler.admin,roles/artifactregistry.reader,roles/iam.serviceAccountUser}"
 
@@ -165,6 +168,7 @@ grant_secret_access "$IDENTITY_GRAPH_BACKFILL_JOB_SERVICE_ACCOUNT_NAME" "DATABAS
 grant_secret_access "$ORDER_ATTRIBUTION_MATERIALIZATION_JOB_SERVICE_ACCOUNT_NAME" "DATABASE_URL"
 grant_secret_access "$ORDER_ATTRIBUTION_MATERIALIZATION_JOB_SERVICE_ACCOUNT_NAME" "SHOPIFY_APP_ENCRYPTION_KEY"
 grant_secret_access "$MMM_BASELINE_JOB_SERVICE_ACCOUNT_NAME" "DATABASE_URL"
+grant_secret_access "$MMM_BAYESIAN_JOB_SERVICE_ACCOUNT_NAME" "DATABASE_URL"
 
 echo "Bootstrap complete for $ENVIRONMENT"
 echo "API service account: $(service_account_email "$API_SERVICE_ACCOUNT_NAME")"
@@ -178,5 +182,6 @@ echo "Data quality service account: $(service_account_email "$DATA_QUALITY_JOB_S
 echo "Identity graph backfill service account: $(service_account_email "$IDENTITY_GRAPH_BACKFILL_JOB_SERVICE_ACCOUNT_NAME")"
 echo "Order attribution materialization service account: $(service_account_email "$ORDER_ATTRIBUTION_MATERIALIZATION_JOB_SERVICE_ACCOUNT_NAME")"
 echo "MMM baseline service account: $(service_account_email "$MMM_BASELINE_JOB_SERVICE_ACCOUNT_NAME")"
+echo "MMM Bayesian service account: $(service_account_email "$MMM_BAYESIAN_JOB_SERVICE_ACCOUNT_NAME")"
 echo "Scheduler invoker service account: $(service_account_email "$SCHEDULER_INVOKER_SERVICE_ACCOUNT_NAME")"
 echo "Deployer service account: $(service_account_email "$DEPLOYER_SERVICE_ACCOUNT_NAME")"

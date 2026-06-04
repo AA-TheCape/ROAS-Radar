@@ -20,6 +20,7 @@ Use this runbook when deploying or operating the scheduled Cloud Run workers in 
   - `roas-radar-identity-graph-backfill`
   - `roas-radar-order-attribution-materialization`
   - `roas-radar-mmm-baseline`
+  - `roas-radar-mmm-bayesian`
 - Cloud Scheduler:
   - one scheduler per recurring Cloud Run Job
 
@@ -57,6 +58,10 @@ Do not sign off staging or continue to production unless the smoke evidence incl
 - `MMM_BASELINE_SCHEDULER_PAUSED` controls whether deploys leave the weekly MMM baseline scheduler active or paused.
 - `MMM_BASELINE_SCHEDULE`, `MMM_BASELINE_TIME_ZONE`, `MMM_BASELINE_LOOKBACK_DAYS`, `MMM_BASELINE_LAG_DAYS`, and `MMM_BASELINE_ATTRIBUTION_MODEL` control the scheduled MMM training window and model anchor.
 - `mmm_baseline_job_lifecycle` logs are the source for MMM failure and drift alerts.
+- `MMM_BAYESIAN_FREEZE_ID` is required before running or enabling the scheduler for `bayesian_hierarchical_mmm_v1`; keep it empty until the approved freeze id is promoted as a release gate.
+- `MMM_BAYESIAN_SCHEDULER_PAUSED`, `MMM_BAYESIAN_SCHEDULE`, `MMM_BAYESIAN_TIME_ZONE`, `MMM_BAYESIAN_LOOKBACK_DAYS`, `MMM_BAYESIAN_LAG_DAYS`, and `MMM_BAYESIAN_ATTRIBUTION_MODEL` control the separate Bayesian job.
+- `MMM_BAYESIAN_JOB_CPU`, `MMM_BAYESIAN_JOB_MEMORY`, `MMM_BAYESIAN_JOB_TIMEOUT_SECONDS`, and `MMM_BAYESIAN_JOB_MAX_RETRIES` control Bayesian Cloud Run resources and retry behavior.
+- `mmm_bayesian_job_lifecycle` logs are the source for Bayesian failure, stale success, diagnostics, and missing artifact alerts.
 
 Recommended operating posture:
 
@@ -70,6 +75,7 @@ Recommended operating posture:
    `sh infra/cloud-run/scheduler.sh <environment> meta-order-value pause`
 2. If MMM calibration drift or model failures are active, pause the MMM scheduler while upstream freshness is repaired:
    `sh infra/cloud-run/scheduler.sh <environment> mmm-baseline pause`
+   `sh infra/cloud-run/scheduler.sh <environment> mmm-bayesian pause`
 3. If the scheduler should stay deployed but order-value extraction must stop, set `META_ADS_ORDER_VALUE_SYNC_ENABLED="false"` in the target environment file and rerun `sh infra/cloud-run/deploy.sh <environment>`.
 4. If the service rollout itself must be reverted, use `sh infra/cloud-run/rollback.sh <environment> <deploy-metadata-file> previous`.
 5. If a schema change must be reversed, apply the matching manual rollback file from `db/rollbacks/` with the migrator database credentials, then rerun the smoke test before resuming schedulers.
@@ -77,6 +83,7 @@ Recommended operating posture:
    `sh infra/cloud-run/scheduler.sh <environment> meta-order-value resume`
 7. For MMM, manually execute one successful baseline job and then resume:
    `sh infra/cloud-run/scheduler.sh <environment> mmm-baseline resume`
+   For Bayesian MMM, manually execute one successful `roas-radar-mmm-bayesian-<environment>` job with a promoted `MMM_BAYESIAN_FREEZE_ID`, then resume `sh infra/cloud-run/scheduler.sh <environment> mmm-bayesian resume`.
 
 For upstream metadata quota incidents, pause the affected campaign metadata scheduler with `gcloud scheduler jobs pause`, then use `gcloud scheduler jobs resume` after `campaign_metadata_sync_job_lifecycle` logs show successful manual or scheduler refreshes.
 
@@ -91,4 +98,5 @@ Attach these artifacts to the release record before production sign-off:
 - Staging rollback drill output when `RUN_STAGING_ROLLBACK_DRILL=true`.
 - Scheduler status for Meta order-value, attribution materialization, identity graph backfill, retention, and data quality jobs.
 - Latest `mmm_model_runs` row for the baseline model after the MMM scheduler or manual job run.
+- Latest `mmm_model_runs` row for `bayesian_hierarchical_mmm_v1` includes `approved_freeze_id`, posterior diagnostics, output artifacts, and calibration status after a Bayesian scheduler or manual run.
 - Monitoring apply output from `npm run ops:monitoring:apply -- <environment>` showing log metrics, alert policies, and the SLO dashboard were updated.

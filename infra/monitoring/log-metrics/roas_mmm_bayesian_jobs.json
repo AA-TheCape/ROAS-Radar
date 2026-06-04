@@ -1,0 +1,27 @@
+{
+  "name": "roas_mmm_bayesian_jobs",
+  "description": "Counts Bayesian MMM training lifecycle events by stage, diagnostics, and artifact persistence.",
+  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"mmm_bayesian_job_lifecycle\"",
+  "labelExtractors": {
+    "service": "EXTRACT(jsonPayload.service)",
+    "stage": "EXTRACT(jsonPayload.stage)",
+    "attribution_model": "EXTRACT(jsonPayload.attributionModel)",
+    "model_version": "EXTRACT(jsonPayload.modelVersion)",
+    "posterior_sanity_status": "EXTRACT(jsonPayload.posteriorSanityStatus)",
+    "artifact_persisted": "EXTRACT(jsonPayload.artifactPersisted)"
+  },
+  "metricDescriptor": {
+    "metricKind": "DELTA",
+    "valueType": "INT64",
+    "unit": "1",
+    "displayName": "ROAS Radar MMM Bayesian Jobs",
+    "labels": [
+      { "key": "service", "valueType": "STRING", "description": "Service emitting Bayesian MMM lifecycle telemetry." },
+      { "key": "stage", "valueType": "STRING", "description": "Lifecycle stage." },
+      { "key": "attribution_model", "valueType": "STRING", "description": "Training attribution model." },
+      { "key": "model_version", "valueType": "STRING", "description": "MMM model version." },
+      { "key": "posterior_sanity_status", "valueType": "STRING", "description": "Posterior diagnostics status." },
+      { "key": "artifact_persisted", "valueType": "STRING", "description": "Whether model artifacts were persisted." }
+    ]
+  }
+}

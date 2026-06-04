@@ -17,6 +17,7 @@ locals {
     identity_graph_backfill           = "roas-radar-idbf-${var.environment}"
     order_attribution_materialization = "roas-radar-ordmat-${var.environment}"
     mmm_baseline                      = "roas-radar-mmm-${var.environment}"
+    mmm_bayesian                      = "roas-radar-mmm-bayesian-${var.environment}"
     scheduler                         = "roas-radar-scheduler-${var.environment}"
     deployer                          = "roas-radar-deployer-${var.environment}"
   }
@@ -153,6 +154,17 @@ locals {
       env             = { DATABASE_POOL_MAX = "1", MMM_BASELINE_LOOKBACK_DAYS = "90", MMM_BASELINE_LAG_DAYS = "1", MMM_BASELINE_SUBMITTED_BY = "cloud-run-scheduler-${var.environment}", MMM_BASELINE_ATTRIBUTION_MODEL = "last_touch", MMM_BASELINE_MAX_SEGMENTS = "8", MMM_BASELINE_ADSTOCK_DECAY = "0.5", MMM_BASELINE_RIDGE_LAMBDA = "1", MMM_BASELINE_HOLDOUT_RATIO = "0.2" }
       secrets         = { DATABASE_URL = "DATABASE_URL" }
     }
+    mmm_bayesian = {
+      name            = "roas-radar-mmm-bayesian-${var.environment}"
+      service_account = "mmm_bayesian"
+      args            = ["run", "mmm:train-bayesian:start"]
+      max_retries     = 0
+      timeout         = "3600s"
+      cpu             = "1"
+      memory          = "1Gi"
+      env             = { DATABASE_POOL_MAX = "1", MMM_BAYESIAN_LOOKBACK_DAYS = "90", MMM_BAYESIAN_LAG_DAYS = "1", MMM_BAYESIAN_SUBMITTED_BY = "cloud-run-scheduler-${var.environment}", MMM_BAYESIAN_ATTRIBUTION_MODEL = "last_touch", MMM_BAYESIAN_FREEZE_ID = var.mmm_bayesian_freeze_id, MMM_BAYESIAN_REFRESH_MART = "false", MMM_BAYESIAN_MAX_CHANNELS = "12", MMM_BAYESIAN_POSTERIOR_CHAINS = "4", MMM_BAYESIAN_POSTERIOR_DRAWS = "1000", MMM_BAYESIAN_POSTERIOR_WARMUP_DRAWS = "500", MMM_BAYESIAN_HOLDOUT_RATIO = "0.2" }
+      secrets         = { DATABASE_URL = "DATABASE_URL" }
+    }
   }
 
   scheduler_targets = {
@@ -166,6 +178,7 @@ locals {
     identity_graph_backfill           = { job = "identity_graph_backfill", schedule = var.schedules.identity_graph_backfill }
     order_attribution_materialization = { job = "order_attribution_materialization", schedule = var.schedules.order_attribution_materialization }
     mmm_baseline                      = { job = "mmm_baseline", schedule = var.schedules.mmm_baseline }
+    mmm_bayesian                      = { job = "mmm_bayesian", schedule = var.schedules.mmm_bayesian }
   }
 
   secret_access = {
@@ -180,6 +193,7 @@ locals {
     identity_graph_backfill           = ["DATABASE_URL"]
     order_attribution_materialization = ["DATABASE_URL", "SHOPIFY_APP_ENCRYPTION_KEY"]
     mmm_baseline                      = ["DATABASE_URL"]
+    mmm_bayesian                      = ["DATABASE_URL"]
     deployer                          = ["REPORTING_API_TOKEN"]
   }
 }
@@ -333,6 +347,9 @@ resource "google_project_iam_member" "runtime_roles" {
     mmm_baseline_cloudsql                      = ["mmm_baseline", "roles/cloudsql.client"]
     mmm_baseline_logging                       = ["mmm_baseline", "roles/logging.logWriter"]
     mmm_baseline_metrics                       = ["mmm_baseline", "roles/monitoring.metricWriter"]
+    mmm_bayesian_cloudsql                      = ["mmm_bayesian", "roles/cloudsql.client"]
+    mmm_bayesian_logging                       = ["mmm_bayesian", "roles/logging.logWriter"]
+    mmm_bayesian_metrics                       = ["mmm_bayesian", "roles/monitoring.metricWriter"]
     scheduler_logging                          = ["scheduler", "roles/logging.logWriter"]
     deployer_run_admin                         = ["deployer", "roles/run.admin"]
     deployer_scheduler_admin                   = ["deployer", "roles/cloudscheduler.admin"]
@@ -548,7 +565,7 @@ resource "google_cloud_run_v2_job" "jobs" {
     template {
       service_account = google_service_account.accounts[each.value.service_account].email
       max_retries     = each.value.max_retries
-      timeout         = "1800s"
+      timeout         = lookup(each.value, "timeout", "1800s")
 
       volumes {
         name = "cloudsql"
@@ -564,8 +581,8 @@ resource "google_cloud_run_v2_job" "jobs" {
 
         resources {
           limits = {
-            cpu    = "1"
-            memory = "512Mi"
+            cpu    = lookup(each.value, "cpu", "1")
+            memory = lookup(each.value, "memory", "512Mi")
           }
         }
 

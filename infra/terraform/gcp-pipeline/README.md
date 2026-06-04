@@ -10,7 +10,7 @@ This stack provisions one deterministic ROAS Radar environment on GCP:
 - Secret Manager placeholders and least-privilege secret access
 - service accounts and IAM for API, dashboard, worker, migration, ingestion, processing, scheduler, and deployer identities
 - Cloud Run services for API, attribution worker, and dashboard
-- Cloud Run Jobs for migrations, ad ingestion, retention, data quality, identity reconciliation, attribution materialization, baseline MMM training, and metadata refreshes
+- Cloud Run Jobs for migrations, ad ingestion, retention, data quality, identity reconciliation, attribution materialization, baseline MMM training, Bayesian hierarchical MMM training, and metadata refreshes
 - Cloud Scheduler HTTP triggers that invoke the Cloud Run Jobs through a dedicated scheduler service account
 
 ## Apply
@@ -34,6 +34,22 @@ printf '%s' "$MIGRATOR_DATABASE_URL" | gcloud secrets versions add MIGRATOR_DATA
 ```
 
 Repeat for the remaining secret names shown by `terraform output secret_names`.
+
+## Bayesian MMM Release Gate
+
+Terraform defines `roas-radar-mmm-bayesian-<environment>` separately from `roas-radar-mmm-baseline-<environment>`. Set `mmm_bayesian_freeze_id` only after an immutable approved calibration freeze exists for the target window and attribution model. Keep the `mmm_bayesian` scheduler in `paused_schedulers` until staging has a successful `bayesian_hierarchical_mmm_v1` run with persisted artifacts and passing posterior diagnostics.
+
+Manual validation and execution:
+
+```sh
+DATABASE_URL=postgres://placeholder \
+MMM_BAYESIAN_FREEZE_ID=<approved-freeze-id> \
+MMM_BAYESIAN_ATTRIBUTION_MODEL=last_touch \
+MMM_BAYESIAN_LOOKBACK_DAYS=90 \
+npm run mmm:train-bayesian -- --validate-config
+
+gcloud run jobs execute roas-radar-mmm-bayesian-<environment> --region <region> --wait
+```
 
 ## Migration And Promotion Contract
 

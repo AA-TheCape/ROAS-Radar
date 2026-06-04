@@ -1,0 +1,32 @@
+{
+  "displayName": "ROAS Radar __ENVIRONMENT__ MMM Bayesian Stale Success",
+  "documentation": {
+    "content": "No successful Bayesian MMM run was observed in the expected weekly window. Confirm the scheduler, approved freeze id, and latest `mmm_model_runs` output artifacts. Runbook: __RUNBOOK_URL_MMM__",
+    "mimeType": "text/markdown"
+  },
+  "combiner": "OR",
+  "enabled": true,
+  "severity": "WARNING",
+  "notificationChannels": __ALERT_NOTIFICATION_CHANNELS__,
+  "conditions": [
+    {
+      "displayName": "No completed Bayesian MMM run in 8 days",
+      "conditionThreshold": {
+        "filter": "metric.type=\"logging.googleapis.com/user/roas_mmm_bayesian_jobs\" resource.type=\"cloud_run_revision\" metric.labels.stage=\"completed\" metric.labels.posterior_sanity_status=\"pass\" metric.labels.artifact_persisted=\"true\"",
+        "comparison": "COMPARISON_LT",
+        "thresholdValue": 1,
+        "duration": "691200s",
+        "aggregations": [
+          {
+            "alignmentPeriod": "691200s",
+            "perSeriesAligner": "ALIGN_SUM",
+            "crossSeriesReducer": "REDUCE_SUM"
+          }
+        ],
+        "trigger": {
+          "count": 1
+        }
+      }
+    }
+  ]
+}
