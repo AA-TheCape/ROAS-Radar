@@ -703,7 +703,7 @@ test('MMM model runs API exposes normalized Bayesian run outputs', async () => {
           holdout_end_date: '2026-05-17',
           run_config: {
             inputContractVersion: 'bayesian_hierarchical_mmm_v1',
-            posteriorEngine: 'closed_form_hierarchical_gaussian_approximation_v1',
+            posteriorEngine: 'gibbs_sampler_conjugate_gaussian_hierarchical_v1',
             responseVariable: 'weekly_total_shopify_revenue_from_channel_mart_outcomes',
             calibrationUse: 'hierarchical_priors_and_calibration_diagnostics'
           },
@@ -752,6 +752,29 @@ test('MMM model runs API exposes normalized Bayesian run outputs', async () => {
                     credibleInterval95: { lower: 0.6, upper: 0.84 }
                   },
                   posteriorProbabilityPositive: 0.99
+                }
+              ],
+              weeklyChannels: [
+                {
+                  weekStartDate: '2026-04-06',
+                  key: 'meta|paid_social|prospecting',
+                  source: 'meta',
+                  medium: 'paid_social',
+                  campaign: 'prospecting',
+                  channel: 'Paid Social',
+                  channelGroup: 'Paid',
+                  transformedMediaFeature: 0.48,
+                  contribution: {
+                    mean: 120,
+                    credibleInterval80: { lower: 90, upper: 150 },
+                    credibleInterval95: { lower: 70, upper: 170 }
+                  },
+                  contributionShare: {
+                    mean: 0.6,
+                    credibleInterval80: { lower: 0.45, upper: 0.75 },
+                    credibleInterval95: { lower: 0.35, upper: 0.85 }
+                  },
+                  posteriorProbabilityPositive: 0.98
                 }
               ]
             }
@@ -831,6 +854,11 @@ test('MMM model runs API exposes normalized Bayesian run outputs', async () => {
       upper: 840
     });
     assert.equal(body.rows[0].posteriorContributionIntervals.channels[0].posteriorProbabilityPositive, 0.99);
+    assert.equal(body.rows[0].posteriorContributionIntervals.weeklyChannels[0].weekStartDate, '2026-04-06');
+    assert.deepEqual(body.rows[0].posteriorContributionIntervals.weeklyChannels[0].contribution.credibleInterval95, {
+      lower: 70,
+      upper: 170
+    });
     assert.equal(body.rows[0].calibrationDeltas.deltaRevenue, 70);
     assert.equal(body.rows[0].calibrationDeltas.segments[0].deltaPct, 70 / 650);
     assert.equal(body.rows[0].validationDiagnostics.posteriorDiagnostics.maxRhat, 1.02);

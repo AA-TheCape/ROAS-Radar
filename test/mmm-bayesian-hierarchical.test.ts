@@ -102,8 +102,10 @@ test("Bayesian hierarchical MMM builds v1 posterior artifact with priors and tra
 		adstockDecay: 0.4,
 		saturationHalfSaturation: 250,
 		saturationSlope: 1.2,
-		posteriorChains: 2,
-		posteriorDraws: 200,
+		posteriorChains: 4,
+		posteriorDraws: 4_000,
+		posteriorWarmupDraws: 500,
+		randomSeed: "unit-success",
 		holdoutRatio: 0,
 	});
 
@@ -129,7 +131,7 @@ test("Bayesian hierarchical MMM builds v1 posterior artifact with priors and tra
 		"google|cpc|brand",
 	]);
 	assert.equal(run.validationReport.posteriorSanityChecks.status, "pass");
-	assert.equal(run.validationReport.posteriorDiagnostics.totalDraws, 200);
+	assert.equal(run.validationReport.posteriorDiagnostics.totalDraws, 4_000);
 	assert.ok(run.modelArtifact.posteriorCoefficients);
 	assert.ok(run.modelArtifact.contributionOutputs);
 
@@ -147,6 +149,21 @@ test("Bayesian hierarchical MMM builds v1 posterior artifact with priors and tra
 		Number.isFinite(
 			contributionOutputs.channels[0]?.contribution.credibleInterval95.upper,
 		),
+	);
+	const weeklyChannels = (run.modelArtifact.contributionOutputs as {
+		weeklyChannels: Array<{
+			key: string;
+			weekStartDate: string;
+			contribution: { credibleInterval95: { lower: number; upper: number } };
+		}>;
+	}).weeklyChannels;
+	const metaWeeklyIntervals = weeklyChannels.filter(
+		(row) => row.key === "meta|paid_social|prospecting",
+	);
+	assert.equal(metaWeeklyIntervals.length, 6);
+	assert.notDeepEqual(
+		metaWeeklyIntervals[0]?.contribution.credibleInterval95,
+		metaWeeklyIntervals.at(-1)?.contribution.credibleInterval95,
 	);
 
 	const coefficients = run.modelArtifact.coefficients as Record<string, number>;
@@ -182,6 +199,40 @@ test("Bayesian hierarchical MMM builds v1 posterior artifact with priors and tra
 		typeof calibrationSegments[0]?.trustWeights.posteriorCalibration,
 		"number",
 	);
+});
+
+test("Bayesian hierarchical MMM fails runs when actual posterior diagnostics are weak", () => {
+	assert.throws(
+		() =>
+			buildBayesianHierarchicalMmmArtifact(fixtureRows(), {
+				startDate: "2026-04-06",
+				endDate: "2026-05-17",
+				posteriorChains: 2,
+				posteriorDraws: 100,
+				posteriorWarmupDraws: 50,
+				randomSeed: "diagnostic-failure",
+				holdoutRatio: 0,
+			}),
+		/posterior sanity checks failed/,
+	);
+});
+
+test("Bayesian hierarchical MMM is reproducible under fixed seed and config", () => {
+	const input = {
+		startDate: "2026-04-06",
+		endDate: "2026-05-17",
+		posteriorChains: 4,
+		posteriorDraws: 4_000,
+		posteriorWarmupDraws: 500,
+		randomSeed: "reproducible-unit",
+		holdoutRatio: 0,
+	};
+	const left = buildBayesianHierarchicalMmmArtifact(fixtureRows(), input);
+	const right = buildBayesianHierarchicalMmmArtifact(fixtureRows(), input);
+
+	assert.deepEqual(left.modelArtifact.posteriorCoefficients, right.modelArtifact.posteriorCoefficients);
+	assert.deepEqual(left.modelArtifact.contributionOutputs, right.modelArtifact.contributionOutputs);
+	assert.equal(left.runConfig.posteriorEngine, "gibbs_sampler_conjugate_gaussian_hierarchical_v1");
 });
 
 test("Bayesian hierarchical MMM rejects failed weekly mart rows", () => {

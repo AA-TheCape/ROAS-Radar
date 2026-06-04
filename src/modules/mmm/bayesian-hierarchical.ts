@@ -33,10 +33,12 @@ const DEFAULT_GROUP_PRIOR_SD = 0.5;
 const DEFAULT_CONTROL_PRIOR_SD = 5;
 const DEFAULT_POSTERIOR_CHAINS = 4;
 const DEFAULT_POSTERIOR_DRAWS = 1_000;
+const DEFAULT_POSTERIOR_WARMUP_DRAWS = 500;
 const DEFAULT_HOLDOUT_RATIO = 0.2;
 const MIN_WEEKLY_OBSERVATIONS = 4;
 const MIN_EFFECTIVE_SAMPLE_SIZE = 100;
 const MAX_RHAT = 1.1;
+const SIGMA_ALPHA_PRIOR = 3;
 
 export type BayesianHierarchicalMmmTrainingInput = {
 	startDate: string;
@@ -52,7 +54,9 @@ export type BayesianHierarchicalMmmTrainingInput = {
 	controlPriorSd?: number;
 	posteriorChains?: number;
 	posteriorDraws?: number;
+	posteriorWarmupDraws?: number;
 	holdoutRatio?: number;
+	randomSeed?: string;
 	submittedBy?: string;
 };
 
@@ -82,6 +86,28 @@ type FittedModel = {
 	covariance: number[][];
 	residualSigma: number;
 	parameterNames: string[];
+};
+
+type DesignMatrix = {
+	x: number[][];
+	y: number[];
+	parameterNames: string[];
+};
+
+type PriorSpec = {
+	mean: number[];
+	sd: number[];
+	mediaGlobalPriorMean: number;
+	mediaFeatureGroups: Map<string, string>;
+	initialGroupMeans: Map<string, number>;
+	groupPriorMean: number;
+	groupPriorSd: number;
+};
+
+type HierarchicalPosteriorDraw = {
+	beta: number[];
+	sigma: number;
+	groupMeans: Record<string, number>;
 };
 
 export type BayesianHierarchicalMmmModelRun = {
@@ -314,7 +340,62 @@ function predict(
 	);
 }
 
-function fitHierarchicalRegression(input: {
+function buildDesignMatrix(input: {
+	observations: WeeklyObservation[];
+	mediaFeatureKeys: string[];
+	controlFeatureKeys: string[];
+}): DesignMatrix {
+	const parameterNames = [
+		"intercept",
+		...input.mediaFeatureKeys,
+		...input.controlFeatureKeys,
+	];
+
+	return {
+		parameterNames,
+		x: input.observations.map((observation) =>
+			parameterNames.map((name) => {
+				if (name === "intercept") {
+					return 1;
+				}
+				return observation.features[name] ?? observation.controls[name] ?? 0;
+			}),
+		),
+		y: input.observations.map((observation) => observation.revenue),
+	};
+}
+
+function dot(left: number[], right: number[]): number {
+	return left.reduce((sum, value, index) => sum + value * (right[index] ?? 0), 0);
+}
+
+function transposeMultiplyMatrix(x: number[][]): number[][] {
+	const columns = x[0]?.length ?? 0;
+	const matrix = Array.from({ length: columns }, () =>
+		Array.from({ length: columns }, () => 0),
+	);
+	for (const row of x) {
+		for (let left = 0; left < columns; left += 1) {
+			for (let right = 0; right < columns; right += 1) {
+				matrix[left][right] += (row[left] ?? 0) * (row[right] ?? 0);
+			}
+		}
+	}
+	return matrix;
+}
+
+function transposeMultiplyVector(x: number[][], y: number[]): number[] {
+	const columns = x[0]?.length ?? 0;
+	const vector = Array.from({ length: columns }, () => 0);
+	for (const [rowIndex, row] of x.entries()) {
+		for (let column = 0; column < columns; column += 1) {
+			vector[column] += (row[column] ?? 0) * (y[rowIndex] ?? 0);
+		}
+	}
+	return vector;
+}
+
+function buildHierarchicalPriorSpec(input: {
 	observations: WeeklyObservation[];
 	mediaFeatureKeys: string[];
 	controlFeatureKeys: string[];
@@ -322,17 +403,8 @@ function fitHierarchicalRegression(input: {
 	mediaPriorSd: number;
 	groupPriorSd: number;
 	controlPriorSd: number;
-}): FittedModel {
-	const parameterNames = [
-		"intercept",
-		...input.mediaFeatureKeys,
-		...input.controlFeatureKeys,
-	];
-	const size = parameterNames.length;
-	const matrix = Array.from({ length: size }, () =>
-		Array.from({ length: size }, () => 0),
-	);
-	const vector = Array.from({ length: size }, () => 0);
+	parameterNames: string[];
+}): PriorSpec {
 	const totalRevenue = input.observations.reduce(
 		(sum, row) => sum + row.revenue,
 		0,
@@ -346,17 +418,34 @@ function fitHierarchicalRegression(input: {
 			),
 		0,
 	);
-	const globalMediaPriorMean =
+	const mediaGlobalPriorMean =
 		totalMediaFeature > 0
 			? totalRevenue / Math.max(totalMediaFeature, 1) / 2
 			: 0;
-	const groupPriorMeans = new Map<string, number>();
+	const yMean =
+		totalRevenue / Math.max(input.observations.length, 1);
+	const yScale = Math.max(
+		1,
+		Math.sqrt(
+			input.observations.reduce(
+				(sum, row) => sum + (row.revenue - yMean) ** 2,
+				0,
+			) / Math.max(input.observations.length - 1, 1),
+		),
+	);
+	const mediaFeatureGroups = new Map<string, string>();
+	const initialGroupMeans = new Map<string, number>();
+	const groupKeys = new Set<string>();
+
 	for (const featureKey of input.mediaFeatureKeys) {
-		const stats = input.channelStats.get(featureKey);
-		const group = stats?.channelGroup ?? "unknown";
+		const group = input.channelStats.get(featureKey)?.channelGroup ?? "unknown";
+		mediaFeatureGroups.set(featureKey, group);
+		groupKeys.add(group);
+	}
+
+	for (const group of groupKeys) {
 		const peers = input.mediaFeatureKeys.filter(
-			(key) =>
-				(input.channelStats.get(key)?.channelGroup ?? "unknown") === group,
+			(key) => mediaFeatureGroups.get(key) === group,
 		);
 		const peerRevenue = peers.reduce(
 			(sum, key) => sum + (input.channelStats.get(key)?.attributedRevenue ?? 0),
@@ -371,46 +460,76 @@ function fitHierarchicalRegression(input: {
 				),
 			0,
 		);
-		groupPriorMeans.set(
-			featureKey,
+		initialGroupMeans.set(
+			group,
 			peerFeature > 0
 				? peerRevenue / Math.max(peerFeature, 1)
-				: globalMediaPriorMean,
+				: mediaGlobalPriorMean,
 		);
 	}
 
-	for (const observation of input.observations) {
-		const row = parameterNames.map((name) => {
+	return {
+		mean: input.parameterNames.map((name) => {
 			if (name === "intercept") {
-				return 1;
+				return yMean;
 			}
-			return observation.features[name] ?? observation.controls[name] ?? 0;
-		});
-		for (let left = 0; left < size; left += 1) {
-			vector[left] += row[left] * observation.revenue;
-			for (let right = 0; right < size; right += 1) {
-				matrix[left][right] += row[left] * row[right];
+			if (input.mediaFeatureKeys.includes(name)) {
+				return initialGroupMeans.get(mediaFeatureGroups.get(name) ?? "unknown") ?? mediaGlobalPriorMean;
 			}
-		}
-	}
+			return 0;
+		}),
+		sd: input.parameterNames.map((name) => {
+			if (name === "intercept") {
+				return Math.max(yScale * 10, 1);
+			}
+			if (input.mediaFeatureKeys.includes(name)) {
+				const priorMean = initialGroupMeans.get(mediaFeatureGroups.get(name) ?? "unknown") ?? mediaGlobalPriorMean;
+				return Math.max(Math.abs(priorMean) * input.mediaPriorSd, yScale * input.mediaPriorSd, 1);
+			}
+			return Math.max(yScale * input.controlPriorSd, input.controlPriorSd, 1);
+		}),
+		mediaGlobalPriorMean,
+		mediaFeatureGroups,
+		initialGroupMeans,
+		groupPriorMean: mediaGlobalPriorMean,
+		groupPriorSd: Math.max(Math.abs(mediaGlobalPriorMean) * input.groupPriorSd, yScale * input.groupPriorSd, 1),
+	};
+}
+
+function fitHierarchicalRegression(input: {
+	observations: WeeklyObservation[];
+	mediaFeatureKeys: string[];
+	controlFeatureKeys: string[];
+	channelStats: Map<string, ChannelStats>;
+	mediaPriorSd: number;
+	groupPriorSd: number;
+	controlPriorSd: number;
+}): FittedModel {
+	const { parameterNames, x, y } = buildDesignMatrix(input);
+	const size = parameterNames.length;
+	const matrix = transposeMultiplyMatrix(x);
+	const vector = transposeMultiplyVector(x, y);
+	const prior = buildHierarchicalPriorSpec({
+		...input,
+		parameterNames,
+	});
 
 	for (const [index, name] of parameterNames.entries()) {
 		if (name === "intercept") {
-			matrix[index][index] += 1e-6;
+			const precision = 1 / (prior.sd[index] ?? 1) ** 2;
+			matrix[index][index] += precision;
+			vector[index] += precision * (prior.mean[index] ?? 0);
 			continue;
 		}
 
 		if (input.mediaFeatureKeys.includes(name)) {
-			const mediaPrecision = 1 / input.mediaPriorSd ** 2;
-			const groupPrecision = 1 / input.groupPriorSd ** 2;
-			matrix[index][index] += mediaPrecision + groupPrecision;
-			vector[index] +=
-				mediaPrecision * globalMediaPriorMean +
-				groupPrecision * (groupPriorMeans.get(name) ?? globalMediaPriorMean);
+			const precision = 1 / (prior.sd[index] ?? 1) ** 2;
+			matrix[index][index] += precision;
+			vector[index] += precision * (prior.mean[index] ?? 0);
 			continue;
 		}
 
-		const controlPrecision = 1 / input.controlPriorSd ** 2;
+		const controlPrecision = 1 / (prior.sd[index] ?? 1) ** 2;
 		matrix[index][index] += controlPrecision;
 	}
 
@@ -484,33 +603,195 @@ function cholesky(matrix: number[][]): number[][] {
 	return lower;
 }
 
-function samplePosterior(input: {
+function sampleMultivariateNormal(input: {
+	mean: number[];
+	covariance: number[][];
+	random: () => number;
+}): number[] {
+	const lower = cholesky(input.covariance);
+	const standardNormal = input.mean.map(() => normalDraw(input.random));
+	return input.mean.map((mean, row) => {
+		const offset = standardNormal.reduce(
+			(sum, value, column) => sum + (lower[row][column] ?? 0) * value,
+			0,
+		);
+		return mean + offset;
+	});
+}
+
+function gammaDraw(shape: number, random: () => number): number {
+	if (shape < 1) {
+		return (
+			gammaDraw(shape + 1, random) *
+			Math.max(Number.MIN_VALUE, random()) ** (1 / shape)
+		);
+	}
+
+	const d = shape - 1 / 3;
+	const c = 1 / Math.sqrt(9 * d);
+	while (true) {
+		const normal = normalDraw(random);
+		const v = (1 + c * normal) ** 3;
+		if (v <= 0) {
+			continue;
+		}
+		const uniform = random();
+		if (
+			uniform < 1 - 0.0331 * normal ** 4 ||
+			Math.log(uniform) <
+				0.5 * normal ** 2 + d * (1 - v + Math.log(v))
+		) {
+			return d * v;
+		}
+	}
+}
+
+function inverseGammaDraw(
+	shape: number,
+	scale: number,
+	random: () => number,
+): number {
+	return scale / Math.max(gammaDraw(shape, random), Number.MIN_VALUE);
+}
+
+function sampleHierarchicalPosterior(input: {
+	observations: WeeklyObservation[];
+	mediaFeatureKeys: string[];
+	controlFeatureKeys: string[];
+	channelStats: Map<string, ChannelStats>;
+	mediaPriorSd: number;
+	groupPriorSd: number;
+	controlPriorSd: number;
 	fitted: FittedModel;
 	inputHash: string;
 	posteriorChains: number;
 	posteriorDraws: number;
-}) {
-	const meanVector = input.fitted.parameterNames.map(
-		(name) => input.fitted.coefficients[name] ?? 0,
-	);
-	const lower = cholesky(input.fitted.covariance);
+	posteriorWarmupDraws: number;
+	randomSeed?: string;
+}): HierarchicalPosteriorDraw[][] {
+	const design = buildDesignMatrix(input);
+	const prior = buildHierarchicalPriorSpec({
+		...input,
+		parameterNames: design.parameterNames,
+	});
+	const xtx = transposeMultiplyMatrix(design.x);
+	const xty = transposeMultiplyVector(design.x, design.y);
 	const drawsPerChain = Math.max(
 		1,
 		Math.floor(input.posteriorDraws / input.posteriorChains),
 	);
+	const mediaIndexes = input.mediaFeatureKeys
+		.map((key) => design.parameterNames.indexOf(key))
+		.filter((index) => index >= 0);
+	const groupNames = [
+		...new Set(
+			input.mediaFeatureKeys.map(
+				(key) => prior.mediaFeatureGroups.get(key) ?? "unknown",
+			),
+		),
+	];
+	const yMean =
+		design.y.reduce((sum, value) => sum + value, 0) /
+		Math.max(design.y.length, 1);
+	const sigmaPriorScale =
+		design.y.reduce((sum, value) => sum + (value - yMean) ** 2, 0) /
+			Math.max(design.y.length, 1) || 1;
 
 	return Array.from({ length: input.posteriorChains }, (_entry, chainIndex) => {
-		const random = createSeededRandom(`${input.inputHash}:${chainIndex}`);
-		return Array.from({ length: drawsPerChain }, () => {
-			const standardNormal = meanVector.map(() => normalDraw(random));
-			return meanVector.map((mean, row) => {
-				const offset = standardNormal.reduce(
-					(sum, value, column) => sum + (lower[row][column] ?? 0) * value,
-					0,
+		const random = createSeededRandom(
+			`${input.randomSeed ?? "bayesian_hierarchical_mmm_v1"}:${input.inputHash}:${chainIndex}`,
+		);
+		let beta = design.parameterNames.map(
+			(name) => input.fitted.coefficients[name] ?? 0,
+		);
+		let sigma2 = Math.max(input.fitted.residualSigma ** 2, 1);
+		const groupMeans = new Map(prior.initialGroupMeans);
+		const retained: HierarchicalPosteriorDraw[] = [];
+		const iterations = input.posteriorWarmupDraws + drawsPerChain;
+
+		for (let iteration = 0; iteration < iterations; iteration += 1) {
+			for (const groupName of groupNames) {
+				const memberIndexes = input.mediaFeatureKeys
+					.map((key, keyIndex) =>
+						(prior.mediaFeatureGroups.get(key) ?? "unknown") === groupName
+							? (mediaIndexes[keyIndex] ?? -1)
+							: -1,
+					)
+					.filter((index) => index >= 0);
+				const mediaVariance = Math.max(
+					Math.max(...memberIndexes.map((index) => prior.sd[index] ?? 1), 1) **
+						2,
+					1e-6,
 				);
-				return mean + offset;
+				const groupVariance = Math.max(prior.groupPriorSd ** 2, 1e-6);
+				const precision =
+					1 / groupVariance + memberIndexes.length / mediaVariance;
+				const mean =
+					(prior.groupPriorMean / groupVariance +
+						memberIndexes.reduce(
+							(sum, index) => sum + (beta[index] ?? 0) / mediaVariance,
+							0,
+						)) /
+					precision;
+				groupMeans.set(
+					groupName,
+					mean + normalDraw(random) * Math.sqrt(1 / precision),
+				);
+			}
+
+			const priorMean = prior.mean.map((mean, index) => {
+				const parameterName = design.parameterNames[index] ?? "";
+				if (!input.mediaFeatureKeys.includes(parameterName)) {
+					return mean;
+				}
+				return (
+					groupMeans.get(
+						prior.mediaFeatureGroups.get(parameterName) ?? "unknown",
+					) ?? mean
+				);
 			});
-		});
+			const precisionMatrix = xtx.map((row, rowIndex) =>
+				row.map((value, columnIndex) => {
+					const likelihood = value / sigma2;
+					if (rowIndex !== columnIndex) {
+						return likelihood;
+					}
+					return (
+						likelihood +
+						1 / Math.max((prior.sd[rowIndex] ?? 1) ** 2, 1e-6)
+					);
+				}),
+			);
+			const precisionVector = xty.map(
+				(value, index) =>
+					value / sigma2 +
+					(priorMean[index] ?? 0) /
+						Math.max((prior.sd[index] ?? 1) ** 2, 1e-6),
+			);
+			const covariance = invertMatrix(precisionMatrix);
+			const mean = solveLinearSystem(precisionMatrix, precisionVector);
+			beta = sampleMultivariateNormal({ mean, covariance, random });
+
+			const sse = design.x.reduce((sum, row, rowIndex) => {
+				const residual = (design.y[rowIndex] ?? 0) - dot(row, beta);
+				return sum + residual ** 2;
+			}, 0);
+			sigma2 = inverseGammaDraw(
+				SIGMA_ALPHA_PRIOR + design.y.length / 2,
+				SIGMA_ALPHA_PRIOR * sigmaPriorScale + sse / 2,
+				random,
+			);
+
+			if (iteration >= input.posteriorWarmupDraws) {
+				retained.push({
+					beta: [...beta],
+					sigma: Math.sqrt(Math.max(sigma2, 1e-12)),
+					groupMeans: Object.fromEntries(groupMeans),
+				});
+			}
+		}
+
+		return retained;
 	});
 }
 
@@ -561,15 +842,63 @@ function variance(values: number[]): number {
 	);
 }
 
-function posteriorDiagnostics(chains: number[][][]) {
-	const parameterCount = chains[0]?.[0]?.length ?? 0;
+function autocorrelation(values: number[], lag: number): number {
+	if (values.length <= lag || lag <= 0) {
+		return 0;
+	}
+
+	const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+	const denominator = values.reduce(
+		(sum, value) => sum + (value - mean) ** 2,
+		0,
+	);
+	if (denominator <= 0) {
+		return 0;
+	}
+
+	let numerator = 0;
+	for (let index = 0; index < values.length - lag; index += 1) {
+		numerator +=
+			((values[index] ?? 0) - mean) * ((values[index + lag] ?? 0) - mean);
+	}
+	return numerator / denominator;
+}
+
+function effectiveSampleSize(parameterChains: number[][]): number {
+	const chainCount = parameterChains.length;
+	const drawsPerChain = parameterChains[0]?.length ?? 0;
+	if (chainCount === 0 || drawsPerChain === 0) {
+		return 0;
+	}
+
+	let autocorrelationSum = 0;
+	for (let lag = 1; lag < drawsPerChain; lag += 1) {
+		const rho =
+			parameterChains.reduce(
+				(sum, chain) => sum + autocorrelation(chain, lag),
+				0,
+			) / chainCount;
+		if (rho <= 0) {
+			break;
+		}
+		autocorrelationSum += rho;
+	}
+
+	return Math.max(
+		1,
+		(chainCount * drawsPerChain) / (1 + 2 * autocorrelationSum),
+	);
+}
+
+function posteriorDiagnostics(chains: HierarchicalPosteriorDraw[][]) {
+	const parameterCount = chains[0]?.[0]?.beta.length ?? 0;
 	const chainCount = chains.length;
 	const drawsPerChain = chains[0]?.length ?? 0;
 	const byParameter = Array.from(
 		{ length: parameterCount },
 		(_entry, parameterIndex) => {
 			const parameterChains = chains.map((chain) =>
-				chain.map((draw) => draw[parameterIndex] ?? 0),
+				chain.map((draw) => draw.beta[parameterIndex] ?? 0),
 			);
 			const chainMeans = parameterChains.map(
 				(chain) =>
@@ -595,11 +924,9 @@ function posteriorDiagnostics(chains: number[][][]) {
 				between / Math.max(drawsPerChain, 1);
 			const rhat =
 				within > 0 ? Math.sqrt(Math.max(posteriorVariance / within, 0)) : 1;
-			const effectiveSampleSize = chainCount * drawsPerChain;
-
 			return {
 				rhat,
-				effectiveSampleSize,
+				effectiveSampleSize: effectiveSampleSize(parameterChains),
 			};
 		},
 	);
@@ -658,7 +985,7 @@ function validationMetrics(
 }
 
 function buildContributionOutputs(input: {
-	chains: number[][][];
+	chains: HierarchicalPosteriorDraw[][];
 	parameterNames: string[];
 	mediaFeatureKeys: string[];
 	observations: WeeklyObservation[];
@@ -683,7 +1010,10 @@ function buildContributionOutputs(input: {
 			return [
 				key,
 				draws.map((draw) =>
-					Math.max(0, (draw[index] ?? 0) * (totalFeatureByChannel[key] ?? 0)),
+					Math.max(
+						0,
+						(draw.beta[index] ?? 0) * (totalFeatureByChannel[key] ?? 0),
+					),
 				),
 			];
 		}),
@@ -695,12 +1025,68 @@ function buildContributionOutputs(input: {
 		),
 	);
 
+	const weeklyChannels = input.observations.flatMap((observation) => {
+		const contributionByKey = Object.fromEntries(
+			input.mediaFeatureKeys.map((key) => {
+				const index = parameterIndex.get(key) ?? 0;
+				return [
+					key,
+					draws.map((draw) =>
+						Math.max(0, (draw.beta[index] ?? 0) * (observation.features[key] ?? 0)),
+					),
+				];
+			}),
+		);
+		const weeklyTotalDraws = draws.map((_draw, drawIndex) =>
+			input.mediaFeatureKeys.reduce(
+				(sum, key) =>
+					sum + ((contributionByKey[key] ?? [])[drawIndex] ?? 0),
+				0,
+			),
+		);
+
+		return input.mediaFeatureKeys.map((key) => {
+			const stats = input.channelStats.get(key);
+			const values = contributionByKey[key] ?? [];
+			const shares = values.map((value, index) => {
+				const total = weeklyTotalDraws[index] ?? 0;
+				return total > 0 ? value / total : 0;
+			});
+
+			return {
+				weekStartDate: observation.weekStartDate,
+				key,
+				source: stats?.source ?? "unknown",
+				medium: stats?.medium ?? "unknown",
+				campaign: stats?.campaign ?? "unknown",
+				channel: stats?.channel ?? "unknown",
+				channelGroup: stats?.channelGroup ?? "unknown",
+				transformedMediaFeature: observation.features[key] ?? 0,
+				contribution: summarizePosterior(values),
+				contributionShare: summarizePosterior(shares),
+				posteriorProbabilityPositive:
+					values.filter((value) => value > 0).length /
+					Math.max(values.length, 1),
+			};
+		});
+	});
+
 	return {
 		totalActualRevenue: input.observations.reduce(
 			(sum, observation) => sum + observation.revenue,
 			0,
 		),
 		totalMediaContribution: summarizePosterior(totalMediaDraws),
+		totalMediaContributionShare: summarizePosterior(
+			totalMediaDraws.map((value) => {
+				const totalActualRevenue = input.observations.reduce(
+					(sum, observation) => sum + observation.revenue,
+					0,
+				);
+				return totalActualRevenue > 0 ? value / totalActualRevenue : 0;
+			}),
+		),
+		weeklyChannels,
 		channels: input.mediaFeatureKeys.map((key) => {
 			const stats = input.channelStats.get(key);
 			const values = contributionDraws[key] ?? [];
@@ -870,6 +1256,12 @@ export function buildBayesianHierarchicalMmmArtifact(
 		posteriorChains * 50,
 		posteriorChains * 5_000,
 	);
+	const posteriorWarmupDraws = clampInteger(
+		input.posteriorWarmupDraws,
+		DEFAULT_POSTERIOR_WARMUP_DRAWS,
+		50,
+		5_000,
+	);
 	const holdoutRatio = clampNumber(
 		input.holdoutRatio,
 		DEFAULT_HOLDOUT_RATIO,
@@ -930,11 +1322,20 @@ export function buildBayesianHierarchicalMmmArtifact(
 		controlPriorSd,
 	});
 	const martInputHash = hashJson(filteredRows);
-	const chains = samplePosterior({
+	const chains = sampleHierarchicalPosterior({
+		observations: trainingObservations,
+		mediaFeatureKeys,
+		controlFeatureKeys,
+		channelStats,
+		mediaPriorSd,
+		groupPriorSd,
+		controlPriorSd,
 		fitted,
 		inputHash: martInputHash,
 		posteriorChains,
 		posteriorDraws,
+		posteriorWarmupDraws,
+		randomSeed: input.randomSeed,
 	});
 	const diagnostics = posteriorDiagnostics(chains);
 	const contributionOutputs = buildContributionOutputs({
@@ -948,7 +1349,22 @@ export function buildBayesianHierarchicalMmmArtifact(
 		fitted.parameterNames.map((parameterName, parameterIndex) => [
 			parameterName,
 			summarizePosterior(
-				chains.flat().map((draw) => draw[parameterIndex] ?? 0),
+				chains.flat().map((draw) => draw.beta[parameterIndex] ?? 0),
+			),
+		]),
+	);
+	const posteriorSigma = summarizePosterior(chains.flat().map((draw) => draw.sigma));
+	const posteriorGroupEffects = Object.fromEntries(
+		[
+			...new Set(
+				chains
+					.flat()
+					.flatMap((draw) => Object.keys(draw.groupMeans)),
+			),
+		].map((groupName) => [
+			groupName,
+			summarizePosterior(
+				chains.flat().map((draw) => draw.groupMeans[groupName] ?? 0),
 			),
 		]),
 	);
@@ -1055,7 +1471,12 @@ export function buildBayesianHierarchicalMmmArtifact(
 			trend: "linear_week_index",
 			seasonality: "annual_fourier_order_1_weekly",
 		},
-		posteriorEngine: "closed_form_hierarchical_gaussian_approximation_v1",
+		posteriorEngine: "gibbs_sampler_conjugate_gaussian_hierarchical_v1",
+		inferenceMethod: "gibbs_sampler_conjugate_gaussian_hierarchical_v1",
+		posteriorWarmupDraws,
+		posteriorChains,
+		posteriorDraws: diagnostics.totalDraws,
+		randomSeed: input.randomSeed ?? "derived_from_input_hash",
 		holdoutRatio,
 		responseVariable: "weekly_total_shopify_revenue_from_channel_mart_outcomes",
 		calibrationUse:
@@ -1103,6 +1524,8 @@ export function buildBayesianHierarchicalMmmArtifact(
 		modelArtifact: {
 			coefficients: fitted.coefficients,
 			posteriorCoefficients,
+			posteriorGroupEffects,
+			posteriorSigma,
 			residualSigma: fitted.residualSigma,
 			contributionOutputs,
 			channels: calibrationSegments.map(

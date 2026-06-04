@@ -63,6 +63,25 @@ Each completed baseline run also writes an auditable calibration governance repo
 
 Operators can override thresholds per run with `--calibration-warn-divergence-rate` and `--calibration-alert-divergence-rate`, or the `MMM_BASELINE_CALIBRATION_WARN_DIVERGENCE_RATE` and `MMM_BASELINE_CALIBRATION_ALERT_DIVERGENCE_RATE` environment variables.
 
+## Bayesian Hierarchical MMM
+
+`bayesian_hierarchical_mmm_v1` trains from `mmm_weekly_channel_input_mart_v1` using a dependency-free Gibbs sampler in the Node Cloud Run job. The model response is weekly total Shopify revenue from the mart outcome columns. Paid channel features are geometric adstock followed by Hill saturation; controls include a linear weekly trend and annual weekly Fourier sine/cosine terms.
+
+The production trainer uses a conjugate Gaussian hierarchy:
+
+- channel coefficients are sampled from channel-group Normal effects
+- channel-group effects are sampled around a global media prior
+- control coefficients use zero-centered Normal priors
+- residual variance is sampled from an inverse-gamma conditional posterior
+
+Deterministic attribution credit is retained as a calibration anchor only. It informs prior centering and the persisted calibration report, but it is not used as a per-channel replacement label.
+
+Each completed Bayesian run persists `posteriorCoefficients`, `posteriorGroupEffects`, `posteriorSigma`, aggregate channel contribution intervals, weekly x channel contribution intervals, calibration inputs, and diagnostics through `mmm_model_runs`. `run_config.posteriorEngine = gibbs_sampler_conjugate_gaussian_hierarchical_v1` identifies the inference path.
+
+Diagnostics are computed from retained Markov chains, not from synthetic independent draws. The run fails before completion when R-hat exceeds `1.1`, minimum effective sample size is below `100`, or posterior contribution sanity checks fail. Failed diagnostics therefore keep the run out of production-ready API readiness.
+
+Cloud Run assumptions: use Node 22, at least 1 vCPU, and 1 GiB memory for default `MMM_BAYESIAN_POSTERIOR_CHAINS=4`, `MMM_BAYESIAN_POSTERIOR_DRAWS=1000`, `MMM_BAYESIAN_POSTERIOR_WARMUP_DRAWS=500`, and up to 12 selected channels. Increase timeout, CPU, or reduce `MMM_BAYESIAN_MAX_CHANNELS` before increasing chains/draws on wide channel windows. Use `MMM_BAYESIAN_RANDOM_SEED` only for reproducible validation runs.
+
 Completed model runs are stored in `mmm_model_runs` with versioned `run_config`, `input_summary`, `model_artifact`, `calibration_report`, `validation_report`, and `approved_freeze_id`. Every completed run also writes immutable row-level inputs to `mmm_model_run_input_snapshots` with `snapshot_version = mmm_weekly_channel_snapshot_v1`, per-row hashes, and a run-level snapshot hash in `input_summary`. Baseline training fails when the approved freeze contains DQ status `fail`; warning counts and freeze evidence are retained in `input_summary`.
 
 ## Read API and Export

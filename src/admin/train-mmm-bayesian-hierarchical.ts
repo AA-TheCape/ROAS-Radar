@@ -175,9 +175,16 @@ async function main() {
 			posteriorChains:
 				readNumberFlag("posterior-chains") ??
 				readNumberEnv("MMM_BAYESIAN_POSTERIOR_CHAINS"),
+			posteriorWarmupDraws:
+				readNumberFlag("posterior-warmup-draws") ??
+				readNumberEnv("MMM_BAYESIAN_POSTERIOR_WARMUP_DRAWS"),
 			holdoutRatio:
 				readNumberFlag("holdout-ratio") ??
 				readNumberEnv("MMM_BAYESIAN_HOLDOUT_RATIO"),
+			randomSeed:
+				readFlag("random-seed")?.trim() ||
+				process.env.MMM_BAYESIAN_RANDOM_SEED?.trim() ||
+				undefined,
 			submittedBy: requestedBy,
 		});
 		const completedAt = new Date();

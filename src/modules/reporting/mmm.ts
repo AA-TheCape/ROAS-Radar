@@ -568,11 +568,25 @@ function mapPosteriorContributionIntervals(modelArtifact: unknown) {
     contributionShare: pickIntervalSummary(channel.contributionShare),
     posteriorProbabilityPositive: toNullableNumber(channel.posteriorProbabilityPositive)
   }));
+  const weeklyChannels = asRecordArray(contributionOutputs.weeklyChannels).map((channel) => ({
+    weekStartDate: getString(channel.weekStartDate),
+    key: getString(channel.key),
+    source: getString(channel.source) ?? 'unknown',
+    medium: getString(channel.medium) ?? 'unknown',
+    campaign: getString(channel.campaign) ?? 'unknown',
+    channel: getString(channel.channel),
+    channelGroup: getString(channel.channelGroup),
+    transformedMediaFeature: toNullableNumber(channel.transformedMediaFeature),
+    contribution: pickIntervalSummary(channel.contribution),
+    contributionShare: pickIntervalSummary(channel.contributionShare),
+    posteriorProbabilityPositive: toNullableNumber(channel.posteriorProbabilityPositive)
+  }));
 
   return {
     totalMediaContribution: pickIntervalSummary(contributionOutputs.totalMediaContribution),
     totalMediaContributionShare: pickIntervalSummary(contributionOutputs.totalMediaContributionShare),
-    channels
+    channels,
+    weeklyChannels
   };
 }
 
