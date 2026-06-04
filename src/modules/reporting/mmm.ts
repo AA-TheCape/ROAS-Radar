@@ -68,6 +68,23 @@ const campaignResolverBackfillSchema = z
     }
   });
 
+const modelRunsQuerySchema = z
+  .object({
+    startDate: dateStringSchema.optional(),
+    endDate: dateStringSchema.optional(),
+    attributionModel: z.enum(ATTRIBUTION_MODELS).optional(),
+    limit: z.coerce.number().int().positive().max(100).optional().default(10)
+  })
+  .superRefine((value, ctx) => {
+    if (value.startDate && value.endDate && value.startDate > value.endDate) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'startDate must be on or before endDate',
+        path: ['startDate']
+      });
+    }
+  });
+
 type MmmQueryInput = z.infer<typeof mmmQuerySchema>;
 
 type MmmReadinessStatus = 'ready' | 'partial' | 'not_ready';
@@ -132,6 +149,29 @@ type MmmExportRow = {
   resolved_canonical_channel_group: string | null;
   resolved_hierarchy_metadata: unknown;
   needs_metadata_qa: boolean;
+};
+
+type MmmModelRunRow = {
+  id: string;
+  model_type: string;
+  model_version: string;
+  mart_version: string;
+  attribution_model: string;
+  run_status: string;
+  training_start_date: string;
+  training_end_date: string;
+  holdout_start_date: string | null;
+  holdout_end_date: string | null;
+  run_config: unknown;
+  input_summary: unknown;
+  model_artifact: unknown;
+  calibration_report: unknown;
+  validation_report: unknown;
+  error_code: string | null;
+  error_message: string | null;
+  created_at: Date | string;
+  started_at: Date | string;
+  completed_at: Date | string | null;
 };
 
 type ExposureCoverageRow = {
@@ -410,6 +450,31 @@ function deriveReadiness(rows: MmmReadinessRow[]) {
   };
 }
 
+function mapMmmModelRun(row: MmmModelRunRow) {
+  return {
+    id: row.id,
+    modelType: row.model_type,
+    modelVersion: row.model_version,
+    martVersion: row.mart_version,
+    attributionModel: row.attribution_model,
+    runStatus: row.run_status,
+    trainingStartDate: row.training_start_date,
+    trainingEndDate: row.training_end_date,
+    holdoutStartDate: row.holdout_start_date,
+    holdoutEndDate: row.holdout_end_date,
+    runConfig: row.run_config ?? {},
+    inputSummary: row.input_summary ?? {},
+    modelArtifact: row.model_artifact ?? {},
+    calibrationReport: row.calibration_report ?? {},
+    validationReport: row.validation_report ?? {},
+    errorCode: row.error_code,
+    errorMessage: row.error_message,
+    createdAt: toIsoString(row.created_at),
+    startedAt: toIsoString(row.started_at),
+    completedAt: toIsoString(row.completed_at)
+  };
+}
+
 export function createMmmRouter(): Router {
   const router = Router();
 
@@ -418,6 +483,68 @@ export function createMmmRouter(): Router {
   router.use((_req, res, next) => {
     res.setHeader('X-ROAS-Radar-MMM-Schema', MMM_SCHEMA_VERSION);
     next();
+  });
+
+  router.get('/model-runs', async (req, res, next) => {
+    try {
+      const input = parseInput(modelRunsQuerySchema, req.query);
+      const params: unknown[] = [];
+      const filters: string[] = [];
+
+      if (input.startDate) {
+        params.push(input.startDate);
+        filters.push(`training_end_date >= $${params.length}::date`);
+      }
+
+      if (input.endDate) {
+        params.push(input.endDate);
+        filters.push(`training_start_date <= $${params.length}::date`);
+      }
+
+      if (input.attributionModel) {
+        params.push(input.attributionModel);
+        filters.push(`attribution_model = $${params.length}`);
+      }
+
+      params.push(input.limit);
+      const result = await query<MmmModelRunRow>(
+        `
+          SELECT
+            id::text,
+            model_type,
+            model_version,
+            mart_version,
+            attribution_model,
+            run_status,
+            training_start_date::text,
+            training_end_date::text,
+            holdout_start_date::text,
+            holdout_end_date::text,
+            run_config,
+            input_summary,
+            model_artifact,
+            calibration_report,
+            validation_report,
+            error_code,
+            error_message,
+            created_at,
+            started_at,
+            completed_at
+          FROM mmm_model_runs
+          ${filters.length > 0 ? `WHERE ${filters.join('\n            AND ')}` : ''}
+          ORDER BY created_at DESC
+          LIMIT $${params.length}
+        `,
+        params
+      );
+
+      res.status(200).json({
+        schemaVersion: 'mmm_model_runs_v1',
+        rows: result.rows.map(mapMmmModelRun)
+      });
+    } catch (error) {
+      next(error);
+    }
   });
 
   router.post('/campaign-resolver/resolve', async (req, res, next) => {

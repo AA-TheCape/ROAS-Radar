@@ -408,6 +408,7 @@ export type MmmModelRun = {
 };
 
 export type MmmModelRunsResponse = {
+  schemaVersion: 'mmm_model_runs_v1';
   rows: MmmModelRun[];
 };
 

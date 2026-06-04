@@ -47,11 +47,23 @@ The trainer refreshes and reads `mmm_weekly_channel_input_mart_v1`:
 - weekly Shopify outcomes provide the response for the selected attribution model.
 - Per-segment deterministic attribution metrics are persisted in `calibration_report` and `validation_report`; they are not used as direct per-channel replacement labels.
 
+Each completed baseline run also writes an auditable calibration governance report to `calibration_report`:
+
+- `governance.channelWeekReconciliation` reconciles each modeled channel/week against deterministic `attribution_credit_revenue` from the same weekly mart snapshot.
+- `modeledRevenue` is computed as `max(0, fitted coefficient * transformed spend feature)` for the channel/week. Non-selected paid media is reconciled under `__other_paid__`.
+- `divergenceRate` is `abs(modeledRevenue - deterministicAnchorRevenue) / max(abs(deterministicAnchorRevenue), 1)`.
+- Deterministic tiers are `aligned`, `watch`, and `alert`. Defaults are `watch >= 25%` divergence and `alert >= 50%` divergence.
+- `governance.divergenceAlerts` and top-level `divergenceAlerts` contain every channel/week alert breach.
+
+Operators can override thresholds per run with `--calibration-warn-divergence-rate` and `--calibration-alert-divergence-rate`, or the `MMM_BASELINE_CALIBRATION_WARN_DIVERGENCE_RATE` and `MMM_BASELINE_CALIBRATION_ALERT_DIVERGENCE_RATE` environment variables.
+
 Completed model runs are stored in `mmm_model_runs` with versioned `run_config`, `input_summary`, `model_artifact`, `calibration_report`, and `validation_report` JSON. Every completed run also writes immutable row-level inputs to `mmm_model_run_input_snapshots` with `snapshot_version = mmm_weekly_channel_snapshot_v1`, per-row hashes, and a run-level snapshot hash in `input_summary`. Baseline training fails when weekly rows have DQ status `fail`; warning counts are retained in `input_summary.weeklyQualitySummary`.
 
 ## Read API and Export
 
 The approved mart is exposed through `GET /api/reporting/mmm`.
+
+Completed MMM runs and their persisted calibration reports are exposed through `GET /api/reporting/mmm/model-runs`. The admin MMM readiness panel renders the calibration governance status, divergence alert counts, thresholds, and reconciliation logic from this API so reconciliation decisions can be audited without direct database access.
 
 Authentication matches the other reporting APIs: callers must send the configured bearer token or an authenticated app session. Responses include `X-ROAS-Radar-MMM-Schema: mmm_daily_input_mart_v1`, and JSON responses also include `schemaVersion`.
 

@@ -35,6 +35,7 @@ import {
   type MmmExportQuery,
   type MmmExportResponse,
   type MmmExportRow,
+  type MmmModelRun,
   type MmmModelRunsResponse,
   type MmmReadinessStatus
 } from '../lib/api';
@@ -63,6 +64,18 @@ type OwnerApproval = {
   owner: string;
   status: ChecklistStatus;
   detail: string;
+};
+
+type CalibrationGovernanceSummary = {
+  status?: string;
+  alertCount?: number;
+  watchCount?: number;
+  rowCount?: number;
+  reconciliationLogic?: string;
+  thresholds?: {
+    warnDivergenceRate?: number;
+    alertDivergenceRate?: number;
+  };
 };
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -157,6 +170,39 @@ function readinessTone(status: MmmReadinessStatus): 'success' | 'warning' | 'dan
   }
 
   return status === 'partial' ? 'warning' : 'danger';
+}
+
+function governanceTone(status: string | undefined): 'success' | 'warning' | 'danger' | 'neutral' {
+  if (status === 'aligned') {
+    return 'success';
+  }
+
+  if (status === 'watch') {
+    return 'warning';
+  }
+
+  if (status === 'alert') {
+    return 'danger';
+  }
+
+  return 'neutral';
+}
+
+function getCalibrationGovernance(run: MmmModelRun): CalibrationGovernanceSummary {
+  const report = run.calibrationReport as {
+    governance?: CalibrationGovernanceSummary;
+    governanceStatus?: string;
+    divergenceAlerts?: unknown[];
+  };
+
+  return {
+    status: report.governance?.status ?? report.governanceStatus,
+    alertCount: report.governance?.alertCount ?? report.divergenceAlerts?.length,
+    watchCount: report.governance?.watchCount,
+    rowCount: report.governance?.rowCount,
+    reconciliationLogic: report.governance?.reconciliationLogic,
+    thresholds: report.governance?.thresholds
+  };
 }
 
 function formatStatus(status: ChecklistStatus | MmmReadinessStatus): string {
@@ -690,24 +736,50 @@ export default function MmmReadinessDashboard({ reportingTimezone }: MmmReadines
                   <TableRow>
                     <TableHeaderCell>Run</TableHeaderCell>
                     <TableHeaderCell>Status</TableHeaderCell>
+                    <TableHeaderCell>Calibration</TableHeaderCell>
+                    <TableHeaderCell>Alerts</TableHeaderCell>
                     <TableHeaderCell>Training window</TableHeaderCell>
                     <TableHeaderCell>Completed</TableHeaderCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {(modelRunsSection.data?.rows ?? []).map((run) => (
-                    <TableRow key={run.id}>
-                      <TableCell>{run.modelVersion}</TableCell>
-                      <TableCell>
-                        <Badge tone={run.runStatus === 'completed' ? 'success' : 'danger'}>{run.runStatus}</Badge>
-                      </TableCell>
-                      <TableCell>
-                        {formatDateLabel(run.trainingStartDate, reportingTimezone)} to{' '}
-                        {formatDateLabel(run.trainingEndDate, reportingTimezone)}
-                      </TableCell>
-                      <TableCell>{formatDateTimeLabel(run.completedAt, reportingTimezone)}</TableCell>
-                    </TableRow>
-                  ))}
+                  {(modelRunsSection.data?.rows ?? []).map((run) => {
+                    const governance = getCalibrationGovernance(run);
+
+                    return (
+                      <TableRow key={run.id}>
+                        <TableCell>
+                          <div>{run.modelVersion}</div>
+                          {governance.reconciliationLogic ? (
+                            <div className="mt-1 max-w-xl text-xs text-slate-500">{governance.reconciliationLogic}</div>
+                          ) : null}
+                        </TableCell>
+                        <TableCell>
+                          <Badge tone={run.runStatus === 'completed' ? 'success' : 'danger'}>{run.runStatus}</Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Badge tone={governanceTone(governance.status)}>{governance.status ?? 'pending'}</Badge>
+                          {governance.thresholds ? (
+                            <div className="mt-1 text-xs text-slate-500">
+                              Warn {formatPercent(governance.thresholds.warnDivergenceRate ?? 0)} / alert{' '}
+                              {formatPercent(governance.thresholds.alertDivergenceRate ?? 0)}
+                            </div>
+                          ) : null}
+                        </TableCell>
+                        <TableCell>
+                          <div>{formatNumber(governance.alertCount ?? 0)}</div>
+                          <div className="text-xs text-slate-500">
+                            {formatNumber(governance.watchCount ?? 0)} watch / {formatNumber(governance.rowCount ?? 0)} rows
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          {formatDateLabel(run.trainingStartDate, reportingTimezone)} to{' '}
+                          {formatDateLabel(run.trainingEndDate, reportingTimezone)}
+                        </TableCell>
+                        <TableCell>{formatDateTimeLabel(run.completedAt, reportingTimezone)}</TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </TableWrap>

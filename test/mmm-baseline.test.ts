@@ -123,6 +123,7 @@ test('MMM baseline uses attribution metrics as calibration diagnostics instead o
   assert.equal(run.runConfig.bayesianEngine, 'closed_form_linear_gaussian_posterior_v1');
   assert.equal(run.runConfig.responseVariable, 'daily_total_shopify_revenue_from_mart_outcomes');
   assert.equal(run.calibrationReport.deterministicAttributionUsage, 'calibration_and_validation_segments_only');
+  assert.ok(run.calibrationReport.governance);
   assert.equal(run.validationReport.train.observationCount, 3);
   assert.equal(run.validationReport.posteriorSanityChecks.status, 'pass');
   assert.equal(run.validationReport.posteriorDiagnostics.chains, 2);
@@ -153,6 +154,41 @@ test('MMM baseline uses attribution metrics as calibration diagnostics instead o
   );
   assert.ok(contributionOutputs.channels[0]?.contribution.credibleInterval95.upper);
   assert.ok(contributionOutputs.channels[0]?.contributionShare.mean);
+
+  const governance = run.calibrationReport.governance as {
+    status: string;
+    thresholds: { warnDivergenceRate: number; alertDivergenceRate: number };
+    reconciliationLogic: string;
+    rowCount: number;
+    channelWeekReconciliation: Array<{ weekStartDate: string; key: string; governanceTier: string }>;
+  };
+  assert.equal(governance.thresholds.warnDivergenceRate, 0.25);
+  assert.equal(governance.thresholds.alertDivergenceRate, 0.5);
+  assert.equal(governance.rowCount, 9);
+  assert.ok(governance.reconciliationLogic.includes('deterministic attribution_credit_revenue'));
+  assert.deepEqual(
+    governance.channelWeekReconciliation.slice(0, 3).map((row) => [row.weekStartDate, row.key]),
+    [
+      ['2026-04-01', 'meta|paid_social|prospecting'],
+      ['2026-04-01', 'google|cpc|brand'],
+      ['2026-04-01', '__other_paid__']
+    ]
+  );
+
+  const strictRun = buildBaselineMmmArtifact(rows, {
+    startDate: '2026-04-01',
+    endDate: '2026-04-03',
+    attributionModel: 'last_touch',
+    adstockDecay: 0,
+    posteriorChains: 2,
+    posteriorDraws: 200,
+    holdoutRatio: 0,
+    calibrationWarnDivergenceRate: 0,
+    calibrationAlertDivergenceRate: 0
+  });
+  const strictGovernance = strictRun.calibrationReport.governance as { status: string; alertCount: number };
+  assert.equal(strictGovernance.status, 'alert');
+  assert.ok(strictGovernance.alertCount > 0);
 });
 
 test('MMM baseline rejects insufficient mart observations', () => {

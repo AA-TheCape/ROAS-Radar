@@ -22,6 +22,8 @@ const DEFAULT_POSTERIOR_CHAINS = 4;
 const MIN_OBSERVATIONS = 3;
 const MIN_EFFECTIVE_SAMPLE_SIZE = 100;
 const MAX_RHAT = 1.1;
+const DEFAULT_CALIBRATION_WARN_DIVERGENCE_RATE = 0.25;
+const DEFAULT_CALIBRATION_ALERT_DIVERGENCE_RATE = 0.5;
 
 export type MmmBaselineTrainingInput = {
   startDate: string;
@@ -33,6 +35,8 @@ export type MmmBaselineTrainingInput = {
   posteriorDraws?: number;
   posteriorChains?: number;
   holdoutRatio?: number;
+  calibrationWarnDivergenceRate?: number;
+  calibrationAlertDivergenceRate?: number;
   submittedBy?: string;
 };
 
@@ -70,6 +74,11 @@ type DailyObservation = {
   date: string;
   revenue: number;
   features: Record<string, number>;
+};
+
+type CalibrationGovernanceThresholds = {
+  warnDivergenceRate: number;
+  alertDivergenceRate: number;
 };
 
 type FittedRegression = {
@@ -314,6 +323,81 @@ function validationMetrics(observations: DailyObservation[], intercept: number, 
   };
 }
 
+function resolveDivergenceTier(
+  deterministicAnchorRevenue: number,
+  modeledRevenue: number,
+  thresholds: CalibrationGovernanceThresholds
+) {
+  const absoluteDivergence = modeledRevenue - deterministicAnchorRevenue;
+  const divergenceRate = Math.abs(absoluteDivergence) / Math.max(Math.abs(deterministicAnchorRevenue), 1);
+  const tier =
+    divergenceRate >= thresholds.alertDivergenceRate
+      ? 'alert'
+      : divergenceRate >= thresholds.warnDivergenceRate
+        ? 'watch'
+        : 'aligned';
+
+  return {
+    absoluteDivergence,
+    divergenceRate,
+    tier
+  };
+}
+
+function buildChannelWeekReconciliation(input: {
+  attributionRows: MmmBaselineMartRow[];
+  observations: DailyObservation[];
+  modelSegments: string[];
+  selectedSegmentSet: Set<string>;
+  segmentStats: Map<string, SegmentStats>;
+  coefficients: Record<string, number>;
+  thresholds: CalibrationGovernanceThresholds;
+}) {
+  const deterministicRevenueByWeekSegment = new Map<string, number>();
+
+  for (const row of input.attributionRows) {
+    const rawKey = segmentKey(row);
+    const modelKey = input.selectedSegmentSet.has(rawKey) ? rawKey : '__other_paid__';
+    const key = `${row.metric_date}::${modelKey}`;
+    deterministicRevenueByWeekSegment.set(key, (deterministicRevenueByWeekSegment.get(key) ?? 0) + toNumber(row.attribution_credit_revenue));
+  }
+
+  const reconciliationRows = input.observations.flatMap((observation) =>
+    input.modelSegments.map((modelKey) => {
+      const stats = input.segmentStats.get(modelKey);
+      const modeledRevenue = Math.max(0, (input.coefficients[modelKey] ?? 0) * (observation.features[modelKey] ?? 0));
+      const deterministicAnchorRevenue = deterministicRevenueByWeekSegment.get(`${observation.date}::${modelKey}`) ?? 0;
+      const divergence = resolveDivergenceTier(deterministicAnchorRevenue, modeledRevenue, input.thresholds);
+
+      return {
+        weekStartDate: observation.date,
+        key: modelKey,
+        source: stats?.source ?? (modelKey === '__other_paid__' ? '__other_paid__' : 'unknown'),
+        medium: stats?.medium ?? 'unknown',
+        campaign: stats?.campaign ?? 'unknown',
+        deterministicAnchorRevenue,
+        modeledRevenue,
+        absoluteDivergence: divergence.absoluteDivergence,
+        divergenceRate: divergence.divergenceRate,
+        governanceTier: divergence.tier
+      };
+    })
+  );
+  const divergenceAlerts = reconciliationRows.filter((row) => row.governanceTier === 'alert');
+
+  return {
+    status: divergenceAlerts.length > 0 ? 'alert' : reconciliationRows.some((row) => row.governanceTier === 'watch') ? 'watch' : 'aligned',
+    thresholds: input.thresholds,
+    reconciliationLogic:
+      'For each week_start_date and modeled channel segment, modeled revenue is max(0, fitted coefficient * transformed spend feature) and is reconciled to deterministic attribution_credit_revenue from the same weekly MMM mart snapshot. Non-selected paid segments are reconciled under __other_paid__. Divergence rate is abs(modeled - deterministic_anchor) / max(abs(deterministic_anchor), 1).',
+    rowCount: reconciliationRows.length,
+    alertCount: divergenceAlerts.length,
+    watchCount: reconciliationRows.filter((row) => row.governanceTier === 'watch').length,
+    channelWeekReconciliation: reconciliationRows,
+    divergenceAlerts
+  };
+}
+
 function createSeededRandom(seedText: string): () => number {
   let seed = createHash('sha256').update(seedText).digest().readUInt32LE(0);
 
@@ -552,6 +636,23 @@ export function buildBaselineMmmArtifact(rows: MmmBaselineMartRow[], input: MmmB
   const posteriorChains = clampInteger(input.posteriorChains, DEFAULT_POSTERIOR_CHAINS, 2, 8);
   const posteriorDraws = clampInteger(input.posteriorDraws, DEFAULT_POSTERIOR_DRAWS, posteriorChains * 50, posteriorChains * 5_000);
   const holdoutRatio = clampNumber(input.holdoutRatio, 0.2, 0, 0.5);
+  const calibrationThresholds = {
+    warnDivergenceRate: clampNumber(
+      input.calibrationWarnDivergenceRate,
+      DEFAULT_CALIBRATION_WARN_DIVERGENCE_RATE,
+      0,
+      10
+    ),
+    alertDivergenceRate: clampNumber(
+      input.calibrationAlertDivergenceRate,
+      DEFAULT_CALIBRATION_ALERT_DIVERGENCE_RATE,
+      0,
+      10
+    )
+  };
+  if (calibrationThresholds.warnDivergenceRate > calibrationThresholds.alertDivergenceRate) {
+    throw new Error('calibrationWarnDivergenceRate must be less than or equal to calibrationAlertDivergenceRate');
+  }
 
   const dates = Array.from(new Set(rows.map((row) => row.metric_date))).sort();
   const paidRows = rows.filter((row) => row.mart_row_type === 'paid_media' || row.mart_row_type === 'weekly_channel');
@@ -665,6 +766,42 @@ export function buildBaselineMmmArtifact(rows: MmmBaselineMartRow[], input: MmmB
   }
   const trainMetrics = validationMetrics(trainingObservations, fitted.intercept, fitted.coefficients);
   const holdoutMetrics = validationMetrics(holdoutObservations, fitted.intercept, fitted.coefficients);
+  const otherSegmentStats = modelSegments.includes('__other_paid__')
+    ? {
+        key: '__other_paid__',
+        source: '__other_paid__',
+        medium: 'mixed',
+        campaign: 'mixed',
+        spend: [...segmentStats.values()]
+          .filter((segment) => !selectedSegmentSet.has(segment.key))
+          .reduce((sum, segment) => sum + segment.spend, 0),
+        impressions: [...segmentStats.values()]
+          .filter((segment) => !selectedSegmentSet.has(segment.key))
+          .reduce((sum, segment) => sum + segment.impressions, 0),
+        clicks: [...segmentStats.values()]
+          .filter((segment) => !selectedSegmentSet.has(segment.key))
+          .reduce((sum, segment) => sum + segment.clicks, 0),
+        attributedRevenue: [...segmentStats.values()]
+          .filter((segment) => !selectedSegmentSet.has(segment.key))
+          .reduce((sum, segment) => sum + segment.attributedRevenue, 0),
+        attributedOrders: [...segmentStats.values()]
+          .filter((segment) => !selectedSegmentSet.has(segment.key))
+          .reduce((sum, segment) => sum + segment.attributedOrders, 0)
+      }
+    : null;
+  const reconciliationSegmentStats = new Map(segmentStats);
+  if (otherSegmentStats) {
+    reconciliationSegmentStats.set('__other_paid__', otherSegmentStats);
+  }
+  const channelWeekGovernance = buildChannelWeekReconciliation({
+    attributionRows,
+    observations,
+    modelSegments,
+    selectedSegmentSet,
+    segmentStats: reconciliationSegmentStats,
+    coefficients: fitted.coefficients,
+    thresholds: calibrationThresholds
+  });
   const totalAttributedRevenue = [...segmentStats.values()].reduce((sum, segment) => sum + segment.attributedRevenue, 0);
   const coefficientRevenue = Object.fromEntries(
     modelSegments.map((key) => {
@@ -697,6 +834,7 @@ export function buildBaselineMmmArtifact(rows: MmmBaselineMartRow[], input: MmmB
     ridgeLambda,
     posteriorChains,
     posteriorDraws: diagnostics.totalDraws,
+    calibrationGovernanceThresholds: calibrationThresholds,
     bayesianEngine: 'closed_form_linear_gaussian_posterior_v1',
     hierarchy: {
       level: 'channel_segment',
@@ -753,9 +891,12 @@ export function buildBaselineMmmArtifact(rows: MmmBaselineMartRow[], input: MmmB
     calibrationReport: {
       attributionModel,
       deterministicAttributionUsage: 'calibration_and_validation_segments_only',
+      governanceStatus: channelWeekGovernance.status,
       totalAttributedRevenue,
       totalModeledMediaRevenue: totalCoefficientRevenue,
-      segments: calibrationSegments
+      segments: calibrationSegments,
+      governance: channelWeekGovernance,
+      divergenceAlerts: channelWeekGovernance.divergenceAlerts
     },
     validationReport: {
       train: trainMetrics,

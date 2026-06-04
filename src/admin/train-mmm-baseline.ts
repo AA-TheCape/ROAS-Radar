@@ -90,6 +90,11 @@ async function main() {
     posteriorDraws: readNumberFlag('posterior-draws') ?? readNumberEnv('MMM_BASELINE_POSTERIOR_DRAWS'),
     posteriorChains: readNumberFlag('posterior-chains') ?? readNumberEnv('MMM_BASELINE_POSTERIOR_CHAINS'),
     holdoutRatio: readNumberFlag('holdout-ratio') ?? readNumberEnv('MMM_BASELINE_HOLDOUT_RATIO'),
+    calibrationWarnDivergenceRate:
+      readNumberFlag('calibration-warn-divergence-rate') ?? readNumberEnv('MMM_BASELINE_CALIBRATION_WARN_DIVERGENCE_RATE'),
+    calibrationAlertDivergenceRate:
+      readNumberFlag('calibration-alert-divergence-rate') ??
+      readNumberEnv('MMM_BASELINE_CALIBRATION_ALERT_DIVERGENCE_RATE'),
     submittedBy: readFlag('submitted-by')?.trim() || process.env.MMM_BASELINE_SUBMITTED_BY?.trim() || 'admin-cli'
   });
 
@@ -102,6 +107,7 @@ async function main() {
         trainingStartDate: run.trainingStartDate,
         trainingEndDate: run.trainingEndDate,
         inputSummary: run.inputSummary,
+        calibrationReport: run.calibrationReport,
         validationReport: run.validationReport
       },
       null,
