@@ -88,9 +88,14 @@ test("buildGa4SessionAttributionHourlyQuery targets daily and intraday exports f
 		/FROM `analytics-prod1\.google_ads_transfer\.p_ads_\*`/,
 	);
 	assert.match(query.query, /LEFT JOIN ads_linked_campaigns/);
-	assert.match(query.query, /LOWER\(ep\.key\) = 'gclid'/);
-	assert.match(query.query, /LOWER\(ep\.key\) = 'dclid'/);
-	assert.match(query.query, /AS dclid/);
+	assert.match(query.query, /TIMESTAMP_MICROS\(event_timestamp\)/);
+	assert.match(query.query, /LOWER\(key\) = 'gclid'/);
+	assert.match(query.query, /LOWER\(key\) = 'dclid'/);
+	assert.match(query.query, /AS click_id_type/);
+	assert.match(query.query, /AS transaction_id/);
+	assert.match(query.query, /AS email_hash/);
+	assert.match(query.query, /AS customer_identity_id/);
+	assert.match(query.query, /AS campaign_metadata_source/);
 	assert.equal(query.params.window_start, "2026-04-27T11:00:00.000Z");
 	assert.equal(query.params.window_end, "2026-04-27T12:00:00.000Z");
 	assert.equal(query.params.start_date_suffix, "20260427");
