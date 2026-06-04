@@ -27,6 +27,8 @@ class MmmHttpError extends Error {
 }
 
 const MMM_SCHEMA_VERSION = 'mmm_daily_input_mart_v1';
+const MMM_READINESS_REQUIRED_OWNERS = ['Product', 'Analytics', 'Backend', 'Data Platform'] as const;
+const MMM_READINESS_REQUIRED_OWNER_SET = new Set<string>(MMM_READINESS_REQUIRED_OWNERS);
 
 const dateStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
@@ -123,7 +125,7 @@ const readinessGateQuerySchema = readinessGateBaseSchema.superRefine((value, ctx
 });
 
 const readinessGateMutationSchema = z.object({
-  owner: z.string().trim().min(1).max(120).optional(),
+  owner: z.enum(MMM_READINESS_REQUIRED_OWNERS).optional(),
   reason: z.string().trim().min(1).max(1000).optional(),
   waiver: z
     .object({
@@ -333,6 +335,14 @@ type MmmReadinessGateRow = {
 };
 
 type JsonRecord = Record<string, unknown>;
+type MmmReadinessGateOwnerApproval = {
+  owner: (typeof MMM_READINESS_REQUIRED_OWNERS)[number];
+  status: 'pass' | 'pending';
+  approvedBy: string | null;
+  approvedAt: string | null;
+  evidenceHash: string | null;
+  detail: string;
+};
 
 function parseInput<TSchema extends z.ZodTypeAny>(schema: TSchema, input: unknown): z.infer<TSchema> {
   try {
@@ -1012,6 +1022,134 @@ function mapGateRow(row: MmmReadinessGateRow) {
   };
 }
 
+function buildRequiredOwnerApprovals(
+  checklistStatuses: Array<{
+    owner: string;
+    status: GateChecklistStatus;
+  }>,
+  existingApprovalsInput: unknown = [],
+  evidenceHashValue?: string
+): MmmReadinessGateOwnerApproval[] {
+  const existingApprovals = Array.isArray(existingApprovalsInput) ? existingApprovalsInput : [];
+
+  return MMM_READINESS_REQUIRED_OWNERS.map((owner) => {
+    const existing = existingApprovals.find(
+      (approval) =>
+        approval &&
+        typeof approval === 'object' &&
+        (approval as { owner?: unknown }).owner === owner &&
+        (approval as { status?: unknown }).status === 'pass' &&
+        (evidenceHashValue === undefined || (approval as { evidenceHash?: unknown }).evidenceHash === evidenceHashValue)
+    ) as
+      | {
+          approvedBy?: unknown;
+          approvedAt?: unknown;
+          detail?: unknown;
+          evidenceHash?: unknown;
+        }
+      | undefined;
+
+    if (existing) {
+      return {
+        owner,
+        status: 'pass' as const,
+        approvedBy: typeof existing.approvedBy === 'string' ? existing.approvedBy : null,
+        approvedAt: typeof existing.approvedAt === 'string' ? existing.approvedAt : null,
+        evidenceHash: typeof existing.evidenceHash === 'string' ? existing.evidenceHash : evidenceHashValue ?? null,
+        detail: typeof existing.detail === 'string' ? existing.detail : 'Owner approved the persisted MMM readiness evidence.'
+      };
+    }
+
+    const ownerItems = checklistStatuses.filter((item) => item.owner === owner);
+    const failedCount = ownerItems.filter((item) => item.status === 'fail').length;
+    const pendingCount = ownerItems.filter((item) => item.status === 'pending').length;
+
+    return {
+      owner,
+      status: 'pending' as const,
+      approvedBy: null,
+      approvedAt: null,
+      evidenceHash: evidenceHashValue ?? null,
+      detail:
+        failedCount > 0
+          ? `${failedCount} gate ${failedCount === 1 ? 'item requires' : 'items require'} approval or waiver.`
+          : pendingCount > 0
+            ? `${pendingCount} gate ${pendingCount === 1 ? 'item is' : 'items are'} pending.`
+            : 'Owner sign-off is required for this evidence hash.'
+    };
+  });
+}
+
+function hasAllRequiredOwnerApprovals(ownerApprovals: unknown[], evidenceHashValue: string): boolean {
+  const approvedOwners = new Set(
+    ownerApprovals
+      .filter(
+        (approval) =>
+          approval &&
+          typeof approval === 'object' &&
+          (approval as { status?: unknown }).status === 'pass' &&
+          (approval as { evidenceHash?: unknown }).evidenceHash === evidenceHashValue
+      )
+      .map((approval) => (approval as { owner?: unknown }).owner)
+      .filter((owner): owner is string => typeof owner === 'string' && MMM_READINESS_REQUIRED_OWNER_SET.has(owner))
+  );
+
+  return MMM_READINESS_REQUIRED_OWNERS.every((owner) => approvedOwners.has(owner));
+}
+
+function deriveGateDecision(unresolvedFailures: number, ownerApprovals: unknown[], evidenceHashValue: string) {
+  const allRequiredOwnersApproved = hasAllRequiredOwnerApprovals(ownerApprovals, evidenceHashValue);
+  const finalState = unresolvedFailures === 0 && allRequiredOwnersApproved ? 'approved' : 'blocked';
+
+  return {
+    finalState,
+    gateStatus: finalState === 'approved' ? 'approved' : 'pending'
+  };
+}
+
+function applyCurrentEvidenceWaivers(
+  checklistStatuses: Array<{
+    key: string;
+    label: string;
+    owner: string;
+    status: GateChecklistStatus;
+    detail: string;
+  }>,
+  waiversInput: unknown,
+  evidenceHashValue: string
+) {
+  const waivers = Array.isArray(waiversInput) ? waiversInput : [];
+  const waiverReasons = new Map(
+    waivers
+      .filter(
+        (waiver) =>
+          waiver &&
+          typeof waiver === 'object' &&
+          (waiver as { evidenceHash?: unknown }).evidenceHash === evidenceHashValue &&
+          typeof (waiver as { checklistKey?: unknown }).checklistKey === 'string' &&
+          typeof (waiver as { reason?: unknown }).reason === 'string'
+      )
+      .map((waiver) => [
+        (waiver as { checklistKey: string }).checklistKey,
+        (waiver as { reason: string }).reason
+      ])
+  );
+
+  return checklistStatuses.map((item) => {
+    const waiverReason = waiverReasons.get(item.key);
+
+    if (item.status !== 'fail' || !waiverReason) {
+      return item;
+    }
+
+    return {
+      ...item,
+      status: 'waived' as const,
+      waiverReason
+    };
+  });
+}
+
 async function fetchPersistedGate(input: z.infer<typeof readinessGateQuerySchema>): Promise<MmmReadinessGateRow | null> {
   const result = await query<MmmReadinessGateRow>(
     `
@@ -1404,7 +1542,7 @@ async function buildReadinessEvidence(input: z.infer<typeof readinessGateQuerySc
     {
       key: 'exposure_coverage',
       label: 'Exposure coverage',
-      owner: 'Frontend',
+      owner: 'Backend',
       status:
         exposureTotals.totalExposures === 0
           ? 'warn'
@@ -1435,7 +1573,7 @@ async function buildReadinessEvidence(input: z.infer<typeof readinessGateQuerySc
     {
       key: 'model_run_governance',
       label: 'Baseline model governance',
-      owner: 'Modeling',
+      owner: 'Analytics',
       status: latestModelRun?.runStatus === 'completed' ? 'pass' : 'pending',
       detail: latestModelRun ? `${latestModelRun.modelVersion} ${latestModelRun.runStatus}.` : 'No model run overlaps this window.'
     }
@@ -1446,24 +1584,8 @@ async function buildReadinessEvidence(input: z.infer<typeof readinessGateQuerySc
     status: GateChecklistStatus;
     detail: string;
   }>;
-  const ownerApprovals = ['Product', 'Analytics', 'Frontend', 'Data Platform', 'Modeling'].map((owner) => {
-    const ownerItems = checklistStatuses.filter((item) => item.owner === owner);
-    const failedCount = ownerItems.filter((item) => item.status === 'fail').length;
-    const pendingCount = ownerItems.filter((item) => item.status === 'pending').length;
-
-    return {
-      owner,
-      status: failedCount > 0 ? 'pending' : pendingCount > 0 ? 'pending' : 'pass',
-      approvedBy: null,
-      approvedAt: null,
-      detail:
-        failedCount > 0
-          ? `${failedCount} gate ${failedCount === 1 ? 'item requires' : 'items require'} approval or waiver.`
-          : pendingCount > 0
-            ? `${pendingCount} gate ${pendingCount === 1 ? 'item is' : 'items are'} pending.`
-            : 'Owner evidence is ready for sign-off.'
-    };
-  });
+  const computedEvidenceHash = evidenceHash(evidencePayload);
+  const ownerApprovals = buildRequiredOwnerApprovals(checklistStatuses, [], computedEvidenceHash);
 
   return {
     evidencePayload,
@@ -1472,14 +1594,24 @@ async function buildReadinessEvidence(input: z.infer<typeof readinessGateQuerySc
     unresolvedCriticalIssueCount:
       checklistStatuses.filter((item) => item.status === 'fail' && item.key !== 'data_quality_blockers').length +
       criticalDataQualityCount,
-    evidenceHash: evidenceHash(evidencePayload)
+    evidenceHash: computedEvidenceHash
   };
 }
 
 async function upsertReadinessGate(input: z.infer<typeof readinessGateQuerySchema>, actor: string) {
   const evidence = await buildReadinessEvidence(input);
-  const finalState = evidence.unresolvedCriticalIssueCount === 0 ? 'approved' : 'blocked';
-  const gateStatus = finalState === 'approved' ? 'approved' : 'pending';
+  const existingGate = await fetchPersistedGate(input);
+  const preserveCurrentEvidenceState = existingGate?.evidence_hash === evidence.evidenceHash;
+  const checklistStatuses = preserveCurrentEvidenceState
+    ? applyCurrentEvidenceWaivers(evidence.checklistStatuses, existingGate.waivers, evidence.evidenceHash)
+    : evidence.checklistStatuses;
+  const unresolvedCriticalIssueCount = preserveCurrentEvidenceState
+    ? checklistStatuses.filter((item) => item.status === 'fail').length
+    : evidence.unresolvedCriticalIssueCount;
+  const ownerApprovals = preserveCurrentEvidenceState
+    ? buildRequiredOwnerApprovals(checklistStatuses, existingGate.owner_approvals, evidence.evidenceHash)
+    : evidence.ownerApprovals;
+  const { finalState, gateStatus } = deriveGateDecision(unresolvedCriticalIssueCount, ownerApprovals, evidence.evidenceHash);
   const result = await query<MmmReadinessGateRow>(
     `
       INSERT INTO mmm_readiness_gates (
@@ -1536,36 +1668,18 @@ async function upsertReadinessGate(input: z.infer<typeof readinessGateQuerySchem
       DO UPDATE SET
         evidence_payload = EXCLUDED.evidence_payload,
         checklist_statuses = EXCLUDED.checklist_statuses,
-        owner_approvals = CASE
-          WHEN mmm_readiness_gates.evidence_hash = EXCLUDED.evidence_hash THEN mmm_readiness_gates.owner_approvals
-          ELSE EXCLUDED.owner_approvals
-        END,
+        owner_approvals = EXCLUDED.owner_approvals,
         waivers = CASE
           WHEN mmm_readiness_gates.evidence_hash = EXCLUDED.evidence_hash THEN mmm_readiness_gates.waivers
           ELSE '[]'::jsonb
         END,
         unresolved_critical_issue_count = EXCLUDED.unresolved_critical_issue_count,
         evidence_hash = EXCLUDED.evidence_hash,
-        gate_status = CASE
-          WHEN mmm_readiness_gates.evidence_hash = EXCLUDED.evidence_hash THEN mmm_readiness_gates.gate_status
-          ELSE EXCLUDED.gate_status
-        END,
-        final_state = CASE
-          WHEN mmm_readiness_gates.evidence_hash = EXCLUDED.evidence_hash THEN mmm_readiness_gates.final_state
-          ELSE EXCLUDED.final_state
-        END,
-        decision_reason = CASE
-          WHEN mmm_readiness_gates.evidence_hash = EXCLUDED.evidence_hash THEN mmm_readiness_gates.decision_reason
-          ELSE EXCLUDED.decision_reason
-        END,
-        decided_by = CASE
-          WHEN mmm_readiness_gates.evidence_hash = EXCLUDED.evidence_hash THEN mmm_readiness_gates.decided_by
-          ELSE EXCLUDED.decided_by
-        END,
-        decided_at = CASE
-          WHEN mmm_readiness_gates.evidence_hash = EXCLUDED.evidence_hash THEN mmm_readiness_gates.decided_at
-          ELSE EXCLUDED.decided_at
-        END,
+        gate_status = EXCLUDED.gate_status,
+        final_state = EXCLUDED.final_state,
+        decision_reason = EXCLUDED.decision_reason,
+        decided_by = EXCLUDED.decided_by,
+        decided_at = EXCLUDED.decided_at,
         updated_by = EXCLUDED.updated_by,
         updated_at = now()
       RETURNING
@@ -1603,13 +1717,13 @@ async function upsertReadinessGate(input: z.infer<typeof readinessGateQuerySchem
       input.source ?? null,
       input.campaign ?? null,
       JSON.stringify(evidence.evidencePayload),
-      JSON.stringify(evidence.checklistStatuses),
-      JSON.stringify(evidence.ownerApprovals),
-      evidence.unresolvedCriticalIssueCount,
+      JSON.stringify(checklistStatuses),
+      JSON.stringify(ownerApprovals),
+      unresolvedCriticalIssueCount,
       evidence.evidenceHash,
       gateStatus,
       finalState,
-      gateStatus === 'approved' ? 'All readiness gates passed during evidence refresh.' : null,
+      gateStatus === 'approved' ? 'All required owners approved the current readiness evidence.' : 'Awaiting required owner approvals.',
       gateStatus === 'approved' ? actor : null,
       actor
     ]
@@ -1673,8 +1787,14 @@ export function createMmmRouter(): Router {
       const actor = getActorLabel(res.locals.auth as AuthContext | null | undefined);
       const gate = (await fetchPersistedGate(input)) ?? (await upsertReadinessGate(input, actor));
       const mapped = mapGateRow(gate);
-      const owner = input.owner ?? actor;
-      const ownerApprovals = Array.isArray(mapped.ownerApprovals) ? [...mapped.ownerApprovals] : [];
+      const owner = input.owner;
+
+      if (!owner) {
+        throw new MmmHttpError(400, 'invalid_request', 'Owner approval requires one of Product, Analytics, Backend, or Data Platform.');
+      }
+
+      const checklistStatuses = Array.isArray(mapped.checklistStatuses) ? mapped.checklistStatuses : [];
+      const ownerApprovals = buildRequiredOwnerApprovals(checklistStatuses, mapped.ownerApprovals, mapped.evidenceHash);
       const ownerIndex = ownerApprovals.findIndex(
         (approval) =>
           approval &&
@@ -1684,9 +1804,10 @@ export function createMmmRouter(): Router {
       );
       const approvalRecord = {
         owner,
-        status: 'pass',
+        status: 'pass' as const,
         approvedBy: actor,
         approvedAt: new Date().toISOString(),
+        evidenceHash: mapped.evidenceHash,
         detail: input.reason ?? 'Owner approved the persisted MMM readiness evidence.'
       };
 
@@ -1696,7 +1817,6 @@ export function createMmmRouter(): Router {
         ownerApprovals.push(approvalRecord);
       }
 
-      const checklistStatuses = Array.isArray(mapped.checklistStatuses) ? mapped.checklistStatuses : [];
       const waivers = Array.isArray(mapped.waivers) ? mapped.waivers : [];
       const waivedKeys = new Set(
         waivers
@@ -1711,8 +1831,7 @@ export function createMmmRouter(): Router {
           (item as { status?: unknown }).status === 'fail' &&
           !waivedKeys.has(String((item as { key?: unknown }).key))
       ).length;
-      const finalState = unresolvedFailures === 0 ? 'approved' : 'blocked';
-      const gateStatus = finalState === 'approved' ? 'approved' : 'pending';
+      const { finalState, gateStatus } = deriveGateDecision(unresolvedFailures, ownerApprovals, mapped.evidenceHash);
       const result = await query<MmmReadinessGateRow>(
         `
           UPDATE mmm_readiness_gates
@@ -1757,7 +1876,10 @@ export function createMmmRouter(): Router {
           JSON.stringify(ownerApprovals),
           gateStatus,
           finalState,
-          input.reason ?? (finalState === 'approved' ? 'Owner approvals completed.' : 'Approval recorded with unresolved gate failures.'),
+          input.reason ??
+            (finalState === 'approved'
+              ? 'All required owners approved the current readiness evidence.'
+              : 'Approval recorded; required owners or checklist resolution remain outstanding.'),
           actor
         ]
       );
@@ -1803,6 +1925,8 @@ export function createMmmRouter(): Router {
       const unresolvedFailures = checklistStatuses.filter(
         (item) => item && typeof item === 'object' && (item as { status?: unknown }).status === 'fail'
       ).length;
+      const ownerApprovals = buildRequiredOwnerApprovals(checklistStatuses, mapped.ownerApprovals, mapped.evidenceHash);
+      const { finalState, gateStatus } = deriveGateDecision(unresolvedFailures, ownerApprovals, mapped.evidenceHash);
       const result = await query<MmmReadinessGateRow>(
         `
           UPDATE mmm_readiness_gates
@@ -1810,8 +1934,13 @@ export function createMmmRouter(): Router {
             waivers = $2::jsonb,
             checklist_statuses = $3::jsonb,
             unresolved_critical_issue_count = $4,
-            final_state = CASE WHEN $4 = 0 AND gate_status = 'approved' THEN 'approved' ELSE 'blocked' END,
-            updated_by = $5,
+            owner_approvals = $5::jsonb,
+            gate_status = $6,
+            final_state = $7,
+            decision_reason = CASE WHEN $6 = 'approved' THEN 'All required owners approved the waived readiness evidence.' ELSE decision_reason END,
+            decided_by = CASE WHEN $6 = 'approved' THEN $8 ELSE decided_by END,
+            decided_at = CASE WHEN $6 = 'approved' THEN now() ELSE decided_at END,
+            updated_by = $8,
             updated_at = now()
           WHERE id = $1::uuid
           RETURNING
@@ -1840,7 +1969,16 @@ export function createMmmRouter(): Router {
             created_at,
             updated_at
         `,
-        [mapped.id, JSON.stringify(waivers), JSON.stringify(checklistStatuses), unresolvedFailures, actor]
+        [
+          mapped.id,
+          JSON.stringify(waivers),
+          JSON.stringify(checklistStatuses),
+          unresolvedFailures,
+          JSON.stringify(ownerApprovals),
+          gateStatus,
+          finalState,
+          actor
+        ]
       );
 
       res.status(200).json({

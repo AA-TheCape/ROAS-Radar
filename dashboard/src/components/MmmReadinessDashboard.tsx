@@ -239,7 +239,7 @@ export function deriveMmmChecklist(exportData: MmmExportResponse | null): Checkl
       },
       {
         label: 'Input freshness',
-        owner: 'Frontend',
+        owner: 'Backend',
         status: 'pending',
         detail: 'Waiting for mart freshness timestamps.'
       }
@@ -286,7 +286,7 @@ export function deriveMmmChecklist(exportData: MmmExportResponse | null): Checkl
     },
     {
       label: 'Input freshness',
-      owner: 'Frontend',
+      owner: 'Backend',
       status: freshnessPass ? 'pass' : 'warn',
       detail: `Latest spend ${latestSpendSync ?? 'N/A'}, Shopify ${latestShopifyIngest ?? 'N/A'}, attribution ${latestAttributionCompute ?? 'N/A'}.`
     }
@@ -297,6 +297,7 @@ function deriveOwnerApprovals(checklist: ChecklistItem[], modelRuns: MmmModelRun
   const productReady = checklist.find((item) => item.owner === 'Product')?.status;
   const analyticsFailures = checklist.filter((item) => item.owner === 'Analytics' && item.status === 'fail');
   const freshness = checklist.find((item) => item.label === 'Input freshness')?.status;
+  const dataPlatformFailures = checklist.filter((item) => item.owner === 'Data Platform' && item.status === 'fail');
 
   return [
     {
@@ -313,17 +314,17 @@ function deriveOwnerApprovals(checklist: ChecklistItem[], modelRuns: MmmModelRun
           : `${formatNumber(analyticsFailures.length)} analytics gate failed.`
     },
     {
-      owner: 'Frontend',
+      owner: 'Backend',
       status: freshness === 'pass' ? 'pass' : 'warn',
-      detail: freshness === 'pass' ? 'Freshness cards have current source timestamps.' : 'Freshness telemetry is incomplete or stale.'
+      detail: freshness === 'pass' ? 'Freshness telemetry has current source timestamps.' : 'Freshness telemetry is incomplete or stale.'
     },
     {
-      owner: 'Modeling',
-      status: modelRuns && modelRuns.rows.length > 0 ? 'pass' : 'pending',
+      owner: 'Data Platform',
+      status: dataPlatformFailures.length === 0 && modelRuns && modelRuns.rows.length > 0 ? 'pass' : 'pending',
       detail:
         modelRuns && modelRuns.rows.length > 0
           ? `${formatNumber(modelRuns.rows.length)} baseline run output rows are available.`
-          : 'Waiting on the model-runs read API.'
+          : 'Waiting on the model-runs read API and data platform checks.'
     }
   ];
 }
@@ -659,7 +660,7 @@ export default function MmmReadinessDashboard({ reportingTimezone }: MmmReadines
             <FieldGrid>
               <Field label="Owner">
                 <Select value={approvalOwner} onChange={(event) => setApprovalOwner(event.target.value)}>
-                  {['Product', 'Analytics', 'Frontend', 'Data Platform', 'Modeling'].map((owner) => (
+                  {['Product', 'Analytics', 'Backend', 'Data Platform'].map((owner) => (
                     <option key={owner} value={owner}>
                       {owner}
                     </option>

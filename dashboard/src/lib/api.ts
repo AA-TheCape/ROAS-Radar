@@ -458,6 +458,7 @@ export type MmmReadinessGateApproval = {
   status: MmmGateChecklistStatus;
   approvedBy: string | null;
   approvedAt: string | null;
+  evidenceHash?: string | null;
   detail: string;
 };
 

@@ -35,6 +35,235 @@ async function requestJson(server: ReturnType<typeof createServer>, path: string
   return { response, body };
 }
 
+async function postJson(
+  server: ReturnType<typeof createServer>,
+  path: string,
+  payload: Record<string, unknown>,
+  headers = buildHeaders()
+) {
+  const address = server.address() as AddressInfo;
+  const response = await fetch(`http://127.0.0.1:${address.port}${path}`, {
+    method: 'POST',
+    headers: {
+      ...headers,
+      'content-type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  });
+  const body = await response.json();
+
+  return { response, body };
+}
+
+type GateQueryMode = 'clean' | 'changed' | 'blocked';
+
+function installReadinessGateQueryMock(getMode: () => GateQueryMode = () => 'clean') {
+  let gate: Record<string, unknown> | null = null;
+
+  function buildGateRow(params: unknown[]) {
+    const now = new Date('2026-04-04T10:00:00.000Z');
+
+    return {
+      id: '11111111-1111-4111-8111-111111111111',
+      gate_version: 'mmm_readiness_gate_v1',
+      start_date: params[0],
+      end_date: params[1],
+      mart_row_type: params[2],
+      attribution_model: params[3],
+      platform: params[4],
+      source: params[5],
+      campaign: params[6],
+      evidence_payload: JSON.parse(String(params[7])),
+      checklist_statuses: JSON.parse(String(params[8])),
+      owner_approvals: JSON.parse(String(params[9])),
+      waivers: [],
+      unresolved_critical_issue_count: params[10],
+      evidence_hash: params[11],
+      gate_status: params[12],
+      final_state: params[13],
+      decision_reason: params[14],
+      decided_by: params[15],
+      decided_at: params[12] === 'approved' ? now : null,
+      created_by: params[16],
+      updated_by: params[16],
+      created_at: now,
+      updated_at: now
+    };
+  }
+
+  pool.query = (async (text: string, params?: unknown[]) => {
+    if (text.includes('FROM mmm_readiness_gates') && text.includes('WHERE start_date = $1::date')) {
+      return { rows: gate ? [gate] : [] };
+    }
+
+    if (text.includes('WITH requested_dates')) {
+      return {
+        rows: [
+          {
+            metric_date: '2026-04-01',
+            matching_row_count: getMode() === 'blocked' ? '0' : '2',
+            mart_row_count: '2',
+            generation_timestamp: getMode() === 'blocked' ? null : new Date('2026-04-04T08:00:00.000Z')
+          }
+        ]
+      };
+    }
+
+    if (text.includes('COUNT(*)::bigint AS total_rows') && text.includes('FROM mmm_daily_input_mart_v1')) {
+      return {
+        rows: [
+          {
+            total_rows: getMode() === 'changed' ? '3' : '2',
+            paid_media_rows: '1',
+            attribution_rows: '1',
+            total_spend: '100',
+            total_impressions: '1000',
+            total_clicks: '50',
+            total_shopify_orders: '4',
+            total_shopify_revenue: '500',
+            total_attribution_credit_orders: '3',
+            total_attribution_credit_revenue: '450',
+            latest_spend_last_synced_at: new Date('2026-04-04T07:00:00.000Z'),
+            latest_shopify_last_ingested_at: new Date('2026-04-04T07:30:00.000Z'),
+            latest_attribution_last_computed_at: new Date('2026-04-04T08:00:00.000Z'),
+            latest_last_computed_at: new Date('2026-04-04T08:01:00.000Z'),
+            unresolved_metadata_rows: getMode() === 'blocked' ? '2' : '0'
+          }
+        ]
+      };
+    }
+
+    if (text.includes('FROM ad_exposure_events')) {
+      return {
+        rows: [
+          {
+            total_exposures: '10',
+            valid_exposures: '10',
+            identity_resolved_exposures: '9',
+            campaign_joinable_exposures: '10',
+            campaign_metadata_resolved_exposures: '9',
+            latest_exposure_at: new Date('2026-04-04T08:00:00.000Z')
+          }
+        ]
+      };
+    }
+
+    if (text.includes('WITH filtered_mart AS')) {
+      return {
+        rows: [
+          {
+            metric_date: null,
+            total_rows: '2',
+            unknown_source_rows: '0',
+            unmapped_source_rows: '0',
+            unknown_or_unmapped_source_rows: '0',
+            unknown_medium_rows: '0',
+            unmapped_medium_rows: '0',
+            unknown_or_unmapped_medium_rows: '0',
+            unresolved_campaign_metadata_rows: getMode() === 'blocked' ? '2' : '0',
+            stale_campaign_metadata_rows: '0',
+            native_id_eligible_rows: '2',
+            account_id_rows: '2',
+            campaign_id_rows: '2',
+            adset_id_rows: '2',
+            ad_id_rows: '2',
+            creative_id_rows: '2',
+            platform_native_id_rows: '2'
+          }
+        ]
+      };
+    }
+
+    if (text.includes('FROM data_quality_check_runs')) {
+      return { rows: [] };
+    }
+
+    if (text.includes('FROM mmm_model_runs')) {
+      return {
+        rows: [
+          {
+            id: 'run-1',
+            model_type: 'baseline_linear_mmm',
+            model_version: 'baseline_linear_mmm_v1',
+            mart_version: 'mmm_daily_input_mart_v1',
+            attribution_model: 'last_touch',
+            run_status: 'completed',
+            training_start_date: '2026-04-01',
+            training_end_date: '2026-04-01',
+            holdout_start_date: null,
+            holdout_end_date: null,
+            run_config: {},
+            input_summary: {},
+            model_artifact: {},
+            calibration_report: {},
+            validation_report: {},
+            error_code: null,
+            error_message: null,
+            created_at: new Date('2026-04-04T08:00:00.000Z'),
+            started_at: new Date('2026-04-04T08:01:00.000Z'),
+            completed_at: new Date('2026-04-04T08:02:00.000Z')
+          }
+        ]
+      };
+    }
+
+    if (text.includes('INSERT INTO mmm_readiness_gates')) {
+      const nextGate = buildGateRow(params ?? []);
+
+      if (gate && gate.evidence_hash === nextGate.evidence_hash) {
+        gate = {
+          ...nextGate,
+          waivers: gate.waivers
+        };
+      } else {
+        gate = nextGate;
+      }
+
+      return { rows: [gate] };
+    }
+
+    if (text.includes('UPDATE mmm_readiness_gates') && text.includes('owner_approvals = $2::jsonb')) {
+      gate = {
+        ...(gate ?? {}),
+        owner_approvals: JSON.parse(String(params?.[1])),
+        gate_status: params?.[2],
+        final_state: params?.[3],
+        decision_reason: params?.[4],
+        decided_by: params?.[2] === 'approved' ? params?.[5] : gate?.decided_by,
+        decided_at: params?.[2] === 'approved' ? new Date('2026-04-04T10:05:00.000Z') : gate?.decided_at,
+        updated_by: params?.[5],
+        updated_at: new Date('2026-04-04T10:05:00.000Z')
+      };
+
+      return { rows: [gate] };
+    }
+
+    if (text.includes('UPDATE mmm_readiness_gates') && text.includes('waivers = $2::jsonb')) {
+      gate = {
+        ...(gate ?? {}),
+        waivers: JSON.parse(String(params?.[1])),
+        checklist_statuses: JSON.parse(String(params?.[2])),
+        unresolved_critical_issue_count: params?.[3],
+        owner_approvals: JSON.parse(String(params?.[4])),
+        gate_status: params?.[5],
+        final_state: params?.[6],
+        updated_by: params?.[7],
+        updated_at: new Date('2026-04-04T10:10:00.000Z')
+      };
+
+      return { rows: [gate] };
+    }
+
+    throw new Error(`Unexpected readiness gate query: ${text.slice(0, 120)}`);
+  }) as typeof pool.query;
+
+  return {
+    get gate() {
+      return gate;
+    }
+  };
+}
+
 test('MMM read API requires authentication', async () => {
   const server = createServer();
 
@@ -591,6 +820,181 @@ test('MMM model runs API exposes normalized Bayesian run outputs', async () => {
       completedAt: '2026-05-18T00:05:00.000Z'
     });
     assert.equal(body.rows[0].modelArtifact.contributionOutputs.channels.length, 1);
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
+test('MMM readiness gate requires every production owner to approve the current evidence hash', async () => {
+  installReadinessGateQueryMock();
+  const server = createServer();
+  const payload = {
+    startDate: '2026-04-01',
+    endDate: '2026-04-01',
+    attributionModel: 'last_touch'
+  };
+
+  try {
+    const created = await postJson(server, '/api/reporting/mmm/readiness-gate/refresh', payload);
+    assert.equal(created.response.status, 200);
+    assert.equal(created.body.gate.gateStatus, 'pending');
+    assert.equal(created.body.gate.finalState, 'blocked');
+    assert.deepEqual(
+      created.body.gate.ownerApprovals.map((approval: { owner: string; status: string }) => [approval.owner, approval.status]),
+      [
+        ['Product', 'pending'],
+        ['Analytics', 'pending'],
+        ['Backend', 'pending'],
+        ['Data Platform', 'pending']
+      ]
+    );
+
+    const firstApproval = await postJson(server, '/api/reporting/mmm/readiness-gate/approve', {
+      ...payload,
+      owner: 'Product',
+      reason: 'Product reviewed the evidence.'
+    });
+    assert.equal(firstApproval.response.status, 200);
+    assert.equal(firstApproval.body.gate.gateStatus, 'pending');
+    assert.equal(firstApproval.body.gate.finalState, 'blocked');
+    assert.equal(firstApproval.body.gate.ownerApprovals[0].evidenceHash, created.body.gate.evidenceHash);
+
+    let latest = firstApproval;
+    for (const owner of ['Analytics', 'Backend', 'Data Platform']) {
+      latest = await postJson(server, '/api/reporting/mmm/readiness-gate/approve', {
+        ...payload,
+        owner
+      });
+      assert.equal(latest.response.status, 200);
+    }
+
+    assert.equal(latest.body.gate.gateStatus, 'approved');
+    assert.equal(latest.body.gate.finalState, 'approved');
+    assert.equal(latest.body.gate.decisionReason, 'All required owners approved the current readiness evidence.');
+    assert.deepEqual(
+      latest.body.gate.ownerApprovals.map((approval: { owner: string; status: string; evidenceHash: string }) => [
+        approval.owner,
+        approval.status,
+        approval.evidenceHash
+      ]),
+      [
+        ['Product', 'pass', created.body.gate.evidenceHash],
+        ['Analytics', 'pass', created.body.gate.evidenceHash],
+        ['Backend', 'pass', created.body.gate.evidenceHash],
+        ['Data Platform', 'pass', created.body.gate.evidenceHash]
+      ]
+    );
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
+test('MMM readiness gate refresh resets approvals and waivers when evidence hash changes', async () => {
+  let mode: GateQueryMode = 'clean';
+  installReadinessGateQueryMock(() => mode);
+  const server = createServer();
+  const payload = {
+    startDate: '2026-04-01',
+    endDate: '2026-04-01',
+    attributionModel: 'last_touch'
+  };
+
+  try {
+    const initial = await postJson(server, '/api/reporting/mmm/readiness-gate/refresh', payload);
+    const firstHash = initial.body.gate.evidenceHash;
+
+    for (const owner of ['Product', 'Analytics', 'Backend', 'Data Platform']) {
+      await postJson(server, '/api/reporting/mmm/readiness-gate/approve', {
+        ...payload,
+        owner
+      });
+    }
+
+    mode = 'changed';
+    const refreshed = await postJson(server, '/api/reporting/mmm/readiness-gate/refresh', payload);
+    assert.equal(refreshed.response.status, 200);
+    assert.notEqual(refreshed.body.gate.evidenceHash, firstHash);
+    assert.equal(refreshed.body.gate.gateStatus, 'pending');
+    assert.equal(refreshed.body.gate.finalState, 'blocked');
+    assert.deepEqual(
+      refreshed.body.gate.ownerApprovals.map((approval: { owner: string; status: string; approvedBy: string | null }) => [
+        approval.owner,
+        approval.status,
+        approval.approvedBy
+      ]),
+      [
+        ['Product', 'pending', null],
+        ['Analytics', 'pending', null],
+        ['Backend', 'pending', null],
+        ['Data Platform', 'pending', null]
+      ]
+    );
+    assert.deepEqual(refreshed.body.gate.waivers, []);
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
+test('MMM readiness gate waivers clear checklist failures without bypassing required owner approvals', async () => {
+  installReadinessGateQueryMock(() => 'blocked');
+  const server = createServer();
+  const payload = {
+    startDate: '2026-04-01',
+    endDate: '2026-04-01',
+    attributionModel: 'last_touch'
+  };
+
+  try {
+    const created = await postJson(server, '/api/reporting/mmm/readiness-gate/refresh', payload);
+    assert.equal(created.body.gate.unresolvedCriticalIssueCount > 0, true);
+
+    const waived = await postJson(server, '/api/reporting/mmm/readiness-gate/waive', {
+      ...payload,
+      owner: 'Data Platform',
+      waiver: {
+        checklistKey: 'campaign_resolver_coverage',
+        reason: 'Accepted for one dry run while metadata backfill completes.'
+      }
+    });
+    assert.equal(waived.response.status, 200);
+    assert.equal(
+      waived.body.gate.checklistStatuses.find((item: { key: string }) => item.key === 'campaign_resolver_coverage').status,
+      'waived'
+    );
+    assert.equal(waived.body.gate.waivers[0].evidenceHash, created.body.gate.evidenceHash);
+    assert.equal(waived.body.gate.gateStatus, 'pending');
+    assert.equal(waived.body.gate.finalState, 'blocked');
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
+test('MMM readiness gate stays blocked when all owners approve unresolved evidence', async () => {
+  installReadinessGateQueryMock(() => 'blocked');
+  const server = createServer();
+  const payload = {
+    startDate: '2026-04-01',
+    endDate: '2026-04-01',
+    attributionModel: 'last_touch'
+  };
+
+  try {
+    let latest = await postJson(server, '/api/reporting/mmm/readiness-gate/refresh', payload);
+    for (const owner of ['Product', 'Analytics', 'Backend', 'Data Platform']) {
+      latest = await postJson(server, '/api/reporting/mmm/readiness-gate/approve', {
+        ...payload,
+        owner
+      });
+    }
+
+    assert.equal(latest.body.gate.gateStatus, 'pending');
+    assert.equal(latest.body.gate.finalState, 'blocked');
+    assert.equal(latest.body.gate.ownerApprovals.every((approval: { status: string }) => approval.status === 'pass'), true);
+    assert.equal(latest.body.gate.unresolvedCriticalIssueCount > 0, true);
   } finally {
     pool.query = originalPoolQuery as typeof pool.query;
     await closeServer(server);
