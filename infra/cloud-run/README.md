@@ -17,7 +17,7 @@ The deployment flow assumes these Cloud Run workloads and Cloud Scheduler trigge
 - `roas-radar-data-quality`: Cloud Run Job that runs `npm run data-quality:check:start` once per invocation.
 - `roas-radar-identity-graph-backfill`: Cloud Run Job that runs `npm run identity:backfill-graph:start` over a recent window to reconcile graph attachments and catch missed identity stitching.
 - `roas-radar-order-attribution-materialization`: Cloud Run Job that runs `npm run attribution:materialization:start` over a recent order window to recover attribution and refresh reporting aggregates.
-- `roas-radar-mmm-baseline`: Cloud Run Job that runs `npm run mmm:train-baseline:start` over the configured lookback window and writes deterministic baseline MMM outputs.
+- `roas-radar-mmm-baseline`: Cloud Run Job that runs `npm run mmm:train-baseline:start` over the configured lookback window with an approved baseline freeze id and writes deterministic baseline MMM outputs.
 - `roas-radar-mmm-bayesian`: Cloud Run Job that runs `npm run mmm:train-bayesian:start` for `bayesian_hierarchical_mmm_v1` with an approved freeze id.
 - `roas-radar-meta-ads-sync-scheduler`: Cloud Scheduler job that invokes the Meta Ads Cloud Run Job.
 - `roas-radar-meta-order-value-sync-scheduler`: Cloud Scheduler job that invokes the Meta order-value Cloud Run Job.
@@ -121,6 +121,7 @@ The checked-in env files are valid shell files. Replace the placeholder project 
 - `MMM_BASELINE_LOOKBACK_DAYS`
 - `MMM_BASELINE_LAG_DAYS`
 - `MMM_BASELINE_SUBMITTED_BY`
+- `MMM_BASELINE_FREEZE_ID`
 - `MMM_BAYESIAN_SCHEDULE`
 - `MMM_BAYESIAN_TIME_ZONE`
 - `MMM_BAYESIAN_SCHEDULER_PAUSED`
@@ -177,6 +178,25 @@ This sequence validates the compiled backend entrypoints, the migration check, t
 For one-off environment deploys, run `infra/cloud-run/deploy.sh dev`, `infra/cloud-run/deploy.sh staging`, or `infra/cloud-run/deploy.sh production`.
 
 `infra/cloud-run/deploy.sh` now deploys the migrator job first, runs schema migration before any service rollout, then deploys the API, worker, dashboard, jobs, and schedulers. If `DEPLOY_METADATA_FILE` is set, the script also records the previous and newly deployed Cloud Run revisions for the API, worker, and dashboard so rollback can route traffic back to the prior revision quickly.
+
+`MMM_BASELINE_FREEZE_ID` is intentionally empty in checked-in environment files. Populate it with the approved `mmm_baseline_calibration_freezes.id` promoted for the target calibration window and attribution model before deploying the baseline MMM scheduler or manually executing the baseline Cloud Run Job. The deployment script validates this value before any Cloud Run changes; a config-only check is:
+
+```sh
+VALIDATE_DEPLOY_CONFIG_ONLY=true \
+infra/cloud-run/deploy.sh <environment>
+```
+
+The command-level dry-run check is:
+
+```sh
+DATABASE_URL=postgres://placeholder \
+MMM_BASELINE_FREEZE_ID=<approved-freeze-id> \
+MMM_BASELINE_ATTRIBUTION_MODEL=last_touch \
+MMM_BASELINE_LOOKBACK_DAYS=90 \
+npm run mmm:train-baseline -- --validate-config
+```
+
+Promote a production baseline freeze only after staging has generated or consumed the same approved freeze successfully. Operators should record the selected freeze id, calibration window, attribution model, approver, and evidence hash in the release notes before unpausing or deploying the production baseline scheduler.
 
 `MMM_BAYESIAN_FREEZE_ID` is intentionally empty in checked-in environment files. Populate it only after approving a freeze for the target calibration window and attribution model; that is the release gate for the Bayesian scheduler and manual Cloud Run execution. The dry-run wiring check is:
 

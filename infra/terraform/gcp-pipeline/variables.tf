@@ -166,6 +166,12 @@ variable "mmm_bayesian_freeze_id" {
   default     = ""
 }
 
+variable "mmm_baseline_freeze_id" {
+  type        = string
+  description = "Approved MMM baseline calibration freeze id used by the baseline_linear_mmm_v1 Cloud Run Job. Set this to the promoted freeze for the target production calibration window before deploying the baseline job."
+  default     = ""
+}
+
 variable "scheduler_time_zone" {
   type        = string
   description = "Default Cloud Scheduler timezone."

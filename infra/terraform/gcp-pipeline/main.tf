@@ -151,7 +151,7 @@ locals {
       service_account = "mmm_baseline"
       args            = ["run", "mmm:train-baseline:start"]
       max_retries     = 1
-      env             = { DATABASE_POOL_MAX = "1", MMM_BASELINE_LOOKBACK_DAYS = "90", MMM_BASELINE_LAG_DAYS = "1", MMM_BASELINE_SUBMITTED_BY = "cloud-run-scheduler-${var.environment}", MMM_BASELINE_ATTRIBUTION_MODEL = "last_touch", MMM_BASELINE_MAX_SEGMENTS = "8", MMM_BASELINE_ADSTOCK_DECAY = "0.5", MMM_BASELINE_RIDGE_LAMBDA = "1", MMM_BASELINE_HOLDOUT_RATIO = "0.2" }
+      env             = { DATABASE_POOL_MAX = "1", MMM_BASELINE_LOOKBACK_DAYS = "90", MMM_BASELINE_LAG_DAYS = "1", MMM_BASELINE_SUBMITTED_BY = "cloud-run-scheduler-${var.environment}", MMM_BASELINE_ATTRIBUTION_MODEL = "last_touch", MMM_BASELINE_FREEZE_ID = var.mmm_baseline_freeze_id, MMM_BASELINE_MAX_SEGMENTS = "8", MMM_BASELINE_ADSTOCK_DECAY = "0.5", MMM_BASELINE_RIDGE_LAMBDA = "1", MMM_BASELINE_HOLDOUT_RATIO = "0.2" }
       secrets         = { DATABASE_URL = "DATABASE_URL" }
     }
     mmm_bayesian = {
@@ -557,6 +557,13 @@ resource "google_cloud_run_v2_job" "jobs" {
   name     = each.value.name
   location = var.region
   labels   = local.labels
+
+  lifecycle {
+    precondition {
+      condition     = each.key != "mmm_baseline" || trimspace(var.mmm_baseline_freeze_id) != ""
+      error_message = "mmm_baseline_freeze_id must be set before deploying the baseline MMM Cloud Run Job."
+    }
+  }
 
   template {
     task_count  = 1

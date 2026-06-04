@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 
 import { pool } from "../db/pool.js";
-import { trainBaselineMmmModel } from "../modules/mmm/baseline.js";
+import {
+	MMM_BASELINE_MODEL_VERSION,
+	trainBaselineMmmModel,
+} from "../modules/mmm/baseline.js";
 import { emitMmmBaselineJobLifecycleLog } from "../observability/index.js";
 
 function readFlag(name: string): string | null {
@@ -26,6 +29,10 @@ function readNumberFlag(name: string): number | undefined {
 	}
 
 	return numeric;
+}
+
+function hasFlag(name: string): boolean {
+	return process.argv.includes(`--${name}`);
 }
 
 function readNumberEnv(name: string): number | undefined {
@@ -83,6 +90,20 @@ function resolveTrainingWindow() {
 	);
 }
 
+function requireRuntimeConfig(input: {
+	approvedFreezeId?: string;
+}) {
+	if (!process.env.DATABASE_URL?.trim()) {
+		throw new Error("baseline_linear_mmm_v1 training requires DATABASE_URL");
+	}
+
+	if (!input.approvedFreezeId?.trim()) {
+		throw new Error(
+			"baseline_linear_mmm_v1 training requires --freeze-id or MMM_BASELINE_FREEZE_ID",
+		);
+	}
+}
+
 async function main() {
 	const { startDate, endDate } = resolveTrainingWindow();
 	const startedAt = new Date();
@@ -97,10 +118,24 @@ async function main() {
 		undefined;
 	const approvedFreezeId =
 		readFlag("freeze-id")?.trim() || process.env.MMM_BASELINE_FREEZE_ID?.trim();
-	if (!approvedFreezeId) {
-		throw new Error(
-			"baseline_linear_mmm_v1 training requires --freeze-id or MMM_BASELINE_FREEZE_ID",
+
+	requireRuntimeConfig({
+		approvedFreezeId,
+	});
+
+	if (hasFlag("validate-config")) {
+		process.stdout.write(
+			`${JSON.stringify({
+				ok: true,
+				command: "mmm:train-baseline:start",
+				modelVersion: MMM_BASELINE_MODEL_VERSION,
+				startDate,
+				endDate,
+				attributionModel: attributionModel ?? null,
+				approvedFreezeId,
+			})}\n`,
 		);
+		return;
 	}
 
 	emitMmmBaselineJobLifecycleLog({

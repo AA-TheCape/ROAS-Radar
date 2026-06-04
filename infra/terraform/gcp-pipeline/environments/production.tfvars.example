@@ -4,6 +4,7 @@ region                 = "us-central1"
 api_allowed_origins    = "https://thecapemarine.com,https://www.thecapemarine.com,https://roas-radar.thecapemarine.com"
 shopify_app_base_url   = "https://roas-radar.api.thecapemarine.com"
 dashboard_api_base_url = "https://roas-radar.api.thecapemarine.com"
+mmm_baseline_freeze_id = ""
 mmm_bayesian_freeze_id = ""
 
 database_availability_type = "REGIONAL"

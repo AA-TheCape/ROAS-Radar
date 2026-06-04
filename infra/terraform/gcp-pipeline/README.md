@@ -35,6 +35,24 @@ printf '%s' "$MIGRATOR_DATABASE_URL" | gcloud secrets versions add MIGRATOR_DATA
 
 Repeat for the remaining secret names shown by `terraform output secret_names`.
 
+## Baseline MMM Release Gate
+
+Terraform defines `roas-radar-mmm-baseline-<environment>` separately from `roas-radar-mmm-bayesian-<environment>`. Set `mmm_baseline_freeze_id` to the approved `mmm_baseline_calibration_freezes.id` for the target calibration window and attribution model before applying the baseline job. Terraform refuses to deploy the baseline MMM Cloud Run Job with an empty baseline freeze id.
+
+Manual validation and execution:
+
+```sh
+DATABASE_URL=postgres://placeholder \
+MMM_BASELINE_FREEZE_ID=<approved-freeze-id> \
+MMM_BASELINE_ATTRIBUTION_MODEL=last_touch \
+MMM_BASELINE_LOOKBACK_DAYS=90 \
+npm run mmm:train-baseline -- --validate-config
+
+gcloud run jobs execute roas-radar-mmm-baseline-<environment> --region <region> --wait
+```
+
+For production promotion, choose the freeze id from an immutable approved baseline freeze after staging validation. Record the freeze id, calibration window, attribution model, approver, and evidence hash in the release notes before deploying or unpausing the production scheduler.
+
 ## Bayesian MMM Release Gate
 
 Terraform defines `roas-radar-mmm-bayesian-<environment>` separately from `roas-radar-mmm-baseline-<environment>`. Set `mmm_bayesian_freeze_id` only after an immutable approved calibration freeze exists for the target window and attribution model. Keep the `mmm_bayesian` scheduler in `paused_schedulers` until staging has a successful `bayesian_hierarchical_mmm_v1` run with persisted artifacts and passing posterior diagnostics.
