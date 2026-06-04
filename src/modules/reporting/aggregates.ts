@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 
 import { ATTRIBUTION_MODELS } from "../attribution/engine.js";
+import { backfillMmmCampaignMetadata } from "../campaign-resolver/index.js";
 import { getReportingTimezone } from "../settings/index.js";
 
 function normalizeMetricDates(metricDates: string[]): string[] {
@@ -762,8 +763,16 @@ export async function refreshDailyMmmInputMart(
        AND confidence_labels.campaign = metrics.campaign
        AND confidence_labels.content = metrics.content
        AND confidence_labels.term = metrics.term
-    `,
+	`,
 		[normalizedMetricDates, reportingTimezone],
+	);
+
+	await backfillMmmCampaignMetadata(
+		{
+			startDate: normalizedMetricDates[0],
+			endDate: normalizedMetricDates[normalizedMetricDates.length - 1],
+		},
+		client,
 	);
 }
 

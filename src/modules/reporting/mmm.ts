@@ -4,6 +4,11 @@ import { z } from 'zod';
 import { query } from '../../db/pool.js';
 import { attachAuthContext, requireAuthenticated } from '../auth/index.js';
 import { ATTRIBUTION_MODELS } from '../attribution/engine.js';
+import {
+  backfillMmmCampaignMetadata,
+  campaignResolverRequestSchema,
+  resolveCampaignMetadata
+} from '../campaign-resolver/index.js';
 
 class MmmHttpError extends Error {
   statusCode: number;
@@ -35,6 +40,23 @@ const mmmQuerySchema = z
     format: z.enum(['json', 'csv']).optional().default('json'),
     limit: z.coerce.number().int().positive().max(10000).optional().default(1000),
     offset: z.coerce.number().int().min(0).optional().default(0)
+  })
+  .superRefine((value, ctx) => {
+    if (value.startDate > value.endDate) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'startDate must be on or before endDate',
+        path: ['startDate']
+      });
+    }
+  });
+
+const campaignResolverBackfillSchema = z
+  .object({
+    startDate: dateStringSchema,
+    endDate: dateStringSchema,
+    resolverVersion: z.string().trim().min(1).max(200).optional(),
+    limit: z.coerce.number().int().positive().max(50000).optional()
   })
   .superRefine((value, ctx) => {
     if (value.startDate > value.endDate) {
@@ -99,6 +121,17 @@ type MmmExportRow = {
   shopify_last_ingested_at: Date | null;
   attribution_last_computed_at: Date | null;
   last_computed_at: Date;
+  resolver_version: string | null;
+  resolver_source: string | null;
+  resolver_confidence: string | number | null;
+  resolved_canonical_campaign_id: string | null;
+  resolved_canonical_campaign_name: string | null;
+  resolved_canonical_source: string | null;
+  resolved_canonical_medium: string | null;
+  resolved_canonical_channel: string | null;
+  resolved_canonical_channel_group: string | null;
+  resolved_hierarchy_metadata: unknown;
+  needs_metadata_qa: boolean;
 };
 
 function parseInput<TSchema extends z.ZodTypeAny>(schema: TSchema, input: unknown): z.infer<TSchema> {
@@ -165,7 +198,7 @@ function toNumber(value: string | number | null | undefined): number {
 }
 
 function mapMmmRow(row: MmmExportRow) {
-  return {
+  const mapped = {
     date: row.metric_date,
     martVersion: row.mart_version,
     martRowType: row.mart_row_type,
@@ -207,6 +240,25 @@ function mapMmmRow(row: MmmExportRow) {
     shopifyLastIngestedAt: toIsoString(row.shopify_last_ingested_at),
     attributionLastComputedAt: toIsoString(row.attribution_last_computed_at),
     lastComputedAt: toIsoString(row.last_computed_at)
+  };
+
+  if (!Object.hasOwn(row, 'resolver_version')) {
+    return mapped;
+  }
+
+  return {
+    ...mapped,
+    resolverVersion: row.resolver_version,
+    resolverSource: row.resolver_source,
+    resolverConfidence: row.resolver_confidence === null ? null : Number(row.resolver_confidence),
+    resolvedCanonicalCampaignId: row.resolved_canonical_campaign_id,
+    resolvedCanonicalCampaignName: row.resolved_canonical_campaign_name,
+    resolvedCanonicalSource: row.resolved_canonical_source,
+    resolvedCanonicalMedium: row.resolved_canonical_medium,
+    resolvedCanonicalChannel: row.resolved_canonical_channel,
+    resolvedCanonicalChannelGroup: row.resolved_canonical_channel_group,
+    resolvedHierarchyMetadata: row.resolved_hierarchy_metadata,
+    needsMetadataQa: row.needs_metadata_qa
   };
 }
 
@@ -264,7 +316,18 @@ function renderCsv(rows: ReturnType<typeof mapMmmRow>[], generationTimestamp: st
     'spendLastSyncedAt',
     'shopifyLastIngestedAt',
     'attributionLastComputedAt',
-    'lastComputedAt'
+    'lastComputedAt',
+    'resolverVersion',
+    'resolverSource',
+    'resolverConfidence',
+    'resolvedCanonicalCampaignId',
+    'resolvedCanonicalCampaignName',
+    'resolvedCanonicalSource',
+    'resolvedCanonicalMedium',
+    'resolvedCanonicalChannel',
+    'resolvedCanonicalChannelGroup',
+    'resolvedHierarchyMetadata',
+    'needsMetadataQa'
   ];
 
   const lines = [headers.join(',')];
@@ -317,6 +380,32 @@ export function createMmmRouter(): Router {
   router.use((_req, res, next) => {
     res.setHeader('X-ROAS-Radar-MMM-Schema', MMM_SCHEMA_VERSION);
     next();
+  });
+
+  router.post('/campaign-resolver/resolve', async (req, res, next) => {
+    try {
+      const input = parseInput(campaignResolverRequestSchema, req.body);
+      const resolution = await resolveCampaignMetadata(input);
+      res.status(200).json({
+        schemaVersion: 'campaign_metadata_resolver_v1',
+        resolution
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/campaign-resolver/backfill', async (req, res, next) => {
+    try {
+      const input = parseInput(campaignResolverBackfillSchema, req.body);
+      const report = await backfillMmmCampaignMetadata(input);
+      res.status(202).json({
+        schemaVersion: 'campaign_metadata_resolver_v1',
+        report
+      });
+    } catch (error) {
+      next(error);
+    }
   });
 
   router.get('/', async (req, res, next) => {
@@ -403,7 +492,18 @@ export function createMmmRouter(): Router {
             spend_last_synced_at,
             shopify_last_ingested_at,
             attribution_last_computed_at,
-            last_computed_at
+            last_computed_at,
+            resolver_version,
+            resolver_source,
+            resolver_confidence,
+            resolved_canonical_campaign_id,
+            resolved_canonical_campaign_name,
+            resolved_canonical_source,
+            resolved_canonical_medium,
+            resolved_canonical_channel,
+            resolved_canonical_channel_group,
+            resolved_hierarchy_metadata,
+            needs_metadata_qa
           FROM mmm_daily_input_mart_v1
           WHERE ${filters.sql}
           ORDER BY metric_date ASC, mart_row_type ASC, attribution_model ASC, platform ASC, entity_key ASC
