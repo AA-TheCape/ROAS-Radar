@@ -33,15 +33,21 @@ npm run mmm:refresh-weekly -- --start-date 2026-04-01 --end-date 2026-04-30 --at
 
 The first MMM training pipeline is `baseline_linear_mmm_v1`.
 
-Run it after the mart has been refreshed:
+Freeze the selected calibration window before training. The freeze command refreshes the weekly mart, writes an immutable `mmm_baseline_calibration_freezes` row, persists row counts, deterministic attribution coverage, freshness metrics, campaign metadata coverage, exposure coverage, data-quality check results, aggregate totals, frozen rows, and a stable evidence hash.
 
 ```bash
-npm run mmm:train-baseline -- --start-date 2026-04-01 --end-date 2026-04-30 --attribution-model last_touch
+npm run mmm:freeze-baseline -- --start-date 2026-04-01 --end-date 2026-04-30 --attribution-model last_touch --status approved --approved-by marketing-ops
 ```
 
-For Cloud Run scheduling, the same trainer reads `MMM_BASELINE_LOOKBACK_DAYS`, `MMM_BASELINE_LAG_DAYS`, `MMM_BASELINE_SUBMITTED_BY`, and optional model tuning environment variables. The checked-in deployment contract runs `roas-radar-mmm-baseline-<environment>` weekly after attribution materialization so baseline model outputs are promoted through the same staging and production path as the rest of the pipeline.
+Then train with the approved freeze id:
 
-The trainer refreshes and reads `mmm_weekly_channel_input_mart_v1`:
+```bash
+npm run mmm:train-baseline -- --start-date 2026-04-01 --end-date 2026-04-30 --attribution-model last_touch --freeze-id <approved-freeze-id>
+```
+
+For Cloud Run scheduling, the same trainer reads `MMM_BASELINE_LOOKBACK_DAYS`, `MMM_BASELINE_LAG_DAYS`, `MMM_BASELINE_FREEZE_ID`, `MMM_BASELINE_SUBMITTED_BY`, and optional model tuning environment variables. The checked-in deployment contract runs `roas-radar-mmm-baseline-<environment>` weekly after attribution materialization so baseline model outputs are promoted through the same staging and production path as the rest of the pipeline.
+
+The trainer requires `approved_freeze_id` for `baseline_linear_mmm_v1`, validates that the freeze is approved and matches the requested calibration window plus attribution model, and trains only from the frozen `snapshot_rows`. Later mart refreshes do not affect the training input for that run:
 
 - weekly channel rows become media features using `log1p(adstock(spend))`.
 - weekly Shopify outcomes provide the response for the selected attribution model.
@@ -57,7 +63,7 @@ Each completed baseline run also writes an auditable calibration governance repo
 
 Operators can override thresholds per run with `--calibration-warn-divergence-rate` and `--calibration-alert-divergence-rate`, or the `MMM_BASELINE_CALIBRATION_WARN_DIVERGENCE_RATE` and `MMM_BASELINE_CALIBRATION_ALERT_DIVERGENCE_RATE` environment variables.
 
-Completed model runs are stored in `mmm_model_runs` with versioned `run_config`, `input_summary`, `model_artifact`, `calibration_report`, and `validation_report` JSON. Every completed run also writes immutable row-level inputs to `mmm_model_run_input_snapshots` with `snapshot_version = mmm_weekly_channel_snapshot_v1`, per-row hashes, and a run-level snapshot hash in `input_summary`. Baseline training fails when weekly rows have DQ status `fail`; warning counts are retained in `input_summary.weeklyQualitySummary`.
+Completed model runs are stored in `mmm_model_runs` with versioned `run_config`, `input_summary`, `model_artifact`, `calibration_report`, `validation_report`, and `approved_freeze_id`. Every completed run also writes immutable row-level inputs to `mmm_model_run_input_snapshots` with `snapshot_version = mmm_weekly_channel_snapshot_v1`, per-row hashes, and a run-level snapshot hash in `input_summary`. Baseline training fails when the approved freeze contains DQ status `fail`; warning counts and freeze evidence are retained in `input_summary`.
 
 ## Read API and Export
 

@@ -35,6 +35,8 @@
     "data-quality:check:start": "node dist/src/data-quality-worker.js",
     "mmm:refresh-weekly": "tsx src/admin/refresh-mmm-weekly-channel-mart.ts",
     "mmm:refresh-weekly:start": "node dist/src/admin/refresh-mmm-weekly-channel-mart.js",
+    "mmm:freeze-baseline": "tsx src/admin/freeze-mmm-baseline.ts",
+    "mmm:freeze-baseline:start": "node dist/src/admin/freeze-mmm-baseline.js",
     "mmm:train-baseline": "tsx src/admin/train-mmm-baseline.ts",
     "mmm:train-baseline:start": "node dist/src/admin/train-mmm-baseline.js",
     "mmm:backfill-campaign-metadata": "tsx src/admin/backfill-mmm-campaign-metadata.ts",
