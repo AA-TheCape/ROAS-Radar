@@ -39,6 +39,8 @@
     "mmm:freeze-baseline:start": "node dist/src/admin/freeze-mmm-baseline.js",
     "mmm:train-baseline": "tsx src/admin/train-mmm-baseline.ts",
     "mmm:train-baseline:start": "node dist/src/admin/train-mmm-baseline.js",
+    "mmm:train-bayesian": "tsx src/admin/train-mmm-bayesian-hierarchical.ts",
+    "mmm:train-bayesian:start": "node dist/src/admin/train-mmm-bayesian-hierarchical.js",
     "mmm:backfill-campaign-metadata": "tsx src/admin/backfill-mmm-campaign-metadata.ts",
     "session-attribution:retention": "tsx src/session-attribution-retention-worker.ts",
     "session-attribution:retention:start": "node dist/src/session-attribution-retention-worker.js",
