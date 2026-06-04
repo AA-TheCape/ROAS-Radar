@@ -4,6 +4,12 @@ import type { PoolClient } from "pg";
 
 import { withTransaction } from "../../db/pool.js";
 import {
+	buildMmmCalibrationReportV1,
+	MMM_BASELINE_CLICK_LOOKBACK_DAYS,
+	MMM_BASELINE_VIEW_LOOKBACK_DAYS,
+	MMM_DETERMINISTIC_BASELINE_VERSION,
+} from "./calibration-report.js";
+import {
 	BAYESIAN_HIERARCHICAL_MMM_INPUT_CONTRACT_VERSION,
 	type BayesianHierarchicalMmmV1FeatureRow,
 	MMM_WEEKLY_CHANNEL_MART_VERSION,
@@ -990,6 +996,29 @@ export function buildBayesianHierarchicalMmmArtifact(
 				? channel.contribution.mean / channel.attributedRevenue
 				: null,
 	}));
+	const calibrationReport = buildMmmCalibrationReportV1({
+		attributionModel,
+		deterministicAttributionUsage:
+			"hierarchical_priors_and_calibration_diagnostics",
+		totalDeterministicRevenue: totalAttributedRevenue,
+		totalPosteriorMediaContribution: totalModeledMediaRevenue,
+		segments: contributionOutputs.channels.map((channel) => ({
+			key: channel.key,
+			source: channel.source,
+			medium: channel.medium,
+			campaign: channel.campaign,
+			channel: channel.channel,
+			channelGroup: channel.channelGroup,
+			spend: channel.spend,
+			impressions: channel.impressions,
+			clicks: channel.clicks,
+			deterministicRevenue: channel.attributedRevenue,
+			posteriorContributionMean: channel.contribution.mean,
+			posteriorContributionShareMean: channel.contributionShare.mean,
+			posteriorProbabilityPositive: channel.posteriorProbabilityPositive,
+		})),
+		governanceStatus: "passed",
+	});
 	const config = {
 		attributionModel,
 		inputContractVersion: BAYESIAN_HIERARCHICAL_MMM_INPUT_CONTRACT_VERSION,
@@ -1031,6 +1060,13 @@ export function buildBayesianHierarchicalMmmArtifact(
 		responseVariable: "weekly_total_shopify_revenue_from_channel_mart_outcomes",
 		calibrationUse:
 			"deterministic attribution credit metrics inform hierarchical priors and calibration diagnostics, not direct channel labels",
+		productionCalibrationBaseline: {
+			version: MMM_DETERMINISTIC_BASELINE_VERSION,
+			clickLookbackWindowDays: MMM_BASELINE_CLICK_LOOKBACK_DAYS,
+			viewLookbackWindowDays: MMM_BASELINE_VIEW_LOOKBACK_DAYS,
+			lookbackRules: ["30d_click", "7d_view"],
+			productionAlignment: "enforced",
+		},
 	};
 	const inputSummary = {
 		rowCount: filteredRows.length,
@@ -1081,15 +1117,7 @@ export function buildBayesianHierarchicalMmmArtifact(
 				}),
 			),
 		},
-		calibrationReport: {
-			attributionModel,
-			deterministicAttributionUsage:
-				"hierarchical_priors_and_calibration_diagnostics",
-			totalAttributedRevenue,
-			totalModeledMediaRevenue,
-			segments: calibrationSegments,
-			governanceStatus: "passed",
-		},
+		calibrationReport,
 		validationReport: {
 			train: validationMetrics(trainingObservations, fitted.coefficients),
 			holdout: validationMetrics(holdoutObservations, fitted.coefficients),

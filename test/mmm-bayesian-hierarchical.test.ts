@@ -157,6 +157,31 @@ test("Bayesian hierarchical MMM builds v1 posterior artifact with priors and tra
 		run.calibrationReport.deterministicAttributionUsage,
 		"hierarchical_priors_and_calibration_diagnostics",
 	);
+	assert.equal(
+		run.calibrationReport.reportVersion,
+		"mmm_calibration_report_v1",
+	);
+	assert.deepEqual(run.calibrationReport.deterministicBaseline, {
+		version: "mmm_deterministic_baseline_30d_click_7d_view_v1",
+		clickLookbackWindowDays: 30,
+		viewLookbackWindowDays: 7,
+		lookbackRules: ["30d_click", "7d_view"],
+		productionAlignment: "enforced",
+	});
+	const calibrationSegments = run.calibrationReport.segments as Array<{
+		deterministicContributionShare: number | null;
+		productionContributionShare: number | null;
+		trustWeights: { posteriorCalibration: number; production: number };
+	}>;
+	assert.equal(
+		calibrationSegments[0]?.productionContributionShare,
+		calibrationSegments[0]?.deterministicContributionShare,
+	);
+	assert.equal(calibrationSegments[0]?.trustWeights.production, 1);
+	assert.equal(
+		typeof calibrationSegments[0]?.trustWeights.posteriorCalibration,
+		"number",
+	);
 });
 
 test("Bayesian hierarchical MMM rejects failed weekly mart rows", () => {

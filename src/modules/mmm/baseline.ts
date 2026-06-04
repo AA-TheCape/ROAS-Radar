@@ -4,6 +4,12 @@ import type { PoolClient } from "pg";
 
 import { withTransaction } from "../../db/pool.js";
 import {
+	buildMmmCalibrationReportV1,
+	MMM_BASELINE_CLICK_LOOKBACK_DAYS,
+	MMM_BASELINE_VIEW_LOOKBACK_DAYS,
+	MMM_DETERMINISTIC_BASELINE_VERSION,
+} from "./calibration-report.js";
+import {
 	MMM_WEEKLY_CHANNEL_MART_VERSION,
 	fetchWeeklyMmmSnapshotRowsWithClient,
 	refreshWeeklyMmmChannelInputMartWithClient,
@@ -1393,8 +1399,46 @@ export function buildBaselineMmmArtifact(
 					segment.attributedRevenue > 0 && modeledRevenue > 0
 						? modeledRevenue / segment.attributedRevenue
 						: null,
-			};
+				};
 		});
+	const contributionChannelsByKey = new Map(
+		(
+			contributionOutputs.channels as Array<{
+				key: string;
+				contribution: { mean: number };
+				contributionShare: { mean: number };
+				posteriorProbabilityPositive: number;
+			}>
+		).map((channel) => [channel.key, channel]),
+	);
+	const calibrationReport = buildMmmCalibrationReportV1({
+		attributionModel,
+		deterministicAttributionUsage: "calibration_and_validation_segments_only",
+		totalDeterministicRevenue: totalAttributedRevenue,
+		totalPosteriorMediaContribution:
+			contributionOutputs.totalMediaContribution.mean,
+		segments: calibrationSegments.map((segment) => {
+			const contribution = contributionChannelsByKey.get(segment.key);
+			return {
+				key: segment.key,
+				source: segment.source,
+				medium: segment.medium,
+				campaign: segment.campaign,
+				spend: segment.spend,
+				deterministicRevenue: segment.attributedRevenue,
+				posteriorContributionMean:
+					contribution?.contribution.mean ?? segment.modeledRevenue,
+				posteriorContributionShareMean:
+					contribution?.contributionShare.mean ??
+					segment.modeledRevenueShare,
+				posteriorProbabilityPositive:
+					contribution?.posteriorProbabilityPositive ?? 1,
+			};
+		}),
+		governanceStatus: channelWeekGovernance.status,
+		governance: channelWeekGovernance,
+		divergenceAlerts: channelWeekGovernance.divergenceAlerts,
+	});
 	const config = {
 		attributionModel,
 		maxSegments,
@@ -1415,6 +1459,13 @@ export function buildBaselineMmmArtifact(
 			: "daily_total_shopify_revenue_from_mart_outcomes",
 		calibrationUse:
 			"segment attribution credit metrics are validation/calibration diagnostics, not per-segment training labels",
+		productionCalibrationBaseline: {
+			version: MMM_DETERMINISTIC_BASELINE_VERSION,
+			clickLookbackWindowDays: MMM_BASELINE_CLICK_LOOKBACK_DAYS,
+			viewLookbackWindowDays: MMM_BASELINE_VIEW_LOOKBACK_DAYS,
+			lookbackRules: ["30d_click", "7d_view"],
+			productionAlignment: "enforced",
+		},
 	};
 	const inputSummary = {
 		rowCount: rows.length,
@@ -1460,16 +1511,7 @@ export function buildBaselineMmmArtifact(
 				}),
 			),
 		},
-		calibrationReport: {
-			attributionModel,
-			deterministicAttributionUsage: "calibration_and_validation_segments_only",
-			governanceStatus: channelWeekGovernance.status,
-			totalAttributedRevenue,
-			totalModeledMediaRevenue: totalCoefficientRevenue,
-			segments: calibrationSegments,
-			governance: channelWeekGovernance,
-			divergenceAlerts: channelWeekGovernance.divergenceAlerts,
-		},
+		calibrationReport,
 		validationReport: {
 			train: trainMetrics,
 			holdout: holdoutMetrics,

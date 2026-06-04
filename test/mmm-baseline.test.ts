@@ -136,6 +136,17 @@ test("MMM baseline uses attribution metrics as calibration diagnostics instead o
 		run.calibrationReport.deterministicAttributionUsage,
 		"calibration_and_validation_segments_only",
 	);
+	assert.equal(
+		run.calibrationReport.reportVersion,
+		"mmm_calibration_report_v1",
+	);
+	assert.deepEqual(run.calibrationReport.deterministicBaseline, {
+		version: "mmm_deterministic_baseline_30d_click_7d_view_v1",
+		clickLookbackWindowDays: 30,
+		viewLookbackWindowDays: 7,
+		lookbackRules: ["30d_click", "7d_view"],
+		productionAlignment: "enforced",
+	});
 	assert.ok(run.calibrationReport.governance);
 	assert.equal(run.validationReport.train.observationCount, 3);
 	assert.equal(run.validationReport.posteriorSanityChecks.status, "pass");
@@ -151,6 +162,14 @@ test("MMM baseline uses attribution metrics as calibration diagnostics instead o
 	const calibrationSegments = run.calibrationReport.segments as Array<{
 		key: string;
 		attributedRevenue: number;
+		deterministicContributionShare: number | null;
+		posteriorContributionShare: number | null;
+		productionContributionShare: number | null;
+		trustWeights: {
+			deterministicBaseline: number;
+			posteriorCalibration: number;
+			production: number;
+		};
 	}>;
 	assert.deepEqual(
 		calibrationSegments.map((segment) => [
@@ -161,6 +180,16 @@ test("MMM baseline uses attribution metrics as calibration diagnostics instead o
 			["meta|paid_social|prospecting", 750],
 			["google|cpc|brand", 240],
 		],
+	);
+	assert.equal(
+		calibrationSegments[0]?.productionContributionShare,
+		calibrationSegments[0]?.deterministicContributionShare,
+	);
+	assert.equal(calibrationSegments[0]?.trustWeights.deterministicBaseline, 1);
+	assert.equal(calibrationSegments[0]?.trustWeights.production, 1);
+	assert.equal(
+		typeof calibrationSegments[0]?.trustWeights.posteriorCalibration,
+		"number",
 	);
 
 	const contributionOutputs = run.modelArtifact.contributionOutputs as {
