@@ -430,6 +430,173 @@ test('MMM export API can render CSV for model training pipelines', async () => {
   }
 });
 
+test('MMM model runs API exposes normalized Bayesian run outputs', async () => {
+  pool.query = (async (text: string, params?: unknown[]) => {
+    assert.match(text, /FROM mmm_model_runs/);
+    assert.match(text, /training_end_date >= \$1::date/);
+    assert.match(text, /training_start_date <= \$2::date/);
+    assert.match(text, /attribution_model = \$3/);
+    assert.deepEqual(params, ['2026-04-01', '2026-05-31', 'last_touch', 10]);
+
+    return {
+      rows: [
+        {
+          id: 'run-bayes-1',
+          model_type: 'bayesian_hierarchical_mmm',
+          model_version: 'bayesian_hierarchical_mmm_v1',
+          mart_version: 'mmm_weekly_channel_input_mart_v1',
+          attribution_model: 'last_touch',
+          run_status: 'completed',
+          training_start_date: '2026-04-06',
+          training_end_date: '2026-05-17',
+          holdout_start_date: '2026-05-11',
+          holdout_end_date: '2026-05-17',
+          run_config: {
+            inputContractVersion: 'bayesian_hierarchical_mmm_v1',
+            posteriorEngine: 'closed_form_hierarchical_gaussian_approximation_v1',
+            responseVariable: 'weekly_total_shopify_revenue_from_channel_mart_outcomes',
+            calibrationUse: 'hierarchical_priors_and_calibration_diagnostics'
+          },
+          input_summary: {
+            rowCount: 24,
+            warnCount: 1,
+            failCount: 0,
+            observationCount: 6,
+            trainingObservationCount: 5,
+            holdoutObservationCount: 1,
+            selectedChannels: ['meta|paid_social|prospecting'],
+            otherPaidChannelCount: 1,
+            inputContractVersion: 'bayesian_hierarchical_mmm_v1',
+            snapshotVersion: 'mmm_weekly_channel_snapshot_v1',
+            snapshotRowCount: 24,
+            snapshotHash: 'snapshot-hash'
+          },
+          model_artifact: {
+            contributionOutputs: {
+              totalMediaContribution: {
+                mean: 700,
+                credibleInterval80: { lower: 600, upper: 800 },
+                credibleInterval95: { lower: 500, upper: 900 }
+              },
+              channels: [
+                {
+                  key: 'meta|paid_social|prospecting',
+                  source: 'meta',
+                  medium: 'paid_social',
+                  campaign: 'prospecting',
+                  channel: 'Paid Social',
+                  channelGroup: 'Paid',
+                  spend: 300,
+                  impressions: 12000,
+                  clicks: 340,
+                  attributedOrders: 12,
+                  attributedRevenue: 650,
+                  contribution: {
+                    mean: 720,
+                    credibleInterval80: { lower: 660, upper: 780 },
+                    credibleInterval95: { lower: 600, upper: 840 }
+                  },
+                  contributionShare: {
+                    mean: 0.72,
+                    credibleInterval80: { lower: 0.66, upper: 0.78 },
+                    credibleInterval95: { lower: 0.6, upper: 0.84 }
+                  },
+                  posteriorProbabilityPositive: 0.99
+                }
+              ]
+            }
+          },
+          calibration_report: {
+            reportVersion: 'mmm_calibration_report_v1',
+            governanceStatus: 'passed',
+            deterministicAttributionUsage: 'hierarchical_priors_and_calibration_diagnostics',
+            deterministicBaseline: {
+              version: 'mmm_deterministic_baseline_30d_click_7d_view_v1'
+            },
+            totalDeterministicRevenue: 650,
+            totalPosteriorMediaContribution: 720,
+            segments: [
+              {
+                key: 'meta|paid_social|prospecting',
+                source: 'meta',
+                medium: 'paid_social',
+                campaign: 'prospecting',
+                channel: 'Paid Social',
+                channelGroup: 'Paid',
+                deterministicRevenue: 650,
+                posteriorContributionMean: 720,
+                deterministicContributionShare: 1,
+                posteriorContributionShareMean: 0.72,
+                productionContributionShare: 1,
+                posteriorProbabilityPositive: 0.99,
+                trustWeights: { posteriorCalibration: 1, production: 1 }
+              }
+            ]
+          },
+          validation_report: {
+            train: { rmse: 10, mape: 0.08 },
+            holdout: { rmse: 12, mape: 0.1 },
+            posteriorDiagnostics: {
+              maxRhat: 1.02,
+              minEffectiveSampleSize: 180,
+              totalDraws: 400,
+              byParameter: {
+                trend: { rhat: 1.01, effectiveSampleSize: 220 }
+              }
+            },
+            posteriorSanityChecks: {
+              status: 'pass',
+              maxRhat: 1.02,
+              maxAllowedRhat: 1.1,
+              minEffectiveSampleSize: 180,
+              minRequiredEffectiveSampleSize: 100
+            }
+          },
+          error_code: null,
+          error_message: null,
+          created_at: new Date('2026-05-18T00:00:00.000Z'),
+          started_at: new Date('2026-05-18T00:01:00.000Z'),
+          completed_at: new Date('2026-05-18T00:05:00.000Z')
+        }
+      ]
+    };
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(
+      server,
+      '/api/reporting/mmm/model-runs?startDate=2026-04-01&endDate=2026-05-31&attributionModel=last_touch'
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('x-roas-radar-mmm-schema'), MMM_SCHEMA_VERSION);
+    assert.equal(body.schemaVersion, 'mmm_model_runs_v1');
+    assert.equal(body.rows[0].runSummary.modelType, 'bayesian_hierarchical_mmm');
+    assert.equal(body.rows[0].runSummary.snapshotHash, 'snapshot-hash');
+    assert.equal(body.rows[0].posteriorContributionIntervals.totalMediaContribution.mean, 700);
+    assert.deepEqual(body.rows[0].posteriorContributionIntervals.channels[0].contribution.credibleInterval95, {
+      lower: 600,
+      upper: 840
+    });
+    assert.equal(body.rows[0].posteriorContributionIntervals.channels[0].posteriorProbabilityPositive, 0.99);
+    assert.equal(body.rows[0].calibrationDeltas.deltaRevenue, 70);
+    assert.equal(body.rows[0].calibrationDeltas.segments[0].deltaPct, 70 / 650);
+    assert.equal(body.rows[0].validationDiagnostics.posteriorDiagnostics.maxRhat, 1.02);
+    assert.deepEqual(body.rows[0].readiness, {
+      status: 'partial',
+      blockers: [],
+      warnings: ['warning_input_rows'],
+      completedAt: '2026-05-18T00:05:00.000Z'
+    });
+    assert.equal(body.rows[0].modelArtifact.contributionOutputs.channels.length, 1);
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
 test('MMM read API rejects invalid date ranges before querying', async () => {
   let queryCalls = 0;
   pool.query = (async () => {

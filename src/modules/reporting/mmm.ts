@@ -332,6 +332,8 @@ type MmmReadinessGateRow = {
   updated_at: Date | string;
 };
 
+type JsonRecord = Record<string, unknown>;
+
 function parseInput<TSchema extends z.ZodTypeAny>(schema: TSchema, input: unknown): z.infer<TSchema> {
   try {
     return schema.parse(input);
@@ -432,6 +434,200 @@ function toNumber(value: string | number | null | undefined): number {
 
 function toNullableRate(numerator: number, denominator: number): number | null {
   return denominator > 0 ? numerator / denominator : null;
+}
+
+function asRecord(value: unknown): JsonRecord {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as JsonRecord) : {};
+}
+
+function asRecordArray(value: unknown): JsonRecord[] {
+  return Array.isArray(value) ? value.filter((entry): entry is JsonRecord => entry !== null && typeof entry === 'object' && !Array.isArray(entry)) : [];
+}
+
+function toNullableNumber(value: unknown): number | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function toNumberOrZero(value: unknown): number {
+  return toNullableNumber(value) ?? 0;
+}
+
+function getString(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function pickIntervalSummary(value: unknown) {
+  const summary = asRecord(value);
+  return {
+    mean: toNullableNumber(summary.mean),
+    credibleInterval80: asRecord(summary.credibleInterval80),
+    credibleInterval95: asRecord(summary.credibleInterval95)
+  };
+}
+
+function summarizeBayesianRun(row: MmmModelRunRow) {
+  const inputSummary = asRecord(row.input_summary);
+  const runConfig = asRecord(row.run_config);
+
+  return {
+    runId: row.id,
+    modelType: row.model_type,
+    modelVersion: row.model_version,
+    martVersion: row.mart_version,
+    attributionModel: row.attribution_model,
+    runStatus: row.run_status,
+    trainingStartDate: row.training_start_date,
+    trainingEndDate: row.training_end_date,
+    holdoutStartDate: row.holdout_start_date,
+    holdoutEndDate: row.holdout_end_date,
+    completedAt: toIsoString(row.completed_at),
+    rowCount: toNullableNumber(inputSummary.rowCount),
+    observationCount: toNullableNumber(inputSummary.observationCount),
+    trainingObservationCount: toNullableNumber(inputSummary.trainingObservationCount),
+    holdoutObservationCount: toNullableNumber(inputSummary.holdoutObservationCount),
+    selectedChannels: Array.isArray(inputSummary.selectedChannels) ? inputSummary.selectedChannels : [],
+    otherPaidChannelCount: toNullableNumber(inputSummary.otherPaidChannelCount),
+    posteriorEngine: getString(runConfig.posteriorEngine),
+    responseVariable: getString(runConfig.responseVariable),
+    calibrationUse: getString(runConfig.calibrationUse),
+    inputContractVersion: getString(inputSummary.inputContractVersion) ?? getString(runConfig.inputContractVersion),
+    snapshotVersion: getString(inputSummary.snapshotVersion),
+    snapshotRowCount: toNullableNumber(inputSummary.snapshotRowCount),
+    snapshotHash: getString(inputSummary.snapshotHash)
+  };
+}
+
+function mapPosteriorContributionIntervals(modelArtifact: unknown) {
+  const contributionOutputs = asRecord(asRecord(modelArtifact).contributionOutputs);
+  const channels = asRecordArray(contributionOutputs.channels).map((channel) => ({
+    key: getString(channel.key),
+    source: getString(channel.source) ?? 'unknown',
+    medium: getString(channel.medium) ?? 'unknown',
+    campaign: getString(channel.campaign) ?? 'unknown',
+    channel: getString(channel.channel),
+    channelGroup: getString(channel.channelGroup),
+    spend: toNullableNumber(channel.spend),
+    impressions: toNullableNumber(channel.impressions),
+    clicks: toNullableNumber(channel.clicks),
+    attributedOrders: toNullableNumber(channel.attributedOrders),
+    attributedRevenue: toNullableNumber(channel.attributedRevenue),
+    contribution: pickIntervalSummary(channel.contribution),
+    contributionShare: pickIntervalSummary(channel.contributionShare),
+    posteriorProbabilityPositive: toNullableNumber(channel.posteriorProbabilityPositive)
+  }));
+
+  return {
+    totalMediaContribution: pickIntervalSummary(contributionOutputs.totalMediaContribution),
+    totalMediaContributionShare: pickIntervalSummary(contributionOutputs.totalMediaContributionShare),
+    channels
+  };
+}
+
+function mapCalibrationDeltas(calibrationReport: unknown) {
+  const report = asRecord(calibrationReport);
+  const totalDeterministicRevenue = toNumberOrZero(report.totalDeterministicRevenue);
+  const totalPosteriorMediaContribution = toNumberOrZero(report.totalPosteriorMediaContribution);
+  const segments = asRecordArray(report.segments).map((segment) => {
+    const deterministicRevenue = toNumberOrZero(segment.deterministicRevenue);
+    const posteriorContributionMean = toNumberOrZero(segment.posteriorContributionMean);
+
+    return {
+      key: getString(segment.key),
+      source: getString(segment.source) ?? 'unknown',
+      medium: getString(segment.medium) ?? 'unknown',
+      campaign: getString(segment.campaign) ?? 'unknown',
+      channel: getString(segment.channel),
+      channelGroup: getString(segment.channelGroup),
+      deterministicRevenue,
+      posteriorContributionMean,
+      deltaRevenue: posteriorContributionMean - deterministicRevenue,
+      deltaPct: deterministicRevenue > 0 ? (posteriorContributionMean - deterministicRevenue) / deterministicRevenue : null,
+      deterministicContributionShare: toNullableNumber(segment.deterministicContributionShare),
+      posteriorContributionShareMean: toNullableNumber(segment.posteriorContributionShareMean),
+      productionContributionShare: toNullableNumber(segment.productionContributionShare),
+      posteriorProbabilityPositive: toNullableNumber(segment.posteriorProbabilityPositive),
+      trustWeights: asRecord(segment.trustWeights)
+    };
+  });
+
+  return {
+    reportVersion: getString(report.reportVersion),
+    governanceStatus: getString(report.governanceStatus),
+    deterministicAttributionUsage: getString(report.deterministicAttributionUsage),
+    deterministicBaseline: asRecord(report.deterministicBaseline),
+    totalDeterministicRevenue,
+    totalPosteriorMediaContribution,
+    deltaRevenue: totalPosteriorMediaContribution - totalDeterministicRevenue,
+    deltaPct:
+      totalDeterministicRevenue > 0
+        ? (totalPosteriorMediaContribution - totalDeterministicRevenue) / totalDeterministicRevenue
+        : null,
+    divergenceAlerts: report.divergenceAlerts ?? [],
+    thresholds: report.thresholds ?? null,
+    segments
+  };
+}
+
+function mapValidationDiagnostics(validationReport: unknown) {
+  const report = asRecord(validationReport);
+  const posteriorDiagnostics = asRecord(report.posteriorDiagnostics);
+  const posteriorSanityChecks = asRecord(report.posteriorSanityChecks);
+
+  return {
+    train: asRecord(report.train),
+    holdout: asRecord(report.holdout),
+    posteriorDiagnostics: {
+      maxRhat: toNullableNumber(posteriorDiagnostics.maxRhat),
+      minEffectiveSampleSize: toNullableNumber(posteriorDiagnostics.minEffectiveSampleSize),
+      totalDraws: toNullableNumber(posteriorDiagnostics.totalDraws),
+      byParameter: asRecord(posteriorDiagnostics.byParameter)
+    },
+    posteriorSanityChecks: {
+      status: getString(posteriorSanityChecks.status),
+      maxRhat: toNullableNumber(posteriorSanityChecks.maxRhat),
+      maxAllowedRhat: toNullableNumber(posteriorSanityChecks.maxAllowedRhat),
+      minEffectiveSampleSize: toNullableNumber(posteriorSanityChecks.minEffectiveSampleSize),
+      minRequiredEffectiveSampleSize: toNullableNumber(posteriorSanityChecks.minRequiredEffectiveSampleSize)
+    }
+  };
+}
+
+function deriveModelRunReadiness(row: MmmModelRunRow, validationDiagnostics: ReturnType<typeof mapValidationDiagnostics>, calibrationDeltas: ReturnType<typeof mapCalibrationDeltas>) {
+  const blockers: string[] = [];
+  const warnings: string[] = [];
+  const inputSummary = asRecord(row.input_summary);
+
+  if (row.run_status !== 'completed') {
+    blockers.push(`run_status_${row.run_status}`);
+  }
+
+  if (toNumberOrZero(inputSummary.failCount) > 0) {
+    blockers.push('failed_input_rows');
+  }
+
+  if (validationDiagnostics.posteriorSanityChecks.status === 'fail') {
+    blockers.push('posterior_sanity_checks_failed');
+  }
+
+  if (calibrationDeltas.governanceStatus && calibrationDeltas.governanceStatus !== 'passed') {
+    warnings.push(`calibration_governance_${calibrationDeltas.governanceStatus}`);
+  }
+
+  if (toNumberOrZero(inputSummary.warnCount) > 0) {
+    warnings.push('warning_input_rows');
+  }
+
+  return {
+    status: blockers.length > 0 ? 'not_ready' : warnings.length > 0 ? 'partial' : 'ready',
+    blockers,
+    warnings,
+    completedAt: toIsoString(row.completed_at)
+  };
 }
 
 function mapMmmRow(row: MmmExportRow) {
@@ -706,7 +902,7 @@ function deriveReadiness(rows: MmmReadinessRow[]) {
 }
 
 function mapMmmModelRun(row: MmmModelRunRow) {
-  return {
+  const mapped = {
     id: row.id,
     modelType: row.model_type,
     modelVersion: row.model_version,
@@ -727,6 +923,23 @@ function mapMmmModelRun(row: MmmModelRunRow) {
     createdAt: toIsoString(row.created_at),
     startedAt: toIsoString(row.started_at),
     completedAt: toIsoString(row.completed_at)
+  };
+
+  if (row.model_type !== 'bayesian_hierarchical_mmm') {
+    return mapped;
+  }
+
+  const posteriorContributionIntervals = mapPosteriorContributionIntervals(row.model_artifact);
+  const calibrationDeltas = mapCalibrationDeltas(row.calibration_report);
+  const validationDiagnostics = mapValidationDiagnostics(row.validation_report);
+
+  return {
+    ...mapped,
+    runSummary: summarizeBayesianRun(row),
+    posteriorContributionIntervals,
+    calibrationDeltas,
+    validationDiagnostics,
+    readiness: deriveModelRunReadiness(row, validationDiagnostics, calibrationDeltas)
   };
 }
 
