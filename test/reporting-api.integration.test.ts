@@ -482,6 +482,59 @@ test("reporting model comparison can use MMM weekly channel rows with provenance
 	}
 });
 
+test("MMM model-runs API persists and returns bayesian hierarchical MMM runs", async () => {
+	await resetE2EDatabase();
+	await pool.query(
+		`INSERT INTO mmm_model_runs (
+      model_type,
+      model_version,
+      mart_version,
+      attribution_model,
+      run_status,
+      training_start_date,
+      training_end_date,
+      input_summary,
+      model_artifact,
+      calibration_report,
+      validation_report,
+      completed_at
+    ) VALUES (
+      'bayesian_hierarchical_mmm',
+      'bayesian_hierarchical_mmm_v1',
+      'mmm_weekly_channel_input_mart_v1',
+      'last_touch',
+      'completed',
+      '2026-04-01',
+      '2026-04-30',
+      '{"inputContractVersion":"bayesian_hierarchical_mmm_v1"}'::jsonb,
+      '{"posteriorSummary":{"draws":1000}}'::jsonb,
+      '{"governanceStatus":"pass"}'::jsonb,
+      '{"posteriorSanityChecks":{"status":"pass"}}'::jsonb,
+      '2026-05-01T12:00:00.000Z'
+    )`,
+	);
+
+	const server = createServer();
+
+	try {
+		const { response, body } = await requestJson(
+			server,
+			"/api/reporting/mmm/model-runs?startDate=2026-04-01&endDate=2026-04-30&attributionModel=last_touch",
+		);
+
+		assert.equal(response.status, 200);
+		assert.equal(body.schemaVersion, "mmm_model_runs_v1");
+		assert.equal(body.rows.length, 1);
+		assert.equal(body.rows[0].modelType, "bayesian_hierarchical_mmm");
+		assert.equal(body.rows[0].modelVersion, "bayesian_hierarchical_mmm_v1");
+		assert.equal(body.rows[0].martVersion, "mmm_weekly_channel_input_mart_v1");
+		assert.equal(body.rows[0].inputSummary.inputContractVersion, "bayesian_hierarchical_mmm_v1");
+	} finally {
+		await closeServer(server);
+		await resetE2EDatabase();
+	}
+});
+
 test('reporting orders only returns online store Shopify orders', async () => {
   await resetE2EDatabase();
   await pool.query(

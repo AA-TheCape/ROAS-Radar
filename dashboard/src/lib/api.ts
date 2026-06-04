@@ -548,9 +548,9 @@ export type MmmReadinessGateDecisionPayload = MmmExportQuery & {
 
 export type MmmModelRun = {
   id: string;
-  modelType: 'baseline_linear_mmm';
-  modelVersion: 'baseline_linear_mmm_v1';
-  martVersion: 'mmm_daily_input_mart_v1';
+  modelType: 'baseline_linear_mmm' | 'bayesian_hierarchical_mmm';
+  modelVersion: 'baseline_linear_mmm_v1' | 'bayesian_hierarchical_mmm_v1';
+  martVersion: 'mmm_daily_input_mart_v1' | 'mmm_weekly_channel_input_mart_v1';
   attributionModel: string;
   runStatus: 'completed' | 'failed';
   trainingStartDate: string;
