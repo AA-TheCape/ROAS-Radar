@@ -6,11 +6,56 @@ const originalKService = process.env.K_SERVICE;
 process.env.K_SERVICE = 'roas-radar-observability-test';
 
 const {
+  emitAttributionConfidenceBackfillProgressLog,
+  emitAttributionQaPayloadFetchLog,
+  emitAttributionQaSnapshotWriteLog,
+  emitAttributionRunLookupResolutionErrorLog,
+  emitAttributionRunOrderOutcomeLog,
   emitCampaignMetadataFreshnessSnapshotLog,
   emitCampaignMetadataResolutionCoverageLog,
   emitCampaignMetadataSyncJobLifecycleLog,
-  emitMmmBayesianJobLifecycleLog
+  emitMmmBayesianJobLifecycleLog,
+  emitMetaMetadataLookupSummaryLog,
+  emitMetaMetadataRawIdFallbackLog,
+  emitRecoveryRecordFailureLog,
+  emitRecoveryRunChunkLog,
+  emitRecoveryRunLifecycleLog
 } = await import('../src/observability/index.js');
+
+const recoveryRun = {
+  id: '123e4567-e89b-12d3-a456-426614174000',
+  jobType: 'shopify_attribution_recovery',
+  status: 'partial_failure',
+  mode: 'automatic',
+  initiatedBy: 'scheduler',
+  dryRun: false,
+  timeRangeStart: '2026-05-01T00:00:00.000Z',
+  timeRangeEnd: '2026-05-02T00:00:00.000Z',
+  idempotencyKey: 'recovery:key',
+  concurrencyKey: 'range:key',
+  scopeKey: 'shopify-attribution-hints',
+  resumeFromRunId: null,
+  rerunOfRunId: null,
+  inputParameters: {},
+  checkpoint: { offset: 10 },
+  recordsDiscovered: 12,
+  recordsClaimed: 12,
+  recordsProcessed: 10,
+  recordsSucceeded: 7,
+  recordsFailed: 2,
+  recordsSkipped: 1,
+  recordsRetried: 1,
+  sideEffectsAttempted: 7,
+  sideEffectsSucceeded: 7,
+  sideEffectsSuppressed: 1,
+  claimedBy: 'worker-1',
+  queuedAt: '2026-05-01T00:00:00.000Z',
+  startedAt: '2026-05-01T00:00:05.000Z',
+  completedAt: '2026-05-01T00:02:05.000Z',
+  lastHeartbeatAt: '2026-05-01T00:02:05.000Z',
+  errorCode: null,
+  errorMessage: null
+} as const;
 
 test.after(() => {
   if (originalKService === undefined) {
@@ -129,6 +174,106 @@ test('campaign metadata freshness snapshot logs expose the fields used by freshn
   });
 });
 
+test('meta metadata lookup summary logs expose lookup cache and API counters', async () => {
+  const { entries } = await captureStructuredLogs(() =>
+    emitMetaMetadataLookupSummaryLog({
+      resolutionScope: 'campaign_adset_metadata',
+      requestedCount: 12,
+      normalizedRequestCount: 10,
+      invalidIdCount: 2,
+      cacheHitCount: 4,
+      staleCacheHitCount: 1,
+      recentFailureCacheHitCount: 1,
+      cacheMissCount: 5,
+      apiRequestCount: 2,
+      apiLookupObjectCount: 5,
+      apiResolvedCount: 3,
+      apiNotFoundCount: 1,
+      apiFailureCount: 1,
+      missingConnectionCount: 0,
+      unresolvedCount: 3,
+      unresolvedEntityIds: ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11'],
+      unresolvedReasons: {
+        invalid_id: 2,
+        meta_api_error: 1
+      }
+    })
+  );
+
+  assert.equal(entries.length, 1);
+  assert.deepEqual(entries[0], {
+    severity: 'INFO',
+    event: 'meta_metadata_lookup_summary',
+    message: 'meta_metadata_lookup_summary',
+    timestamp: entries[0]?.timestamp,
+    service: 'roas-radar-observability-test',
+    platform: 'meta_ads',
+    resolutionScope: 'campaign_adset_metadata',
+    requestedCount: 12,
+    normalizedRequestCount: 10,
+    invalidIdCount: 2,
+    cacheHitCount: 4,
+    staleCacheHitCount: 1,
+    recentFailureCacheHitCount: 1,
+    cacheMissCount: 5,
+    cacheHitRate: 0.4,
+    cacheMissRate: 0.5,
+    apiRequestCount: 2,
+    apiLookupObjectCount: 5,
+    apiResolvedCount: 3,
+    apiNotFoundCount: 1,
+    apiFailureCount: 1,
+    missingConnectionCount: 0,
+    unresolvedCount: 3,
+    unresolvedRate: 0.3,
+    unresolvedEntityIds: ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10'],
+    unresolvedReasons: {
+      invalid_id: 2,
+      meta_api_error: 1
+    }
+  });
+});
+
+test('meta metadata raw-id fallback logs include reporting context and unresolved samples', async () => {
+  const { entries } = await captureStructuredLogs(() =>
+    emitMetaMetadataRawIdFallbackLog({
+      resolutionScope: 'campaign_adset_metadata',
+      startDate: '2026-05-01',
+      endDate: '2026-05-02',
+      source: 'meta',
+      requestedCount: 3,
+      unresolvedCount: 2,
+      unresolvedEntityIds: ['111', '222'],
+      unresolvedReasons: {
+        missing_connection: 1,
+        meta_api_not_found: 1
+      }
+    })
+  );
+
+  assert.equal(entries.length, 1);
+  assert.deepEqual(entries[0], {
+    severity: 'INFO',
+    event: 'meta_metadata_raw_id_fallback',
+    message: 'meta_metadata_raw_id_fallback',
+    timestamp: entries[0]?.timestamp,
+    service: 'roas-radar-observability-test',
+    platform: 'meta_ads',
+    resolutionScope: 'campaign_adset_metadata',
+    requestedCount: 3,
+    unresolvedCount: 2,
+    unresolvedEntityIds: ['111', '222'],
+    unresolvedReasons: {
+      missing_connection: 1,
+      meta_api_not_found: 1
+    },
+    fallback: 'raw_id',
+    startDate: '2026-05-01',
+    endDate: '2026-05-02',
+    source: 'meta'
+  });
+});
+
 test('campaign metadata sync lifecycle logs emit success payloads and alertable failure payloads', async () => {
   const startedAt = '2026-04-11T10:00:00.000Z';
   const completedAt = '2026-04-11T10:00:04.250Z';
@@ -212,6 +357,264 @@ test('campaign metadata sync lifecycle logs emit success payloads and alertable 
         ? (entries[1].error as { stack?: string | null }).stack ?? null
         : null
     }
+  });
+});
+
+test('recovery telemetry logs include run counters, chunk duration, trace correlation, and actionable failure context', async () => {
+  const { entries } = await captureStructuredLogs(() => {
+    emitRecoveryRunLifecycleLog({
+      stage: 'completed',
+      run: recoveryRun,
+      workerId: 'worker-1',
+      pagesProcessed: 2,
+      durationMs: 120000
+    });
+    emitRecoveryRunChunkLog({
+      run: recoveryRun,
+      workerId: 'worker-1',
+      pageNumber: 2,
+      recordsDiscovered: 5,
+      recordsProcessed: 4,
+      done: true,
+      durationMs: 3000,
+      checkpoint: { offset: 10 }
+    });
+    emitRecoveryRecordFailureLog({
+      run: recoveryRun,
+      workerId: 'worker-1',
+      recordId: '99',
+      recordType: 'shopify_order',
+      recordKey: 'gid://shopify/Order/1',
+      attemptNumber: 3,
+      retryable: false,
+      nextAttemptAt: null,
+      error: {
+        code: 'shopify_write_failed',
+        message: 'Shopify write failed',
+        details: { status: 429 }
+      }
+    });
+  });
+
+  assert.equal(entries.length, 3);
+  assert.equal(entries[0]?.event, 'recovery_run_lifecycle');
+  assert.equal(entries[0]?.runId, recoveryRun.id);
+  assert.equal(entries[0]?.jobType, recoveryRun.jobType);
+  assert.equal(entries[0]?.processedCount, 10);
+  assert.equal(entries[0]?.updatedCount, 7);
+  assert.equal(entries[0]?.skippedCount, 1);
+  assert.equal(entries[0]?.failedCount, 2);
+  assert.equal(entries[0]?.durationMs, 120000);
+  assert.equal(entries[0]?.recoveryTraceId, '123e4567e89b12d3a456426614174000');
+
+  assert.equal(entries[1]?.event, 'recovery_run_chunk_processed');
+  assert.equal(entries[1]?.pageNumber, 2);
+  assert.equal(entries[1]?.recordsDiscovered, 5);
+  assert.equal(entries[1]?.recordsProcessed, 4);
+  assert.equal(entries[1]?.durationMs, 3000);
+
+  assert.equal(entries[2]?.event, 'recovery_record_failure');
+  assert.equal(entries[2]?.severity, 'ERROR');
+  assert.equal(entries[2]?.errorCode, 'shopify_write_failed');
+  assert.equal(entries[2]?.retryable, false);
+  assert.equal(entries[2]?.alertable, true);
+  assert.deepEqual(entries[2]?.errorDetails, { status: 429 });
+  assert.match(
+    (entries[2]?.actionContext as { inspectRunFilter?: string }).inspectRunFilter ?? '',
+    /recovery_run_lifecycle/
+  );
+});
+
+test('attribution QA snapshot write logs include order correlation and payload size metrics', async () => {
+  const payload = {
+    candidates: {
+      deterministic_first_party: [{ source_key: 'session-1' }],
+      shopify_hint: [],
+      ga4_fallback: [{ source_key: 'ga4-1' }]
+    },
+    model_summaries: [{ attribution_model: 'last_non_direct' }],
+    credits: [{ credit_weight: '1.000000' }],
+    explainability: [{ rule_id: 'winner_selected' }],
+    diagnostics: { normalization_failures: [{ scope: 'order', reason: 'missing_processed_at' }] }
+  };
+  const { entries } = await captureStructuredLogs(() =>
+    emitAttributionQaSnapshotWriteLog({
+      orderId: 'order-qa-observe-1',
+      pipeline: 'realtime_queue',
+      status: 'success',
+      attributionTier: 'deterministic_first_party',
+      matchSource: 'first_party',
+      payload
+    })
+  );
+
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].event, 'attribution_qa_snapshot_write');
+  assert.equal(entries[0].order_id, 'order-qa-observe-1');
+  assert.equal(entries[0].orderId, 'order-qa-observe-1');
+  assert.equal(entries[0].status, 'success');
+  assert.equal(entries[0].pipeline, 'realtime_queue');
+  assert.equal(entries[0].candidateCount, 2);
+  assert.equal(entries[0].modelSummaryCount, 1);
+  assert.equal(entries[0].creditCount, 1);
+  assert.equal(entries[0].explainabilityRecordCount, 1);
+  assert.equal(entries[0].normalizationFailureCount, 1);
+  assert.equal(typeof entries[0].payloadSizeBytes, 'number');
+  assert.ok((entries[0].payloadSizeBytes as number) > 0);
+});
+
+test('attribution QA fetch logs emit latency, source, evidence size, and failure severity', async () => {
+  const { entries } = await captureStructuredLogs(() => {
+    emitAttributionQaPayloadFetchLog({
+      endpoint: 'admin_qa_debug',
+      orderId: 'order-qa-observe-2',
+      status: 'success',
+      statusCode: 200,
+      durationMs: 12.3456,
+      source: 'persisted_snapshot',
+      payload: { candidates: { deterministic_first_party: [], shopify_hint: [], ga4_fallback: [] } },
+      rawEvidenceCount: 3,
+      rawEvidenceSizeBytes: 2048
+    });
+
+    emitAttributionQaPayloadFetchLog({
+      endpoint: 'public_qa_payload',
+      orderId: 'order-qa-observe-3',
+      status: 'failure',
+      statusCode: 500,
+      durationMs: 25,
+      error: new Error('database unavailable')
+    });
+  });
+
+  assert.equal(entries.length, 2);
+  assert.equal(entries[0].severity, 'INFO');
+  assert.equal(entries[0].event, 'attribution_qa_payload_fetch');
+  assert.equal(entries[0].order_id, 'order-qa-observe-2');
+  assert.equal(entries[0].endpoint, 'admin_qa_debug');
+  assert.equal(entries[0].statusClass, '2xx');
+  assert.equal(entries[0].durationMs, 12.35);
+  assert.equal(entries[0].source, 'persisted_snapshot');
+  assert.equal(entries[0].rawEvidenceCount, 3);
+  assert.equal(entries[0].rawEvidenceSizeBytes, 2048);
+
+  assert.equal(entries[1].severity, 'ERROR');
+  assert.equal(entries[1].order_id, 'order-qa-observe-3');
+  assert.equal(entries[1].status, 'failure');
+  assert.equal(entries[1].statusClass, '5xx');
+  assert.deepEqual((entries[1].error as { message: string }).message, 'database unavailable');
+});
+
+test('attribution run order outcome logs include order and run correlation fields', async () => {
+  const { entries } = await captureStructuredLogs(() =>
+    emitAttributionRunOrderOutcomeLog({
+      attributionRunId: '2d5f5284-e17d-4b73-a428-bad6d7318244',
+      orderId: '1001',
+      outcome: 'recomputed',
+      processedOrderCount: 1,
+      recomputedOrderCount: 1,
+      skippedOrderCount: 0,
+      failedOrderCount: 0,
+      modelCount: 3,
+      creditCount: 4,
+      primaryModelKey: 'last_non_direct',
+      primaryAllocationStatus: 'credited',
+      primaryConfidenceLabel: 'high',
+      lookupResolutionErrorCount: 0,
+      lookupResolutionErrorCodes: [],
+      orderOccurredAtUtc: '2026-04-12T10:00:00.000Z'
+    })
+  );
+
+  assert.equal(entries.length, 1);
+  assert.deepEqual(entries[0], {
+    severity: 'INFO',
+    event: 'attribution_run_order_outcome',
+    message: 'attribution_run_order_outcome',
+    timestamp: entries[0]?.timestamp,
+    service: 'roas-radar-observability-test',
+    attributionRunId: '2d5f5284-e17d-4b73-a428-bad6d7318244',
+    orderId: '1001',
+    outcome: 'recomputed',
+    processedOrderCount: 1,
+    recomputedOrderCount: 1,
+    skippedOrderCount: 0,
+    failedOrderCount: 0,
+    modelCount: 3,
+    creditCount: 4,
+    primaryModelKey: 'last_non_direct',
+    primaryAllocationStatus: 'credited',
+    primaryConfidenceLabel: 'high',
+    lookupResolutionErrorCount: 0,
+    lookupResolutionErrorCodes: [],
+    orderOccurredAtUtc: '2026-04-12T10:00:00.000Z'
+  });
+});
+
+test('attribution lookup resolution errors are warning logs with traceable identifiers', async () => {
+  const { entries } = await captureStructuredLogs(() =>
+    emitAttributionRunLookupResolutionErrorLog({
+      attributionRunId: '2d5f5284-e17d-4b73-a428-bad6d7318244',
+      orderId: '1002',
+      reasonCode: 'campaign_lookup_missing',
+      orderOccurredAtUtc: new Date('2026-04-12T11:00:00.000Z')
+    })
+  );
+
+  assert.equal(entries.length, 1);
+  assert.deepEqual(entries[0], {
+    severity: 'WARNING',
+    event: 'attribution_run_lookup_resolution_error',
+    message: 'attribution_run_lookup_resolution_error',
+    timestamp: entries[0]?.timestamp,
+    service: 'roas-radar-observability-test',
+    attributionRunId: '2d5f5284-e17d-4b73-a428-bad6d7318244',
+    orderId: '1002',
+    reasonCode: 'campaign_lookup_missing',
+    orderOccurredAtUtc: '2026-04-12T11:00:00.000Z',
+    alertable: true
+  });
+});
+
+test('confidence backfill progress logs expose skipped and recomputed ratios', async () => {
+  const { entries } = await captureStructuredLogs(() =>
+    emitAttributionConfidenceBackfillProgressLog({
+      workerId: 'confidence-worker-1',
+      dryRun: false,
+      stage: 'batch_processed',
+      scannedOrders: 10,
+      updatedOrders: 4,
+      updatedResults: 3,
+      skippedOrders: 6,
+      fallbackRows: 2,
+      failedBatches: 0,
+      batchesProcessed: 1,
+      lastOrderRowId: '42'
+    })
+  );
+
+  assert.equal(entries.length, 1);
+  assert.deepEqual(entries[0], {
+    severity: 'INFO',
+    event: 'order_attribution_confidence_backfill_progress',
+    message: 'order_attribution_confidence_backfill_progress',
+    timestamp: entries[0]?.timestamp,
+    service: 'roas-radar-observability-test',
+    workerId: 'confidence-worker-1',
+    dryRun: false,
+    stage: 'batch_processed',
+    scannedOrders: 10,
+    updatedOrders: 4,
+    updatedResults: 3,
+    skippedOrders: 6,
+    recomputedOrders: 4,
+    fallbackRows: 2,
+    lookupResolutionErrorCount: 2,
+    lookupResolutionErrorRate: 0.2,
+    skippedVsRecomputedRatio: 1.5,
+    failedBatches: 0,
+    batchesProcessed: 1,
+    lastOrderRowId: '42'
   });
 });
 

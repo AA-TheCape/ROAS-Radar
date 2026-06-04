@@ -107,6 +107,10 @@ These fields are not part of the shared `AttributionCaptureV1` object, but they 
 | `shopify_checkout_token` | `string \| null` | `255` | `tracking_events`, `session_attribution_touch_events`, raw payload snapshots | Shopify checkout token observed at capture time. Used for deterministic order/session stitching. |
 | `ingestion_source` | text | `64` in `session_attribution_touch_events` | `tracking_events`, `session_attribution_touch_events` | How the event entered the system. Current persisted values include `browser`, `server`, and `request_query`. |
 | `match_source` | text enum | implementation-defined | `attribution_results`, `attribution_order_credits`, `shopify_orders.attribution_snapshot` winner and timeline surfaces | Provenance of the winning or credited attribution path. Supported values currently include `landing_session_id`, `checkout_token`, `cart_token`, `customer_identity`, `shopify_hint_fallback`, `ga4_fallback`, and `unattributed`. |
+| `attribution_source_id` | smallint FK | n/a | `shopify_orders`, `attribution_results` | Lookup-backed source of the persisted order attribution. References `attribution_sources(id)` and defaults to `unattributed` for orders that have not been attributed. |
+| `matching_method_id` | smallint FK | n/a | `shopify_orders`, `attribution_results` | Lookup-backed matching method for the persisted order attribution. References `matching_methods(id)` and defaults to `unknown` for orders that have not been attributed. |
+| `attribution_confidence_score` | numeric | n/a | `shopify_orders` | Order-listing confidence score constrained to `0 <= score <= 1`. Kept in sync with the canonical attribution result confidence on attribution runs. |
+| `last_attribution_run_at` | timestamptz | n/a | `shopify_orders`, `attribution_results` | Timestamp of the latest attribution run that wrote the persisted order attribution metadata. Nullable on `shopify_orders` until an order has been processed. |
 | `confidence_label` | text enum | implementation-defined | `attribution_results`, `attribution_order_credits`, reporting or API surfaces that expose match strength | Grouped interpretation of `confidence_score`. Supported values are `high`, `medium`, `low`, and `none`. |
 | `raw_payload` | `jsonb` | n/a | `tracking_events`, `session_attribution_touch_events`, `shopify_orders` snapshots, ad raw spend tables | Storage surface for payload snapshots. For Shopify, Meta Ads, and Google Ads external-source raw tables, exact parsed-payload requirements are governed by `docs/raw-payload-persistence-contract.md`. Derived tables may retain normalized snapshots separately. |
 | `retained_until` | timestamptz | n/a | `session_attribution_identities`, `session_attribution_touch_events`, `order_attribution_links` | Retention cutoff used by cleanup jobs. Not a business attribution field. |
@@ -409,6 +413,7 @@ Current mapping:
 
 Rules:
 
+- canonical scoring semantics live in `docs/confidence-scoring-contract-v1.md`
 - GA4 fallback always maps to `confidence_label = 'low'`
 - unattributed always maps to `confidence_label = 'none'`
 - readers should prefer the explicit label when available rather than recomputing custom buckets
@@ -504,4 +509,5 @@ A new schema version is usually not required when:
 - [Shopify App Setup](shopify-app-setup.md)
 - [Visitor Identity Stitching](visitor-identity-stitching.md)
 - [Analytics Playbook](analytics-playbook.md)
+- [Confidence Scoring Contract V1](confidence-scoring-contract-v1.md)
 - [GA4 Fallback Attribution Contract v1](ga4-fallback-attribution-contract-v1.md)

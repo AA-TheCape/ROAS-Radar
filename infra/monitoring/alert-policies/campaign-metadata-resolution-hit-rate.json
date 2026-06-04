@@ -1,16 +1,16 @@
 {
   "displayName": "ROAS Radar __ENVIRONMENT__ Campaign Metadata Resolution Hit Rate",
   "documentation": {
-    "content": "Campaign metadata resolution rate dropped below the production threshold. Review `campaign_metadata_resolution_coverage` logs and follow the runbook: __RUNBOOK_URL_DATA_QUALITY__",
+    "content": "Campaign metadata resolution hit rate dropped below the operating threshold. Review `campaign_metadata_resolution_coverage` logs and unresolved entity samples. Runbook: __RUNBOOK_URL_ATTRIBUTION__",
     "mimeType": "text/markdown"
   },
   "combiner": "OR",
   "enabled": true,
   "severity": "WARNING",
-  "notificationChannels": __ALERT_NOTIFICATION_CHANNELS__,
+  "notificationChannels": "__ALERT_NOTIFICATION_CHANNELS__",
   "conditions": [
     {
-      "displayName": "Resolution rate below 85 percent for 15 minutes",
+      "displayName": "Campaign metadata resolved rate below 85% for 15 minutes",
       "conditionThreshold": {
         "filter": "metric.type=\"logging.googleapis.com/user/roas_campaign_metadata_resolution_rate\" resource.type=\"cloud_run_revision\"",
         "comparison": "COMPARISON_LT",
@@ -19,8 +19,7 @@
         "aggregations": [
           {
             "alignmentPeriod": "900s",
-            "perSeriesAligner": "ALIGN_PERCENTILE_50",
-            "crossSeriesReducer": "REDUCE_MEAN"
+            "perSeriesAligner": "ALIGN_PERCENTILE_05"
           }
         ],
         "trigger": {

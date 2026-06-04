@@ -13,6 +13,7 @@ import {
   ATTRIBUTION_TIER_VALUES,
   formatAttributionTierLabel
 } from '../lib/attributionTier';
+import { getConfidenceDisplay } from '../lib/confidence';
 import {
   formatCompactCurrency,
   formatCurrency,
@@ -26,7 +27,9 @@ import type {
 	OrderRow,
 	ReportingModelComparisonRow,
 	ReportingFilters,
+	ReportingMode,
 	SpendDetailChannelGroup,
+	SummaryResponse,
 	SummaryTotals,
 	TimeseriesGroupBy,
 	TimeseriesPoint,
@@ -109,7 +112,7 @@ type ReportingDashboardProps = {
 	) => void;
 	onClearFilters: () => void;
 	summaryCards: SummaryCardData[];
-	summarySection: DashboardSection<SummaryTotals>;
+	summarySection: DashboardSection<SummaryResponse>;
 	campaignsSection: DashboardSection<CampaignRow[]>;
 	timeseriesSection: DashboardSection<TimeseriesPoint[]>;
 	ordersSection: DashboardSection<OrderRow[]>;
@@ -124,6 +127,33 @@ const GROUP_BY_OPTIONS: Array<{ value: TimeseriesGroupBy; label: string }> = [
 	{ value: "campaign", label: "By campaign" },
 ];
 
+const REPORTING_LAYER_OPTIONS: Array<{
+	value: ReportingMode;
+	label: string;
+	description: string;
+}> = [
+	{
+		value: "combined",
+		label: "Comparison",
+		description: "Non-canonical comparison sum of clicks plus Meta API-verified deterministic view totals.",
+	},
+	{
+		value: "clicks",
+		label: "Clicks",
+		description: "Orders credited through click-based reporting inputs.",
+	},
+	{
+		value: "deterministic_views",
+		label: "Meta views",
+		description: "Deterministic view/impression signals verified by Meta API v1.",
+	},
+	{
+		value: "meta_view_through",
+		label: "View-through",
+		description: "Meta API impression-time purchase revenue, purchases, and ROAS.",
+	},
+];
+
 type CampaignSortKey =
 	| "campaign"
 	| "source"
@@ -136,7 +166,9 @@ type OrderSortKey =
 	| "processedAt"
 	| "source"
 	| "campaign"
-	| "totalPrice";
+	| "totalPrice"
+	| "confidenceScore"
+	| "lastAttributionRunAt";
 export type DateField = "startDate" | "endDate";
 
 const CAMPAIGN_PAGE_SIZE = 6;
@@ -278,6 +310,111 @@ const SummaryCard = memo(function SummaryCard({
 	);
 });
 
+function formatReportingModeLabel(mode: ReportingMode | undefined) {
+	return (
+		REPORTING_LAYER_OPTIONS.find((option) => option.value === mode)?.label ??
+		"Combined"
+	);
+}
+
+function formatLayerDetail(totals: SummaryTotals, countLabel = "orders") {
+	const roasLabel =
+		totals.roas == null ? "ROAS pending spend" : `${formatNumber(totals.roas)} ROAS`;
+	return `${formatNumber(totals.orders)} ${countLabel}, ${formatCurrency(totals.revenue)}, ${roasLabel}`;
+}
+
+const LayerBreakdownPanel = memo(function LayerBreakdownPanel({
+	summary,
+}: {
+	summary: SummaryResponse;
+}) {
+	const activeMode = summary.reportingMode;
+	const layerCards: Array<{
+		key: ReportingMode;
+		label: string;
+		totals: SummaryTotals;
+		scope: string;
+		countLabel?: string;
+	}> = [
+		{
+			key: "combined",
+			label: summary.comparisonTotals.combined.label,
+			totals: summary.comparisonTotals.combined.totals,
+			scope:
+				summary.comparisonTotals.combined.description,
+		},
+		{
+			key: "clicks",
+			label: summary.layers.clicks.label,
+			totals: summary.layers.clicks.totals,
+			scope: summary.layers.clicks.description,
+		},
+		{
+			key: "deterministic_views",
+			label: summary.layers.deterministicViews.label,
+			totals: summary.layers.deterministicViews.totals,
+			scope: summary.layers.deterministicViews.description,
+		},
+		{
+			key: "meta_view_through",
+			label: summary.layers.metaViewThrough.label,
+			totals: summary.layers.metaViewThrough.totals,
+			scope: summary.layers.metaViewThrough.description,
+			countLabel: "purchases",
+		},
+	];
+
+	return (
+		<Panel
+			title="Layer breakdown"
+			description="Default totals stay click-only. Use the layer control to inspect clicks, deterministic views, Meta API view-through, or the non-canonical comparison total."
+		>
+			<div className="grid gap-4 lg:grid-cols-4">
+				{layerCards.map((card) => (
+						<Card
+							key={card.key}
+							padding="compact"
+							className={`border-line/70 bg-white/90 ${activeMode === card.key ? "ring-2 ring-brand/35" : ""}`}
+						>
+							<div className="flex items-start justify-between gap-3" title={card.scope}>
+							<div>
+								<Eyebrow>
+									{activeMode === card.key ? "Active layer" : "Available layer"}
+								</Eyebrow>
+								<p className="mt-3 font-display text-title text-ink">
+									{card.label}
+								</p>
+							</div>
+							<Badge
+								tone={
+									card.key === "deterministic_views" || card.key === "meta_view_through"
+										? "teal"
+										: card.key === "combined"
+											? "brand"
+											: "neutral"
+								}
+							>
+								{card.key === "deterministic_views"
+									? "Meta v1"
+									: card.key === "meta_view_through"
+										? "Meta API"
+									: formatReportingModeLabel(card.key)}
+							</Badge>
+						</div>
+						<p className="mt-4 font-display text-display text-ink">
+							{formatCurrency(card.totals.revenue)}
+						</p>
+						<p className="mt-2 text-body text-ink-muted">
+							{formatLayerDetail(card.totals, card.countLabel)}
+						</p>
+						<p className="mt-3 text-caption text-ink-soft">{card.scope}</p>
+					</Card>
+				))}
+			</div>
+		</Panel>
+	);
+});
+
 function buildTrendSummary(
 	points: TimeseriesPoint[],
 	groupBy: TimeseriesGroupBy,
@@ -338,8 +475,135 @@ function titleCaseToken(value: string) {
 		.join(" ");
 }
 
-function formatChannelLabel(source: string, medium: string) {
-	return `${titleCaseToken(source || "unknown")} / ${titleCaseToken(medium || "unknown")}`;
+type CampaignDisplayFields = Pick<
+	CampaignRow,
+	| "source"
+	| "medium"
+	| "campaign"
+	| "content"
+	| "campaignDisplayName"
+	| "campaignEntityId"
+	| "campaignEntityType"
+	| "parentCampaignEntityId"
+	| "parentCampaignDisplayName"
+	| "campaignPlatform"
+	| "campaignNameResolutionStatus"
+	| "campaignLabel"
+>;
+
+function formatSourceLabel(
+	source: string | null | undefined,
+	platform?: CampaignDisplayFields["campaignPlatform"],
+) {
+	if (platform === "meta_ads" || source === "meta" || source === "facebook") {
+		return "Meta";
+	}
+
+	if (platform === "google_ads") {
+		return "Google Ads";
+	}
+
+	return titleCaseToken(source || "unknown");
+}
+
+function formatChannelLabel(
+	source: string,
+	medium: string,
+	platform?: CampaignDisplayFields["campaignPlatform"],
+) {
+	return `${formatSourceLabel(source, platform)} / ${titleCaseToken(medium || "unknown")}`;
+}
+
+function getCampaignResolutionStatus(row: CampaignDisplayFields) {
+	return (
+		row.campaignLabel?.resolutionStatus ??
+		row.campaignNameResolutionStatus ??
+		(row.campaignDisplayName ? "resolved" : "unresolved")
+	);
+}
+
+function getCampaignPlatform(row: CampaignDisplayFields) {
+	return row.campaignLabel?.platform ?? row.campaignPlatform ?? null;
+}
+
+function getCampaignObjectType(row: CampaignDisplayFields) {
+	return (
+		row.campaignLabel?.objectType ??
+		row.campaignLabel?.entityType ??
+		row.campaignEntityType ??
+		null
+	);
+}
+
+function getCampaignRawId(row: CampaignDisplayFields) {
+	return (
+		row.campaignLabel?.rawId?.trim() ||
+		row.campaignLabel?.entityId?.trim() ||
+		row.campaignEntityId?.trim() ||
+		row.campaign
+	);
+}
+
+function getParentCampaignRawId(row: CampaignDisplayFields) {
+	return (
+		row.campaignLabel?.parentCampaign?.entityId?.trim() ||
+		row.campaignLabel?.parentCampaignEntityId?.trim() ||
+		row.parentCampaignEntityId?.trim() ||
+		null
+	);
+}
+
+function getCampaignDisplayName(row: CampaignDisplayFields) {
+	if (getCampaignResolutionStatus(row) === "unresolved") {
+		return row.campaign;
+	}
+
+	return (
+		row.campaignLabel?.displayName?.trim() ||
+		row.campaignDisplayName?.trim() ||
+		row.campaign
+	);
+}
+
+function getParentCampaignDisplayName(row: CampaignDisplayFields) {
+	return (
+		row.campaignLabel?.parentCampaign?.displayName?.trim() ||
+		row.campaignLabel?.parentCampaignDisplayName?.trim() ||
+		row.parentCampaignDisplayName?.trim() ||
+		null
+	);
+}
+
+function formatCampaignHierarchyContext(row: CampaignDisplayFields) {
+	const parentCampaign = getParentCampaignDisplayName(row);
+
+	if (getCampaignObjectType(row) === "adset" && parentCampaign) {
+		return `Ad set in ${parentCampaign}`;
+	}
+
+	return row.content ?? "No content tag";
+}
+
+function formatCampaignIdContext(row: CampaignDisplayFields) {
+	const rawId = getCampaignRawId(row);
+	const objectType = getCampaignObjectType(row);
+	const label = objectType === "adset" ? "Ad set ID" : "Campaign ID";
+	const parentRawId = objectType === "adset" ? getParentCampaignRawId(row) : null;
+	const parts = [`${label} ${rawId}`];
+
+	if (parentRawId && parentRawId !== rawId) {
+		parts.push(`Campaign ID ${parentRawId}`);
+	}
+
+	return parts.join(" | ");
+}
+
+function formatCampaignContext(row: CampaignDisplayFields) {
+	return `${formatCampaignHierarchyContext(row)} | ${formatCampaignIdContext(row)}`;
+}
+
+function formatCampaignSourceMedium(row: CampaignDisplayFields) {
+	return formatChannelLabel(row.source, row.medium, getCampaignPlatform(row));
 }
 
 const DashboardOverview = memo(function DashboardOverview({
@@ -431,7 +695,27 @@ const DashboardOverview = memo(function DashboardOverview({
 									{peakPoint
 										? groupBy === "day"
 											? formatDateLabel(peakPoint.date, reportingTimezone)
-											: peakPoint.date
+											: groupBy === "campaign"
+												? getCampaignDisplayName({
+														source: "",
+														medium: "",
+														campaign: peakPoint.date,
+														content: null,
+														campaignDisplayName: peakPoint.campaignDisplayName,
+														campaignEntityId: peakPoint.campaignEntityId,
+														campaignEntityType: peakPoint.campaignEntityType,
+														parentCampaignEntityId: peakPoint.parentCampaignEntityId,
+														parentCampaignDisplayName:
+															peakPoint.parentCampaignDisplayName,
+														campaignPlatform: peakPoint.campaignPlatform,
+														campaignNameResolutionStatus:
+															peakPoint.campaignNameResolutionStatus,
+														campaignLabel: peakPoint.campaignLabel,
+													})
+												: formatSourceLabel(
+														peakPoint.date,
+														peakPoint.campaignPlatform,
+													)
 										: "N/A"}
 								</p>
 								<p className="mt-2 text-body text-ink-soft">
@@ -462,11 +746,13 @@ const DashboardOverview = memo(function DashboardOverview({
 							>
 								<Eyebrow>Leading campaign</Eyebrow>
 								<p className="mt-4 font-display text-title text-ink">
-									{leadingCampaign?.campaign ?? "N/A"}
+									{leadingCampaign
+										? getCampaignDisplayName(leadingCampaign)
+										: "N/A"}
 								</p>
 								<p className="mt-2 text-body text-ink-soft">
 									{leadingCampaign
-										? `${formatCurrency(leadingCampaign.revenue)} from ${leadingCampaign.source} / ${leadingCampaign.medium}`
+										? `${formatCurrency(leadingCampaign.revenue)} from ${formatCampaignSourceMedium(leadingCampaign)}`
 										: "No campaign leader available yet"}
 								</p>
 							</Card>
@@ -560,6 +846,7 @@ const DashboardControlPanel = memo(function DashboardControlPanel({
     () => `${formatDateLabel(filters.startDate, reportingTimezone)} to ${formatDateLabel(filters.endDate, reportingTimezone)}`,
     [filters.endDate, filters.startDate, reportingTimezone]
   );
+  const activeReportingMode = filters.reportingMode ?? 'clicks';
 
 	useEffect(() => {
 		if (previousDateRangeKeyRef.current === dateRangeKey) {
@@ -640,8 +927,9 @@ const DashboardControlPanel = memo(function DashboardControlPanel({
 				</div>
 
         <div className="grid gap-3 xl:grid-cols-[minmax(0,1.8fr)_minmax(18rem,auto)] xl:items-end">
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
-            <Field label="Start date" htmlFor="start-date">
+          <div className="grid gap-3">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-7">
+              <Field label="Start date" htmlFor="start-date">
               <Input
                 id="start-date"
                 type="date"
@@ -731,6 +1019,42 @@ const DashboardControlPanel = memo(function DashboardControlPanel({
                 ))}
               </Select>
             </Field>
+            </div>
+
+            <div className="grid gap-2 rounded-card border border-line/60 bg-white/75 px-3 py-3 shadow-inset-soft">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-label uppercase text-ink-muted">Summary layer</p>
+                  <p className="mt-1 text-[0.86rem] text-ink-soft">
+                    Click attribution is the canonical default. Meta views are API-verified deterministic signals for Meta v1; comparison is non-canonical.
+                  </p>
+                </div>
+                <Badge tone={activeReportingMode === 'deterministic_views' ? 'teal' : 'brand'}>
+                  {formatReportingModeLabel(activeReportingMode)}
+                </Badge>
+              </div>
+              <fieldset className="flex flex-wrap gap-2">
+                <legend className="sr-only">Summary layer</legend>
+                {REPORTING_LAYER_OPTIONS.map((option) => (
+                  <Button
+                    key={option.value}
+                    type="button"
+                    tone={activeReportingMode === option.value ? 'primary' : 'secondary'}
+                    className="min-h-[34px] px-3 py-1 text-label"
+                    aria-pressed={activeReportingMode === option.value}
+                    title={option.description}
+                    onClick={() =>
+                      onFiltersChange({
+                        ...filters,
+                        reportingMode: option.value
+                      })
+                    }
+                  >
+                    {option.label}
+                  </Button>
+                ))}
+              </fieldset>
+            </div>
           </div>
 
 					<div className="grid gap-3 rounded-card border border-line/60 bg-white/75 px-3 py-3 shadow-inset-soft">
@@ -824,7 +1148,24 @@ const TimeseriesTrendPanel = memo(function TimeseriesTrendPanel({
 					const bucketLabel =
 						groupBy === "day"
 							? formatDateLabel(point.date, reportingTimezone)
-							: point.date;
+							: groupBy === "campaign"
+								? getCampaignDisplayName({
+										source: "",
+										medium: "",
+										campaign: point.date,
+										content: null,
+										campaignDisplayName: point.campaignDisplayName,
+										campaignEntityId: point.campaignEntityId,
+										campaignEntityType: point.campaignEntityType,
+										parentCampaignEntityId: point.parentCampaignEntityId,
+										parentCampaignDisplayName:
+											point.parentCampaignDisplayName,
+										campaignPlatform: point.campaignPlatform,
+										campaignNameResolutionStatus:
+											point.campaignNameResolutionStatus,
+										campaignLabel: point.campaignLabel,
+									})
+								: formatSourceLabel(point.date, point.campaignPlatform);
 					return {
 						x: bucketLabel,
 						y: point.revenue,
@@ -938,7 +1279,29 @@ const TimeseriesTrendPanel = memo(function TimeseriesTrendPanel({
 												<p className="text-body font-semibold text-ink">
 													{groupBy === "day"
 														? formatDateLabel(point.date, reportingTimezone)
-														: point.date}
+														: groupBy === "campaign"
+															? getCampaignDisplayName({
+																	source: "",
+																	medium: "",
+																	campaign: point.date,
+																	content: null,
+																	campaignDisplayName:
+																		point.campaignDisplayName,
+																	campaignEntityId: point.campaignEntityId,
+																	campaignEntityType: point.campaignEntityType,
+																	parentCampaignEntityId:
+																		point.parentCampaignEntityId,
+																	parentCampaignDisplayName:
+																		point.parentCampaignDisplayName,
+																	campaignPlatform: point.campaignPlatform,
+																	campaignNameResolutionStatus:
+																		point.campaignNameResolutionStatus,
+																	campaignLabel: point.campaignLabel,
+																})
+															: formatSourceLabel(
+																	point.date,
+																	point.campaignPlatform,
+																)}
 												</p>
 												<p className="font-display text-lg text-brand">
 													{formatCompactCurrency(point.revenue)}
@@ -982,7 +1345,29 @@ const TimeseriesTrendPanel = memo(function TimeseriesTrendPanel({
 												<p className="text-body font-semibold text-ink">
 													{groupBy === "day"
 														? formatDateLabel(point.date, reportingTimezone)
-														: point.date}
+														: groupBy === "campaign"
+															? getCampaignDisplayName({
+																	source: "",
+																	medium: "",
+																	campaign: point.date,
+																	content: null,
+																	campaignDisplayName:
+																		point.campaignDisplayName,
+																	campaignEntityId: point.campaignEntityId,
+																	campaignEntityType: point.campaignEntityType,
+																	parentCampaignEntityId:
+																		point.parentCampaignEntityId,
+																	parentCampaignDisplayName:
+																		point.parentCampaignDisplayName,
+																	campaignPlatform: point.campaignPlatform,
+																	campaignNameResolutionStatus:
+																		point.campaignNameResolutionStatus,
+																	campaignLabel: point.campaignLabel,
+																})
+															: formatSourceLabel(
+																	point.date,
+																	point.campaignPlatform,
+																)}
 												</p>
 												<p className="font-display text-lg text-warning">
 													{formatCompactCurrency(point.revenue)}
@@ -1263,7 +1648,7 @@ const ReportingDashboard = memo(function ReportingDashboard({
 	const campaignMixData = useMemo(
 		() =>
 			campaigns.map((row) => ({
-				campaign: row.campaign,
+				campaign: getCampaignDisplayName(row),
 				revenueShare: Number(
 					(
 						(totalCampaignRevenue > 0
@@ -1272,7 +1657,7 @@ const ReportingDashboard = memo(function ReportingDashboard({
 					).toFixed(2),
 				),
 				revenue: row.revenue,
-				sourceMedium: `${row.source} / ${row.medium}`,
+				sourceMedium: formatCampaignSourceMedium(row),
 			})),
 		[campaigns, totalCampaignRevenue],
 	);
@@ -1281,7 +1666,7 @@ const ReportingDashboard = memo(function ReportingDashboard({
 		const sourceMixMap = campaigns.reduce<
 			Record<string, { revenue: number; orders: number }>
 		>((accumulator, row) => {
-			const key = row.source || "Unknown";
+			const key = formatSourceLabel(row.source, getCampaignPlatform(row));
 			const current = accumulator[key] ?? { revenue: 0, orders: 0 };
 			current.revenue += row.revenue;
 			current.orders += row.orders;
@@ -1307,7 +1692,27 @@ const ReportingDashboard = memo(function ReportingDashboard({
     () =>
       campaigns.filter((row) =>
         matchesQuery(
-          [row.campaign, row.source, row.medium, row.content, row.visits, row.orders, row.revenue],
+          [
+            row.campaign,
+            getCampaignDisplayName(row),
+            formatCampaignSourceMedium(row),
+            formatCampaignContext(row),
+            row.source,
+            row.medium,
+            row.content,
+            getCampaignRawId(row),
+            row.campaignEntityId,
+            row.campaignLabel?.rawId,
+            row.campaignLabel?.entityId,
+            row.campaignLabel?.displayName,
+            row.parentCampaignDisplayName,
+            row.campaignLabel?.parentCampaignDisplayName,
+            row.campaignLabel?.parentCampaign?.displayName,
+            getParentCampaignRawId(row),
+            row.visits,
+            row.orders,
+            row.revenue
+          ],
           campaignSearch
         )
       ),
@@ -1316,8 +1721,8 @@ const ReportingDashboard = memo(function ReportingDashboard({
   const sortedCampaigns = useMemo(
     () =>
       sortRows(filteredCampaigns, campaignSort, {
-        campaign: (row) => row.campaign,
-        source: (row) => `${row.source} ${row.medium}`,
+        campaign: (row) => `${getCampaignDisplayName(row)} ${getCampaignRawId(row)} ${row.campaign}`,
+        source: (row) => formatCampaignSourceMedium(row),
         visits: (row) => row.visits,
         orders: (row) => row.orders,
         revenue: (row) => row.revenue,
@@ -1342,6 +1747,10 @@ const ReportingDashboard = memo(function ReportingDashboard({
             row.primaryCreditAttributionReason,
             row.attributionTier,
             row.attributionTierLabel,
+            row.attributionSource,
+            row.matchingMethod,
+            row.confidenceScore,
+            row.lastAttributionRunAt,
             row.totalPrice
           ],
           orderSearch
@@ -1356,7 +1765,9 @@ const ReportingDashboard = memo(function ReportingDashboard({
         processedAt: (row) => row.processedAt ?? '',
         source: (row) => `${row.source ?? ''} ${row.medium ?? ''}`,
         campaign: (row) => row.campaign ?? '',
-        totalPrice: (row) => row.totalPrice
+        totalPrice: (row) => row.totalPrice,
+        confidenceScore: (row) => row.confidenceScore ?? (row.lastAttributionRunAt ? -1 : -2),
+        lastAttributionRunAt: (row) => row.lastAttributionRunAt ?? ''
       }),
     [filteredOrders, orderSort]
   );
@@ -1392,7 +1803,7 @@ const ReportingDashboard = memo(function ReportingDashboard({
 				filters={filters}
 				groupBy={groupBy}
 				reportingTimezone={reportingTimezone}
-				summary={summarySection.data}
+				summary={summarySection.data?.totals ?? null}
 				campaigns={campaigns}
 				points={timeseriesPoints}
 				orderCount={orders.length}
@@ -1420,6 +1831,15 @@ const ReportingDashboard = memo(function ReportingDashboard({
 						<SummaryCard key={card.label} {...card} />
 					))}
 				</div>
+			</SectionState>
+
+			<SectionState
+				loading={summarySection.loading}
+				error={summarySection.error}
+				empty={!summarySection.data}
+				emptyLabel="No summary layer totals were returned for this filter range."
+			>
+				<LayerBreakdownPanel summary={summarySection.data as SummaryResponse} />
 			</SectionState>
 
 			<TimeseriesTrendPanel
@@ -1461,7 +1881,7 @@ const ReportingDashboard = memo(function ReportingDashboard({
 											<div>
 												<Eyebrow>Top campaign</Eyebrow>
 												<p className="mt-3 font-display text-title text-ink">
-													{row.campaign}
+													{getCampaignDisplayName(row)}
 												</p>
 											</div>
 											<Badge tone="brand">
@@ -1469,7 +1889,10 @@ const ReportingDashboard = memo(function ReportingDashboard({
 											</Badge>
 										</div>
 										<p className="mt-3 break-words text-body text-ink-soft">
-											{row.source} / {row.medium}
+											{formatCampaignSourceMedium(row)}
+										</p>
+										<p className="mt-1 break-words text-caption text-ink-muted">
+											{formatCampaignContext(row)}
 										</p>
 										<p className="mt-5 font-display text-metric text-brand">
 											{formatCompactCurrency(row.revenue)}
@@ -1609,11 +2032,11 @@ const ReportingDashboard = memo(function ReportingDashboard({
 											>
 												<TableCell>
 													<PrimaryCell>
-														<strong>{row.campaign}</strong>
-														<span>{row.content ?? "No content tag"}</span>
+														<strong>{getCampaignDisplayName(row)}</strong>
+														<span>{formatCampaignContext(row)}</span>
 													</PrimaryCell>
 												</TableCell>
-												<TableCell>{`${row.source} / ${row.medium}`}</TableCell>
+												<TableCell>{formatCampaignSourceMedium(row)}</TableCell>
 												<TableCell>{formatNumber(row.visits)}</TableCell>
 												<TableCell>{formatNumber(row.orders)}</TableCell>
 												<TableCell>{formatCurrency(row.revenue)}</TableCell>
@@ -1736,6 +2159,10 @@ const ReportingDashboard = memo(function ReportingDashboard({
                     <option value="order:asc">Order ↑</option>
                     <option value="campaign:asc">Campaign A-Z</option>
                     <option value="campaign:desc">Campaign Z-A</option>
+                    <option value="confidenceScore:desc">Confidence ↓</option>
+                    <option value="confidenceScore:asc">Confidence ↑</option>
+                    <option value="lastAttributionRunAt:desc">Last run ↓</option>
+                    <option value="lastAttributionRunAt:asc">Last run ↑</option>
                   </Select>
                 </Field>
               </TableFilterBar>
@@ -1792,13 +2219,28 @@ const ReportingDashboard = memo(function ReportingDashboard({
                     >
                       Total
                     </SortableTableHeaderCell>
+                    <SortableTableHeaderCell
+                      sorted={orderSort.key === 'confidenceScore'}
+                      direction={orderSort.direction}
+                      onSort={() => toggleOrderSort('confidenceScore')}
+                    >
+                      Confidence
+                    </SortableTableHeaderCell>
+                    <TableHeaderCell>Method</TableHeaderCell>
+                    <SortableTableHeaderCell
+                      sorted={orderSort.key === 'lastAttributionRunAt'}
+                      direction={orderSort.direction}
+                      onSort={() => toggleOrderSort('lastAttributionRunAt')}
+                    >
+                      Last run
+                    </SortableTableHeaderCell>
                     <TableHeaderCell>Match reason</TableHeaderCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   {paginatedOrders.rows.length === 0 ? (
                     <TableEmptyRow
-                      colSpan={7}
+                      colSpan={10}
                       title="No orders matched"
                       description="Try another search term or widen the reporting window."
                     />
@@ -1821,8 +2263,8 @@ const ReportingDashboard = memo(function ReportingDashboard({
                       <TableCell>{formatDateTimeLabel(row.processedAt, reportingTimezone)}</TableCell>
                       <TableCell>
                         <PrimaryCell className="gap-0.5">
-                          <strong>{row.source ?? 'Unattributed'}</strong>
-                          <span>{row.medium ?? (row.attributionTier === 'unattributed' ? 'No attributed medium' : 'No medium')}</span>
+                          <strong>{row.source ?? (getConfidenceDisplay(row).state === 'pending' ? 'Pending' : 'Unattributed')}</strong>
+                          <span>{row.medium ?? (getConfidenceDisplay(row).state === 'pending' ? 'Awaiting attribution run' : row.attributionTier === 'unattributed' ? 'No attributed medium' : 'No medium')}</span>
                         </PrimaryCell>
                       </TableCell>
                       <TableCell>
@@ -1831,8 +2273,16 @@ const ReportingDashboard = memo(function ReportingDashboard({
                           <span>{row.attributionSource ?? 'No persisted source'}</span>
                         </PrimaryCell>
                       </TableCell>
-                      <TableCell>{row.campaign ?? (row.attributionTier === 'unattributed' ? 'No attributed campaign' : 'No campaign')}</TableCell>
+                      <TableCell>{row.campaign ?? (getConfidenceDisplay(row).state === 'pending' ? 'Pending' : row.attributionTier === 'unattributed' ? 'No attributed campaign' : 'No campaign')}</TableCell>
                       <TableCell>{formatCurrency(row.totalPrice)}</TableCell>
+                      <TableCell>
+                        <PrimaryCell className="gap-0.5">
+                          <strong>{getConfidenceDisplay(row).label}</strong>
+                          <span>{getConfidenceDisplay(row).detail}</span>
+                        </PrimaryCell>
+                      </TableCell>
+                      <TableCell>{row.matchingMethod?.replace(/_/g, ' ') ?? 'Not available'}</TableCell>
+                      <TableCell>{formatDateTimeLabel(row.lastAttributionRunAt, reportingTimezone)}</TableCell>
                       <TableCell>
                         <PrimaryCell className="gap-1">
                           <strong>{row.attributionReason}</strong>
@@ -1927,12 +2377,21 @@ const ReportingDashboard = memo(function ReportingDashboard({
 													>
 														<TableCell>
 															<PrimaryCell>
-																<strong>{campaign.campaign}</strong>
+																<strong>
+																	{getCampaignDisplayName({
+																		...campaign,
+																		source: group.source,
+																		medium: group.medium,
+																		content: null,
+																	})}
+																</strong>
 																<span>
-																	{formatChannelLabel(
-																		group.source,
-																		group.medium,
-																	)}
+																	{formatCampaignContext({
+																		...campaign,
+																		source: group.source,
+																		medium: group.medium,
+																		content: null,
+																	})}
 																</span>
 															</PrimaryCell>
 														</TableCell>

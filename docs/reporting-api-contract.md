@@ -5,6 +5,7 @@ This document defines the backward-compatibility contract for authenticated repo
 Use it together with:
 
 - `docs/analytics-playbook.md` for how reporting slices should be interpreted
+- `docs/deterministic-attribution-behavior.md` for deterministic view/impression reporting modes and non-mixing rules
 - `docs/reporting-metrics.md` for KPI formulas
 - `docs/database-operations.md` and the campaign metadata resolution contract for how resolved labels are stored
 
@@ -14,11 +15,34 @@ ROAS Radar uses additive schema evolution for reporting responses.
 
 - Existing response fields must not be renamed or removed in-place.
 - New capabilities ship as additive fields on the same endpoint.
-- The current reporting response schema version is `2026-05-02`.
-- Every `/api/reporting/*` response includes `X-ROAS-Radar-Reporting-Schema: 2026-05-02`.
+- The current reporting response schema version is `2026-05-27`.
+- Every `/api/reporting/*` response includes `X-ROAS-Radar-Reporting-Schema: 2026-05-27`.
 - Consumers that care about the contract version should read the response header rather than infer version from field presence.
 
 This means no path-level version bump is required for additive reporting changes in this phase.
+
+## Reporting Modes And Layer Separation
+
+`GET /api/reporting/summary` supports additive reporting modes while preserving canonical Click attribution as the default.
+
+Supported modes:
+
+| `reportingMode` | Canonical | Source surface | Contract |
+| --- | --- | --- | --- |
+| omitted or `clicks` | yes | `daily_reporting_metrics` click-attributed credits | Canonical reporting totals. |
+| `deterministic_views` | no | `deterministic_model_outputs` | Meta API-verified deterministic view/impression model layer. |
+| `meta_view_through` | no | `meta_ads_order_value_aggregates` | Meta API-reported impression-time view-through aggregates. |
+| `combined` | no | Clicks plus Deterministic Views | Comparison-only total. |
+
+Required response behavior:
+
+- `totals` reflects only the selected reporting mode.
+- `totalsCanonical` is `true` only for omitted or `clicks` mode.
+- `layers.clicks`, `layers.deterministicViews`, and `layers.metaViewThrough` remain separate namespaces.
+- `comparisonTotals.combined` must remain labeled non-canonical.
+- Deterministic view/impression model credit must not be blended into generic canonical `attributedRevenue`, primary attribution winners, Shopify writeback fields, or click-attributed order credit.
+
+This separation applies to API responses, dashboard consumers, exports, and derived analyst tables.
 
 ## Campaign Label Enrichment
 
@@ -49,7 +73,14 @@ New consumers should prefer the additive nested object:
 {
   "campaignLabel": {
     "displayName": "Google Brand Search Latest",
+    "source": "google",
+    "rawId": "brand-search",
     "entityId": "cmp_google_1",
+    "objectType": "campaign",
+    "entityType": "campaign",
+    "parentCampaignEntityId": null,
+    "parentCampaignDisplayName": null,
+    "parentCampaign": null,
     "platform": "google_ads",
     "resolutionStatus": "resolved",
     "lastSeenAt": "2026-04-10T08:00:00.000Z",
@@ -61,7 +92,14 @@ New consumers should prefer the additive nested object:
 Field meanings:
 
 - `displayName`: resolved display label after lookup or fallback ordering
-- `entityId`: native platform campaign id
+- `source`: normalized reporting source to render for this label, such as `meta` after Meta source normalization
+- `rawId`: raw campaign grouping value from the reporting row
+- `entityId`: native platform object id when known
+- `objectType`: native object type, currently `campaign`, `adset`, or `null`
+- `entityType`: backward-compatible alias for `objectType`
+- `parentCampaignEntityId`: parent campaign id for Meta ad set labels when known
+- `parentCampaignDisplayName`: parent campaign display name for Meta ad set labels when known
+- `parentCampaign`: structured parent campaign metadata for Meta ad set labels, or `null`
 - `platform`: `google_ads` or `meta_ads`
 - `resolutionStatus`: `resolved`, `fallback_name`, or `unresolved`
 - `lastSeenAt`: upstream observation timestamp from metadata sync when available
@@ -85,3 +123,27 @@ No removal date is scheduled for the flat `campaignDisplayName` compatibility fi
 - New consumers should read `campaignLabel`.
 - Existing consumers may continue reading the flat fields without change.
 - A future removal would require a new documented schema version and an explicit migration window.
+
+## Order Attribution Metadata
+
+Order read endpoints expose persisted attribution metadata additively on top of the existing order payloads.
+
+Affected endpoints:
+
+- `GET /api/reporting/orders`
+- `GET /api/reporting/orders/{shopifyOrderId}`
+
+Additive fields:
+
+- `attributionSource`: `string | null`; lookup-backed attribution source code such as `landing_session_id`, `checkout_token`, `shopify_hint_fallback`, `ga4_fallback`, or `unattributed`
+- `confidenceScore`: `number | null`; persisted attribution confidence score, constrained to `0 <= score <= 1`
+- `matchingMethod`: `string | null`; lookup-backed matching method code such as `matched_by_checkout_token`, `shopify_hint_derived`, `ga4_fallback_derived`, `unattributed`, or `unknown`
+- `lastAttributionRunAt`: `string | null`; ISO-8601 timestamp for the latest attribution run that wrote order metadata
+
+Existing fields, including `attributionMatchedAt`, `attributionReason`, `attributionTier`, and snapshot fields on the detail endpoint, remain unchanged.
+
+Attribution write paths reject invalid metadata instead of coercing it:
+
+- confidence scores outside `0..1` are invalid
+- `attributionSource` must resolve to an active `attribution_sources.code`
+- `matchingMethod` must resolve to an active `matching_methods.code`

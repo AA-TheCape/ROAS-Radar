@@ -1,6 +1,6 @@
 {
   "name": "roas_campaign_metadata_stale_count",
-  "description": "Distribution of stale campaign metadata entity counts from freshness snapshots.",
+  "description": "Distribution of stale campaign metadata entity counts emitted by freshness snapshots.",
   "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"campaign_metadata_freshness_snapshot\"",
   "valueExtractor": "EXTRACT(jsonPayload.staleEntityCount)",
   "labelExtractors": {
@@ -21,7 +21,7 @@
   },
   "bucketOptions": {
     "explicitBuckets": {
-      "bounds": [1, 5, 10, 25, 50, 100, 250]
+      "bounds": [0, 1, 5, 10, 25, 50, 100, 250, 500]
     }
   }
 }

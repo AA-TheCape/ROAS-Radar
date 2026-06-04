@@ -339,9 +339,9 @@ test("recoverShopifyAttributionHints applies click-id-backed synthetic attributi
 				attributed_campaign: null,
 				attributed_click_id_type: "fbclid",
 				attributed_click_id_value: "FB-CLICK-123",
-				match_source: "shopify_hint_derived",
+				match_source: "shopify_hint_fallback",
 				confidence_score: "0.55",
-				confidence_label: "medium",
+				confidence_label: "low",
 				attribution_reason: "shopify_hint_derived",
 			});
 
@@ -360,7 +360,7 @@ test("recoverShopifyAttributionHints applies click-id-backed synthetic attributi
       clickIdType: 'fbclid',
       clickIdValue: 'FB-CLICK-123',
       attributionReason: 'shopify_hint_derived',
-      ingestionSource: 'customer_identity',
+      ingestionSource: 'shopify_marketing_hint',
       isDirect: false
     });
     assert.deepEqual(snapshot?.timeline, [snapshot?.winner]);
@@ -373,8 +373,8 @@ test("recoverShopifyAttributionHints applies click-id-backed synthetic attributi
         attribution_reason: orderAudit?.attribution_reason
       },
       {
-        attribution_tier: 'deterministic_first_party',
-        attribution_source: 'stitched_identity_journey',
+        attribution_tier: 'deterministic_shopify_hint',
+        attribution_source: 'shopify_hint_fallback',
         attribution_reason: 'shopify_hint_derived'
       }
     );
@@ -519,7 +519,7 @@ test("recoverShopifyAttributionHints suppresses Shopify fallback when checkout o
 				attributed_campaign: "brand-search",
 				attributed_click_id_type: "gclid",
 				attributed_click_id_value: "gclid-123",
-				match_source: "matched_by_landing_session",
+				match_source: "landing_session_id",
 				confidence_score: "1.00",
 				confidence_label: "high",
 			attribution_reason: "matched_by_landing_session",

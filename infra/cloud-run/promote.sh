@@ -26,6 +26,10 @@ promote_environment() {
   ENVIRONMENT="$1"
   METADATA_FILE="$STATE_DIR/$ENVIRONMENT.env"
 
+  echo "Checking smoke test dependencies for $ENVIRONMENT"
+  SMOKE_TEST_DEPENDENCY_CHECK_ONLY=true \
+  sh "$SCRIPT_DIR/smoke-test.sh" "$ENVIRONMENT"
+
   echo "Deploying $ENVIRONMENT"
   DEPLOY_METADATA_FILE="$METADATA_FILE" \
   SHORT_SHA="${SHORT_SHA:-}" \

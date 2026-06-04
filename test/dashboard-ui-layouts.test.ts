@@ -167,6 +167,8 @@ test("reporting dashboard search and order drill-in stay wired for high-traffic 
     assert.match(mounted.container.textContent ?? '', /Order attribution rows/);
     assert.match(mounted.container.textContent ?? '', /Deterministic first-party/);
     assert.match(mounted.container.textContent ?? '', /Unattributed/);
+    assert.match(mounted.container.textContent ?? '', /Pending/);
+    assert.match(mounted.container.textContent ?? '', /Awaiting attribution run/);
 
 		const orderButton = mounted.container.querySelector(
 			'button[aria-label="Open order details for Shopify order 1105"]',
@@ -176,6 +178,113 @@ test("reporting dashboard search and order drill-in stay wired for high-traffic 
 		click(orderButton);
 		await tick();
 		assert.equal(openedOrderId, "1105");
+	} finally {
+		mounted.cleanup();
+	}
+});
+
+test("reporting dashboard labels Meta campaigns and ad sets with resolved names", async () => {
+	const { default: ReportingDashboard } = await loadDashboardModule<
+		typeof import("../dashboard/src/components/ReportingDashboard")
+	>("dashboard/src/components/ReportingDashboard.tsx");
+
+	const resolvedCampaignId = "23861234567890123";
+	const resolvedAdSetId = "23869876543210987";
+	const unresolvedCampaignId = "23860000000000000";
+	const mounted = await mountUi(
+		h(
+			ReportingDashboard,
+			createReportingDashboardProps({
+				campaignsSection: {
+					data: [
+						{
+							source: "meta",
+							medium: "paid_social",
+							campaign: resolvedCampaignId,
+							content: "feed",
+							visits: 1200,
+							orders: 44,
+							revenue: 8800,
+							conversionRate: 0.0367,
+							campaignLabel: {
+								displayName: "Meta Prospecting Launch",
+								source: "meta",
+								rawId: resolvedCampaignId,
+								entityId: resolvedCampaignId,
+								objectType: "campaign",
+								platform: "meta_ads",
+								resolutionStatus: "resolved",
+								lastSeenAt: "2026-04-20T08:00:00.000Z",
+								updatedAt: "2026-04-20T08:30:00.000Z",
+							},
+						},
+						{
+							source: "meta",
+							medium: "paid_social",
+							campaign: resolvedAdSetId,
+							content: "story",
+							visits: 940,
+							orders: 31,
+							revenue: 6100,
+							conversionRate: 0.033,
+							campaignLabel: {
+								displayName: "US Broad Audience",
+								source: "meta",
+								rawId: resolvedAdSetId,
+								entityId: resolvedAdSetId,
+								objectType: "adset",
+								platform: "meta_ads",
+								resolutionStatus: "resolved",
+								parentCampaign: {
+									entityId: resolvedCampaignId,
+									displayName: "Meta Prospecting Launch",
+								},
+								parentCampaignEntityId: resolvedCampaignId,
+								parentCampaignDisplayName: "Meta Prospecting Launch",
+								lastSeenAt: "2026-04-20T08:05:00.000Z",
+								updatedAt: "2026-04-20T08:35:00.000Z",
+							},
+						},
+						{
+							source: "meta",
+							medium: "paid_social",
+							campaign: unresolvedCampaignId,
+							content: "reels",
+							visits: 300,
+							orders: 5,
+							revenue: 900,
+							conversionRate: 0.0167,
+							campaignDisplayName: "Stale Meta Campaign Name",
+							campaignLabel: {
+								displayName: "Stale Meta Campaign Name",
+								source: "meta",
+								rawId: unresolvedCampaignId,
+								entityId: unresolvedCampaignId,
+								objectType: "campaign",
+								platform: "meta_ads",
+								resolutionStatus: "unresolved",
+								lastSeenAt: null,
+								updatedAt: null,
+							},
+						},
+					],
+					loading: false,
+					error: null,
+				},
+			}),
+		),
+	);
+
+	try {
+		const text = mounted.container.textContent ?? "";
+		assert.match(text, /Meta Prospecting Launch/);
+		assert.match(text, /US Broad Audience/);
+		assert.match(text, /Ad set in Meta Prospecting Launch/);
+		assert.match(text, new RegExp(`Campaign ID ${resolvedCampaignId}`));
+		assert.match(text, new RegExp(`Ad set ID ${resolvedAdSetId}`));
+		assert.match(text, /Meta \/ Paid Social/);
+		assert.match(text, new RegExp(unresolvedCampaignId));
+		assert.doesNotMatch(text, /Stale Meta Campaign Name/);
 	} finally {
 		mounted.cleanup();
 	}
@@ -232,6 +341,22 @@ test("reporting dashboard keeps overview, charts, and report tables internally c
 		typeof import("../dashboard/src/components/ReportingDashboard")
 	>("dashboard/src/components/ReportingDashboard.tsx");
 
+	const qaTotals = {
+		visits: 1500,
+		orders: 12,
+		revenue: 1200,
+		spend: 600,
+		conversionRate: 0.008,
+		roas: 2,
+	};
+	const zeroTotals = {
+		visits: 0,
+		orders: 0,
+		revenue: 0,
+		spend: 0,
+		conversionRate: 0,
+		roas: null,
+	};
   const props = createReportingDashboardProps({
     summaryCards: [
       { label: 'Visits', value: '1,500', detail: 'Apr 1 to Apr 3' },
@@ -242,12 +367,44 @@ test("reporting dashboard keeps overview, charts, and report tables internally c
     ],
     summarySection: {
       data: {
-        visits: 1500,
-        orders: 12,
-        revenue: 1200,
-        spend: 600,
-        conversionRate: 0.008,
-        roas: 2
+        range: {
+          startDate: '2026-04-01',
+          endDate: '2026-04-03'
+        },
+        reportingMode: 'clicks',
+        reportingModeLabel: 'Clicks',
+        totalsLabel: 'Click-attributed totals',
+        totalsCanonical: true,
+        totalsDescription: 'Canonical totals from click-attributed orders.',
+        totals: qaTotals,
+        comparisonTotals: {
+          combined: {
+            label: 'Combined',
+            canonical: false,
+            description: 'Comparison totals combining click and view-through attribution.',
+            totals: qaTotals
+          }
+        },
+        layers: {
+          clicks: {
+            label: 'Clicks',
+            canonical: true,
+            description: 'Canonical click-attributed totals.',
+            totals: qaTotals
+          },
+          deterministicViews: {
+            label: 'Deterministic views',
+            canonical: false,
+            description: 'Deterministic view-through totals.',
+            totals: zeroTotals
+          },
+          metaViewThrough: {
+            label: 'Meta view-through',
+            canonical: false,
+            description: 'Meta API view-through totals.',
+            totals: zeroTotals
+          }
+        }
       },
       loading: false,
       error: null
@@ -355,7 +512,7 @@ test("reporting dashboard keeps overview, charts, and report tables internally c
     }
   });
 
-	const summary = props.summarySection.data;
+	const summary = props.summarySection.data?.totals;
 	const campaigns = props.campaignsSection.data ?? [];
 	const points = props.timeseriesSection.data ?? [];
 	const orders = props.ordersSection.data ?? [];
@@ -527,6 +684,30 @@ test("order details empty state stays explicit when no drill-in selection is act
 
 	try {
 		assert.match(mounted.container.textContent ?? "", /No order selected\./);
+	} finally {
+		mounted.cleanup();
+	}
+});
+
+test("order details renders attribution confidence lookup metadata", async () => {
+	const { default: OrderDetailsView } = await loadDashboardModule<
+		typeof import("../dashboard/src/components/OrderDetailsView")
+	>("dashboard/src/components/OrderDetailsView.tsx");
+
+	const mounted = await mountUi(
+		h(OrderDetailsView, createOrderDetailsProps()),
+		{ width: 1280, height: 900 },
+	);
+
+	try {
+		const text = mounted.container.textContent ?? "";
+		assert.match(text, /Attribution source/);
+		assert.match(text, /landing_session_id/);
+		assert.match(text, /Matching method/);
+		assert.match(text, /matched_by_landing_session/);
+		assert.match(text, /Confidence score/);
+		assert.match(text, /Last attribution run/);
+		assert.match(text, /Apr 20, 11:00 AM/);
 	} finally {
 		mounted.cleanup();
 	}

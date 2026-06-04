@@ -14,6 +14,8 @@ const spendSection =
 	deployScript.match(/gcloud run jobs deploy "\$META_ADS_JOB_NAME"[\s\S]*?ensure_job_invoker "\$META_ADS_JOB_NAME"/)?.[0] ?? "";
 const orderValueSection =
 	deployScript.match(/gcloud run jobs deploy "\$META_ADS_ORDER_VALUE_JOB_NAME"[\s\S]*?ensure_job_invoker "\$META_ADS_ORDER_VALUE_JOB_NAME"/)?.[0] ?? "";
+const deterministicSection =
+	deployScript.match(/gcloud run jobs deploy "\$META_ADS_DETERMINISTIC_JOB_NAME"[\s\S]*?ensure_job_invoker "\$META_ADS_DETERMINISTIC_JOB_NAME"/)?.[0] ?? "";
 const originalMetaAdsJobMode = process.env.META_ADS_JOB_MODE;
 
 test.afterEach(() => {
@@ -41,4 +43,13 @@ test("Cloud Run deploy script keeps spend and order-value job entrypoints isolat
 	assert.match(orderValueSection, /--args=run,meta-ads:order-value:start/);
 	assert.match(orderValueSection, /META_ADS_JOB_MODE=order_value/);
 	assert.match(orderValueSection, /META_ADS_ORDER_VALUE_SYNC_ENABLED=/);
+
+	assert.match(deterministicSection, /--args=run,meta-ads:deterministic:start/);
+	assert.match(deterministicSection, /META_ADS_DETERMINISTIC_SYNC_ENABLED=/);
+	assert.match(deterministicSection, /META_ADS_DETERMINISTIC_SYNC_LOOKBACK_DAYS=/);
+	assert.doesNotMatch(deterministicSection, /META_ADS_ORDER_VALUE_SYNC_ENABLED=/);
+	assert.match(
+		deterministicSection,
+		/DATABASE_URL=DATABASE_URL:latest,\$META_ADS_SECRET_FLAGS/,
+	);
 });

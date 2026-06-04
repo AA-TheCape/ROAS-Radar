@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ShopifyAttributionHintV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "shopifyOrderId",
+    "extractedAt",
+    "hintSource",
+    "source",
+    "medium",
+    "campaign",
+    "content",
+    "term",
+    "clickIdType",
+    "clickIdValue",
+    "landingSite",
+    "referringSite",
+    "confidenceScore",
+    "confidenceLabel",
+    "rawKeys",
+    "sourcePrecedenceRank"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1, "type": "integer" },
+    "shopifyOrderId": { "type": "string", "minLength": 1 },
+    "extractedAt": { "type": "string", "format": "date-time" },
+    "hintSource": {
+      "type": "string",
+      "enum": ["note_attributes", "landing_site", "attributes_array", "client_details"]
+    },
+    "source": { "type": ["string", "null"] },
+    "medium": { "type": ["string", "null"] },
+    "campaign": { "type": ["string", "null"] },
+    "content": { "type": ["string", "null"] },
+    "term": { "type": ["string", "null"] },
+    "clickIdType": {
+      "type": ["string", "null"],
+      "enum": ["gclid", "gbraid", "wbraid", "fbclid", "ttclid", "msclkid", null]
+    },
+    "clickIdValue": { "type": ["string", "null"] },
+    "landingSite": { "type": ["string", "null"] },
+    "referringSite": { "type": ["string", "null"] },
+    "confidenceScore": { "type": "number", "minimum": 0, "maximum": 1 },
+    "confidenceLabel": { "type": "string", "enum": ["low", "medium", "high"] },
+    "rawKeys": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "sourcePrecedenceRank": { "const": 1, "type": "integer" }
+  }
+}

@@ -1,9 +1,11 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { Buffer } from 'node:buffer';
 import { randomUUID } from 'node:crypto';
 
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 
 import type { OrderAttributionBackfillReport } from '../../packages/attribution-schema/index.js';
+import type { NormalizedRecoveryError, RecoveryCheckpoint, RecoveryRun } from '../modules/recovery/index.js';
 
 type SerializableFields = Record<string, unknown>;
 
@@ -158,6 +160,130 @@ type MmmBaselineJobLifecycleLogInput = {
   error?: unknown;
 };
 
+type MetaMetadataLookupSummaryLogInput = {
+  resolutionScope: 'campaign_adset_metadata';
+  requestedCount: number;
+  normalizedRequestCount: number;
+  invalidIdCount: number;
+  cacheHitCount: number;
+  staleCacheHitCount: number;
+  recentFailureCacheHitCount: number;
+  cacheMissCount: number;
+  apiRequestCount: number;
+  apiLookupObjectCount: number;
+  apiResolvedCount: number;
+  apiNotFoundCount: number;
+  apiFailureCount: number;
+  missingConnectionCount: number;
+  unresolvedCount: number;
+  unresolvedEntityIds?: string[];
+  unresolvedReasons?: Record<string, number>;
+};
+
+type MetaMetadataRawIdFallbackLogInput = {
+  resolutionScope: 'campaign_adset_metadata';
+  startDate: string;
+  endDate: string;
+  source?: string | null;
+  requestedCount: number;
+  unresolvedCount: number;
+  unresolvedEntityIds?: string[];
+  unresolvedReasons?: Record<string, number>;
+};
+
+type RecoveryRunLifecycleLogInput = {
+  stage: 'started' | 'completed' | 'failed' | 'cancelled';
+  run: RecoveryRun;
+  workerId: string;
+  pagesProcessed?: number;
+  durationMs?: number | null;
+  error?: unknown;
+};
+
+type RecoveryRunChunkLogInput = {
+  run: RecoveryRun;
+  workerId: string;
+  pageNumber: number;
+  recordsDiscovered: number;
+  recordsProcessed: number;
+  done: boolean;
+  durationMs: number;
+  checkpoint: RecoveryCheckpoint;
+};
+
+type RecoveryRecordFailureLogInput = {
+  run: RecoveryRun;
+  workerId: string;
+  recordId: string;
+  recordType: string;
+  recordKey: string;
+  attemptNumber: number;
+  retryable: boolean;
+  nextAttemptAt?: Date | null;
+  error: NormalizedRecoveryError;
+};
+
+type AttributionQaSnapshotWriteLogInput = {
+  orderId: string;
+  pipeline: 'realtime_queue' | 'order_backfill' | 'generated_on_read' | string;
+  status: 'success' | 'failure';
+  attributionTier?: string | null;
+  matchSource?: string | null;
+  payload?: unknown;
+  error?: unknown;
+};
+
+type AttributionQaPayloadFetchLogInput = {
+  endpoint: 'public_qa_payload' | 'admin_qa_debug' | string;
+  orderId: string;
+  status: 'success' | 'not_found' | 'failure';
+  statusCode: number;
+  durationMs: number;
+  source?: string | null;
+  payload?: unknown;
+  rawEvidenceCount?: number | null;
+  rawEvidenceSizeBytes?: number | null;
+  error?: unknown;
+};
+
+type AttributionRunOrderOutcomeLogInput = {
+  attributionRunId: string;
+  orderId: string;
+  outcome: 'recomputed' | 'skipped' | 'failed';
+  processedOrderCount: number;
+  recomputedOrderCount: number;
+  skippedOrderCount: number;
+  failedOrderCount: number;
+  modelCount?: number;
+  creditCount?: number;
+  primaryModelKey?: string | null;
+  primaryAllocationStatus?: string | null;
+  primaryConfidenceLabel?: string | null;
+  lookupResolutionErrorCount?: number;
+  lookupResolutionErrorCodes?: string[];
+  orderOccurredAtUtc?: Date | string | null;
+};
+
+type AttributionRunLookupResolutionErrorLogInput = {
+  attributionRunId: string;
+  orderId: string;
+  reasonCode: string;
+  orderOccurredAtUtc?: Date | string | null;
+};
+
+type AttributionConfidenceBackfillProgressLogInput = {
+  workerId: string;
+  dryRun: boolean;
+  stage: 'started' | 'batch_processed' | 'completed' | 'failed';
+  scannedOrders: number;
+  updatedOrders: number;
+  updatedResults: number;
+  skippedOrders: number;
+  fallbackRows: number;
+  failedBatches: number;
+  batchesProcessed: number;
+  lastOrderRowId: string | null;
+};
 const requestContextStorage = new AsyncLocalStorage<RequestContext>();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -171,6 +297,14 @@ function normalizeString(value: unknown): string | undefined {
 
   const normalized = value.trim();
   return normalized ? normalized : undefined;
+}
+
+function normalizeTimestamp(value: Date | string | null | undefined): string | null {
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  return normalizeString(value) ?? null;
 }
 
 function getGoogleCloudProjectId(): string | undefined {
@@ -258,6 +392,151 @@ function normalizeBackfillErrorMessage(error: unknown): string | null {
   }
 
   return null;
+}
+
+function calculateDurationMs(startedAt: string | null, completedAt: string | null): number | null {
+  if (!startedAt || !completedAt) {
+    return null;
+  }
+
+  const started = new Date(startedAt).getTime();
+  const completed = new Date(completedAt).getTime();
+
+  if (Number.isNaN(started) || Number.isNaN(completed)) {
+    return null;
+  }
+
+  return Math.max(0, completed - started);
+}
+
+function buildRecoveryTraceFields(runId: string): SerializableFields {
+  const traceId = runId.replaceAll('-', '').toLowerCase();
+  const projectId = getGoogleCloudProjectId();
+  const isCloudTraceCompatible = /^[a-f0-9]{32}$/.test(traceId);
+
+  return {
+    recoveryTraceId: traceId,
+    ...(projectId && isCloudTraceCompatible
+      ? { 'logging.googleapis.com/trace': `projects/${projectId}/traces/${traceId}` }
+      : {})
+  };
+}
+
+function summarizeRecoveryRun(run: RecoveryRun): SerializableFields {
+  return {
+    runId: run.id,
+    jobType: run.jobType,
+    status: run.status,
+    mode: run.mode,
+    initiatedBy: run.initiatedBy,
+    dryRun: run.dryRun,
+    scopeKey: run.scopeKey,
+    timeRangeStart: run.timeRangeStart,
+    timeRangeEnd: run.timeRangeEnd,
+    resumeFromRunId: run.resumeFromRunId,
+    rerunOfRunId: run.rerunOfRunId,
+    queuedAt: run.queuedAt,
+    startedAt: run.startedAt,
+    completedAt: run.completedAt,
+    lastHeartbeatAt: run.lastHeartbeatAt,
+    durationMs: calculateDurationMs(run.startedAt, run.completedAt),
+    processedCount: run.recordsProcessed,
+    updatedCount: run.sideEffectsSucceeded,
+    skippedCount: run.recordsSkipped,
+    failedCount: run.recordsFailed,
+    retriedCount: run.recordsRetried,
+    discoveredCount: run.recordsDiscovered,
+    claimedCount: run.recordsClaimed,
+    sideEffectsAttempted: run.sideEffectsAttempted,
+    sideEffectsSuppressed: run.sideEffectsSuppressed,
+    errorCode: run.errorCode,
+    errorMessage: run.errorMessage,
+    ...buildRecoveryTraceFields(run.id)
+  };
+}
+
+export function emitRecoveryRunLifecycleLog(input: RecoveryRunLifecycleLogInput): void {
+  const runSummary = summarizeRecoveryRun(input.run);
+  const fields: SerializableFields = {
+    service: process.env.K_SERVICE ?? 'roas-radar-recovery-worker',
+    stage: input.stage,
+    workerId: input.workerId,
+    pagesProcessed: input.pagesProcessed ?? null,
+    ...runSummary,
+    durationMs:
+      typeof input.durationMs === 'number'
+        ? Number(input.durationMs.toFixed(2))
+        : runSummary.durationMs
+  };
+
+  if (input.stage === 'failed') {
+    fields.alertable = true;
+    fields.failureContext = {
+      runId: input.run.id,
+      jobType: input.run.jobType,
+      workerId: input.workerId,
+      status: input.run.status,
+      checkpoint: input.run.checkpoint,
+      counters: {
+        processed: input.run.recordsProcessed,
+        updated: input.run.sideEffectsSucceeded,
+        skipped: input.run.recordsSkipped,
+        failed: input.run.recordsFailed,
+        retried: input.run.recordsRetried
+      }
+    };
+    logError('recovery_run_lifecycle', input.error ?? new Error('Recovery run failed'), fields);
+    return;
+  }
+
+  logInfo('recovery_run_lifecycle', fields);
+}
+
+export function emitRecoveryRunChunkLog(input: RecoveryRunChunkLogInput): void {
+  logInfo('recovery_run_chunk_processed', {
+    service: process.env.K_SERVICE ?? 'roas-radar-recovery-worker',
+    ...summarizeRecoveryRun(input.run),
+    workerId: input.workerId,
+    pageNumber: input.pageNumber,
+    recordsDiscovered: input.recordsDiscovered,
+    recordsProcessed: input.recordsProcessed,
+    processedCount: input.run.recordsProcessed,
+    updatedCount: input.run.sideEffectsSucceeded,
+    skippedCount: input.run.recordsSkipped,
+    failedCount: input.run.recordsFailed,
+    retriedCount: input.run.recordsRetried,
+    done: input.done,
+    durationMs: Number(input.durationMs.toFixed(2)),
+    checkpoint: input.checkpoint
+  });
+}
+
+export function emitRecoveryRecordFailureLog(input: RecoveryRecordFailureLogInput): void {
+  logError('recovery_record_failure', new Error(input.error.message), {
+    service: process.env.K_SERVICE ?? 'roas-radar-recovery-worker',
+    workerId: input.workerId,
+    runId: input.run.id,
+    jobType: input.run.jobType,
+    status: input.run.status,
+    mode: input.run.mode,
+    dryRun: input.run.dryRun,
+    recordId: input.recordId,
+    recordType: input.recordType,
+    recordKey: input.recordKey,
+    attemptNumber: input.attemptNumber,
+    retryable: input.retryable,
+    nextAttemptAt: input.nextAttemptAt?.toISOString() ?? null,
+    errorCode: input.error.code,
+    errorMessage: input.error.message,
+    errorDetails: input.error.details,
+    actionContext: {
+      inspectRunFilter: `jsonPayload.event="recovery_run_lifecycle" jsonPayload.runId="${input.run.id}"`,
+      inspectRecordFilter: `jsonPayload.event="recovery_record_failure" jsonPayload.runId="${input.run.id}" jsonPayload.recordKey="${input.recordKey}"`,
+      checkpoint: input.run.checkpoint
+    },
+    alertable: !input.retryable,
+    ...buildRecoveryTraceFields(input.run.id)
+  });
 }
 
 function toBackfillLifecycleStatus(stage: BackfillLifecycleStage): 'queued' | 'processing' | 'completed' | 'failed' {
@@ -352,6 +631,40 @@ function hasMeaningfulValue(value: unknown): boolean {
   }
 
   return value.trim().length > 0;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function arrayLength(value: unknown): number {
+  return Array.isArray(value) ? value.length : 0;
+}
+
+function measureJsonSizeBytes(value: unknown): number {
+  try {
+    return Buffer.byteLength(JSON.stringify(value) ?? 'null', 'utf8');
+  } catch {
+    return 0;
+  }
+}
+
+function summarizeAttributionQaPayload(payload: unknown): SerializableFields {
+  const record = asRecord(payload);
+  const candidates = asRecord(record?.candidates);
+  const diagnostics = asRecord(record?.diagnostics);
+
+  return {
+    payloadSizeBytes: payload === undefined ? 0 : measureJsonSizeBytes(payload),
+    candidateCount:
+      arrayLength(candidates?.deterministic_first_party) +
+      arrayLength(candidates?.shopify_hint) +
+      arrayLength(candidates?.ga4_fallback),
+    modelSummaryCount: arrayLength(record?.model_summaries),
+    creditCount: arrayLength(record?.credits),
+    explainabilityRecordCount: arrayLength(record?.explainability),
+    normalizationFailureCount: arrayLength(diagnostics?.normalization_failures)
+  };
 }
 
 function buildCaptureStatus(payload: Record<string, unknown>): 'missing_session_id' | 'complete' | 'partial' {
@@ -472,6 +785,53 @@ export function emitAttributionResolverOutcomeLog(input: ResolverOutcomeInput): 
     service: process.env.K_SERVICE ?? 'roas-radar-attribution-worker',
     ...summarizeResolverOutcome(input)
   });
+}
+
+export function emitAttributionQaSnapshotWriteLog(input: AttributionQaSnapshotWriteLogInput): void {
+  const fields: SerializableFields = {
+    service: process.env.K_SERVICE ?? 'roas-radar-attribution-worker',
+    order_id: input.orderId,
+    orderId: input.orderId,
+    pipeline: input.pipeline,
+    status: input.status,
+    attributionTier: input.attributionTier ?? null,
+    matchSource: input.matchSource ?? null,
+    ...summarizeAttributionQaPayload(input.payload)
+  };
+
+  if (input.status === 'failure') {
+    logError('attribution_qa_snapshot_write', input.error ?? new Error('Attribution QA snapshot write failed'), {
+      ...fields,
+      alertable: true
+    });
+    return;
+  }
+
+  logInfo('attribution_qa_snapshot_write', fields);
+}
+
+export function emitAttributionQaPayloadFetchLog(input: AttributionQaPayloadFetchLogInput): void {
+  const fields: SerializableFields = {
+    service: process.env.K_SERVICE ?? 'roas-radar-api',
+    endpoint: input.endpoint,
+    order_id: input.orderId,
+    orderId: input.orderId,
+    status: input.status,
+    statusCode: input.statusCode,
+    statusClass: `${Math.floor(input.statusCode / 100)}xx`,
+    source: input.source ?? null,
+    durationMs: Number(input.durationMs.toFixed(2)),
+    rawEvidenceCount: input.rawEvidenceCount ?? null,
+    rawEvidenceSizeBytes: input.rawEvidenceSizeBytes ?? null,
+    ...summarizeAttributionQaPayload(input.payload)
+  };
+
+  if (input.status === 'failure') {
+    logError('attribution_qa_payload_fetch', input.error ?? new Error('Attribution QA payload fetch failed'), fields);
+    return;
+  }
+
+  logInfo('attribution_qa_payload_fetch', fields);
 }
 
 export function runWithRequestContext<T>(context: RequestContext, callback: () => T): T {
@@ -803,6 +1163,117 @@ export function emitMmmBayesianJobLifecycleLog(input: MmmBaselineJobLifecycleLog
   logInfo('mmm_bayesian_job_lifecycle', fields);
 }
 
+export function emitMetaMetadataLookupSummaryLog(input: MetaMetadataLookupSummaryLogInput): void {
+  const normalizedRequestCount = Math.max(0, input.normalizedRequestCount);
+  const unresolvedCount = Math.max(0, input.unresolvedCount);
+
+  logInfo('meta_metadata_lookup_summary', {
+    service: process.env.K_SERVICE ?? 'roas-radar',
+    platform: 'meta_ads',
+    resolutionScope: input.resolutionScope,
+    requestedCount: Math.max(0, input.requestedCount),
+    normalizedRequestCount,
+    invalidIdCount: Math.max(0, input.invalidIdCount),
+    cacheHitCount: Math.max(0, input.cacheHitCount),
+    staleCacheHitCount: Math.max(0, input.staleCacheHitCount),
+    recentFailureCacheHitCount: Math.max(0, input.recentFailureCacheHitCount),
+    cacheMissCount: Math.max(0, input.cacheMissCount),
+    cacheHitRate: normalizedRequestCount > 0 ? input.cacheHitCount / normalizedRequestCount : 0,
+    cacheMissRate: normalizedRequestCount > 0 ? input.cacheMissCount / normalizedRequestCount : 0,
+    apiRequestCount: Math.max(0, input.apiRequestCount),
+    apiLookupObjectCount: Math.max(0, input.apiLookupObjectCount),
+    apiResolvedCount: Math.max(0, input.apiResolvedCount),
+    apiNotFoundCount: Math.max(0, input.apiNotFoundCount),
+    apiFailureCount: Math.max(0, input.apiFailureCount),
+    missingConnectionCount: Math.max(0, input.missingConnectionCount),
+    unresolvedCount,
+    unresolvedRate: normalizedRequestCount > 0 ? unresolvedCount / normalizedRequestCount : 0,
+    unresolvedEntityIds: (input.unresolvedEntityIds ?? []).slice(0, 10),
+    unresolvedReasons: input.unresolvedReasons ?? {}
+  });
+}
+
+export function emitMetaMetadataRawIdFallbackLog(input: MetaMetadataRawIdFallbackLogInput): void {
+  logInfo('meta_metadata_raw_id_fallback', {
+    service: process.env.K_SERVICE ?? 'roas-radar',
+    platform: 'meta_ads',
+    resolutionScope: input.resolutionScope,
+    requestedCount: Math.max(0, input.requestedCount),
+    unresolvedCount: Math.max(0, input.unresolvedCount),
+    unresolvedEntityIds: (input.unresolvedEntityIds ?? []).slice(0, 10),
+    unresolvedReasons: input.unresolvedReasons ?? {},
+    fallback: 'raw_id',
+    startDate: input.startDate,
+    endDate: input.endDate,
+    source: input.source ?? null
+  });
+}
+
+export function emitAttributionRunOrderOutcomeLog(input: AttributionRunOrderOutcomeLogInput): void {
+  const fields: SerializableFields = {
+    service: process.env.K_SERVICE ?? 'roas-radar-attribution-worker',
+    attributionRunId: input.attributionRunId,
+    orderId: input.orderId,
+    outcome: input.outcome,
+    processedOrderCount: input.processedOrderCount,
+    recomputedOrderCount: input.recomputedOrderCount,
+    skippedOrderCount: input.skippedOrderCount,
+    failedOrderCount: input.failedOrderCount,
+    modelCount: input.modelCount ?? null,
+    creditCount: input.creditCount ?? null,
+    primaryModelKey: input.primaryModelKey ?? null,
+    primaryAllocationStatus: input.primaryAllocationStatus ?? null,
+    primaryConfidenceLabel: input.primaryConfidenceLabel ?? null,
+    lookupResolutionErrorCount: input.lookupResolutionErrorCount ?? 0,
+    lookupResolutionErrorCodes: input.lookupResolutionErrorCodes ?? [],
+    orderOccurredAtUtc: normalizeTimestamp(input.orderOccurredAtUtc)
+  };
+
+  if (input.outcome === 'failed') {
+    logWarning('attribution_run_order_outcome', fields);
+    return;
+  }
+
+  logInfo('attribution_run_order_outcome', fields);
+}
+
+export function emitAttributionRunLookupResolutionErrorLog(input: AttributionRunLookupResolutionErrorLogInput): void {
+  logWarning('attribution_run_lookup_resolution_error', {
+    service: process.env.K_SERVICE ?? 'roas-radar-attribution-worker',
+    attributionRunId: input.attributionRunId,
+    orderId: input.orderId,
+    reasonCode: input.reasonCode,
+    orderOccurredAtUtc: normalizeTimestamp(input.orderOccurredAtUtc),
+    alertable: true
+  });
+}
+
+export function emitAttributionConfidenceBackfillProgressLog(
+  input: AttributionConfidenceBackfillProgressLogInput
+): void {
+  const lookupResolutionErrorRate = input.scannedOrders > 0 ? input.fallbackRows / input.scannedOrders : 0;
+  const skippedVsRecomputedRatio = input.updatedOrders > 0 ? input.skippedOrders / input.updatedOrders : input.skippedOrders;
+
+  logInfo('order_attribution_confidence_backfill_progress', {
+    service: process.env.K_SERVICE ?? 'roas-radar-attribution-worker',
+    workerId: input.workerId,
+    dryRun: input.dryRun,
+    stage: input.stage,
+    scannedOrders: input.scannedOrders,
+    updatedOrders: input.updatedOrders,
+    updatedResults: input.updatedResults,
+    skippedOrders: input.skippedOrders,
+    recomputedOrders: input.updatedOrders,
+    fallbackRows: input.fallbackRows,
+    lookupResolutionErrorCount: input.fallbackRows,
+    lookupResolutionErrorRate,
+    skippedVsRecomputedRatio,
+    failedBatches: input.failedBatches,
+    batchesProcessed: input.batchesProcessed,
+    lastOrderRowId: input.lastOrderRowId
+  });
+}
+
 export function buildAttributionBacklogLog(snapshot: AttributionBacklogSnapshot): string {
   return JSON.stringify({
     severity: 'INFO',
@@ -828,5 +1299,10 @@ export const __observabilityTestUtils = {
   emitCampaignMetadataFreshnessSnapshotLog,
   emitCampaignMetadataSyncJobLifecycleLog,
   emitMmmBaselineJobLifecycleLog,
-  emitMmmBayesianJobLifecycleLog
+  emitMmmBayesianJobLifecycleLog,
+  emitMetaMetadataLookupSummaryLog,
+  emitMetaMetadataRawIdFallbackLog,
+  emitAttributionRunOrderOutcomeLog,
+  emitAttributionRunLookupResolutionErrorLog,
+  emitAttributionConfidenceBackfillProgressLog
 };

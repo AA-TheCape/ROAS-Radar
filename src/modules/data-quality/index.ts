@@ -67,6 +67,35 @@ type RateCheckRow = {
 	discrepancy_count: string | number;
 };
 
+type MetaDeterministicReconciliationRow = {
+	account_id: string;
+	campaign_id: string | null;
+	adset_id: string | null;
+	ad_id: string | null;
+	event_type: "impression" | "view";
+	api_expected_count: string | number;
+	raw_ingested_count: string | number;
+	fact_count: string | number;
+	sample_source_ids: Array<string | number>;
+	sample_raw_event_ids: Array<string | number>;
+};
+
+type MetaDeterministicMismatch = {
+	accountId: string;
+	campaignId: string | null;
+	adsetId: string | null;
+	adId: string | null;
+	eventType: "impression" | "view";
+	apiExpectedCount: number;
+	rawIngestedCount: number;
+	factCount: number;
+	absoluteDelta: number;
+	relativeDelta: number | null;
+	anomalyFlags: string[];
+	sampleSourceIds: number[];
+	sampleRawEventIds: number[];
+};
+
 type DataQualityCheckSeverity = Extract<
 	PersistedCheckRow["severity"],
 	"warning" | "critical"
@@ -1398,6 +1427,388 @@ async function buildMmmGa4FallbackStatusCheck(
 	return { ...evaluated, checkKey: "mmm_readiness_ga4_fallback_status" };
 }
 
+function isMetaDeterministicMismatch(input: {
+	apiExpectedCount: number;
+	rawIngestedCount: number;
+	factCount: number;
+	absoluteTolerance: number;
+	relativeTolerance: number;
+}): {
+	mismatch: boolean;
+	absoluteDelta: number;
+	relativeDelta: number | null;
+	anomalyFlags: string[];
+} {
+	const apiExpectedCount = Math.max(0, input.apiExpectedCount);
+	const rawIngestedCount = Math.max(0, input.rawIngestedCount);
+	const factCount = Math.max(0, input.factCount);
+	const absoluteTolerance = Math.max(0, input.absoluteTolerance);
+	const relativeTolerance = Math.max(0, input.relativeTolerance);
+	const rawDelta = Math.abs(apiExpectedCount - rawIngestedCount);
+	const factDelta = Math.abs(apiExpectedCount - factCount);
+	const absoluteDelta = Math.max(rawDelta, factDelta);
+	const relativeDelta =
+		apiExpectedCount <= 0
+			? absoluteDelta > 0
+				? 1
+				: null
+			: absoluteDelta / apiExpectedCount;
+	const exceedsTolerance =
+		absoluteDelta > absoluteTolerance &&
+		(relativeDelta ?? 0) > relativeTolerance;
+	const anomalyFlags: string[] = [];
+
+	if (exceedsTolerance && rawDelta > absoluteTolerance) {
+		anomalyFlags.push("raw_ingestion_count_mismatch");
+	}
+
+	if (exceedsTolerance && factDelta > absoluteTolerance) {
+		anomalyFlags.push("fact_count_mismatch");
+	}
+
+	return {
+		mismatch: anomalyFlags.length > 0,
+		absoluteDelta,
+		relativeDelta,
+		anomalyFlags,
+	};
+}
+
+async function persistMetaDeterministicReconciliation(params: {
+	runDate: string;
+	status: "passed" | "failed";
+	comparedScopeCount: number;
+	mismatches: MetaDeterministicMismatch[];
+	totalApiExpectedCount: number;
+	totalRawIngestedCount: number;
+	totalFactCount: number;
+	absoluteTolerance: number;
+	relativeTolerance: number;
+	details: Record<string, unknown>;
+}): Promise<void> {
+	await withTransaction(async (client) => {
+		const runResult = await client.query<{ id: number }>(
+			`
+        INSERT INTO meta_ads_deterministic_reconciliation_runs (
+          run_date,
+          status,
+          checked_at,
+          compared_scope_count,
+          mismatch_count,
+          total_api_expected_count,
+          total_raw_ingested_count,
+          total_fact_count,
+          absolute_tolerance,
+          relative_tolerance,
+          details,
+          updated_at
+        )
+        VALUES ($1::date, $2, now(), $3, $4, $5, $6, $7, $8, $9, $10::jsonb, now())
+        ON CONFLICT (run_date)
+        DO UPDATE SET
+          status = EXCLUDED.status,
+          checked_at = now(),
+          compared_scope_count = EXCLUDED.compared_scope_count,
+          mismatch_count = EXCLUDED.mismatch_count,
+          total_api_expected_count = EXCLUDED.total_api_expected_count,
+          total_raw_ingested_count = EXCLUDED.total_raw_ingested_count,
+          total_fact_count = EXCLUDED.total_fact_count,
+          absolute_tolerance = EXCLUDED.absolute_tolerance,
+          relative_tolerance = EXCLUDED.relative_tolerance,
+          details = EXCLUDED.details,
+          updated_at = now()
+        RETURNING id
+      `,
+			[
+				params.runDate,
+				params.status,
+				params.comparedScopeCount,
+				params.mismatches.length,
+				params.totalApiExpectedCount,
+				params.totalRawIngestedCount,
+				params.totalFactCount,
+				params.absoluteTolerance,
+				params.relativeTolerance,
+				JSON.stringify(params.details),
+			],
+		);
+		const runId = runResult.rows[0].id;
+
+		await client.query(
+			"DELETE FROM meta_ads_deterministic_reconciliation_mismatches WHERE run_id = $1",
+			[runId],
+		);
+
+		for (const mismatch of params.mismatches) {
+			await client.query(
+				`
+          INSERT INTO meta_ads_deterministic_reconciliation_mismatches (
+            run_id,
+            run_date,
+            account_id,
+            campaign_id,
+            adset_id,
+            ad_id,
+            event_type,
+            api_expected_count,
+            raw_ingested_count,
+            fact_count,
+            absolute_delta,
+            relative_delta,
+            anomaly_flags,
+            sample_source_ids,
+            sample_raw_event_ids
+          )
+          VALUES (
+            $1,
+            $2::date,
+            $3,
+            $4,
+            $5,
+            $6,
+            $7,
+            $8,
+            $9,
+            $10,
+            $11,
+            $12,
+            $13::text[],
+            $14::bigint[],
+            $15::bigint[]
+          )
+        `,
+				[
+					runId,
+					params.runDate,
+					mismatch.accountId,
+					mismatch.campaignId,
+					mismatch.adsetId,
+					mismatch.adId,
+					mismatch.eventType,
+					mismatch.apiExpectedCount,
+					mismatch.rawIngestedCount,
+					mismatch.factCount,
+					mismatch.absoluteDelta,
+					mismatch.relativeDelta,
+					mismatch.anomalyFlags,
+					mismatch.sampleSourceIds,
+					mismatch.sampleRawEventIds,
+				],
+			);
+		}
+	});
+}
+
+async function buildMetaDeterministicReconciliationCheck(
+	runDate: string,
+): Promise<DataQualityCheckResult> {
+	const result = await query<MetaDeterministicReconciliationRow>(
+		`
+      WITH raw_api_counts AS (
+        SELECT
+          r.account_id,
+          r.campaign_id,
+          r.adset_id,
+          r.ad_id,
+          r.event_type,
+          r.source_id,
+          r.id AS raw_event_id,
+          r.event_count AS raw_ingested_count,
+          CASE
+            WHEN r.event_type = 'impression' THEN
+              CASE
+                WHEN COALESCE(r.raw_payload->>'impressions', '') ~ '^[0-9]+(\\.[0-9]+)?$'
+                  THEN GREATEST(0, FLOOR((r.raw_payload->>'impressions')::numeric))::bigint
+                ELSE 0::bigint
+              END
+            WHEN r.event_type = 'view' THEN
+              GREATEST(
+                COALESCE(video_play_actions.value, 0),
+                COALESCE(video_thruplay_actions.value, 0)
+              )::bigint
+            ELSE 0::bigint
+          END AS api_expected_count
+        FROM raw_deterministic_events r
+        LEFT JOIN LATERAL (
+          SELECT FLOOR(SUM(
+            CASE
+              WHEN jsonb_typeof(action_entry) = 'object'
+                AND COALESCE(action_entry->>'value', '') ~ '^[0-9]+(\\.[0-9]+)?$'
+                THEN (action_entry->>'value')::numeric
+              ELSE 0
+            END
+          ))::bigint AS value
+          FROM jsonb_array_elements(
+            CASE
+              WHEN jsonb_typeof(r.raw_payload->'video_play_actions') = 'array'
+                THEN r.raw_payload->'video_play_actions'
+              ELSE '[]'::jsonb
+            END
+          ) action_entry
+        ) video_play_actions ON true
+        LEFT JOIN LATERAL (
+          SELECT FLOOR(SUM(
+            CASE
+              WHEN jsonb_typeof(action_entry) = 'object'
+                AND COALESCE(action_entry->>'value', '') ~ '^[0-9]+(\\.[0-9]+)?$'
+                THEN (action_entry->>'value')::numeric
+              ELSE 0
+            END
+          ))::bigint AS value
+          FROM jsonb_array_elements(
+            CASE
+              WHEN jsonb_typeof(r.raw_payload->'video_thruplay_watched_actions') = 'array'
+                THEN r.raw_payload->'video_thruplay_watched_actions'
+              ELSE '[]'::jsonb
+            END
+          ) action_entry
+        ) video_thruplay_actions ON true
+        WHERE r.platform = 'meta_ads'
+          AND r.evidence_origin = 'api'
+          AND r.platform_verified = true
+          AND r.event_date = $1::date
+      ),
+      expected AS (
+        SELECT
+          account_id,
+          campaign_id,
+          adset_id,
+          ad_id,
+          event_type,
+          SUM(api_expected_count)::bigint AS api_expected_count,
+          SUM(raw_ingested_count)::bigint AS raw_ingested_count,
+          ARRAY_AGG(DISTINCT source_id ORDER BY source_id) FILTER (WHERE source_id IS NOT NULL) AS sample_source_ids,
+          ARRAY_AGG(DISTINCT raw_event_id ORDER BY raw_event_id) AS sample_raw_event_ids
+        FROM raw_api_counts
+        GROUP BY account_id, campaign_id, adset_id, ad_id, event_type
+      ),
+      facts AS (
+        SELECT
+          account_id,
+          campaign_id,
+          adset_id,
+          ad_id,
+          event_type,
+          SUM(event_count)::bigint AS fact_count
+        FROM deterministic_event_facts
+        WHERE platform = 'meta_ads'
+          AND evidence_origin = 'api'
+          AND platform_verified = true
+          AND fact_date = $1::date
+        GROUP BY account_id, campaign_id, adset_id, ad_id, event_type
+      )
+      SELECT
+        COALESCE(expected.account_id, facts.account_id) AS account_id,
+        COALESCE(expected.campaign_id, facts.campaign_id) AS campaign_id,
+        COALESCE(expected.adset_id, facts.adset_id) AS adset_id,
+        COALESCE(expected.ad_id, facts.ad_id) AS ad_id,
+        COALESCE(expected.event_type, facts.event_type) AS event_type,
+        COALESCE(expected.api_expected_count, 0)::text AS api_expected_count,
+        COALESCE(expected.raw_ingested_count, 0)::text AS raw_ingested_count,
+        COALESCE(facts.fact_count, 0)::text AS fact_count,
+        COALESCE(expected.sample_source_ids, ARRAY[]::bigint[]) AS sample_source_ids,
+        COALESCE(expected.sample_raw_event_ids, ARRAY[]::bigint[]) AS sample_raw_event_ids
+      FROM expected
+      FULL OUTER JOIN facts
+        ON facts.account_id = expected.account_id
+       AND COALESCE(facts.campaign_id, '') = COALESCE(expected.campaign_id, '')
+       AND COALESCE(facts.adset_id, '') = COALESCE(expected.adset_id, '')
+       AND COALESCE(facts.ad_id, '') = COALESCE(expected.ad_id, '')
+       AND facts.event_type = expected.event_type
+      ORDER BY account_id ASC, event_type ASC, campaign_id ASC NULLS LAST, ad_id ASC NULLS LAST
+    `,
+		[runDate],
+	);
+	const absoluteTolerance =
+		env.DATA_QUALITY_META_DETERMINISTIC_ABSOLUTE_TOLERANCE;
+	const relativeTolerance =
+		env.DATA_QUALITY_META_DETERMINISTIC_RELATIVE_TOLERANCE;
+	const rows = result.rows;
+	let totalApiExpectedCount = 0;
+	let totalRawIngestedCount = 0;
+	let totalFactCount = 0;
+	const mismatches: MetaDeterministicMismatch[] = [];
+
+	for (const row of rows) {
+		const apiExpectedCount = toNumber(row.api_expected_count);
+		const rawIngestedCount = toNumber(row.raw_ingested_count);
+		const factCount = toNumber(row.fact_count);
+		totalApiExpectedCount += apiExpectedCount;
+		totalRawIngestedCount += rawIngestedCount;
+		totalFactCount += factCount;
+		const mismatch = isMetaDeterministicMismatch({
+			apiExpectedCount,
+			rawIngestedCount,
+			factCount,
+			absoluteTolerance,
+			relativeTolerance,
+		});
+
+		if (!mismatch.mismatch) {
+			continue;
+		}
+
+		mismatches.push({
+			accountId: row.account_id,
+			campaignId: row.campaign_id,
+			adsetId: row.adset_id,
+			adId: row.ad_id,
+			eventType: row.event_type,
+			apiExpectedCount,
+			rawIngestedCount,
+			factCount,
+			absoluteDelta: mismatch.absoluteDelta,
+			relativeDelta: mismatch.relativeDelta,
+			anomalyFlags: mismatch.anomalyFlags,
+			sampleSourceIds: row.sample_source_ids.map(Number).slice(0, 10),
+			sampleRawEventIds: row.sample_raw_event_ids.map(Number).slice(0, 10),
+		});
+	}
+
+	const sampledMismatches = mismatches
+		.sort((left, right) => right.absoluteDelta - left.absoluteDelta)
+		.slice(0, env.DATA_QUALITY_SAMPLE_LIMIT);
+	const details = {
+		comparedScopeCount: rows.length,
+		totalApiExpectedCount,
+		totalRawIngestedCount,
+		totalFactCount,
+		absoluteTolerance,
+		relativeTolerance,
+		investigationView: "meta_ads_deterministic_reconciliation_investigation",
+		sampleMismatches: sampledMismatches,
+	};
+
+	await persistMetaDeterministicReconciliation({
+		runDate,
+		status: mismatches.length > 0 ? "failed" : "passed",
+		comparedScopeCount: rows.length,
+		mismatches: sampledMismatches,
+		totalApiExpectedCount,
+		totalRawIngestedCount,
+		totalFactCount,
+		absoluteTolerance,
+		relativeTolerance,
+		details,
+	});
+
+	const evaluated = evaluateDiscrepancyCount({
+		discrepancyCount: mismatches.length,
+		threshold: 0,
+		severityOnAlert: "critical",
+		healthySummary:
+			"Meta deterministic API pull summaries matched ingested raw rows and normalized facts.",
+		warningSummary: `${mismatches.length} Meta deterministic ${pluralize("scope", mismatches.length)} mismatched API pull summaries but did not breach the alert threshold.`,
+		alertSummary: `${mismatches.length} Meta deterministic ${pluralize("scope", mismatches.length)} breached reconciliation tolerances against API pull summaries.`,
+		details,
+	});
+
+	return {
+		...evaluated,
+		checkKey: "meta_ads_deterministic_api_reconciliation",
+	};
+}
+
 function emitCheckLog(runDate: string, check: DataQualityCheckResult): void {
 	const fields = {
 		service: process.env.K_SERVICE ?? "roas-radar-data-quality",
@@ -1599,6 +2010,7 @@ export async function runDailyDataQualityChecks(
 		buildMmmReportingAggregateFreshnessCheck(runDate),
 		buildMmmDataQualityBlockersCheck(runDate),
 		buildMmmGa4FallbackStatusCheck(runDate),
+		buildMetaDeterministicReconciliationCheck(runDate),
 	]);
 
 	await withTransaction(async (client) => {
@@ -1681,4 +2093,5 @@ export const __dataQualityTestUtils = {
 	detectAnomalyFlags,
 	evaluateDiscrepancyCount,
 	evaluateMaximumRate,
+	isMetaDeterministicMismatch,
 };

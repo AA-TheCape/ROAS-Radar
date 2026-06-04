@@ -85,7 +85,88 @@ test('preprocessAttributionSnapshot builds deterministic normalized orders and t
   );
   assert.equal(result.touchpoints[1].engagement_type, 'click');
   assert.equal(result.touchpoints[2].is_synthetic, true);
+  assert.deepEqual(
+    result.rawEvidence.map((evidence) => [evidence.evidenceType, evidence.sourceRecordId, evidence.evidenceStatus]),
+    [
+      ['tracking_touchpoint', 'evt-1', 'valid'],
+      ['shopify_hint', 'order-1', 'valid']
+    ]
+  );
+  assert.deepEqual(result.rawEvidence[0].rawPayload, {
+    engagement_type: 'click'
+  });
+  assert.deepEqual(result.rawEvidence[1].rawPayload, {
+    landing_site: 'https://shop.example/products/widget?utm_source=Google&utm_medium=CPC&utm_campaign=Brand&gclid=G-123',
+    referring_site: null,
+    source_name: null,
+    note_attributes: null,
+    attributes: null
+  });
   assert.deepEqual(failures, []);
+});
+
+test('preprocessAttributionSnapshot records malformed raw evidence without throwing', async () => {
+  const preprocessAttributionSnapshot = await getPreprocessing();
+
+  const result = preprocessAttributionSnapshot({
+    orders: [
+      {
+        shopifyOrderId: 'order-malformed',
+        processedAt: '2026-04-20T18:00:00.000Z',
+        createdAtShopify: null,
+        ingestedAt: '2026-04-20T18:02:00.000Z',
+        currencyCode: 'USD',
+        subtotalAmount: '10.00',
+        totalAmount: '12.00',
+        landingSessionId: '123e4567-e89b-42d3-a456-426614174011',
+        checkoutToken: 'checkout-malformed',
+        cartToken: null,
+        shopifyCustomerId: null,
+        emailHash: null,
+        sourceName: 'web',
+        identityJourneyId: null,
+        rawPayload: 'not-an-object'
+      }
+    ],
+    sessionIdentities: [
+      {
+        sessionId: '123e4567-e89b-42d3-a456-426614174011',
+        firstCapturedAt: '2026-04-19T12:00:00.000Z',
+        lastCapturedAt: '2026-04-19T12:00:00.000Z'
+      }
+    ],
+    touchEvents: [
+      {
+        touchEventId: 'evt-malformed',
+        sessionId: '123e4567-e89b-42d3-a456-426614174011',
+        occurredAt: 'bad-date',
+        capturedAt: null,
+        eventType: 'ad_click',
+        ingestionSource: 'server',
+        shopifyCheckoutToken: 'checkout-malformed',
+        rawPayload: {
+          event_type: 'ad_click',
+          page_url: 'https://shop.example/products/widget?utm_source=Meta'
+        }
+      }
+    ],
+    journeySessions: []
+  });
+
+  const shopifyEvidence = result.rawEvidence.find((evidence) => evidence.evidenceType === 'shopify_hint');
+  const trackingEvidence = result.rawEvidence.find((evidence) => evidence.evidenceType === 'tracking_touchpoint');
+
+  assert.equal(shopifyEvidence?.evidenceStatus, 'malformed');
+  assert.equal(shopifyEvidence?.errorCode, 'invalid_shopify_payload_shape');
+  assert.equal(shopifyEvidence?.rawPayload, 'not-an-object');
+  assert.equal(trackingEvidence?.evidenceStatus, 'malformed');
+  assert.equal(trackingEvidence?.errorCode, 'invalid_touchpoint_timestamp');
+  assert.deepEqual(trackingEvidence?.rawPayload, {
+    event_type: 'ad_click',
+    page_url: 'https://shop.example/products/widget?utm_source=Meta'
+  });
+  assert.equal(result.touchpoints.some((touchpoint) => touchpoint.touchpoint_id === 'event:evt-malformed'), false);
+  assert.equal(result.failures.some((failure) => failure.reasonCode === 'invalid_shopify_payload_shape'), true);
 });
 
 test('preprocessAttributionSnapshot records missing sessions, future touchpoints, and duplicate event drops', async () => {

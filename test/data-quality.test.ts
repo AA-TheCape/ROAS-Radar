@@ -13,6 +13,8 @@ process.env.DATA_QUALITY_DUPLICATE_CANONICAL_ALERT_THRESHOLD = "1";
 process.env.DATA_QUALITY_CONFLICTING_SHOPIFY_ALERT_THRESHOLD = "0";
 process.env.DATA_QUALITY_HASH_ANOMALY_ALERT_THRESHOLD = "3";
 process.env.MMM_READINESS_WINDOW_DAYS = "7";
+process.env.DATA_QUALITY_META_DETERMINISTIC_ABSOLUTE_TOLERANCE = "2";
+process.env.DATA_QUALITY_META_DETERMINISTIC_RELATIVE_TOLERANCE = "0.01";
 
 const { __dataQualityTestUtils } = await import(
 	"../src/modules/data-quality/index.js"
@@ -143,4 +145,30 @@ test("evaluateMaximumRate fails critical readiness rate breaches", () => {
 	assert.equal(result.severity, "critical");
 	assert.equal(result.alertTriggered, true);
 	assert.equal(result.details.observedRate, 0.03);
+});
+
+test("isMetaDeterministicMismatch respects absolute and relative tolerances", () => {
+	const tolerated = __dataQualityTestUtils.isMetaDeterministicMismatch({
+		apiExpectedCount: 1000,
+		rawIngestedCount: 999,
+		factCount: 998,
+		absoluteTolerance: 2,
+		relativeTolerance: 0.01,
+	});
+	assert.equal(tolerated.mismatch, false);
+	assert.equal(tolerated.absoluteDelta, 2);
+
+	const breached = __dataQualityTestUtils.isMetaDeterministicMismatch({
+		apiExpectedCount: 1000,
+		rawIngestedCount: 980,
+		factCount: 970,
+		absoluteTolerance: 2,
+		relativeTolerance: 0.01,
+	});
+	assert.equal(breached.mismatch, true);
+	assert.equal(breached.absoluteDelta, 30);
+	assert.deepEqual(breached.anomalyFlags, [
+		"raw_ingestion_count_mismatch",
+		"fact_count_mismatch",
+	]);
 });

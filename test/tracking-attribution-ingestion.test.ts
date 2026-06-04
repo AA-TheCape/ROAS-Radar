@@ -161,6 +161,10 @@ test("tracking attribution endpoint persists canonical touch events and mirrors 
 					return { rows: [] };
 				}
 
+				if (text.includes("SELECT pg_advisory_xact_lock")) {
+					return { rowCount: 1, rows: [] };
+				}
+
 				if (text.includes("INSERT INTO session_attribution_identities")) {
 					return { rows: [] };
 				}
@@ -183,6 +187,71 @@ test("tracking attribution endpoint persists canonical touch events and mirrors 
 
 				if (text.includes("INSERT INTO tracking_events")) {
 					return { rows: [] };
+				}
+
+				if (text.includes("INSERT INTO identity_edge_ingestion_runs")) {
+					return {
+						rowCount: 1,
+						rows: [{ id: "identity-ingestion-run-1" }],
+					};
+				}
+
+				if (
+					text.includes("FROM identity_nodes") ||
+					text.includes("FROM identity_edges") ||
+					text.includes("FROM identity_journeys") ||
+					text.includes("FROM customer_identities")
+				) {
+					return { rowCount: 0, rows: [] };
+				}
+
+				if (text.includes("WITH candidate_sessions")) {
+					return {
+						rowCount: 1,
+						rows: [{ session_id: validPayload.roas_radar_session_id }],
+					};
+				}
+
+				if (text.includes("INSERT INTO identity_journeys")) {
+					return {
+						rowCount: 1,
+						rows: [
+							{
+								id: "123e4567-e89b-42d3-a456-426614174111",
+								created: true,
+								reason_code: "new_journey",
+							},
+						],
+					};
+				}
+
+				if (
+					text.includes("INSERT INTO identity_nodes") ||
+					text.includes("INSERT INTO identity_edges") ||
+					text.includes("INSERT INTO customer_identities") ||
+					text.includes("INSERT INTO identity_edge_supersessions")
+				) {
+					return { rowCount: 1, rows: [] };
+				}
+
+				if (
+					text.includes("DELETE FROM customer_journey") ||
+					text.includes("UPDATE identity_edge_ingestion_runs") ||
+					text.includes("UPDATE identity_journeys") ||
+					text.includes("UPDATE identity_edges") ||
+					text.includes("UPDATE tracking_sessions") ||
+					text.includes("UPDATE tracking_events") ||
+					text.includes("UPDATE session_attribution_identities") ||
+					text.includes("UPDATE session_attribution_touch_events") ||
+					text.includes("UPDATE customer_identities") ||
+					text.includes("UPDATE shopify_orders") ||
+					text.includes("UPDATE shopify_customers")
+				) {
+					return { rowCount: 1, rows: [] };
+				}
+
+				if (text.includes("INSERT INTO customer_journey")) {
+					return { rowCount: 1, rows: [] };
 				}
 
 				throw new Error(`Unexpected client.query call: ${text}`);
@@ -265,6 +334,10 @@ test("tracking attribution endpoint preserves the full raw payload before canoni
 				return { rows: [] };
 			}
 
+			if (text.includes("SELECT pg_advisory_xact_lock")) {
+				return { rowCount: 1, rows: [] };
+			}
+
 			if (text.includes("INSERT INTO session_attribution_identities")) {
 				return { rows: [] };
 			}
@@ -287,6 +360,71 @@ test("tracking attribution endpoint preserves the full raw payload before canoni
 
 			if (text.includes("INSERT INTO tracking_events")) {
 				return { rows: [] };
+			}
+
+			if (text.includes("INSERT INTO identity_edge_ingestion_runs")) {
+				return {
+					rowCount: 1,
+					rows: [{ id: "identity-ingestion-run-1" }],
+				};
+			}
+
+			if (
+				text.includes("FROM identity_nodes") ||
+				text.includes("FROM identity_edges") ||
+				text.includes("FROM identity_journeys") ||
+				text.includes("FROM customer_identities")
+			) {
+				return { rowCount: 0, rows: [] };
+			}
+
+			if (text.includes("WITH candidate_sessions")) {
+				return {
+					rowCount: 1,
+					rows: [{ session_id: validPayload.roas_radar_session_id }],
+				};
+			}
+
+			if (text.includes("INSERT INTO identity_journeys")) {
+				return {
+					rowCount: 1,
+					rows: [
+						{
+							id: "123e4567-e89b-42d3-a456-426614174111",
+							created: true,
+							reason_code: "new_journey",
+						},
+					],
+				};
+			}
+
+			if (
+				text.includes("INSERT INTO identity_nodes") ||
+				text.includes("INSERT INTO identity_edges") ||
+				text.includes("INSERT INTO customer_identities") ||
+				text.includes("INSERT INTO identity_edge_supersessions")
+			) {
+				return { rowCount: 1, rows: [] };
+			}
+
+			if (
+				text.includes("DELETE FROM customer_journey") ||
+				text.includes("UPDATE identity_edge_ingestion_runs") ||
+				text.includes("UPDATE identity_journeys") ||
+				text.includes("UPDATE identity_edges") ||
+				text.includes("UPDATE tracking_sessions") ||
+				text.includes("UPDATE tracking_events") ||
+				text.includes("UPDATE session_attribution_identities") ||
+				text.includes("UPDATE session_attribution_touch_events") ||
+				text.includes("UPDATE customer_identities") ||
+				text.includes("UPDATE shopify_orders") ||
+				text.includes("UPDATE shopify_customers")
+			) {
+				return { rowCount: 1, rows: [] };
+			}
+
+			if (text.includes("INSERT INTO customer_journey")) {
+				return { rowCount: 1, rows: [] };
 			}
 
 			throw new Error(`Unexpected client.query call: ${text}`);

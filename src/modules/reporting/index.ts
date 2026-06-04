@@ -1,7 +1,9 @@
 import { Router } from "express";
 import { z } from "zod";
 
+import { env } from "../../config/env.js";
 import { query } from "../../db/pool.js";
+import { logError, logInfo } from "../../observability/index.js";
 import { calculatePerformanceMetrics } from "../../shared/metrics.js";
 import { ATTRIBUTION_MODELS } from "../attribution/engine.js";
 import { attachAuthContext, requireAuthenticated } from "../auth/index.js";
@@ -66,6 +68,7 @@ const baseFiltersObjectSchema = z.object({
   startDate: dateStringSchema,
   endDate: dateStringSchema,
   attributionModel: z.enum(ATTRIBUTION_MODELS).optional().default('last_touch'),
+  reportingMode: z.enum(['combined', 'clicks', 'deterministic_views', 'meta_view_through']).optional().default('clicks'),
   attributionTier: attributionTierSchema.optional(),
   source: z.string().trim().min(1).optional(),
   campaign: z.string().trim().min(1).optional()
@@ -134,6 +137,43 @@ type SummaryRow = {
 	spend: string | number;
 };
 
+type ModelFreshnessRow = {
+	latest_model_output_at: Date | string | null;
+	model_output_count: string | number;
+};
+
+type ReportingMetricTotals = {
+  visits: number;
+  orders: number;
+  revenue: number;
+  spend: number;
+  conversionRate: number;
+  roas: number | null;
+};
+
+const REPORTING_MODE_METADATA = {
+  clicks: {
+    label: 'Click attribution',
+    canonical: true,
+    description: 'Canonical reporting totals from click-attributed order credits.'
+  },
+  deterministic_views: {
+    label: 'Deterministic view layer',
+    canonical: false,
+    description: 'Layer-only Meta API-verified deterministic view/impression attribution.'
+  },
+  meta_view_through: {
+    label: 'Meta API view-through',
+    canonical: false,
+    description: 'Meta API-reported view-through purchase revenue, purchases, and ROAS from impression-time reporting.'
+  },
+  combined: {
+    label: 'Non-canonical comparison total',
+    canonical: false,
+    description: 'Comparison-only sum of click attribution and deterministic view attribution; do not treat as canonical revenue.'
+  }
+} as const;
+
 type CampaignRow = {
 	source: string;
 	medium: string;
@@ -154,11 +194,24 @@ type SpendDetailRow = {
 type CampaignLabelResponseFields = {
 	campaignDisplayName?: string;
 	campaignEntityId?: string | null;
+	campaignEntityType?: "campaign" | "adset";
+	parentCampaignEntityId?: string | null;
+	parentCampaignDisplayName?: string | null;
 	campaignPlatform?: "google_ads" | "meta_ads" | null;
 	campaignNameResolutionStatus?: "resolved" | "fallback_name" | "unresolved";
 	campaignLabel?: {
 		displayName: string;
+		source: string;
+		rawId: string;
 		entityId: string | null;
+		objectType: "campaign" | "adset" | null;
+		entityType?: "campaign" | "adset";
+		parentCampaignEntityId?: string | null;
+		parentCampaignDisplayName?: string | null;
+		parentCampaign?: {
+			entityId: string | null;
+			displayName: string | null;
+		} | null;
 		platform: "google_ads" | "meta_ads" | null;
 		resolutionStatus: "resolved" | "fallback_name" | "unresolved";
 		lastSeenAt: string | null;
@@ -259,8 +312,12 @@ type OrderAttributionRow = {
   total_price: string | number;
   attribution_tier: string | null;
   attribution_source: string | null;
+  attribution_source_code: string | null;
+  matching_method_code: string | null;
   order_attribution_reason: string | null;
   attribution_matched_at: Date | null;
+  attribution_confidence_score: string | number | null;
+  last_attribution_run_at: Date | null;
   attribution_snapshot: unknown;
   attributed_source: string | null;
   attributed_medium: string | null;
@@ -288,8 +345,12 @@ type OrderDetailsRow = {
   source_name: string | null;
   attribution_tier: string | null;
   attribution_source: string | null;
+  attribution_source_code: string | null;
+  matching_method_code: string | null;
   attribution_matched_at: Date | null;
   attribution_reason: string | null;
+  attribution_confidence_score: string | number | null;
+  last_attribution_run_at: Date | null;
   attribution_snapshot: unknown;
   attribution_snapshot_updated_at: Date | null;
   ingested_at: Date;
@@ -380,6 +441,101 @@ function buildMetricDimensionFilters(
 		sql: filters.length > 0 ? ` AND ${filters.join(" AND ")}` : "",
 		params,
 	};
+}
+
+function buildDeterministicViewFilters(
+	source: string | undefined,
+	campaign: string | undefined,
+): { sql: string; params: string[] } {
+	const params: string[] = [];
+	const filters = [
+		"dmo.model_key = 'deterministic_views'",
+		"dmo.output_type = 'credited_input'",
+		"dmo.platform_verified = true",
+	];
+
+	if (source) {
+		params.push(source);
+		filters.push(`
+      CASE dmo.platform
+        WHEN 'google_ads' THEN 'google'
+        WHEN 'meta_ads' THEN 'meta'
+        ELSE dmo.platform
+      END = $${params.length + 2}
+    `);
+	}
+
+	if (campaign) {
+		params.push(campaign);
+		filters.push(`
+      COALESCE(NULLIF(dmo.campaign_id, ''), NULLIF(dmo.adset_id, ''), NULLIF(dmo.ad_id, ''), 'unknown') = $${params.length + 2}
+    `);
+	}
+
+	return {
+		sql: ` AND ${filters.join(" AND ")}`,
+		params,
+	};
+}
+
+function buildMetaViewThroughFilters(
+	source: string | undefined,
+	campaign: string | undefined,
+): { sql: string; params: string[] } {
+	const params: string[] = [];
+	const filters = [
+		"organization_id = $3",
+		"action_report_time = 'impression'",
+		"use_account_attribution_setting = true",
+	];
+
+	if (source) {
+		params.push(source);
+		filters.push(`'meta' = $${params.length + 3}`);
+	}
+
+	if (campaign) {
+		params.push(campaign);
+		filters.push(`(
+      campaign_id = $${params.length + 3}
+      OR campaign_name = $${params.length + 3}
+    )`);
+	}
+
+	return {
+		sql: ` AND ${filters.join(" AND ")}`,
+		params,
+	};
+}
+
+function toReportingTotals(row: SummaryRow | undefined): ReportingMetricTotals {
+	const metrics = calculatePerformanceMetrics({
+		visits: row?.visits ?? 0,
+		orders: row?.orders ?? 0,
+		attributedRevenue: row?.revenue ?? 0,
+		spend: row?.spend ?? 0,
+	});
+
+	return {
+		visits: metrics.visits,
+		orders: metrics.orders,
+		revenue: metrics.attributedRevenue,
+		spend: metrics.spend,
+		conversionRate: metrics.conversionRate,
+		roas: metrics.roas,
+	};
+}
+
+function combineReportingTotals(
+	clicks: ReportingMetricTotals,
+	deterministicViews: ReportingMetricTotals,
+): ReportingMetricTotals {
+	return toReportingTotals({
+		visits: clicks.visits,
+		orders: clicks.orders + deterministicViews.orders,
+		revenue: clicks.revenue + deterministicViews.revenue,
+		spend: clicks.spend,
+	});
 }
 
 function buildOrderAttributionFilters(
@@ -503,7 +659,7 @@ function normalizeContent(value: string | null): string | null {
 	}
 
 	const trimmed = value.trim();
-	return trimmed.length > 0 ? trimmed : null;
+	return trimmed.length > 0 && trimmed.toLowerCase() !== "unknown" ? trimmed : null;
 }
 
 type AttributionWinnerMetadata = {
@@ -553,29 +709,117 @@ function extractOrderAttributionMetadata(snapshot: unknown): OrderAttributionMet
   };
 }
 
+function readOrderConfidenceScore(
+  persistedScore: string | number | null,
+  lastAttributionRunAt: Date | null,
+  snapshotScore: number | null
+): number | null {
+  if (persistedScore === null || persistedScore === undefined) {
+    return snapshotScore;
+  }
+
+  const parsed = Number(persistedScore);
+  if (!Number.isFinite(parsed)) {
+    return snapshotScore;
+  }
+
+  return lastAttributionRunAt || snapshotScore !== null ? parsed : null;
+}
+
+function readAttributionLookupCode(
+  legacyCode: string | null,
+  lookupCode: string | null,
+  lastAttributionRunAt: Date | null
+): string | null {
+  return legacyCode ?? (lastAttributionRunAt ? lookupCode : null);
+}
+
 function normalizeAttributionTier(value: string | null | undefined): ReportingAttributionTier {
   return attributionTierSchema.safeParse(value).success ? (value as ReportingAttributionTier) : 'unattributed';
 }
 
-function buildCampaignLabelFields(resolution: CampaignDisplayResolution | undefined): CampaignLabelResponseFields {
+function buildCampaignLabelFields(
+	resolution: CampaignDisplayResolution | undefined,
+	input: { source?: string; rawId?: string } = {},
+): CampaignLabelResponseFields {
 	if (!resolution?.campaignDisplayName) {
 		return {};
 	}
 
+	const source = input.source ?? resolution.source;
+	const rawId = input.rawId ?? resolution.campaign;
+	const objectType = resolution.campaignEntityType ?? null;
+	const parentCampaign =
+		resolution.parentCampaignEntityId || resolution.parentCampaignDisplayName
+			? {
+					entityId: resolution.parentCampaignEntityId ?? null,
+					displayName: resolution.parentCampaignDisplayName ?? null,
+				}
+			: null;
+
 	return {
 		campaignDisplayName: resolution.campaignDisplayName,
 		campaignEntityId: resolution.campaignEntityId,
+		campaignEntityType: resolution.campaignEntityType,
+		parentCampaignEntityId: resolution.parentCampaignEntityId,
+		parentCampaignDisplayName: resolution.parentCampaignDisplayName,
 		campaignPlatform: resolution.campaignPlatform,
 		campaignNameResolutionStatus: resolution.campaignNameResolutionStatus,
 		campaignLabel: {
 			displayName: resolution.campaignDisplayName,
+			source,
+			rawId,
 			entityId: resolution.campaignEntityId,
+			objectType,
+			entityType: resolution.campaignEntityType,
+			parentCampaignEntityId: resolution.parentCampaignEntityId,
+			parentCampaignDisplayName: resolution.parentCampaignDisplayName,
+			parentCampaign,
 			platform: resolution.campaignPlatform,
 			resolutionStatus: resolution.campaignNameResolutionStatus,
 			lastSeenAt: resolution.lastSeenAt,
 			updatedAt: resolution.updatedAt,
 		},
 	};
+}
+
+function isMetaLikeAttributionSource(source: string, medium: string): boolean {
+	const normalizedSource = source.trim().toLowerCase();
+	const normalizedMedium = medium.trim().toLowerCase();
+
+	return (
+		['meta', 'facebook', 'fb', 'instagram', 'ig'].includes(normalizedSource) ||
+		(normalizedMedium.includes('social') && ['paid_social', 'paidsocial', 'cpc', 'paid'].includes(normalizedMedium))
+	);
+}
+
+function selectCampaignResolution(
+	metadata: Awaited<ReturnType<typeof resolveCampaignDisplayMetadata>>,
+	row: { source: string; medium: string; campaign: string }
+): CampaignDisplayResolution | undefined {
+	const groupResolution = metadata.byGroup.get(
+		buildCampaignResolutionGroupKey(row.source, row.medium, row.campaign),
+	);
+
+	if (groupResolution) {
+		return groupResolution;
+	}
+
+	return isMetaLikeAttributionSource(row.source, row.medium)
+		? metadata.byCampaign.get(row.campaign)
+		: undefined;
+}
+
+function resolveReportRowSource(row: { source: string }, resolution: CampaignDisplayResolution | undefined): string {
+	return resolution?.campaignPlatform === 'meta_ads' ? 'meta' : row.source;
+}
+
+function resolveReportRowContent(row: { content: string | null }, resolution: CampaignDisplayResolution | undefined): string | null {
+	if (resolution?.campaignPlatform === 'meta_ads' && resolution.campaignNameResolutionStatus === 'resolved') {
+		return null;
+	}
+
+	return normalizeContent(row.content);
 }
 
 function countDaysInRange(startDate: string, endDate: string): number {
@@ -589,7 +833,7 @@ function countDaysInRange(startDate: string, endDate: string): number {
 	return Math.floor((end - start) / 86_400_000) + 1;
 }
 
-const REPORTING_SCHEMA_VERSION = "2026-05-02";
+const REPORTING_SCHEMA_VERSION = "2026-05-27";
 
 export function createReportingRouter(): Router {
 	const router = Router();
@@ -602,14 +846,15 @@ export function createReportingRouter(): Router {
 	});
 
 	router.get("/summary", async (req, res, next) => {
+		const requestStartedAt = Date.now();
 		try {
 			const input = parseInput(baseFiltersSchema, req.query);
-			const filters = buildMetricDimensionFilters(
+			const clickFilters = buildMetricDimensionFilters(
 				input.attributionModel,
 				input.source,
 				input.campaign,
 			);
-			const result = await query<SummaryRow>(
+			const clickResult = await query<SummaryRow>(
 				`
           SELECT
             COALESCE(SUM(visits), 0) AS visits,
@@ -618,17 +863,119 @@ export function createReportingRouter(): Router {
             COALESCE(SUM(spend), 0) AS spend
           FROM daily_reporting_metrics
           WHERE metric_date BETWEEN $1::date AND $2::date
-          ${filters.sql}
+          ${clickFilters.sql}
         `,
-				[input.startDate, input.endDate, ...filters.params],
+				[input.startDate, input.endDate, ...clickFilters.params],
+			);
+			const deterministicViewFilters = buildDeterministicViewFilters(
+				input.source,
+				input.campaign,
+			);
+			const deterministicViewResult = await query<SummaryRow>(
+				`
+          SELECT
+            0 AS visits,
+            COALESCE(SUM(dmo.contribution_weight), 0) AS orders,
+            COALESCE(SUM(inputs.total_amount * dmo.contribution_weight), 0) AS revenue,
+            0 AS spend
+          FROM deterministic_model_outputs dmo
+          INNER JOIN attribution_order_inputs inputs
+            ON inputs.run_id = dmo.run_id
+           AND inputs.order_id = dmo.order_id
+          WHERE inputs.order_occurred_at_utc >= $1::date
+            AND inputs.order_occurred_at_utc < ($2::date + interval '1 day')
+            ${deterministicViewFilters.sql}
+        `,
+				[input.startDate, input.endDate, ...deterministicViewFilters.params],
+			);
+			const metaViewThroughFilters = buildMetaViewThroughFilters(
+				input.source,
+				input.campaign,
+			);
+			const metaViewThroughResult = await query<SummaryRow>(
+				`
+          SELECT
+            0 AS visits,
+            COALESCE(SUM(COALESCE(purchase_count, 0)), 0) AS orders,
+            COALESCE(SUM(COALESCE(attributed_revenue, 0)), 0) AS revenue,
+            COALESCE(SUM(spend), 0) AS spend
+          FROM meta_ads_order_value_aggregates
+          WHERE report_date BETWEEN $1::date AND $2::date
+            ${metaViewThroughFilters.sql}
+        `,
+				[
+					input.startDate,
+					input.endDate,
+					env.DEFAULT_ORGANIZATION_ID,
+					...metaViewThroughFilters.params,
+				],
+			);
+			const modelFreshnessResult = await query<ModelFreshnessRow>(
+				`
+          SELECT
+            MAX(dmo.generated_at_utc) AS latest_model_output_at,
+            COUNT(*) AS model_output_count
+          FROM deterministic_model_outputs dmo
+          INNER JOIN attribution_order_inputs inputs
+            ON inputs.run_id = dmo.run_id
+           AND inputs.order_id = dmo.order_id
+          WHERE inputs.order_occurred_at_utc >= $1::date
+            AND inputs.order_occurred_at_utc < ($2::date + interval '1 day')
+            ${deterministicViewFilters.sql}
+        `,
+				[input.startDate, input.endDate, ...deterministicViewFilters.params],
 			);
 
-			const row = result.rows[0];
-			const metrics = calculatePerformanceMetrics({
-				visits: row?.visits ?? 0,
-				orders: row?.orders ?? 0,
-				attributedRevenue: row?.revenue ?? 0,
-				spend: row?.spend ?? 0,
+			const clickTotals = toReportingTotals(clickResult.rows[0]);
+			const deterministicViewTotals = toReportingTotals(
+				deterministicViewResult.rows[0],
+			);
+			const metaViewThroughTotals = toReportingTotals(
+				metaViewThroughResult.rows[0],
+			);
+			const combinedTotals = combineReportingTotals(
+				clickTotals,
+				deterministicViewTotals,
+			);
+			const selectedTotals =
+				input.reportingMode === "clicks"
+					? clickTotals
+					: input.reportingMode === "deterministic_views"
+						? deterministicViewTotals
+						: input.reportingMode === "meta_view_through"
+							? metaViewThroughTotals
+						: combinedTotals;
+      const modeMetadata = REPORTING_MODE_METADATA[input.reportingMode];
+			const modelFreshness = modelFreshnessResult.rows[0];
+			const latestModelOutputAt =
+				modelFreshness?.latest_model_output_at instanceof Date
+					? modelFreshness.latest_model_output_at.toISOString()
+					: modelFreshness?.latest_model_output_at ?? null;
+			const modelOutputFreshnessHours = latestModelOutputAt
+				? Number(
+						((Date.now() - new Date(latestModelOutputAt).getTime()) / 3_600_000).toFixed(2),
+					)
+				: 9999;
+
+			logInfo("combined_report_api_health", {
+				service: process.env.K_SERVICE ?? "roas-radar",
+				path: "/api/reporting/summary",
+				reportingMode: input.reportingMode,
+				startDate: input.startDate,
+				endDate: input.endDate,
+				source: input.source ?? null,
+				campaign: input.campaign ?? null,
+				durationMs: Date.now() - requestStartedAt,
+				status: "success",
+				statusClass: "2xx",
+				combinedOrders: combinedTotals.orders,
+				combinedRevenue: combinedTotals.revenue,
+				deterministicViewOrders: deterministicViewTotals.orders,
+				modelOutputCount: Number(modelFreshness?.model_output_count ?? 0),
+				latestModelOutputAt,
+				modelOutputFreshnessHours,
+				modelOutputFreshnessStatus:
+					modelOutputFreshnessHours >= 24 ? "stale" : "healthy",
 			});
 
 			res.json({
@@ -636,16 +983,44 @@ export function createReportingRouter(): Router {
 					startDate: input.startDate,
 					endDate: input.endDate,
 				},
-				totals: {
-					visits: metrics.visits,
-					orders: metrics.orders,
-					revenue: metrics.attributedRevenue,
-					spend: metrics.spend,
-					conversionRate: metrics.conversionRate,
-					roas: metrics.roas,
+				reportingMode: input.reportingMode,
+        reportingModeLabel: modeMetadata.label,
+        totalsLabel: modeMetadata.label,
+        totalsCanonical: modeMetadata.canonical,
+        totalsDescription: modeMetadata.description,
+				totals: selectedTotals,
+        comparisonTotals: {
+          combined: {
+            ...REPORTING_MODE_METADATA.combined,
+            totals: combinedTotals
+          }
+        },
+				layers: {
+          clicks: {
+            ...REPORTING_MODE_METADATA.clicks,
+            totals: clickTotals
+          },
+          deterministicViews: {
+            ...REPORTING_MODE_METADATA.deterministic_views,
+            totals: deterministicViewTotals
+          },
+          metaViewThrough: {
+            ...REPORTING_MODE_METADATA.meta_view_through,
+            totals: metaViewThroughTotals
+          },
 				},
 			});
 		} catch (error) {
+			const statusCode =
+				error instanceof ReportingHttpError ? error.statusCode : 500;
+			logError("combined_report_api_health", error, {
+				service: process.env.K_SERVICE ?? "roas-radar",
+				path: "/api/reporting/summary",
+				durationMs: Date.now() - requestStartedAt,
+				status: statusCode >= 500 ? "error" : "client_error",
+				statusCode,
+				statusClass: `${Math.floor(statusCode / 100)}xx`,
+			});
 			next(error);
 		}
 	});
@@ -689,20 +1064,21 @@ export function createReportingRouter(): Router {
 						const visits = Number(row.visits);
 						const orders = Number(row.orders);
 						const revenue = Number(row.revenue);
-						const resolution = campaignMetadata.byGroup.get(
-							buildCampaignResolutionGroupKey(row.source, row.medium, row.campaign),
-						);
+						const resolution = selectCampaignResolution(campaignMetadata, row);
 
 						return {
-							source: row.source,
+							source: resolveReportRowSource(row, resolution),
 							medium: row.medium,
 							campaign: row.campaign,
-							content: normalizeContent(row.content),
+							content: resolveReportRowContent(row, resolution),
 							visits,
 							orders,
 							revenue,
 							conversionRate: visits > 0 ? orders / visits : 0,
-							...buildCampaignLabelFields(resolution),
+							...buildCampaignLabelFields(resolution, {
+								source: resolveReportRowSource(row, resolution),
+								rawId: row.campaign,
+							}),
 						};
 					}),
 					nextCursor: null,
@@ -763,12 +1139,14 @@ export function createReportingRouter(): Router {
 					const spend = Number(row.spend);
 					const source = row.source;
 					const medium = row.medium;
-					const channel = `${source} / ${medium}`;
 					const groupKey = `${source}\u0000${medium}`;
 					const existingGroup = groupMap.get(groupKey);
-					const labelFields = buildCampaignLabelFields(
-						campaignMetadata.byGroup.get(buildCampaignResolutionGroupKey(source, medium, row.campaign)),
-					);
+					const resolution = selectCampaignResolution(campaignMetadata, row);
+					const displaySource = resolveReportRowSource(row, resolution);
+					const labelFields = buildCampaignLabelFields(resolution, {
+						source: displaySource,
+						rawId: row.campaign,
+					});
 
 					if (existingGroup) {
 						existingGroup.subtotal += spend;
@@ -781,9 +1159,9 @@ export function createReportingRouter(): Router {
 					}
 
 				groupMap.set(groupKey, {
-					source,
+					source: displaySource,
 					medium,
-					channel,
+					channel: `${displaySource} / ${medium}`,
 					subtotal: spend,
 						campaigns: [
 							{
@@ -884,7 +1262,9 @@ export function createReportingRouter(): Router {
 						conversionRate: metrics.conversionRate,
 						roas: metrics.roas,
 						...(input.groupBy === "campaign"
-							? buildCampaignLabelFields(campaignMetadata?.byCampaign.get(row.bucket))
+							? buildCampaignLabelFields(campaignMetadata?.byCampaign.get(row.bucket), {
+									rawId: row.bucket,
+								})
 							: {}),
 					};
 				});
@@ -896,7 +1276,9 @@ export function createReportingRouter(): Router {
 						orders: row.orders,
 						revenue: row.revenue,
 						...(input.groupBy === "campaign"
-							? buildCampaignLabelFields(campaignMetadata?.byCampaign.get(row.bucket))
+							? buildCampaignLabelFields(campaignMetadata?.byCampaign.get(row.bucket), {
+									rawId: row.bucket,
+								})
 							: {}),
 					})),
 				lowestBuckets: [...bucketMetrics]
@@ -1210,14 +1592,22 @@ export function createReportingRouter(): Router {
             o.total_price,
             o.attribution_tier,
             o.attribution_source,
+            sources.code AS attribution_source_code,
+            methods.code AS matching_method_code,
             o.attribution_reason AS order_attribution_reason,
             o.attribution_matched_at,
+            o.attribution_confidence_score::text AS attribution_confidence_score,
+            o.last_attribution_run_at,
             o.attribution_snapshot,
             c.attributed_source,
             c.attributed_medium,
             c.attributed_campaign,
             c.attribution_reason AS primary_credit_attribution_reason
           FROM shopify_orders o
+          LEFT JOIN attribution_sources sources
+            ON sources.id = o.attribution_source_id
+          LEFT JOIN matching_methods methods
+            ON methods.id = o.matching_method_id
           LEFT JOIN LATERAL (
             SELECT
               attributed_source,
@@ -1268,9 +1658,19 @@ export function createReportingRouter(): Router {
             attributionTier,
             attributionTierLabel: ATTRIBUTION_TIER_LABELS[attributionTier],
             attributionTierDescription: ATTRIBUTION_TIER_DESCRIPTIONS[attributionTier],
-            attributionSource: row.attribution_source,
+            attributionSource: readAttributionLookupCode(
+              row.attribution_source,
+              row.attribution_source_code,
+              row.last_attribution_run_at
+            ),
+            matchingMethod: readAttributionLookupCode(null, row.matching_method_code, row.last_attribution_run_at),
             attributionMatchedAt: row.attribution_matched_at?.toISOString() ?? null,
-            confidenceScore: metadata.confidenceScore,
+            confidenceScore: readOrderConfidenceScore(
+              row.attribution_confidence_score,
+              row.last_attribution_run_at,
+              metadata.confidenceScore
+            ),
+            lastAttributionRunAt: row.last_attribution_run_at?.toISOString() ?? null,
             sessionId: metadata.winner.sessionId
           };
         })
@@ -1309,14 +1709,22 @@ export function createReportingRouter(): Router {
             o.source_name,
             o.attribution_tier,
             o.attribution_source,
+            sources.code AS attribution_source_code,
+            methods.code AS matching_method_code,
             o.attribution_matched_at,
             o.attribution_reason,
+            o.attribution_confidence_score::text AS attribution_confidence_score,
+            o.last_attribution_run_at,
             o.attribution_snapshot,
             o.attribution_snapshot_updated_at,
             o.ingested_at,
             o.attribution_snapshot,
             o.raw_payload
           FROM shopify_orders o
+          LEFT JOIN attribution_sources sources
+            ON sources.id = o.attribution_source_id
+          LEFT JOIN matching_methods methods
+            ON methods.id = o.matching_method_id
           WHERE o.shopify_order_id = $1
           LIMIT 1
         `,
@@ -1414,10 +1822,20 @@ export function createReportingRouter(): Router {
           attributionTier: normalizeAttributionTier(order.attribution_tier),
           attributionTierLabel: ATTRIBUTION_TIER_LABELS[normalizeAttributionTier(order.attribution_tier)],
           attributionTierDescription: ATTRIBUTION_TIER_DESCRIPTIONS[normalizeAttributionTier(order.attribution_tier)],
-          attributionSource: order.attribution_source,
+          attributionSource: readAttributionLookupCode(
+            order.attribution_source,
+            order.attribution_source_code,
+            order.last_attribution_run_at
+          ),
+          matchingMethod: readAttributionLookupCode(null, order.matching_method_code, order.last_attribution_run_at),
           attributionMatchedAt: order.attribution_matched_at?.toISOString() ?? null,
           attributionReason: order.attribution_reason ?? 'unattributed',
-          confidenceScore: metadata.confidenceScore,
+          confidenceScore: readOrderConfidenceScore(
+            order.attribution_confidence_score,
+            order.last_attribution_run_at,
+            metadata.confidenceScore
+          ),
+          lastAttributionRunAt: order.last_attribution_run_at?.toISOString() ?? null,
           sessionId: metadata.winner.sessionId,
           attributedSource: metadata.winner.source,
           attributedMedium: metadata.winner.medium,
@@ -1464,6 +1882,8 @@ export function createReportingRouter(): Router {
           revenueCredit: Number(row.revenue_credit),
           isPrimary: row.is_primary,
           attributionReason: row.attribution_reason,
+          matchSource: row.match_source,
+          confidenceLabel: row.confidence_label,
           createdAt: row.created_at.toISOString(),
           modelVersion: row.model_version
         }))

@@ -1,0 +1,31 @@
+{
+  "name": "roas_recovery_run_processed_count",
+  "description": "Distribution of processed record counts reported on terminal recovery run lifecycle events.",
+  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"recovery_run_lifecycle\" AND jsonPayload.stage=(\"completed\" OR \"failed\")",
+  "valueExtractor": "EXTRACT(jsonPayload.processedCount)",
+  "labelExtractors": {
+    "service": "EXTRACT(jsonPayload.service)",
+    "job_type": "EXTRACT(jsonPayload.jobType)",
+    "status": "EXTRACT(jsonPayload.status)",
+    "mode": "EXTRACT(jsonPayload.mode)",
+    "dry_run": "EXTRACT(jsonPayload.dryRun)"
+  },
+  "metricDescriptor": {
+    "metricKind": "DELTA",
+    "valueType": "DISTRIBUTION",
+    "unit": "1",
+    "displayName": "ROAS Radar Recovery Processed Records",
+    "labels": [
+      { "key": "service", "valueType": "STRING", "description": "Service emitting the recovery telemetry." },
+      { "key": "job_type", "valueType": "STRING", "description": "Recovery job type." },
+      { "key": "status", "valueType": "STRING", "description": "Persisted recovery run status." },
+      { "key": "mode", "valueType": "STRING", "description": "manual, scheduled, or automatic." },
+      { "key": "dry_run", "valueType": "STRING", "description": "Whether side effects were suppressed." }
+    ]
+  },
+  "bucketOptions": {
+    "explicitBuckets": {
+      "bounds": [1, 10, 50, 100, 250, 500, 1000, 5000]
+    }
+  }
+}

@@ -1,4 +1,10 @@
 import type { AttributionTouchpoint } from './engine.js';
+import { boundConfidenceScore, confidenceScoreForWinner } from './confidence-scoring.js';
+import {
+  attributionEvidenceSourcePrecedence,
+  attributionOriginPrecedence,
+  mapResolvedIngestionSourceToAttributionOrigin
+} from './precedence.js';
 import {
   CLICK_LOOKBACK_WINDOW_DAYS,
   hasClickId,
@@ -78,23 +84,13 @@ export type TieredAttributionResolverInput = {
   }>;
 };
 
-const INGESTION_SOURCE_PRECEDENCE: Record<DeterministicIngestionSource, number> = {
-  landing_session_id: 0,
-  checkout_token: 1,
-  cart_token: 2,
-  customer_identity: 3
-};
-
 function ingestionSourcePrecedence(source: ResolvedIngestionSource): number {
-  if (source === 'shopify_marketing_hint') {
-    return Number.MAX_SAFE_INTEGER - 1;
-  }
+  const originRank =
+    1_000 -
+    attributionOriginPrecedence(mapResolvedIngestionSourceToAttributionOrigin(source));
+  const sourceRank = attributionEvidenceSourcePrecedence(source);
 
-  if (source === 'ga4_fallback') {
-    return Number.MAX_SAFE_INTEGER;
-  }
-
-  return INGESTION_SOURCE_PRECEDENCE[source];
+  return originRank * 10 + sourceRank;
 }
 
 function compareDatesDescending(left: Date, right: Date): number {
@@ -222,28 +218,6 @@ export function selectLastNonDirectWinner(
   }
 
   return selectionPool.slice().sort(compareWinnerPriority)[0] ?? null;
-}
-
-export function confidenceScoreForWinner(
-  winner: Pick<ResolvedAttributionTouchpoint, 'ingestionSource'> | null
-): number {
-  if (!winner) {
-    return 0;
-  }
-
-  switch (winner.ingestionSource) {
-    case 'landing_session_id':
-    case 'checkout_token':
-      return 1;
-    case 'cart_token':
-      return 0.9;
-    case 'customer_identity':
-      return 0.6;
-    case 'shopify_marketing_hint':
-      return 0.55;
-    case 'ga4_fallback':
-      return 0.35;
-  }
 }
 
 function mapCandidateToResolvedTouchpoint(candidate: TieredAttributionCandidate): ResolvedAttributionTouchpoint {
@@ -397,7 +371,7 @@ export function resolveAttributionTier(input: TieredAttributionResolverInput): R
       tier: 'deterministic_shopify_hint',
       touchpoints: shopifyHintTouchpoints.map(mapCandidateToResolvedTouchpoint),
       winner: shopifyHintWinner,
-      confidenceScore: shopifyHintWinnerCandidate?.confidenceScore ?? confidenceScoreForWinner(shopifyHintWinner),
+      confidenceScore: confidenceScoreForWinner(shopifyHintWinner, shopifyHintWinnerCandidate?.confidenceScore),
       attributionReason: shopifyHintWinner.attributionReason,
       orderOccurredAtUtc,
       normalizationFailures: input.normalizationFailures ?? []
@@ -418,7 +392,7 @@ export function resolveAttributionTier(input: TieredAttributionResolverInput): R
       tier: 'ga4_fallback',
       touchpoints: ga4FallbackTouchpoints.map(mapCandidateToResolvedTouchpoint),
       winner: ga4FallbackWinner,
-      confidenceScore: ga4FallbackWinnerCandidate?.confidenceScore ?? confidenceScoreForWinner(ga4FallbackWinner),
+      confidenceScore: confidenceScoreForWinner(ga4FallbackWinner, ga4FallbackWinnerCandidate?.confidenceScore),
       attributionReason: ga4FallbackWinner.attributionReason,
       orderOccurredAtUtc,
       normalizationFailures: input.normalizationFailures ?? []
@@ -435,3 +409,5 @@ export function resolveAttributionTier(input: TieredAttributionResolverInput): R
     normalizationFailures: input.normalizationFailures ?? []
   };
 }
+
+export { boundConfidenceScore, confidenceScoreForWinner };

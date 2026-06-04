@@ -1,0 +1,25 @@
+{
+  "name": "roas_recovery_record_failures",
+  "description": "Counts recovery record failures with run and record context for incident triage.",
+  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"recovery_record_failure\"",
+  "labelExtractors": {
+    "service": "EXTRACT(jsonPayload.service)",
+    "job_type": "EXTRACT(jsonPayload.jobType)",
+    "record_type": "EXTRACT(jsonPayload.recordType)",
+    "error_code": "EXTRACT(jsonPayload.errorCode)",
+    "retryable": "EXTRACT(jsonPayload.retryable)"
+  },
+  "metricDescriptor": {
+    "metricKind": "DELTA",
+    "valueType": "INT64",
+    "unit": "1",
+    "displayName": "ROAS Radar Recovery Record Failures",
+    "labels": [
+      { "key": "service", "valueType": "STRING", "description": "Service emitting the recovery telemetry." },
+      { "key": "job_type", "valueType": "STRING", "description": "Recovery job type." },
+      { "key": "record_type", "valueType": "STRING", "description": "Recovery record type." },
+      { "key": "error_code", "valueType": "STRING", "description": "Normalized failure code." },
+      { "key": "retryable", "valueType": "STRING", "description": "Whether another retry remains." }
+    ]
+  }
+}

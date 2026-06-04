@@ -342,6 +342,30 @@ test('core v1 models do not spill fallback evidence into deterministic attributi
   assert.equal(result.summariesByModel.hinted_fallback_only.winnerTouchpointId, 'hint-qualifying');
 });
 
+test('deterministic view/impression runtime rows cannot override first-party attribution winners', () => {
+  const firstPartyTouchpoint = buildTouchpoint('session-first-party', '2026-04-20T00:00:00.000Z', {
+    evidenceSource: 'landing_session_id',
+    attributionReason: 'matched_by_landing_session'
+  });
+  const malformedDeterministicViewTouchpoint = buildTouchpoint('session-meta-view', '2026-04-29T00:00:00.000Z', {
+    touchpointId: 'meta-api-deterministic-view',
+    sessionId: null,
+    source: 'meta',
+    medium: 'paid_social',
+    campaign: 'retargeting',
+    clickIdType: null,
+    clickIdValue: null,
+    engagementType: 'view',
+    evidenceSource: 'deterministic_views' as AttributionTouchpoint['evidenceSource'],
+    attributionReason: 'deterministic_views'
+  });
+
+  assert.throws(
+    () => execute([firstPartyTouchpoint, malformedDeterministicViewTouchpoint], ['last_touch', 'last_non_direct', 'linear']),
+    /deterministic_views cannot be used as an order-level attribution evidence source/
+  );
+});
+
 test('model execution can target a single model or multiple models in one batch', () => {
   const touchpoints = [
     buildTouchpoint('session-a', '2026-04-10T00:00:00.000Z'),

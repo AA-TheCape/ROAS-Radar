@@ -1,4 +1,8 @@
+import { env } from '../../config/env.js';
 import { withTransaction } from '../../db/pool.js';
+import { emitAttributionRunLookupResolutionErrorLog, emitAttributionRunOrderOutcomeLog } from '../../observability/index.js';
+import { buildRawPayloadStorageMetadata } from '../../shared/raw-payload-storage.js';
+import { assertNoDeterministicViewImpressionOrderAttribution, isDeterministicViewImpressionAttributionEnabled, persistDeterministicViewImpressionModelOutputs } from './deterministic-view-impression-model.js';
 import { ATTRIBUTION_MODELS, executeAttributionModels } from './engine.js';
 import { preprocessAttributionOrders } from './preprocessing.js';
 import { parseAttributionRunProgress } from './run-progress.js';
@@ -73,18 +77,114 @@ async function insertExplainRecord(client, input) {
         input.orderOccurredAtUtc ?? null
     ]);
 }
+async function insertRawEvidenceRecords(client, runId, orderId, rawEvidence) {
+    const retentionDays = Math.max(Math.trunc(env.ATTRIBUTION_QA_RETENTION_DAYS), 1);
+    await client.query('DELETE FROM attribution_raw_evidence WHERE run_id = $1::uuid AND order_id = $2', [runId, orderId]);
+    for (const evidence of rawEvidence.filter((record) => record.orderId === orderId)) {
+        const payloadMetadata = buildRawPayloadStorageMetadata(evidence.rawPayload);
+        await client.query(`
+        INSERT INTO attribution_raw_evidence (
+          run_id,
+          order_id,
+          evidence_type,
+          source_table,
+          source_record_id,
+          touchpoint_id,
+          session_id,
+          ingestion_source,
+          event_type,
+          occurred_at_utc,
+          captured_at_utc,
+          evidence_status,
+          error_code,
+          error_message,
+          normalized_metadata,
+          raw_payload,
+          payload_size_bytes,
+          payload_hash,
+          retained_until
+        )
+        VALUES (
+          $1::uuid,
+          $2,
+          $3,
+          $4,
+          $5,
+          $6,
+          $7::uuid,
+          $8,
+          $9,
+          $10::timestamptz,
+          $11::timestamptz,
+          $12,
+          $13,
+          $14,
+          $15::jsonb,
+          $16::jsonb,
+          $17,
+          $18,
+          $19::timestamptz
+        )
+      `, [
+            runId,
+            orderId,
+            evidence.evidenceType,
+            evidence.sourceTable,
+            evidence.sourceRecordId,
+            evidence.touchpointId,
+            evidence.sessionId,
+            evidence.ingestionSource,
+            evidence.eventType,
+            evidence.occurredAtUtc,
+            evidence.capturedAtUtc,
+            evidence.evidenceStatus,
+            evidence.errorCode,
+            evidence.errorMessage,
+            JSON.stringify(evidence.normalizedMetadata),
+            payloadMetadata.rawPayloadJson,
+            payloadMetadata.payloadSizeBytes,
+            payloadMetadata.payloadHash,
+            new Date(Date.now() + retentionDays * 24 * 60 * 60 * 1000)
+        ]);
+    }
+}
 async function persistBatch(client, run, orderIds) {
     const succeededOrderIds = [];
     const failedOrderIds = [];
+    const deterministicViewImpressionEnabled = isDeterministicViewImpressionAttributionEnabled(run.runMetadata);
     for (const orderId of orderIds) {
         const dataset = await preprocessAttributionOrders(client, [orderId]);
         const order = dataset.orders[0];
         if (!order) {
             failedOrderIds.push(orderId);
+            emitAttributionRunLookupResolutionErrorLog({
+                attributionRunId: run.id,
+                orderId,
+                reasonCode: 'order_not_found'
+            });
+            emitAttributionRunOrderOutcomeLog({
+                attributionRunId: run.id,
+                orderId,
+                outcome: 'skipped',
+                processedOrderCount: 1,
+                recomputedOrderCount: 0,
+                skippedOrderCount: 1,
+                failedOrderCount: 0,
+                lookupResolutionErrorCount: 1,
+                lookupResolutionErrorCodes: ['order_not_found']
+            });
             continue;
         }
         const orderTouchpoints = dataset.touchpoints;
         const orderFailures = dataset.failures.filter((failure) => failure.orderId === orderId).map((failure) => failure.reasonCode);
+        for (const reasonCode of orderFailures) {
+            emitAttributionRunLookupResolutionErrorLog({
+                attributionRunId: run.id,
+                orderId,
+                reasonCode,
+                orderOccurredAtUtc: order.order_occurred_at_utc
+            });
+        }
         await client.query('DELETE FROM attribution_order_inputs WHERE run_id = $1::uuid AND order_id = $2', [run.id, orderId]);
         await client.query(`
         INSERT INTO attribution_order_inputs (
@@ -144,7 +244,17 @@ async function persistBatch(client, run, orderIds) {
             order.identity_journey_id,
             JSON.stringify(order.raw_order_ref ?? {})
         ]);
+        await insertRawEvidenceRecords(client, run.id, orderId, dataset.rawEvidence);
         for (const touchpoint of orderTouchpoints) {
+            assertNoDeterministicViewImpressionOrderAttribution({
+                surface: 'attribution_touchpoint_inputs',
+                values: {
+                    attribution_reason: touchpoint.attribution_reason,
+                    evidence_source: touchpoint.evidence_source,
+                    ingestion_source: touchpoint.ingestion_source,
+                    touchpoint_source_kind: touchpoint.touchpoint_source_kind
+                }
+            });
             await client.query(`
           INSERT INTO attribution_touchpoint_inputs (
             run_id,
@@ -263,6 +373,15 @@ async function persistBatch(client, run, orderIds) {
         });
         for (const model of ATTRIBUTION_MODELS) {
             const summary = execution.summariesByModel[model];
+            assertNoDeterministicViewImpressionOrderAttribution({
+                surface: 'attribution_model_summaries',
+                values: {
+                    model_key: model,
+                    winner_attribution_reason: summary.winnerAttributionReason,
+                    winner_evidence_source: summary.winnerEvidenceSource,
+                    winner_selection_rule: summary.winnerSelectionRule
+                }
+            });
             await client.query(`
           INSERT INTO attribution_model_summaries (
             run_id,
@@ -332,6 +451,15 @@ async function persistBatch(client, run, orderIds) {
             const modelCredits = execution.creditsByModel[model];
             const creditedTouchpointIds = new Set(modelCredits.map((credit) => credit.touchpointId).filter(Boolean));
             for (const credit of modelCredits) {
+                assertNoDeterministicViewImpressionOrderAttribution({
+                    surface: 'attribution_model_credits',
+                    values: {
+                        attribution_reason: credit.attributionReason,
+                        evidence_source: credit.evidenceSource,
+                        match_source: credit.evidenceSource,
+                        model_key: model
+                    }
+                });
                 await client.query(`
             INSERT INTO attribution_model_credits (
               run_id,
@@ -451,7 +579,36 @@ async function persistBatch(client, run, orderIds) {
                 });
             }
         }
+        await persistDeterministicViewImpressionModelOutputs(client, {
+            runId: run.id,
+            orderId,
+            orderOccurredAtUtc: order.order_occurred_at_utc,
+            enabled: deterministicViewImpressionEnabled
+        });
         succeededOrderIds.push(orderId);
+        const primaryModelKey = ATTRIBUTION_MODELS[0] ?? null;
+        const primarySummary = primaryModelKey ? execution.summariesByModel[primaryModelKey] : null;
+        const primaryCredit = primaryModelKey ? execution.creditsByModel[primaryModelKey]?.find((credit) => credit.isPrimary) : null;
+        emitAttributionRunOrderOutcomeLog({
+            attributionRunId: run.id,
+            orderId,
+            outcome: 'recomputed',
+            processedOrderCount: 1,
+            recomputedOrderCount: 1,
+            skippedOrderCount: 0,
+            failedOrderCount: 0,
+            modelCount: ATTRIBUTION_MODELS.length,
+            creditCount: Object.values(execution.creditsByModel).reduce((total, credits) => total + credits.length, 0),
+            primaryModelKey,
+            primaryAllocationStatus: primarySummary?.allocationStatus ?? null,
+            primaryConfidenceLabel: primaryCredit
+                ? buildConfidenceLabel(orderTouchpoints.find((touchpoint) => touchpoint.touchpoint_id === primaryCredit.touchpointId) ??
+                    orderTouchpoints[0])
+                : null,
+            lookupResolutionErrorCount: orderFailures.length,
+            lookupResolutionErrorCodes: orderFailures,
+            orderOccurredAtUtc: order.order_occurred_at_utc
+        });
     }
     return {
         succeededOrderIds,

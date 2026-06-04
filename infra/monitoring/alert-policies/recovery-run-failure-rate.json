@@ -1,0 +1,53 @@
+{
+  "displayName": "ROAS Radar __ENVIRONMENT__ Recovery Failure Rate",
+  "documentation": {
+    "content": "Recovery jobs are producing abnormal failed-record volume. Inspect `recovery_record_failure` by `jsonPayload.runId`, `jsonPayload.recordType`, `jsonPayload.recordKey`, and `jsonPayload.errorCode`; each failure log includes Cloud Logging filters and checkpoint context. Runbook: __RUNBOOK_URL_ATTRIBUTION_COMPLETENESS__",
+    "mimeType": "text/markdown"
+  },
+  "combiner": "OR",
+  "enabled": true,
+  "severity": "ERROR",
+  "notificationChannels": __ALERT_NOTIFICATION_CHANNELS__,
+  "conditions": [
+    {
+      "displayName": "Non-retryable recovery record failures exceed 10 in 30 minutes",
+      "conditionThreshold": {
+        "filter": "metric.type=\"logging.googleapis.com/user/roas_recovery_record_failures\" resource.type=\"cloud_run_revision\" metric.labels.retryable=\"false\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 10,
+        "duration": "1800s",
+        "aggregations": [
+          {
+            "alignmentPeriod": "1800s",
+            "perSeriesAligner": "ALIGN_SUM",
+            "crossSeriesReducer": "REDUCE_SUM",
+            "groupByFields": [
+              "metric.labels.job_type"
+            ]
+          }
+        ],
+        "trigger": {
+          "count": 1
+        }
+      }
+    },
+    {
+      "displayName": "Any recovery run ends failed",
+      "conditionThreshold": {
+        "filter": "metric.type=\"logging.googleapis.com/user/roas_recovery_run_lifecycle\" resource.type=\"cloud_run_revision\" metric.labels.stage=\"failed\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 0,
+        "duration": "900s",
+        "aggregations": [
+          {
+            "alignmentPeriod": "900s",
+            "perSeriesAligner": "ALIGN_SUM"
+          }
+        ],
+        "trigger": {
+          "count": 1
+        }
+      }
+    }
+  ]
+}

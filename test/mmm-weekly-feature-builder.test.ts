@@ -59,7 +59,7 @@ test('weekly MMM refresh emits bayesian_hierarchical_mmm_v1 metadata and filters
   assert.ok(insertQuery);
   assert.match(insertQuery.text, /eligible_weeks AS/);
   assert.match(insertQuery.text, /week_start_date >= \$1::date/);
-  assert.match(insertQuery.text, /\(week_start_date \+ 6\) <= \$2::date/);
+  assert.match(insertQuery.text, /\(week_start_date::date \+ 6\) <= \$2::date/);
   assert.match(insertQuery.text, /inputContractVersion', 'bayesian_hierarchical_mmm_v1'/);
   assert.match(insertQuery.text, /clickLookbackWindowDays', 30/);
   assert.match(insertQuery.text, /viewLookbackWindowDays', 7/);

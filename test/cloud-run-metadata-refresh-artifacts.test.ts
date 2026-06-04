@@ -44,12 +44,20 @@ test('cloud run metadata refresh jobs use provider-specific secret bindings', ()
   const googleAdsSection = extractSection(
     script,
     'echo "Deploying Google Ads metadata refresh job $GOOGLE_ADS_METADATA_JOB_NAME"',
-    'echo "Deploying session retention job $RETENTION_JOB_NAME"'
+    'echo "Deploying GA4 ingestion job $GA4_INGESTION_JOB_NAME"'
   );
 
   assert.match(
     metaAdsSection,
-    /DATABASE_URL=DATABASE_URL:latest,META_ADS_APP_SECRET=META_ADS_APP_SECRET:latest,META_ADS_ENCRYPTION_KEY=META_ADS_ENCRYPTION_KEY:latest/
+    /DATABASE_URL=DATABASE_URL:latest,\$META_ADS_SECRET_FLAGS/
+  );
+  assert.match(
+    script,
+    /if \[ -n "\$\{META_ADS_METADATA_ACCESS_TOKEN_SECRET_NAME:-\}" \]; then/
+  );
+  assert.match(
+    script,
+    /META_ADS_METADATA_ACCESS_TOKEN=\$META_ADS_METADATA_ACCESS_TOKEN_SECRET_NAME:latest/
   );
   assert.doesNotMatch(metaAdsSection, /GOOGLE_ADS_ENCRYPTION_KEY/);
   assert.match(
@@ -57,6 +65,24 @@ test('cloud run metadata refresh jobs use provider-specific secret bindings', ()
     /DATABASE_URL=DATABASE_URL:latest,GOOGLE_ADS_ENCRYPTION_KEY=GOOGLE_ADS_ENCRYPTION_KEY:latest/
   );
   assert.doesNotMatch(googleAdsSection, /META_ADS_(APP_SECRET|ENCRYPTION_KEY)/);
+});
+
+test('cloud run deploy script manages attribution QA retention job and scheduler', () => {
+  const script = readRepoFile('infra/cloud-run/deploy.sh');
+  const qaRetentionSection = extractSection(
+    script,
+    'echo "Deploying attribution QA retention job $ATTRIBUTION_QA_RETENTION_JOB_NAME"',
+    'echo "Deploying data quality job $DATA_QUALITY_JOB_NAME"'
+  );
+
+  assert.match(qaRetentionSection, /--args=run,attribution-qa:retention:start/);
+  assert.match(qaRetentionSection, /ATTRIBUTION_QA_RETENTION_DAYS=\$ATTRIBUTION_QA_RETENTION_DAYS/);
+  assert.match(qaRetentionSection, /ATTRIBUTION_QA_RETENTION_BATCH_SIZE=\$ATTRIBUTION_QA_RETENTION_BATCH_SIZE/);
+  assert.match(qaRetentionSection, /DATABASE_URL=DATABASE_URL:latest/);
+  assert.match(
+    script,
+    /upsert_scheduler_job "\$ATTRIBUTION_QA_RETENTION_SCHEDULER_JOB_NAME" "\$ATTRIBUTION_QA_RETENTION_JOB_NAME" "\$ATTRIBUTION_QA_RETENTION_SCHEDULE"/
+  );
 });
 
 test('cloud run environment templates declare per-platform metadata scheduler controls', () => {
@@ -69,13 +95,22 @@ test('cloud run environment templates declare per-platform metadata scheduler co
     const text = readRepoFile(file);
 
     assert.match(text, /META_ADS_METADATA_SCHEDULER_NAME=/);
+    assert.match(text, /META_ADS_DETERMINISTIC_JOB_NAME=/);
+    assert.match(text, /META_ADS_DETERMINISTIC_SCHEDULER_JOB_NAME=/);
+    assert.match(text, /META_ADS_DETERMINISTIC_JOB_SERVICE_ACCOUNT_NAME=/);
+    assert.match(text, /META_ADS_DETERMINISTIC_SYNC_SCHEDULE=/);
     assert.match(text, /META_ADS_METADATA_SCHEDULE=/);
+    assert.match(text, /META_ADS_METADATA_ACCESS_TOKEN_SECRET_NAME=/);
     assert.match(text, /META_ADS_METADATA_SCHEDULER_ENABLED=/);
     assert.match(text, /META_ADS_METADATA_REFRESH_REQUESTED_BY=/);
     assert.match(text, /GOOGLE_ADS_METADATA_SCHEDULER_NAME=/);
     assert.match(text, /GOOGLE_ADS_METADATA_SCHEDULE=/);
     assert.match(text, /GOOGLE_ADS_METADATA_SCHEDULER_ENABLED=/);
     assert.match(text, /GOOGLE_ADS_METADATA_REFRESH_REQUESTED_BY=/);
+    assert.match(text, /ATTRIBUTION_QA_RETENTION_JOB_NAME=/);
+    assert.match(text, /ATTRIBUTION_QA_RETENTION_SCHEDULER_JOB_NAME=/);
+    assert.match(text, /ATTRIBUTION_QA_RETENTION_SCHEDULE=/);
+    assert.match(text, /ATTRIBUTION_QA_RETENTION_DAYS="30"/);
   }
 });
 
@@ -87,9 +122,45 @@ test('cloud run runbooks document metadata scheduler creation and pause or resum
   assert.match(cloudRunRunbook, /pause/i);
   assert.match(cloudRunRunbook, /resume/i);
   assert.match(cloudRunRunbook, /META_ADS_METADATA_SCHEDULER_NAME/);
+  assert.match(cloudRunRunbook, /META_ADS_DETERMINISTIC_SYNC_SCHEDULE/);
+  assert.match(cloudRunRunbook, /meta-deterministic/);
   assert.match(cloudRunRunbook, /GOOGLE_ADS_METADATA_SCHEDULER_NAME/);
 
   assert.match(metadataRunbook, /campaign_metadata_sync_job_lifecycle/);
+  assert.match(metadataRunbook, /META_ADS_METADATA_ACCESS_TOKEN_SECRET_NAME/);
   assert.match(metadataRunbook, /META_ADS_METADATA_REFRESH_REQUESTED_BY/);
   assert.match(metadataRunbook, /GOOGLE_ADS_METADATA_REFRESH_REQUESTED_BY/);
+});
+
+test('cloud run IAM bootstrap grants optional Meta metadata token access to Meta-capable workloads', () => {
+  const bootstrapScript = readRepoFile('infra/cloud-run/bootstrap-iam.sh');
+
+  assert.match(bootstrapScript, /if \[ -z "\$secret_name" \]; then/);
+
+  for (const serviceAccount of [
+    'API_SERVICE_ACCOUNT_NAME',
+    'WORKER_SERVICE_ACCOUNT_NAME',
+    'META_ADS_JOB_SERVICE_ACCOUNT_NAME',
+    'META_ADS_DETERMINISTIC_JOB_SERVICE_ACCOUNT_NAME',
+    'CAMPAIGN_METADATA_BACKFILL_JOB_SERVICE_ACCOUNT_NAME'
+  ]) {
+    assert.match(
+      bootstrapScript,
+      new RegExp(
+        `grant_secret_access "\\$${serviceAccount}" "\\$\\{META_ADS_METADATA_ACCESS_TOKEN_SECRET_NAME:-\\}"`
+      )
+    );
+  }
+});
+
+test('cloud run runbook documents recovery queue and dead-letter replay workflows', () => {
+  const cloudRunRunbook = readRepoFile('docs/runbooks/cloud-run-pipelines.md');
+
+  assert.match(cloudRunRunbook, /Automatic recovery queue checks/);
+  assert.match(cloudRunRunbook, /Dead-letter replay workflow/);
+  assert.match(cloudRunRunbook, /--dry-run/);
+  assert.match(cloudRunRunbook, /sourcePrecedence=\["shopify","ga4","ad_platforms"\]/);
+  assert.match(cloudRunRunbook, /Retryable:/);
+  assert.match(cloudRunRunbook, /Permanent:/);
+  assert.match(cloudRunRunbook, /raw payload hashes and storage URIs remain unchanged/);
 });

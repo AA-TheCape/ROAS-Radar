@@ -1,10 +1,18 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
   ORDER_ATTRIBUTION_BACKFILL_DEFAULT_LIMIT,
   ORDER_ATTRIBUTION_BACKFILL_MAX_LIMIT,
+  RECOVERY_SOURCE_PRECEDENCE,
   attributionEngineV1JsonSchemas,
+  attributionQaPayloadV1JsonSchema,
+  attributionQaPayloadV1NoMatchFixture,
+  attributionQaPayloadV1SuccessFixture,
+  campaignMetadataRefreshPayloadJsonSchema,
+  ga4EnrichmentFieldsJsonSchema,
+  normalizeCampaignMetadataRefreshPayload,
   normalizeAttributionCaptureV1,
   normalizeAttributionCreditRecordV1,
   normalizeAttributionConsentState,
@@ -12,12 +20,24 @@ import {
   normalizeAttributionExplainRecordV1,
   normalizeAttributionHintInputV1,
   normalizeAttributionOrderInputV1,
+  normalizeAttributionQaPayloadV1,
   normalizeAttributionResultRecordV1,
   normalizeAttributionTouchpointInputV1,
   normalizeAttributionUtcTimestamp,
+  normalizeGa4EnrichmentFields,
+  normalizeMetaDeterministicAttributionAggregateV1,
+  normalizeMetaDeterministicAttributionIdentityTupleV1,
   normalizeOrderAttributionBackfillRequest,
+  normalizeRecoveryJobReport,
+  normalizeRecoveryJobRequest,
+  normalizeShopifyAttributionHint,
+  normalizeShopifyRawPayloadSnapshot,
   orderAttributionBackfillEnqueueResponseSchema,
-  orderAttributionBackfillJobResponseSchema
+  orderAttributionBackfillJobResponseSchema,
+  recoveryJobReportJsonSchema,
+  recoveryJobRequestJsonSchema,
+  shopifyAttributionHintJsonSchema,
+  shopifyRawPayloadSnapshotJsonSchema
 } from "../packages/attribution-schema/index.js";
 
 test("attribution consent state defaults to unknown and accepts explicit opt-out", () => {
@@ -255,6 +275,229 @@ test("order attribution backfill job responses accept queued and processing payl
 	assert.equal(processingJob.error, null);
 });
 
+test("recovery job contracts normalize requests and require Shopify > GA4 > ad platforms precedence", () => {
+	const request = normalizeRecoveryJobRequest({
+		schemaVersion: 1,
+		jobType: "shopify_attribution_hint_recovery",
+		initiatedBy: "ops@example.com",
+		timeRangeStart: "2026-05-01T00:00:00Z",
+		timeRangeEnd: "2026-05-02T00:00:00Z",
+	});
+
+	assert.equal(request.mode, "manual");
+	assert.equal(request.dryRun, true);
+	assert.equal(request.scopeKey, "global");
+	assert.deepEqual(RECOVERY_SOURCE_PRECEDENCE, [
+		"shopify",
+		"ga4",
+		"ad_platforms",
+	]);
+
+	const report = normalizeRecoveryJobReport({
+		schemaVersion: 1,
+		jobId: "run-1",
+		jobType: "shopify_attribution_hint_recovery",
+		status: "succeeded",
+		startedAt: "2026-05-01T00:00:01Z",
+		completedAt: "2026-05-01T00:00:02Z",
+		dryRun: true,
+		sourcePrecedence: ["shopify", "ga4", "ad_platforms"],
+		counters: {
+			recordsDiscovered: 1,
+			recordsProcessed: 1,
+			recordsSucceeded: 1,
+			recordsFailed: 0,
+			recordsSkipped: 0,
+			sideEffectsAttempted: 0,
+			sideEffectsSucceeded: 0,
+			sideEffectsSuppressed: 1,
+		},
+	});
+
+	assert.equal(report.completedAt, "2026-05-01T00:00:02.000Z");
+	assert.throws(
+		() =>
+			normalizeRecoveryJobReport({
+				...report,
+				sourcePrecedence: ["ga4", "shopify", "ad_platforms"],
+			}),
+		/Invalid literal value/,
+	);
+});
+
+test("recovery job contracts reject invalid windows and classify failure retryability", () => {
+	assert.throws(
+		() =>
+			normalizeRecoveryJobRequest({
+				schemaVersion: 1,
+				jobType: "ga4_fallback_unattributed_recovery",
+				initiatedBy: "ops@example.com",
+				timeRangeStart: "2026-05-02T00:00:00Z",
+				timeRangeEnd: "2026-05-01T00:00:00Z",
+			}),
+		/timeRangeStart must be on or before timeRangeEnd/,
+	);
+
+	const report = normalizeRecoveryJobReport({
+		schemaVersion: 1,
+		jobId: "run-2",
+		jobType: "ga4_fallback_unattributed_recovery",
+		status: "dead_lettered",
+		startedAt: "2026-05-01T00:00:00Z",
+		completedAt: "2026-05-01T00:05:00Z",
+		dryRun: false,
+		sourcePrecedence: ["shopify", "ga4", "ad_platforms"],
+		counters: {
+			recordsDiscovered: 2,
+			recordsProcessed: 2,
+			recordsSucceeded: 1,
+			recordsFailed: 1,
+			recordsSkipped: 0,
+			sideEffectsAttempted: 1,
+			sideEffectsSucceeded: 1,
+			sideEffectsSuppressed: 0,
+		},
+		failures: [
+			{
+				recordType: "shopify_order",
+				recordKey: "1001",
+				code: "ga4_export_lag",
+				message: "GA4 export is not available yet",
+				sourceSystem: "ga4",
+				retryable: true,
+			},
+			{
+				recordType: "shopify_order",
+				recordKey: "1002",
+				code: "invalid_order_payload",
+				message: "Order payload is missing required ids",
+				sourceSystem: "shopify",
+				retryable: false,
+			},
+		],
+	});
+
+	assert.equal(report.status, "dead_lettered");
+	assert.equal(report.failures[0].retryable, true);
+	assert.equal(report.failures[1].retryable, false);
+	assert.throws(
+		() =>
+			normalizeRecoveryJobReport({
+				...report,
+				failures: [
+					{
+						...report.failures[0],
+						sourceSystem: "warehouse",
+					},
+				],
+			}),
+		/Invalid enum value/,
+	);
+});
+
+test("recovery source payload contracts normalize Shopify, GA4, and ad metadata fields", () => {
+	const shopifySnapshot = normalizeShopifyRawPayloadSnapshot({
+		schemaVersion: 1,
+		snapshotId: "snapshot-1",
+		shopDomain: "example.myshopify.com",
+		shopifyOrderId: "1001",
+		capturedAt: "2026-05-01T00:00:00Z",
+		payloadVersion: 1,
+		payloadSha256: "a".repeat(64),
+		storageUri: null,
+		rawPayload: { id: 1001 },
+		normalized: {
+			orderName: "#1001",
+			processedAt: "2026-05-01T00:00:00Z",
+			createdAtShopify: null,
+			currencyCode: "usd",
+			totalPrice: "120.00",
+			subtotalPrice: "100.00",
+			landingSite: "https://example.com/?utm_source=Google",
+			referringSite: null,
+			checkoutToken: "checkout-1",
+			cartToken: null,
+			customerId: "customer-1",
+			sourceName: "web",
+		},
+	});
+	const shopifyHint = normalizeShopifyAttributionHint({
+		schemaVersion: 1,
+		shopifyOrderId: "1001",
+		extractedAt: "2026-05-01T00:00:01Z",
+		hintSource: "landing_site",
+		source: "Google",
+		medium: "CPC",
+		campaign: "Brand",
+		content: null,
+		term: null,
+		clickIdType: "gclid",
+		clickIdValue: "ABC123",
+		landingSite: "https://example.com/?gclid=ABC123",
+		referringSite: null,
+		confidenceScore: 0.8,
+		confidenceLabel: "high",
+		sourcePrecedenceRank: 1,
+	});
+	const ga4 = normalizeGa4EnrichmentFields({
+		schemaVersion: 1,
+		shopifyOrderId: "1001",
+		ga4PropertyId: "properties/123",
+		ga4EventDate: "2026-05-01",
+		enrichedAt: "2026-05-01T00:00:02Z",
+		clientId: "client-1",
+		sessionId: null,
+		userPseudoId: null,
+		transactionId: "1001",
+		source: "Newsletter",
+		medium: "Email",
+		campaign: "May",
+		content: null,
+		term: null,
+		clickIdType: null,
+		clickIdValue: null,
+		collectedTrafficSource: { manual_source: "newsletter" },
+		sourcePrecedenceRank: 2,
+	});
+	const metadata = normalizeCampaignMetadataRefreshPayload({
+		schemaVersion: 1,
+		requestedBy: "ops@example.com",
+		workerId: "metadata-refresh",
+		mode: "api_refresh",
+		platforms: ["google_ads", "meta_ads"],
+		startDate: "2026-05-01",
+		endDate: "2026-05-02",
+		sourcePrecedenceRank: 3,
+	});
+
+	assert.equal(shopifySnapshot.normalized.currencyCode, "USD");
+	assert.deepEqual(shopifySnapshot.rawPayload, { id: 1001 });
+	assert.equal(shopifyHint.source, "google");
+	assert.equal(shopifyHint.sourcePrecedenceRank, 1);
+	assert.equal(ga4.medium, "email");
+	assert.equal(ga4.sourcePrecedenceRank, 2);
+	assert.deepEqual(metadata.campaignIds, []);
+	assert.equal(metadata.sourcePrecedenceRank, 3);
+});
+
+test("committed recovery JSON Schema files cover shared recovery contract titles", () => {
+	const expectedSchemas = [
+		["docs/json-schema/recovery-job-request-v1.schema.json", recoveryJobRequestJsonSchema],
+		["docs/json-schema/recovery-job-report-v1.schema.json", recoveryJobReportJsonSchema],
+		["docs/json-schema/shopify-raw-payload-snapshot-v1.schema.json", shopifyRawPayloadSnapshotJsonSchema],
+		["docs/json-schema/shopify-attribution-hint-v1.schema.json", shopifyAttributionHintJsonSchema],
+		["docs/json-schema/ga4-enrichment-fields-v1.schema.json", ga4EnrichmentFieldsJsonSchema],
+		["docs/json-schema/campaign-metadata-refresh-payload-v1.schema.json", campaignMetadataRefreshPayloadJsonSchema],
+	] as const;
+
+	for (const [path, exportedSchema] of expectedSchemas) {
+		const committed = JSON.parse(readFileSync(path, "utf8"));
+
+		assert.equal(committed.$schema, "https://json-schema.org/draft/2020-12/schema");
+		assert.equal(committed.title, exportedSchema.title);
+	}
+});
+
 test('attribution v1 order, touchpoint, and hint schemas normalize canonical preprocessing records', () => {
   const order = normalizeAttributionOrderInputV1({
     schema_version: 1,
@@ -323,6 +566,35 @@ test('attribution v1 order, touchpoint, and hint schemas normalize canonical pre
   assert.equal(hint.source, 'google');
   assert.equal(touchpoint.source, 'google');
   assert.equal(touchpoint.touchpoint_occurred_at_utc, '2026-04-30T11:00:00.000Z');
+});
+
+test('attribution hint input rejects confidence scores outside 0..1', () => {
+  const baseHint = {
+    hint_source_system: 'shopify_order',
+    hint_type: 'landing_site',
+    source: 'Google',
+    medium: 'CPC',
+    campaign: 'Brand',
+    content: null,
+    term: null,
+    click_id_type: 'gclid',
+    click_id_value: 'ABC123',
+    hint_confidence_label: 'medium',
+    raw_hint_keys: ['utm_source', 'gclid']
+  };
+
+  assert.throws(() =>
+    normalizeAttributionHintInputV1({
+      ...baseHint,
+      hint_confidence_score: '1.01'
+    })
+  );
+  assert.throws(() =>
+    normalizeAttributionHintInputV1({
+      ...baseHint,
+      hint_confidence_score: '-0.01'
+    })
+  );
 });
 
 test('attribution v1 canonical schemas normalize omitted nullable fields to explicit nulls', () => {
@@ -545,17 +817,287 @@ test('attribution v1 schemas reject timestamps without timezone offsets', () => 
   );
 });
 
-test('attribution engine package publishes six JSON schema documents for canonical v1 records', () => {
+test('Meta deterministic attribution schemas enforce identity, verification, and window contracts', () => {
+  const identity = normalizeMetaDeterministicAttributionIdentityTupleV1({
+    organization_id: 1,
+    ad_account_id: 'act_123',
+    report_date: '2026-05-20',
+    attribution_family: 'deterministic_views',
+    attribution_window: '7d_view',
+    campaign_id: 'campaign-1',
+    adset_id: null,
+    ad_id: null
+  });
+
+  const aggregate = normalizeMetaDeterministicAttributionAggregateV1({
+    schema_version: 1,
+    platform: 'meta_ads',
+    organization_id: 1,
+    meta_connection_id: 2,
+    source_id: 3,
+    raw_event_id: 4,
+    fact_id: null,
+    ad_account_id: 'act_123',
+    report_date: '2026-05-20',
+    campaign_id: 'campaign-1',
+    campaign_name: 'Campaign',
+    adset_id: null,
+    adset_name: null,
+    ad_id: null,
+    ad_name: null,
+    event_type: 'view',
+    attribution_family: 'deterministic_views',
+    attribution_window: '7d_view',
+    attribution_window_days: 7,
+    aggregate_count: 42,
+    evidence_origin: 'api',
+    platform_verified: true,
+    verification_status: 'verified',
+    verified_by_source_id: 3,
+    verified_at_utc: '2026-05-21T12:00:00Z',
+    raw_record_metadata: {
+      sourceId: 3,
+      sourceTable: 'deterministic_event_sources',
+      rawTable: 'raw_deterministic_events',
+      rawEventId: 4,
+      apiVersion: 'v20.0',
+      apiEndpoint: 'insights',
+      apiAccountId: 'act_123',
+      apiRequestTimestampUtc: '2026-05-21T11:59:59Z',
+      requestId: 'trace-123'
+    }
+  });
+
+  assert.equal(identity.campaign_id, 'campaign-1');
+  assert.equal(aggregate.verified_at_utc, '2026-05-21T12:00:00.000Z');
+  assert.equal(aggregate.attribution_window_days, 7);
+
+  assert.throws(
+    () =>
+      normalizeAttributionResultRecordV1({
+        run_id: '11111111-1111-4111-8111-111111111111',
+        attribution_spec_version: 'v1',
+        order_id: 'order-1',
+        model_key: 'deterministic_views',
+        allocation_status: 'attributed',
+        winner_touchpoint_id: 'touch-1',
+        winner_session_id: null,
+        winner_evidence_source: 'landing_session_id',
+        winner_attribution_reason: 'matched_by_landing_session',
+        total_credit_weight: '1.00',
+        total_revenue_credited: '200.00',
+        touchpoint_count_considered: 1,
+        eligible_click_count: 1,
+        eligible_view_count: 0,
+        lookback_rule_applied: '30d_click',
+        winner_selection_rule: 'last_touch',
+        direct_suppression_applied: false,
+        deterministic_block_applied: false,
+        normalization_failures_count: 0,
+        generated_at_utc: '2026-05-21T12:00:00Z'
+      }),
+    /Invalid enum value/
+  );
+
+  assert.throws(
+    () =>
+      normalizeAttributionCreditRecordV1({
+        run_id: '11111111-1111-4111-8111-111111111111',
+        attribution_spec_version: 'v1',
+        order_id: 'order-1',
+        model_key: 'last_touch',
+        touchpoint_id: 'touch-1',
+        session_id: null,
+        touchpoint_position: 1,
+        occurred_at_utc: '2026-05-21T12:00:00Z',
+        source: 'meta',
+        medium: 'paid_social',
+        campaign: 'campaign-1',
+        content: null,
+        term: null,
+        click_id_type: null,
+        click_id_value: null,
+        touch_type: 'view',
+        is_direct: false,
+        evidence_source: 'deterministic_views',
+        is_synthetic: false,
+        attribution_reason: 'deterministic_views',
+        credit_weight: '1.00',
+        revenue_credit: '200.00',
+        is_primary: true
+      }),
+    /Invalid enum value/
+  );
+
+  assert.throws(
+    () =>
+      normalizeMetaDeterministicAttributionAggregateV1({
+        ...aggregate,
+        event_type: 'impression'
+      }),
+    /event_type must match attribution_family/
+  );
+
+  assert.throws(
+    () =>
+      normalizeMetaDeterministicAttributionAggregateV1({
+        ...aggregate,
+        verified_by_source_id: null
+      }),
+    /verified Meta aggregate rows require verified status/
+  );
+
+  assert.throws(
+    () =>
+      normalizeMetaDeterministicAttributionAggregateV1({
+        ...aggregate,
+        raw_record_metadata: {
+          ...aggregate.raw_record_metadata,
+          requestId: null
+        }
+      }),
+    /verified Meta aggregate rows require raw payload and Meta API provenance metadata/
+  );
+
+  assert.throws(
+    () =>
+      normalizeMetaDeterministicAttributionIdentityTupleV1({
+        ...identity,
+        campaign_id: null,
+        ad_id: null
+      }),
+    /campaign_id or ad_id is required/
+  );
+});
+
+test('attribution engine package publishes JSON schema documents for canonical v1 records', () => {
   assert.deepEqual(Object.keys(attributionEngineV1JsonSchemas).sort(), [
     'AttributionCreditRecordV1',
     'AttributionExplainRecordV1',
     'AttributionHintInputV1',
     'AttributionOrderInputV1',
+    'AttributionQaPayloadV1',
     'AttributionResultRecordV1',
-    'AttributionTouchpointInputV1'
+    'AttributionTouchpointInputV1',
+    'MetaDeterministicAttributionAggregateV1',
+    'MetaDeterministicAttributionIdentityTupleV1'
   ]);
 
   assert.equal(attributionEngineV1JsonSchemas.AttributionOrderInputV1.title, 'AttributionOrderInputV1');
   assert.equal(attributionEngineV1JsonSchemas.AttributionTouchpointInputV1.type, 'object');
   assert.equal(attributionEngineV1JsonSchemas.AttributionResultRecordV1.additionalProperties, false);
+  assert.equal(attributionQaPayloadV1JsonSchema.title, 'AttributionQaPayloadV1');
+  assert.equal(
+    attributionEngineV1JsonSchemas.MetaDeterministicAttributionAggregateV1.title,
+    'MetaDeterministicAttributionAggregateV1'
+  );
+});
+
+test('attribution QA payload fixtures validate success and no-match outcomes', () => {
+  const success = normalizeAttributionQaPayloadV1(attributionQaPayloadV1SuccessFixture);
+  const noMatch = normalizeAttributionQaPayloadV1(attributionQaPayloadV1NoMatchFixture);
+  const selectedSuccessCandidates = [
+    ...success.candidates.deterministic_first_party,
+    ...success.candidates.shopify_hint,
+    ...success.candidates.ga4_fallback
+  ].filter((candidate) => candidate.selected);
+  const selectedNoMatchCandidates = [
+    ...noMatch.candidates.deterministic_first_party,
+    ...noMatch.candidates.shopify_hint,
+    ...noMatch.candidates.ga4_fallback
+  ].filter((candidate) => candidate.selected);
+
+  assert.equal(success.outcome.status, 'success');
+  assert.equal(success.outcome.attribution_tier, 'deterministic_first_party');
+  assert.equal(success.order.currency_code, 'USD');
+  assert.equal(success.candidates.deterministic_first_party[0]?.source, 'google');
+  assert.equal(success.generated_at_utc, '2026-04-30T12:30:00.000Z');
+  assert.equal(selectedSuccessCandidates.length, 1);
+  assert.ok(success.outcome.winner_touchpoint_id || success.outcome.winner_session_id);
+
+  assert.equal(noMatch.outcome.status, 'no_match');
+  assert.equal(noMatch.outcome.attribution_tier, 'unattributed');
+  assert.equal(noMatch.outcome.winner_touchpoint_id, null);
+  assert.equal(noMatch.outcome.winner_session_id, null);
+  assert.equal(noMatch.outcome.confidence_score, 0);
+  assert.equal(noMatch.outcome.confidence_label, 'none');
+  assert.equal(selectedNoMatchCandidates.length, 0);
+  assert.equal(noMatch.credits.length, 0);
+});
+
+test('attribution QA payload serialization round-trips normalized schema fields', () => {
+  const payload = normalizeAttributionQaPayloadV1({
+    ...attributionQaPayloadV1SuccessFixture,
+    generated_at_utc: '2026-04-30T12:30:00-05:00',
+    order: {
+      ...attributionQaPayloadV1SuccessFixture.order,
+      currency_code: 'usd',
+      subtotal_amount: 180,
+      total_amount: 195,
+      identifiers: {
+        ...attributionQaPayloadV1SuccessFixture.order.identifiers,
+        checkout_token: undefined,
+        cart_token: '   ',
+        email_hash: undefined
+      }
+    },
+    candidates: {
+      ...attributionQaPayloadV1SuccessFixture.candidates,
+      deterministic_first_party: attributionQaPayloadV1SuccessFixture.candidates.deterministic_first_party.map(
+        (candidate) => ({
+          ...candidate,
+          occurred_at_utc: '2026-04-30T11:15:00-05:00',
+          source: ' Google ',
+          medium: ' CPC ',
+          content: undefined,
+          click_id_type: undefined
+        })
+      )
+    }
+  });
+  const serialized = JSON.parse(JSON.stringify(payload));
+  const reparsed = normalizeAttributionQaPayloadV1(serialized);
+
+  assert.deepEqual(reparsed, serialized);
+  assert.equal(reparsed.generated_at_utc, '2026-04-30T17:30:00.000Z');
+  assert.equal(reparsed.order.currency_code, 'USD');
+  assert.equal(reparsed.order.subtotal_amount, '180.00');
+  assert.equal(reparsed.order.identifiers.checkout_token, null);
+  assert.equal(reparsed.order.identifiers.cart_token, null);
+  assert.equal(reparsed.order.identifiers.email_hash, null);
+  assert.equal(reparsed.candidates.deterministic_first_party[0]?.source, 'google');
+  assert.equal(reparsed.candidates.deterministic_first_party[0]?.medium, 'cpc');
+  assert.equal(reparsed.candidates.deterministic_first_party[0]?.content, null);
+  assert.equal(reparsed.candidates.deterministic_first_party[0]?.click_id_type, null);
+  assert.equal(reparsed.candidates.deterministic_first_party[0]?.occurred_at_utc, '2026-04-30T16:15:00.000Z');
+});
+
+test('attribution QA payload enforces success and no-match invariants', () => {
+  assert.throws(
+    () =>
+      normalizeAttributionQaPayloadV1({
+        ...attributionQaPayloadV1SuccessFixture,
+        outcome: {
+          ...attributionQaPayloadV1SuccessFixture.outcome,
+          status: 'no_match'
+        }
+      }),
+    /no_match payloads must be unattributed/
+  );
+
+  assert.throws(
+    () =>
+      normalizeAttributionQaPayloadV1({
+        ...attributionQaPayloadV1NoMatchFixture,
+        outcome: {
+          ...attributionQaPayloadV1NoMatchFixture.outcome,
+          status: 'success',
+          attribution_tier: 'deterministic_first_party',
+          match_source: 'landing_session_id',
+          confidence_score: 1,
+          confidence_label: 'high'
+        }
+      }),
+    /success payloads require winner_touchpoint_id or winner_session_id/
+  );
 });

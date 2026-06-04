@@ -130,14 +130,14 @@ export async function refreshWeeklyMmmChannelInputMartWithClient(
       eligible_weeks AS (
         SELECT
           week_start_date,
-          (week_start_date + 6) AS week_end_date
+          (week_start_date::date + 6) AS week_end_date
         FROM generate_series(
           date_trunc('week', $1::date)::date,
           date_trunc('week', $2::date)::date,
           interval '1 week'
         ) AS generated(week_start_date)
         WHERE week_start_date >= $1::date
-          AND (week_start_date + 6) <= $2::date
+          AND (week_start_date::date + 6) <= $2::date
       ),
       daily_paid AS (
         SELECT

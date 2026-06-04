@@ -356,6 +356,7 @@ export function createReportingDashboardProps(
     filters: {
       startDate: '2026-04-01',
       endDate: '2026-04-20',
+      reportingMode: 'clicks',
       source: '',
       campaign: '',
       attributionTier: ''
@@ -380,16 +381,83 @@ export function createReportingDashboardProps(
     ],
     summarySection: {
       data: {
-        visits: 12480,
-        orders: 324,
-        revenue: 48920,
-        spend: 11376,
-        conversionRate: 0.02596,
-        roas: 4.3
+        range: {
+          startDate: '2026-04-01',
+          endDate: '2026-04-20'
+        },
+        reportingMode: 'clicks',
+        reportingModeLabel: 'Click attribution',
+        totalsLabel: 'Click attribution',
+        totalsCanonical: true,
+        totalsDescription: 'Canonical reporting totals from click-attributed order credits.',
+        totals: {
+          visits: 12480,
+          orders: 324,
+          revenue: 48920,
+          spend: 11376,
+          conversionRate: 0.02596,
+          roas: 4.3
+        },
+        comparisonTotals: {
+          combined: {
+            label: 'Non-canonical comparison total',
+            canonical: false,
+            description: 'Comparison-only sum of click attribution and deterministic view attribution; do not treat as canonical revenue.',
+            totals: {
+              visits: 12480,
+              orders: 344,
+              revenue: 51920,
+              spend: 11376,
+              conversionRate: 344 / 12480,
+              roas: 4.56
+            }
+          }
+        },
+        layers: {
+          clicks: {
+            label: 'Click attribution',
+            canonical: true,
+            description: 'Canonical reporting totals from click-attributed order credits.',
+            totals: {
+              visits: 12480,
+              orders: 324,
+              revenue: 48920,
+              spend: 11376,
+              conversionRate: 0.02596,
+              roas: 4.3
+            }
+          },
+          deterministicViews: {
+            label: 'Deterministic view layer',
+            canonical: false,
+            description: 'Layer-only Meta API-verified deterministic view/impression attribution.',
+            totals: {
+              visits: 0,
+              orders: 20,
+              revenue: 3000,
+              spend: 0,
+              conversionRate: 0,
+              roas: null
+            }
+          },
+          metaViewThrough: {
+            label: 'Meta API view-through',
+            canonical: false,
+            description: 'Meta API-reported view-through purchase revenue, purchases, and ROAS from impression-time reporting.',
+            totals: {
+              visits: 0,
+              orders: 14,
+              revenue: 2100,
+              spend: 760,
+              conversionRate: 0,
+              roas: 2100 / 760
+            }
+          }
+        }
       },
       loading: false,
       error: null
-    } satisfies AsyncSection<import('../dashboard/src/lib/api').SummaryTotals>,
+    } satisfies AsyncSection<import('../dashboard/src/lib/api').SummaryResponse>,
     campaignsSection: {
       data: [
         {
@@ -407,7 +475,10 @@ export function createReportingDashboardProps(
           campaignNameResolutionStatus: 'resolved',
           campaignLabel: {
             displayName: 'Spring Search',
+            source: 'google',
+            rawId: 'spring-search',
             entityId: 'cmp_google_spring_search',
+            objectType: 'campaign',
             platform: 'google_ads',
             resolutionStatus: 'resolved',
             lastSeenAt: '2026-04-20T07:00:00.000Z',
@@ -429,7 +500,10 @@ export function createReportingDashboardProps(
           campaignNameResolutionStatus: 'fallback_name',
           campaignLabel: {
             displayName: 'Prospecting Carousel',
+            source: 'meta',
+            rawId: 'prospecting-carousel',
             entityId: 'cmp_meta_prospecting_carousel',
+            objectType: 'campaign',
             platform: 'meta_ads',
             resolutionStatus: 'fallback_name',
             lastSeenAt: '2026-04-20T08:00:00.000Z',
@@ -466,8 +540,10 @@ export function createReportingDashboardProps(
           attributionTierDescription:
             'Resolved from durable ROAS Radar first-party evidence such as a landing session, checkout token, cart token, or stitched identity path.',
           attributionSource: 'landing_session_id',
+          matchingMethod: 'matched_by_landing_session',
           attributionMatchedAt: '2026-04-20T18:00:30.000Z',
           confidenceScore: 1,
+          lastAttributionRunAt: '2026-04-20T18:00:30.000Z',
           sessionId: 'sess_123'
         },
         {
@@ -484,8 +560,10 @@ export function createReportingDashboardProps(
           attributionTierLabel: 'Deterministic Shopify hint',
           attributionTierDescription: 'Recovered synthetically from Shopify marketing hints after first-party resolution failed.',
           attributionSource: 'shopify_marketing_hint',
+          matchingMethod: 'shopify_hint_derived',
           attributionMatchedAt: '2026-04-19T18:00:15.000Z',
           confidenceScore: 0.55,
+          lastAttributionRunAt: '2026-04-19T18:00:15.000Z',
           sessionId: null
         },
         {
@@ -503,8 +581,10 @@ export function createReportingDashboardProps(
           attributionTierDescription:
             'No eligible first-party, Shopify hint, or GA4 fallback match qualified, or the required timing data could not be normalized.',
           attributionSource: 'unattributed',
+          matchingMethod: 'unattributed',
           attributionMatchedAt: null,
           confidenceScore: null,
+          lastAttributionRunAt: null,
           sessionId: null
         }
       ],
@@ -528,7 +608,10 @@ export function createReportingDashboardProps(
               campaignNameResolutionStatus: 'resolved',
               campaignLabel: {
                 displayName: 'Spring Search',
+                source: 'google',
+                rawId: 'spring-search',
                 entityId: 'cmp_google_spring_search',
+                objectType: 'campaign',
                 platform: 'google_ads',
                 resolutionStatus: 'resolved',
                 lastSeenAt: '2026-04-20T07:00:00.000Z',
@@ -544,7 +627,10 @@ export function createReportingDashboardProps(
               campaignNameResolutionStatus: 'resolved',
               campaignLabel: {
                 displayName: 'Brand Search',
+                source: 'google',
+                rawId: 'brand-search',
                 entityId: 'cmp_google_brand_search',
+                objectType: 'campaign',
                 platform: 'google_ads',
                 resolutionStatus: 'resolved',
                 lastSeenAt: '2026-04-20T07:15:00.000Z',
@@ -568,7 +654,10 @@ export function createReportingDashboardProps(
               campaignNameResolutionStatus: 'fallback_name',
               campaignLabel: {
                 displayName: 'Prospecting Carousel',
+                source: 'meta',
+                rawId: 'prospecting-carousel',
                 entityId: 'cmp_meta_prospecting_carousel',
+                objectType: 'campaign',
                 platform: 'meta_ads',
                 resolutionStatus: 'fallback_name',
                 lastSeenAt: '2026-04-20T08:00:00.000Z',
@@ -584,7 +673,10 @@ export function createReportingDashboardProps(
               campaignNameResolutionStatus: 'resolved',
               campaignLabel: {
                 displayName: 'Retargeting Video',
+                source: 'meta',
+                rawId: 'retargeting-video',
                 entityId: 'cmp_meta_retargeting_video',
+                objectType: 'campaign',
                 platform: 'meta_ads',
                 resolutionStatus: 'resolved',
                 lastSeenAt: '2026-04-20T08:20:00.000Z',
@@ -687,9 +779,11 @@ export function createOrderDetailsProps(
           attributionTierDescription:
             'Resolved from durable ROAS Radar first-party evidence such as a landing session, checkout token, cart token, or stitched identity path.',
           attributionSource: 'landing_session_id',
+          matchingMethod: 'matched_by_landing_session',
           attributionMatchedAt: '2026-04-20T18:00:30.000Z',
           attributionReason: 'matched_by_landing_session',
           confidenceScore: 1,
+          lastAttributionRunAt: '2026-04-20T18:00:30.000Z',
           sessionId: 'sess_123',
           attributedSource: 'google',
           attributedMedium: 'cpc',
@@ -766,6 +860,8 @@ export function createOrderDetailsProps(
             revenueCredit: 195,
             isPrimary: true,
             attributionReason: 'matched checkout token',
+            matchSource: 'checkout_token',
+            confidenceLabel: 'high',
             createdAt: '2026-04-20T18:31:00.000Z',
             modelVersion: 2
           },
@@ -785,6 +881,8 @@ export function createOrderDetailsProps(
             revenueCredit: 97.5,
             isPrimary: false,
             attributionReason: 'modeled credit',
+            matchSource: 'landing_session_id',
+            confidenceLabel: 'high',
             createdAt: '2026-04-20T18:31:00.000Z',
             modelVersion: 2
           }
@@ -898,6 +996,8 @@ export function createSettingsAdminProps(
 					status: "connected",
 					account_name: "North America Prospecting",
 					account_currency: "USD",
+					deterministic_view_impression_sync_enabled: true,
+					deterministic_view_impression_last_planned_for: "2026-04-19",
 				},
 			},
 			loading: false,
@@ -989,6 +1089,7 @@ export function createSettingsAdminProps(
 		onOrderAttributionBackfillRefresh: noop,
 		onMetaConnect: noop,
 		onMetaSync: noop,
+		onMetaDeterministicSyncToggle: noop,
 		onGoogleSync: noop,
 		onGoogleReconcile: noop,
 	};

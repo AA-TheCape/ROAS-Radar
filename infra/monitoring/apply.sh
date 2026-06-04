@@ -61,6 +61,7 @@ render_template() {
     -e "s|__RUNBOOK_URL_INGESTION__|$(escape_for_sed "$(build_runbook_url "ingestion-failures.md")")|g" \
     -e "s|__RUNBOOK_URL_META_ORDER_VALUE__|$(escape_for_sed "$(build_runbook_url "meta-order-value-ingestion.md")")|g" \
     -e "s|__RUNBOOK_URL_ATTRIBUTION__|$(escape_for_sed "$(build_runbook_url "attribution-worker-backlog.md")")|g" \
+    -e "s|__RUNBOOK_URL_ATTRIBUTION_QA__|$(escape_for_sed "$(build_runbook_url "attribution-qa-tooling.md")")|g" \
     -e "s|__RUNBOOK_URL_ATTRIBUTION_COMPLETENESS__|$(escape_for_sed "$(build_runbook_url "attribution-completeness.md")")|g" \
     -e "s|__RUNBOOK_URL_API_LATENCY__|$(escape_for_sed "$(build_runbook_url "api-latency.md")")|g" \
     -e "s|__RUNBOOK_URL_DATA_QUALITY__|$(escape_for_sed "$(build_runbook_url "identity-data-quality.md")")|g" \

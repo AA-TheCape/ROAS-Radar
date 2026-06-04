@@ -9,6 +9,7 @@ import { checkDatabaseHealth, pool } from "./db/pool.js";
 import { processOrderAttributionBackfillRuns } from "./modules/attribution/backfill-jobs.js";
 import { assertGa4BigQueryIngestionConfig } from "./modules/attribution/ga4-bigquery-config.js";
 import { processAttributionQueue } from "./modules/attribution/index.js";
+import { processRegisteredRecoveryJobs } from "./modules/recovery-jobs/registered.js";
 import {
 	buildAttributionBacklogLog,
 	logError,
@@ -112,6 +113,10 @@ async function run(): Promise<void> {
 			});
 			await processOrderAttributionBackfillRuns({
 				workerId,
+			});
+			await processRegisteredRecoveryJobs({
+				workerId,
+				limit: 1,
 			});
 			await emitAttributionBacklogSnapshot(workerId);
 			lastRunAt = new Date().toISOString();

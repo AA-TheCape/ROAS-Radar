@@ -1,0 +1,21 @@
+{
+  "name": "roas_combined_report_api_errors",
+  "description": "Counts combined report summary API health failures.",
+  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"combined_report_api_health\" AND jsonPayload.status=\"error\"",
+  "labelExtractors": {
+    "service": "EXTRACT(jsonPayload.service)",
+    "path": "EXTRACT(jsonPayload.path)",
+    "status_class": "EXTRACT(jsonPayload.statusClass)"
+  },
+  "metricDescriptor": {
+    "metricKind": "DELTA",
+    "valueType": "INT64",
+    "unit": "1",
+    "displayName": "ROAS Radar Combined Report API Errors",
+    "labels": [
+      { "key": "service", "valueType": "STRING", "description": "Service emitting combined report telemetry." },
+      { "key": "path", "valueType": "STRING", "description": "Combined report API path." },
+      { "key": "status_class", "valueType": "STRING", "description": "Failure status class." }
+    ]
+  }
+}

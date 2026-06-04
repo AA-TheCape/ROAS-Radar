@@ -1,0 +1,31 @@
+{
+  "name": "roas_attribution_qa_evidence_size_bytes",
+  "description": "Distribution of Attribution QA payload and retained raw evidence sizes observed on write and fetch paths.",
+  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=(\"attribution_qa_snapshot_write\" OR \"attribution_qa_payload_fetch\")",
+  "valueExtractor": "EXTRACT(jsonPayload.payloadSizeBytes)",
+  "labelExtractors": {
+    "service": "EXTRACT(jsonPayload.service)",
+    "event": "EXTRACT(jsonPayload.event)",
+    "pipeline": "EXTRACT(jsonPayload.pipeline)",
+    "endpoint": "EXTRACT(jsonPayload.endpoint)",
+    "status": "EXTRACT(jsonPayload.status)"
+  },
+  "metricDescriptor": {
+    "metricKind": "DELTA",
+    "valueType": "DISTRIBUTION",
+    "unit": "By",
+    "displayName": "ROAS Radar Attribution QA Evidence Size",
+    "labels": [
+      { "key": "service", "valueType": "STRING", "description": "Service emitting the QA evidence size event." },
+      { "key": "event", "valueType": "STRING", "description": "QA telemetry event name." },
+      { "key": "pipeline", "valueType": "STRING", "description": "Snapshot write pipeline when present." },
+      { "key": "endpoint", "valueType": "STRING", "description": "QA fetch endpoint when present." },
+      { "key": "status", "valueType": "STRING", "description": "Telemetry outcome." }
+    ]
+  },
+  "bucketOptions": {
+    "explicitBuckets": {
+      "bounds": [1024, 4096, 16384, 65536, 262144, 1048576, 4194304]
+    }
+  }
+}

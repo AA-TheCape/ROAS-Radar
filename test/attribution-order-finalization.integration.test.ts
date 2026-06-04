@@ -385,6 +385,34 @@ async function fetchOrderAttributionAudit(shopifyOrderId: string) {
   return result.rows[0];
 }
 
+async function fetchConfidenceMetadata(shopifyOrderId: string) {
+  const { pool } = await getModules();
+  const result = await pool.query<{
+    order_confidence_score: string;
+    order_last_attribution_run_at: Date | null;
+    result_confidence_score: string;
+    result_last_attribution_run_at: Date;
+    result_attribution_reason: string;
+  }>(
+    `
+      SELECT
+        orders.attribution_confidence_score::text AS order_confidence_score,
+        orders.last_attribution_run_at AS order_last_attribution_run_at,
+        results.confidence_score::text AS result_confidence_score,
+        results.last_attribution_run_at AS result_last_attribution_run_at,
+        results.attribution_reason AS result_attribution_reason
+      FROM shopify_orders orders
+      JOIN attribution_results results
+        ON results.shopify_order_id = orders.shopify_order_id
+      WHERE orders.shopify_order_id = $1
+    `,
+    [shopifyOrderId]
+  );
+
+  assert.equal(result.rowCount, 1);
+  return result.rows[0];
+}
+
 async function resetIntegrationDatabase() {
   const { pool } = await getModules();
 
@@ -924,7 +952,7 @@ test('out-of-window and future-dated candidates are excluded so in-window direct
     await insertCustomerIdentity(pool, customerIdentityId);
 
     const oldPaidSessionId = await insertTrackingSession(pool, {
-      firstSeenAt: '2026-03-05T09:00:00.000Z',
+      firstSeenAt: '2026-03-03T09:00:00.000Z',
       landingPage: 'https://store.example/products/widget?utm_source=google&utm_medium=cpc&utm_campaign=old-paid',
       customerIdentityId,
       utmSource: 'google',
@@ -934,7 +962,7 @@ test('out-of-window and future-dated candidates are excluded so in-window direct
     await insertTrackingEvent(pool, {
       sessionId: oldPaidSessionId,
       eventType: 'page_view',
-      occurredAt: '2026-03-05T09:00:00.000Z',
+      occurredAt: '2026-03-03T09:00:00.000Z',
       pageUrl: 'https://store.example/products/widget?utm_source=google&utm_medium=cpc&utm_campaign=old-paid',
       utmSource: 'google',
       utmMedium: 'cpc',
@@ -991,6 +1019,100 @@ test('out-of-window and future-dated candidates are excluded so in-window direct
       confidence_score: '0.60',
       attribution_reason: 'matched_by_customer_identity'
     });
+  } finally {
+    await resetIntegrationDatabase();
+  }
+});
+
+test('confidence metadata only advances when attribution-relevant fields change', async () => {
+  await resetIntegrationDatabase();
+  const { pool } = await getModules();
+
+  try {
+    const cartSessionId = await insertTrackingSession(pool, {
+      firstSeenAt: '2026-04-08T10:00:00.000Z',
+      landingPage: 'https://store.example/cart?utm_source=google&utm_medium=cpc&utm_campaign=cart',
+      utmSource: 'google',
+      utmMedium: 'cpc',
+      utmCampaign: 'cart'
+    });
+    await insertTrackingEvent(pool, {
+      sessionId: cartSessionId,
+      eventType: 'page_view',
+      occurredAt: '2026-04-08T10:00:00.000Z',
+      pageUrl: 'https://store.example/cart?utm_source=google&utm_medium=cpc&utm_campaign=cart',
+      utmSource: 'google',
+      utmMedium: 'cpc',
+      utmCampaign: 'cart',
+      shopifyCartToken: 'cart-confidence-1'
+    });
+
+    const checkoutSessionId = await insertTrackingSession(pool, {
+      firstSeenAt: '2026-04-08T10:05:00.000Z',
+      landingPage: 'https://store.example/checkout?utm_source=google&utm_medium=cpc&utm_campaign=checkout',
+      utmSource: 'google',
+      utmMedium: 'cpc',
+      utmCampaign: 'checkout'
+    });
+    await insertTrackingEvent(pool, {
+      sessionId: checkoutSessionId,
+      eventType: 'checkout_started',
+      occurredAt: '2026-04-08T10:05:00.000Z',
+      pageUrl: 'https://store.example/checkout?utm_source=google&utm_medium=cpc&utm_campaign=checkout',
+      utmSource: 'google',
+      utmMedium: 'cpc',
+      utmCampaign: 'checkout',
+      shopifyCheckoutToken: 'checkout-confidence-1'
+    });
+
+    await insertShopifyOrder(pool, {
+      shopifyOrderId: 'order-confidence-diff-1',
+      processedAt: '2026-04-08T10:10:00.000Z',
+      cartToken: 'cart-confidence-1'
+    });
+
+    await processOrder('order-confidence-diff-1');
+    const initialMetadata = await fetchConfidenceMetadata('order-confidence-diff-1');
+    assert.equal(initialMetadata.order_confidence_score, '0.90');
+    assert.equal(initialMetadata.result_confidence_score, '0.90');
+    assert.equal(initialMetadata.result_attribution_reason, 'matched_by_cart_token');
+
+    await pool.query(
+      `
+        UPDATE shopify_orders
+        SET total_price = '140.00'
+        WHERE shopify_order_id = 'order-confidence-diff-1'
+      `
+    );
+    await processOrder('order-confidence-diff-1');
+    const unchangedMetadata = await fetchConfidenceMetadata('order-confidence-diff-1');
+    assert.equal(unchangedMetadata.order_confidence_score, initialMetadata.order_confidence_score);
+    assert.equal(unchangedMetadata.result_confidence_score, initialMetadata.result_confidence_score);
+    assert.equal(
+      unchangedMetadata.order_last_attribution_run_at?.getTime(),
+      initialMetadata.order_last_attribution_run_at?.getTime()
+    );
+    assert.equal(
+      unchangedMetadata.result_last_attribution_run_at.getTime(),
+      initialMetadata.result_last_attribution_run_at.getTime()
+    );
+
+    await pool.query(
+      `
+        UPDATE shopify_orders
+        SET checkout_token = 'checkout-confidence-1'
+        WHERE shopify_order_id = 'order-confidence-diff-1'
+      `
+    );
+    await processOrder('order-confidence-diff-1');
+    const changedMetadata = await fetchConfidenceMetadata('order-confidence-diff-1');
+    assert.equal(changedMetadata.order_confidence_score, '1.00');
+    assert.equal(changedMetadata.result_confidence_score, '1.00');
+    assert.equal(changedMetadata.result_attribution_reason, 'matched_by_checkout_token');
+    assert.notEqual(
+      changedMetadata.result_last_attribution_run_at.getTime(),
+      initialMetadata.result_last_attribution_run_at.getTime()
+    );
   } finally {
     await resetIntegrationDatabase();
   }

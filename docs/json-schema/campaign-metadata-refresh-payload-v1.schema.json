@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CampaignMetadataRefreshPayloadV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "runId",
+    "requestedBy",
+    "workerId",
+    "mode",
+    "platforms",
+    "startDate",
+    "endDate",
+    "campaignIds",
+    "dryRun",
+    "entities",
+    "sourcePrecedenceRank"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1, "type": "integer" },
+    "runId": { "type": ["string", "null"] },
+    "requestedBy": { "type": "string", "minLength": 1 },
+    "workerId": { "type": "string", "minLength": 1 },
+    "mode": { "type": "string", "enum": ["api_refresh", "history_backfill"] },
+    "platforms": {
+      "type": "array",
+      "items": { "type": "string", "enum": ["google_ads", "meta_ads"] }
+    },
+    "startDate": { "type": ["string", "null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+    "endDate": { "type": ["string", "null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+    "campaignIds": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "dryRun": { "type": "boolean" },
+    "maxAttempts": { "type": "integer", "minimum": 1 },
+    "entities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["platform", "accountId", "entityType", "entityId", "latestName", "lastSeenAt"],
+        "properties": {
+          "platform": { "type": "string", "enum": ["google_ads", "meta_ads"] },
+          "accountId": { "type": "string", "minLength": 1 },
+          "entityType": { "type": "string", "enum": ["campaign", "adset", "ad"] },
+          "entityId": { "type": "string", "minLength": 1 },
+          "latestName": { "type": ["string", "null"] },
+          "lastSeenAt": { "type": ["string", "null"], "format": "date-time" }
+        }
+      }
+    },
+    "sourcePrecedenceRank": { "const": 3, "type": "integer" }
+  }
+}

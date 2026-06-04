@@ -6,6 +6,10 @@
 			"coverage/**",
 			"node_modules/**",
 			"dashboard/dist/**",
+			"dashboard/vite.config.js",
+			"vite.config.js",
+			"vite.config.d.ts",
+			"tsconfig*.tsbuildinfo",
 			"dashboard/node_modules/**",
 			"shopify/theme/assets/**",
 			"test/shopify-roas-radar-tracker.test.js"

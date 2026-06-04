@@ -9,6 +9,7 @@ Use this document alongside:
 - `docs/last-non-direct-touch-approval-matrix.md` for the approved primary-winner rule matrix and Shopify fallback caveats
 - `docs/ga4-fallback-attribution-contract-v1.md` for GA4 fallback eligibility, precedence, and confidence semantics
 - `docs/reporting-metrics.md` for KPI formulas used by the reporting APIs and dashboard
+- `docs/deterministic-attribution-behavior.md` for Clicks, Deterministic Views, Meta view-through, and combined comparison reporting behavior
 
 ## Dashboard Interpretation Quick Start
 
@@ -18,6 +19,7 @@ Use this sequence when validating the dashboard or answering analytics questions
 2. Use this playbook for what each reporting table means, how attribution models differ, and why orders can move between channels.
 3. Use `docs/attribution-schema-v1.md` when a mismatch looks like a field-naming, normalization, or Shopify-attribute problem.
 4. Use `docs/operational-attribution-contracts.md` when a mismatch looks like resolver precedence, writeback, reconciliation, retention, or dead-letter behavior.
+5. Use `docs/confidence-scoring-contract-v1.md` and `docs/runbooks/attribution-confidence-scoring.md` when a mismatch involves attribution source, matching method, confidence score, confidence label, or `lastAttributionRunAt`.
 
 Practical rule:
 
@@ -33,8 +35,9 @@ For the current MVP, ROAS Radar measures:
 - Shopify orders and basic customer identifiers from webhooks
 - deterministic attribution from tracked sessions to orders
 - reporting aggregates by attribution model, date, source, medium, campaign, content, and term
+- separate Meta API-verified deterministic view/impression model outputs where enabled
 
-It does not attempt probabilistic measurement. Attribution is based on explicit session evidence, tracked checkout/cart tokens, and deterministic identity stitching.
+It does not attempt probabilistic measurement. Canonical click attribution is based on explicit session evidence, tracked checkout/cart tokens, and deterministic identity stitching. Meta deterministic view/impression reporting is a separate aggregate model layer and does not become the canonical order winner.
 
 ## Tracking Event Contract
 
@@ -174,12 +177,17 @@ Key fields:
 - `processed_at`, `created_at_shopify`, `updated_at_shopify`, `ingested_at`
 - `landing_session_id`, `checkout_token`, `cart_token`
 - `customer_identity_id`: deterministic identity attached during stitching
+- `attribution_source_id`, `matching_method_id`: lookup-backed metadata for the persisted order winner
+- `attribution_confidence_score`, `attribution_confidence_contract_version`
+- `last_attribution_run_at`: timestamp of the attribution run that wrote the current winner metadata
 - `raw_payload`: original webhook body
 
 Interpretation notes:
 
 - order reporting time uses `processed_at`, then `created_at_shopify`, then `ingested_at`
 - `landing_session_id`, `checkout_token`, and `cart_token` are the strongest deterministic evidence fields used by attribution
+- lookup IDs are internal storage fields; APIs expose the corresponding source and matching-method codes
+- `last_attribution_run_at` is about attribution metadata freshness, not Shopify order recency
 
 ### `attribution_results`
 
@@ -195,6 +203,9 @@ Key fields:
 - `attributed_click_id_type`, `attributed_click_id_value`
 - `confidence_score`
 - `confidence_label`
+- `attribution_source_id`, `matching_method_id`
+- `confidence_contract_version`
+- `last_attribution_run_at`
 - `attribution_reason`
 - `attributed_at`
 
@@ -202,6 +213,7 @@ Interpretation notes:
 
 - this table stores the primary `last_touch` result used for single-row order summaries
 - `match_source` is the durable provenance field for how the primary result was sourced
+- source and matching method IDs should identify the same winner as `match_source`, `attribution_reason`, and `confidence_score`
 - analysts comparing models should use `attribution_order_credits` and `daily_reporting_metrics`, not just `attribution_results`
 
 ### `attribution_order_credits`
@@ -219,6 +231,7 @@ Key fields:
 - `revenue_credit`
 - `is_primary`
 - `confidence_label`
+- `confidence_contract_version`
 - `attribution_reason`
 
 Interpretation notes:
@@ -253,6 +266,35 @@ Interpretation notes:
 - orders and revenue come from `attribution_order_credits`
 - spend, impressions, and clicks come from ad-platform creative-level spend tables when those integrations are enabled
 - because order credit can be fractional, aggregate orders can be decimals for multi-touch models
+- this table is the canonical Click attribution reporting surface; deterministic view/impression model outputs must not be merged into its canonical attributed revenue fields
+
+### `deterministic_model_outputs`
+
+Separate model output table for API-verified deterministic view/impression attribution layers.
+
+Key interpretation fields:
+
+- `platform`: currently `meta_ads` for deterministic view/impression reporting
+- model metadata identifying the deterministic view/impression path
+- output date, entity, order, revenue, and traceability fields
+- `generated_at_utc`: freshness marker for reporting
+
+Interpretation notes:
+
+- this table is not a click-attribution winner table
+- rows are eligible only when backed by verified Meta API deterministic evidence
+- outputs may be surfaced as `reportingMode=deterministic_views`
+- outputs must not overwrite `attribution_results`, canonical `attribution_order_credits`, Shopify writeback fields, or the default Clicks totals
+
+### `meta_ads_order_value_aggregates`
+
+Meta API order-value aggregate table used for Meta view-through reporting.
+
+Interpretation notes:
+
+- Meta view-through reporting reads Meta-reported impression-time purchase metrics
+- this surface is distinct from ROAS Radar deterministic view/impression model outputs
+- these values should be compared to Clicks or Deterministic Views as separate Meta-reported context, not reconciled as if they are the same revenue source
 
 ### `data_quality_check_runs`
 
@@ -506,6 +548,45 @@ Analyst expectations:
 
 Treat this as the weakest approved attributed recovery path before `unattributed`, not as first-party session proof.
 
+### Deterministic Views are a separate Meta layer
+
+Deterministic Views are Meta API-verified deterministic view/impression model outputs. They are not primary click attribution and are not Meta's own view-through totals.
+
+Analyst expectations:
+
+- default reporting remains canonical Click attribution
+- Deterministic Views are selected explicitly with `reportingMode=deterministic_views`
+- the layer reads `deterministic_model_outputs`, not `daily_reporting_metrics`
+- the layer must not change order winners, `attribution_tier`, Shopify writeback, or canonical click model credits
+- missing or quarantined Meta API evidence means no Deterministic View credit, even when local UTMs, `fbclid`, pageviews, or Shopify hints suggest Meta involvement
+
+Treat this as an additional aggregate model layer for analysis, not as proof that a specific person viewed a Meta ad.
+
+### Meta view-through is platform-reported context
+
+Meta view-through reporting is based on Meta API-reported impression-time aggregates from `meta_ads_order_value_aggregates`.
+
+Analyst expectations:
+
+- select it explicitly with `reportingMode=meta_view_through`
+- interpret it as Meta-reported platform attribution, not ROAS Radar click attribution
+- do not add it to Clicks or Deterministic Views unless the report labels it as a separate comparison
+- do not use it to change first-party attribution winners or confidence labels
+
+Treat this as a Meta platform reporting layer, not as the ROAS Radar deterministic view model.
+
+### Combined totals are comparison-only
+
+Combined totals add canonical Clicks and Deterministic Views to help analysts inspect incremental-looking model credit. They are intentionally non-canonical.
+
+Analyst expectations:
+
+- select them explicitly with `reportingMode=combined`
+- expect `totalsCanonical=false`
+- use them for side-by-side comparison, planning discussion, and anomaly review only
+- do not use combined revenue as canonical attributed revenue, finance revenue, Shopify writeback revenue, or a replacement for Clicks
+- remember that combined totals can double count because Clicks and deterministic view/impression model credit can describe overlapping business outcomes
+
 ### `confidence_score` is about match strength
 
 `confidence_score` reflects how strongly the order was linked to a journey:
@@ -528,11 +609,26 @@ It is not a measure of channel performance, campaign quality, or model superiori
 - `low`: `0.55`, `0.40`, `0.35`, `0.25`
 - `none`: `0.00`
 
+### Confidence metadata lifecycle
+
+Attribution source and matching method lookup IDs are created by database migrations, then used by the worker when it persists attribution. Analysts normally see codes, not numeric IDs:
+
+- `attributionSource`: source code such as `landing_session_id`, `checkout_token`, `shopify_hint_fallback`, `ga4_fallback`, or `unattributed`
+- `matchingMethod`: method code such as `matched_by_landing_session`, `matched_by_checkout_token`, `shopify_hint_derived`, or `ga4_fallback_derived`
+- `confidenceScore`: the v1 score for the same winning path
+- `lastAttributionRunAt`: when the current winner metadata was written
+
+The same winner metadata is persisted to `shopify_orders` and `attribution_results`. If those tables disagree for the same order, treat it as operational drift rather than an analytics interpretation issue.
+
+Confidence metadata is recomputed when the attribution winner or winner fingerprint changes. Common causes are order attribution backfills, Shopify hint recovery, GA4 fallback rollout changes, identity stitching changes, click-ID or UTM normalization fixes, and confidence-contract updates. If the winner is correct but lookup IDs, score, contract version, or `lastAttributionRunAt` are stale, operators use the confidence backfill described in `docs/runbooks/attribution-confidence-scoring.md`. If the winner is wrong, order attribution backfill must run before confidence backfill.
+
 ### Summary, campaigns, timeseries, and orders endpoints read different shapes
 
 `GET /api/reporting/summary`
 
 - sums `visits`, `attributed_orders`, and `attributed_revenue` for the selected filters and model
+- defaults to canonical Clicks when `reportingMode` is omitted
+- exposes non-canonical reporting layers and combined comparison totals separately when deterministic view/impression reporting is enabled
 
 `GET /api/reporting/campaigns`
 
@@ -546,7 +642,7 @@ It is not a measure of channel performance, campaign quality, or model superiori
 `GET /api/reporting/orders`
 
 - returns one row per order using the primary credit row for the selected model
-- exposes the persisted order-level attribution audit fields as the canonical contract, including `attributionTier`, `attributionTierLabel`, `attributionTierDescription`, `attributionSource`, `attributionMatchedAt`, `attributionReason`, `confidenceScore`, and canonical winner `sessionId`
+- exposes the persisted order-level attribution audit fields as the canonical contract, including `attributionTier`, `attributionTierLabel`, `attributionTierDescription`, `attributionSource`, `matchingMethod`, `attributionMatchedAt`, `attributionReason`, `confidenceScore`, `lastAttributionRunAt`, and canonical winner `sessionId`
 - also exposes `primaryCreditAttributionReason` for the selected model as a secondary debugging field
 - useful for debugging why a particular order appears under a channel or campaign
 
@@ -555,7 +651,7 @@ It is not a measure of channel performance, campaign quality, or model superiori
 Use the dashboard in this order when sanity-checking performance:
 
 1. Summary cards
-   Confirm the selected date range and attribution model first. Card totals are model-scoped, so a model switch can legitimately move revenue and order counts even when raw orders did not change.
+   Confirm the selected date range, attribution model, and reporting mode first. Card totals are model-scoped and layer-scoped, so a model or reporting mode switch can legitimately move revenue and order counts even when raw orders did not change.
 2. Campaign table
    Treat this as the best view for channel mix. `conversionRate`, `roas`, and `cac` are computed from the grouped slice, not from global totals.
 3. Timeseries chart
@@ -565,10 +661,13 @@ Use the dashboard in this order when sanity-checking performance:
 
 When a dashboard value looks wrong, ask these questions in order:
 
+- Is the selected reporting mode Clicks, Deterministic Views, Meta view-through, or Combined?
 - Is the selected attribution model the one you expect?
 - Is the issue a metric formula question? If so, use `docs/reporting-metrics.md`.
 - Is the issue a field capture or normalization question? If so, use `docs/attribution-schema-v1.md`.
 - Is the issue a resolver, Shopify writeback, retry, or reconciliation question? If so, use `docs/operational-attribution-contracts.md`.
+- Is the issue isolated to Deterministic Views? If so, use `docs/runbooks/meta-deterministic-ingestion.md`.
+- Is the issue a stale or inconsistent `attributionSource`, `matchingMethod`, `confidenceScore`, or `lastAttributionRunAt` value? If so, use `docs/runbooks/attribution-confidence-scoring.md`.
 
 ## Identity Stitching Impact
 
@@ -607,7 +706,7 @@ ROAS Radar MVP is intentionally narrower than a Northbeam-like attribution platf
 Current limitations:
 
 - no media mix modeling or incrementality measurement
-- no view-through attribution
+- no person-level view-through attribution
 - no probabilistic identity graph
 - no cross-device identity beyond deterministic session, token, email-hash, and Shopify-customer-ID stitching
 - no automatic multi-store or multi-brand normalization

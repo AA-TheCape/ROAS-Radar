@@ -1,0 +1,57 @@
+{
+  "displayName": "ROAS Radar __ENVIRONMENT__ Long-Running Recovery Jobs",
+  "documentation": {
+    "content": "A recovery run or chunk exceeded the expected runtime window. Inspect `recovery_run_lifecycle` and `recovery_run_chunk_processed` logs by `jsonPayload.runId` and `jsonPayload.recoveryTraceId` to find the checkpoint and counters. Runbook: __RUNBOOK_URL_ATTRIBUTION_COMPLETENESS__",
+    "mimeType": "text/markdown"
+  },
+  "combiner": "OR",
+  "enabled": true,
+  "severity": "WARNING",
+  "notificationChannels": __ALERT_NOTIFICATION_CHANNELS__,
+  "conditions": [
+    {
+      "displayName": "Terminal recovery run duration p95 exceeds 2 hours",
+      "conditionThreshold": {
+        "filter": "metric.type=\"logging.googleapis.com/user/roas_recovery_run_duration_ms\" resource.type=\"cloud_run_revision\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 7200000,
+        "duration": "900s",
+        "aggregations": [
+          {
+            "alignmentPeriod": "900s",
+            "perSeriesAligner": "ALIGN_PERCENTILE_95",
+            "crossSeriesReducer": "REDUCE_MAX",
+            "groupByFields": [
+              "metric.labels.job_type"
+            ]
+          }
+        ],
+        "trigger": {
+          "count": 1
+        }
+      }
+    },
+    {
+      "displayName": "Recovery chunk duration p95 exceeds 30 minutes",
+      "conditionThreshold": {
+        "filter": "metric.type=\"logging.googleapis.com/user/roas_recovery_chunk_duration_ms\" resource.type=\"cloud_run_revision\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 1800000,
+        "duration": "900s",
+        "aggregations": [
+          {
+            "alignmentPeriod": "900s",
+            "perSeriesAligner": "ALIGN_PERCENTILE_95",
+            "crossSeriesReducer": "REDUCE_MAX",
+            "groupByFields": [
+              "metric.labels.job_type"
+            ]
+          }
+        ],
+        "trigger": {
+          "count": 1
+        }
+      }
+    }
+  ]
+}
