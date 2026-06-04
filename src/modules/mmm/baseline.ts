@@ -17,7 +17,11 @@ export const MMM_BASELINE_MART_VERSION = MMM_WEEKLY_CHANNEL_MART_VERSION;
 const DEFAULT_MAX_SEGMENTS = 8;
 const DEFAULT_ADSTOCK_DECAY = 0.5;
 const DEFAULT_RIDGE_LAMBDA = 1;
+const DEFAULT_POSTERIOR_DRAWS = 1_000;
+const DEFAULT_POSTERIOR_CHAINS = 4;
 const MIN_OBSERVATIONS = 3;
+const MIN_EFFECTIVE_SAMPLE_SIZE = 100;
+const MAX_RHAT = 1.1;
 
 export type MmmBaselineTrainingInput = {
   startDate: string;
@@ -26,6 +30,8 @@ export type MmmBaselineTrainingInput = {
   maxSegments?: number;
   adstockDecay?: number;
   ridgeLambda?: number;
+  posteriorDraws?: number;
+  posteriorChains?: number;
   holdoutRatio?: number;
   submittedBy?: string;
 };
@@ -64,6 +70,14 @@ type DailyObservation = {
   date: string;
   revenue: number;
   features: Record<string, number>;
+};
+
+type FittedRegression = {
+  intercept: number;
+  coefficients: Record<string, number>;
+  covariance: number[][];
+  residualSigma: number;
+  parameterNames: string[];
 };
 
 export type MmmBaselineModelRun = {
@@ -211,7 +225,20 @@ function solveLinearSystem(matrix: number[][], vector: number[]): number[] {
   return augmented.map((row) => row[size] ?? 0);
 }
 
-function fitRidgeRegression(observations: DailyObservation[], segmentKeys: string[], lambda: number) {
+function invertMatrix(matrix: number[][]): number[][] {
+  return matrix.map((_, column) => {
+    const basis = Array.from({ length: matrix.length }, (_entry, index) => (index === column ? 1 : 0));
+    return solveLinearSystem(matrix, basis);
+  }).reduce<number[][]>((inverse, columnValues, column) => {
+    columnValues.forEach((value, row) => {
+      inverse[row] ??= [];
+      inverse[row][column] = value;
+    });
+    return inverse;
+  }, []);
+}
+
+function fitRidgeRegression(observations: DailyObservation[], segmentKeys: string[], lambda: number): FittedRegression {
   const featureCount = segmentKeys.length + 1;
   const matrix = Array.from({ length: featureCount }, () => Array.from({ length: featureCount }, () => 0));
   const vector = Array.from({ length: featureCount }, () => 0);
@@ -231,10 +258,22 @@ function fitRidgeRegression(observations: DailyObservation[], segmentKeys: strin
   }
 
   const coefficients = solveLinearSystem(matrix, vector);
+  const intercept = coefficients[0] ?? 0;
+  const coefficientMap = Object.fromEntries(segmentKeys.map((key, index) => [key, coefficients[index + 1] ?? 0]));
+  const residualSse = observations.reduce((sum, observation) => {
+    const error = observation.revenue - predict(observation, intercept, coefficientMap);
+    return sum + error ** 2;
+  }, 0);
+  const degreesOfFreedom = Math.max(1, observations.length - featureCount);
+  const residualSigma = Math.max(1e-6, Math.sqrt(residualSse / degreesOfFreedom));
+  const inverse = invertMatrix(matrix);
 
   return {
-    intercept: coefficients[0] ?? 0,
-    coefficients: Object.fromEntries(segmentKeys.map((key, index) => [key, coefficients[index + 1] ?? 0]))
+    intercept,
+    coefficients: coefficientMap,
+    covariance: inverse.map((row) => row.map((value) => value * residualSigma ** 2)),
+    residualSigma,
+    parameterNames: ['intercept', ...segmentKeys]
   };
 }
 
@@ -275,6 +314,230 @@ function validationMetrics(observations: DailyObservation[], intercept: number, 
   };
 }
 
+function createSeededRandom(seedText: string): () => number {
+  let seed = createHash('sha256').update(seedText).digest().readUInt32LE(0);
+
+  return () => {
+    seed += 0x6d2b79f5;
+    let value = seed;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+    return ((value ^ (value >>> 14)) >>> 0) / 4_294_967_296;
+  };
+}
+
+function normalDraw(random: () => number): number {
+  const left = Math.max(Number.MIN_VALUE, random());
+  const right = random();
+  return Math.sqrt(-2 * Math.log(left)) * Math.cos(2 * Math.PI * right);
+}
+
+function cholesky(matrix: number[][]): number[][] {
+  const size = matrix.length;
+  const lower = Array.from({ length: size }, () => Array.from({ length: size }, () => 0));
+
+  for (let row = 0; row < size; row += 1) {
+    for (let column = 0; column <= row; column += 1) {
+      const sum = Array.from({ length: column }).reduce<number>(
+        (subtotal, _entry, index) => subtotal + (lower[row][index] ?? 0) * (lower[column][index] ?? 0),
+        0
+      );
+
+      if (row === column) {
+        lower[row][column] = Math.sqrt(Math.max((matrix[row][row] ?? 0) - sum, 1e-10));
+      } else {
+        lower[row][column] = ((matrix[row][column] ?? 0) - sum) / Math.max(lower[column][column] ?? 0, 1e-10);
+      }
+    }
+  }
+
+  return lower;
+}
+
+function quantile(values: number[], probability: number): number {
+  if (values.length === 0) {
+    return 0;
+  }
+
+  const sorted = [...values].sort((left, right) => left - right);
+  const position = (sorted.length - 1) * probability;
+  const lower = Math.floor(position);
+  const upper = Math.ceil(position);
+  if (lower === upper) {
+    return sorted[lower] ?? 0;
+  }
+
+  const weight = position - lower;
+  return (sorted[lower] ?? 0) * (1 - weight) + (sorted[upper] ?? 0) * weight;
+}
+
+function summarizePosterior(values: number[]) {
+  const mean = values.reduce((sum, value) => sum + value, 0) / Math.max(values.length, 1);
+
+  return {
+    mean,
+    median: quantile(values, 0.5),
+    credibleInterval80: {
+      lower: quantile(values, 0.1),
+      upper: quantile(values, 0.9)
+    },
+    credibleInterval95: {
+      lower: quantile(values, 0.025),
+      upper: quantile(values, 0.975)
+    }
+  };
+}
+
+function variance(values: number[]): number {
+  if (values.length < 2) {
+    return 0;
+  }
+
+  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+  return values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (values.length - 1);
+}
+
+function autocorrelation(values: number[], lag: number): number {
+  if (values.length <= lag) {
+    return 0;
+  }
+
+  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+  const denominator = values.reduce((sum, value) => sum + (value - mean) ** 2, 0);
+  if (denominator === 0) {
+    return 0;
+  }
+
+  let numerator = 0;
+  for (let index = 0; index < values.length - lag; index += 1) {
+    numerator += ((values[index] ?? 0) - mean) * ((values[index + lag] ?? 0) - mean);
+  }
+
+  return numerator / denominator;
+}
+
+function posteriorDiagnostics(chains: number[][][]) {
+  const parameterCount = chains[0]?.[0]?.length ?? 0;
+  const chainCount = chains.length;
+  const drawsPerChain = chains[0]?.length ?? 0;
+  const byParameter = Array.from({ length: parameterCount }, (_entry, parameterIndex) => {
+    const parameterChains = chains.map((chain) => chain.map((draw) => draw[parameterIndex] ?? 0));
+    const chainMeans = parameterChains.map((chain) => chain.reduce((sum, value) => sum + value, 0) / Math.max(chain.length, 1));
+    const chainVariances = parameterChains.map(variance);
+    const meanOfMeans = chainMeans.reduce((sum, value) => sum + value, 0) / Math.max(chainMeans.length, 1);
+    const between = drawsPerChain * chainMeans.reduce((sum, value) => sum + (value - meanOfMeans) ** 2, 0) / Math.max(chainCount - 1, 1);
+    const within = chainVariances.reduce((sum, value) => sum + value, 0) / Math.max(chainVariances.length, 1);
+    const posteriorVariance = ((drawsPerChain - 1) / Math.max(drawsPerChain, 1)) * within + between / Math.max(drawsPerChain, 1);
+    const rhat = within > 0 ? Math.sqrt(Math.max(posteriorVariance / within, 0)) : 1;
+    const merged = parameterChains.flat();
+    let autocorrelationSum = 0;
+    for (let lag = 1; lag < Math.min(50, merged.length - 1); lag += 1) {
+      const rho = autocorrelation(merged, lag);
+      if (rho <= 0) {
+        break;
+      }
+      autocorrelationSum += rho;
+    }
+    const effectiveSampleSize = merged.length / Math.max(1 + 2 * autocorrelationSum, 1);
+
+    return {
+      rhat,
+      effectiveSampleSize
+    };
+  });
+
+  return {
+    chains: chainCount,
+    drawsPerChain,
+    totalDraws: chainCount * drawsPerChain,
+    maxRhat: Math.max(...byParameter.map((entry) => entry.rhat), 1),
+    minEffectiveSampleSize: Math.min(...byParameter.map((entry) => entry.effectiveSampleSize), chainCount * drawsPerChain),
+    byParameter
+  };
+}
+
+function samplePosterior(
+  fitted: FittedRegression,
+  segmentKeys: string[],
+  inputHash: string,
+  posteriorChains: number,
+  posteriorDraws: number
+) {
+  const meanVector = [fitted.intercept, ...segmentKeys.map((key) => fitted.coefficients[key] ?? 0)];
+  const lower = cholesky(fitted.covariance);
+  const drawsPerChain = Math.max(1, Math.floor(posteriorDraws / posteriorChains));
+
+  return Array.from({ length: posteriorChains }, (_entry, chainIndex) => {
+    const random = createSeededRandom(`${inputHash}:${chainIndex}`);
+    return Array.from({ length: drawsPerChain }, () => {
+      const standardNormal = meanVector.map(() => normalDraw(random));
+      return meanVector.map((mean, row) => {
+        const offset = standardNormal.reduce((sum, value, column) => sum + (lower[row][column] ?? 0) * value, 0);
+        return mean + offset;
+      });
+    });
+  });
+}
+
+function summarizePosteriorCoefficients(chains: number[][][], parameterNames: string[]) {
+  const draws = chains.flat();
+  return Object.fromEntries(
+    parameterNames.map((parameterName, parameterIndex) => [
+      parameterName,
+      summarizePosterior(draws.map((draw) => draw[parameterIndex] ?? 0))
+    ])
+  );
+}
+
+function buildContributionOutputs(
+  chains: number[][][],
+  segmentKeys: string[],
+  observations: DailyObservation[],
+  segmentStats: Map<string, SegmentStats>
+) {
+  const draws = chains.flat();
+  const totalActualRevenue = observations.reduce((sum, observation) => sum + observation.revenue, 0);
+  const totalFeatureBySegment = Object.fromEntries(
+    segmentKeys.map((key) => [key, observations.reduce((sum, observation) => sum + (observation.features[key] ?? 0), 0)])
+  );
+  const contributionDraws = Object.fromEntries(
+    segmentKeys.map((key, keyIndex) => [
+      key,
+      draws.map((draw) => Math.max(0, (draw[keyIndex + 1] ?? 0) * (totalFeatureBySegment[key] ?? 0)))
+    ])
+  );
+  const totalMediaDraws = draws.map((_draw, drawIndex) =>
+    segmentKeys.reduce((sum, key) => sum + ((contributionDraws[key] ?? [])[drawIndex] ?? 0), 0)
+  );
+
+  return {
+    totalActualRevenue,
+    totalMediaContribution: summarizePosterior(totalMediaDraws),
+    channels: segmentKeys.map((key) => {
+      const stats = segmentStats.get(key);
+      const values = contributionDraws[key] ?? [];
+      const shares = values.map((value, index) => {
+        const total = totalMediaDraws[index] ?? 0;
+        return total > 0 ? value / total : 0;
+      });
+
+      return {
+        key,
+        source: stats?.source ?? 'unknown',
+        medium: stats?.medium ?? 'unknown',
+        campaign: stats?.campaign ?? 'unknown',
+        spend: stats?.spend ?? 0,
+        impressions: stats?.impressions ?? 0,
+        clicks: stats?.clicks ?? 0,
+        attributedRevenue: stats?.attributedRevenue ?? 0,
+        contribution: summarizePosterior(values),
+        contributionShare: summarizePosterior(shares),
+        posteriorProbabilityPositive: values.filter((value) => value > 0).length / Math.max(values.length, 1)
+      };
+    })
+  };
+}
+
 export function buildBaselineMmmArtifact(rows: MmmBaselineMartRow[], input: MmmBaselineTrainingInput): MmmBaselineModelRun {
   const startDate = normalizeDate(input.startDate, 'startDate');
   const endDate = normalizeDate(input.endDate, 'endDate');
@@ -286,6 +549,8 @@ export function buildBaselineMmmArtifact(rows: MmmBaselineMartRow[], input: MmmB
   const maxSegments = clampInteger(input.maxSegments, DEFAULT_MAX_SEGMENTS, 1, 25);
   const adstockDecay = clampNumber(input.adstockDecay, DEFAULT_ADSTOCK_DECAY, 0, 0.95);
   const ridgeLambda = clampNumber(input.ridgeLambda, DEFAULT_RIDGE_LAMBDA, 0, 10_000);
+  const posteriorChains = clampInteger(input.posteriorChains, DEFAULT_POSTERIOR_CHAINS, 2, 8);
+  const posteriorDraws = clampInteger(input.posteriorDraws, DEFAULT_POSTERIOR_DRAWS, posteriorChains * 50, posteriorChains * 5_000);
   const holdoutRatio = clampNumber(input.holdoutRatio, 0.2, 0, 0.5);
 
   const dates = Array.from(new Set(rows.map((row) => row.metric_date))).sort();
@@ -370,6 +635,34 @@ export function buildBaselineMmmArtifact(rows: MmmBaselineMartRow[], input: MmmB
   const trainingObservations = holdoutCount > 0 ? observations.slice(0, -holdoutCount) : observations;
   const holdoutObservations = holdoutCount > 0 ? observations.slice(-holdoutCount) : [];
   const fitted = fitRidgeRegression(trainingObservations, modelSegments, ridgeLambda);
+  const martInputHash = hashJson(rows);
+  const posteriorChainsByDraw = samplePosterior(fitted, modelSegments, martInputHash, posteriorChains, posteriorDraws);
+  const diagnostics = posteriorDiagnostics(posteriorChainsByDraw);
+  const posteriorCoefficients = summarizePosteriorCoefficients(posteriorChainsByDraw, fitted.parameterNames);
+  const contributionOutputs = buildContributionOutputs(posteriorChainsByDraw, modelSegments, observations, segmentStats);
+  const posteriorSanityChecks = {
+    status:
+      Number.isFinite(diagnostics.maxRhat) &&
+      diagnostics.maxRhat <= MAX_RHAT &&
+      diagnostics.minEffectiveSampleSize >= MIN_EFFECTIVE_SAMPLE_SIZE &&
+      contributionOutputs.channels.every((channel) => channel.contribution.mean >= 0 && Number.isFinite(channel.contribution.mean))
+        ? 'pass'
+        : 'fail',
+    maxRhat: diagnostics.maxRhat,
+    maxAllowedRhat: MAX_RHAT,
+    minEffectiveSampleSize: diagnostics.minEffectiveSampleSize,
+    minRequiredEffectiveSampleSize: MIN_EFFECTIVE_SAMPLE_SIZE,
+    finiteContributionIntervals: contributionOutputs.channels.every(
+      (channel) =>
+        Number.isFinite(channel.contribution.credibleInterval95.lower) &&
+        Number.isFinite(channel.contribution.credibleInterval95.upper)
+    )
+  };
+  if (posteriorSanityChecks.status !== 'pass') {
+    throw new Error(
+      `MMM posterior sanity checks failed: maxRhat=${diagnostics.maxRhat.toFixed(3)}, minESS=${diagnostics.minEffectiveSampleSize.toFixed(0)}`
+    );
+  }
   const trainMetrics = validationMetrics(trainingObservations, fitted.intercept, fitted.coefficients);
   const holdoutMetrics = validationMetrics(holdoutObservations, fitted.intercept, fitted.coefficients);
   const totalAttributedRevenue = [...segmentStats.values()].reduce((sum, segment) => sum + segment.attributedRevenue, 0);
@@ -402,6 +695,14 @@ export function buildBaselineMmmArtifact(rows: MmmBaselineMartRow[], input: MmmB
     maxSegments,
     adstockDecay,
     ridgeLambda,
+    posteriorChains,
+    posteriorDraws: diagnostics.totalDraws,
+    bayesianEngine: 'closed_form_linear_gaussian_posterior_v1',
+    hierarchy: {
+      level: 'channel_segment',
+      grouping: 'source|medium|campaign',
+      prior: 'ridge_precision_partial_pooling_to_global_media_effect'
+    },
     holdoutRatio,
     responseVariable: rows.some((row) => row.mart_row_type === 'weekly_channel')
       ? 'weekly_total_shopify_revenue_from_channel_mart_outcomes'
@@ -416,7 +717,7 @@ export function buildBaselineMmmArtifact(rows: MmmBaselineMartRow[], input: MmmB
     trainingObservationCount: trainingObservations.length,
     holdoutObservationCount: holdoutObservations.length,
     selectedSegments,
-    martInputHash: hashJson(rows)
+    martInputHash
   };
 
   return {
@@ -434,10 +735,13 @@ export function buildBaselineMmmArtifact(rows: MmmBaselineMartRow[], input: MmmB
     modelArtifact: {
       intercept: fitted.intercept,
       coefficients: fitted.coefficients,
+      posteriorCoefficients,
+      residualSigma: fitted.residualSigma,
       featureTransform: {
         spend: 'log1p(adstock(spend))',
         adstockDecay
       },
+      contributionOutputs,
       segments: calibrationSegments.map(({ key, source, medium, campaign, spend }) => ({
         key,
         source,
@@ -455,7 +759,14 @@ export function buildBaselineMmmArtifact(rows: MmmBaselineMartRow[], input: MmmB
     },
     validationReport: {
       train: trainMetrics,
-      holdout: holdoutMetrics
+      holdout: holdoutMetrics,
+      posteriorDiagnostics: {
+        ...diagnostics,
+        byParameter: Object.fromEntries(
+          fitted.parameterNames.map((parameterName, index) => [parameterName, diagnostics.byParameter[index]])
+        )
+      },
+      posteriorSanityChecks
     }
   };
 }

@@ -87,6 +87,8 @@ async function main() {
     maxSegments: readNumberFlag('max-segments') ?? readNumberEnv('MMM_BASELINE_MAX_SEGMENTS'),
     adstockDecay: readNumberFlag('adstock-decay') ?? readNumberEnv('MMM_BASELINE_ADSTOCK_DECAY'),
     ridgeLambda: readNumberFlag('ridge-lambda') ?? readNumberEnv('MMM_BASELINE_RIDGE_LAMBDA'),
+    posteriorDraws: readNumberFlag('posterior-draws') ?? readNumberEnv('MMM_BASELINE_POSTERIOR_DRAWS'),
+    posteriorChains: readNumberFlag('posterior-chains') ?? readNumberEnv('MMM_BASELINE_POSTERIOR_CHAINS'),
     holdoutRatio: readNumberFlag('holdout-ratio') ?? readNumberEnv('MMM_BASELINE_HOLDOUT_RATIO'),
     submittedBy: readFlag('submitted-by')?.trim() || process.env.MMM_BASELINE_SUBMITTED_BY?.trim() || 'admin-cli'
   });

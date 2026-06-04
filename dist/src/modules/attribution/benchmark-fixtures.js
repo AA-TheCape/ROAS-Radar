@@ -113,15 +113,15 @@ export const NORTHBEAM_BENCHMARK_FIXTURES = [
             })
         ],
         northbeamReferenceByModel: {
-            first_touch: winnerTakeAll('direct-early', '120.00', 2, 2, 0, '28d_click', { isDirect: true }),
-            last_touch: winnerTakeAll('direct-late', '120.00', 2, 2, 0, '28d_click', { isDirect: true }),
-            last_non_direct: winnerTakeAll('direct-late', '120.00', 2, 2, 0, '28d_click', { isDirect: true }),
+            first_touch: winnerTakeAll('direct-early', '120.00', 2, 2, 0, '30d_click', { isDirect: true }),
+            last_touch: winnerTakeAll('direct-late', '120.00', 2, 2, 0, '30d_click', { isDirect: true }),
+            last_non_direct: winnerTakeAll('direct-late', '120.00', 2, 2, 0, '30d_click', { isDirect: true }),
             linear: linearSplit([
                 weightedCredit('direct-early', '60.00', 0.5, true, { isDirect: true }),
                 weightedCredit('direct-late', '60.00', 0.5, false, { isDirect: true })
-            ], 2, 2, 0, '28d_click'),
-            clicks_only: winnerTakeAll('direct-late', '120.00', 2, 2, 0, '28d_click', { isDirect: true }),
-            hinted_fallback_only: noCredit('blocked_by_deterministic', 2, 2, 0, '28d_click', {
+            ], 2, 2, 0, '30d_click'),
+            clicks_only: winnerTakeAll('direct-late', '120.00', 2, 2, 0, '30d_click', { isDirect: true }),
+            hinted_fallback_only: noCredit('blocked_by_deterministic', 2, 2, 0, '30d_click', {
                 deterministicBlockApplied: true
             })
         }
@@ -160,7 +160,7 @@ export const NORTHBEAM_BENCHMARK_FIXTURES = [
                 weightedCredit('view-middle', '33.33', 1 / 3, false),
                 weightedCredit('direct-latest', '33.33', 1 / 3, false, { isDirect: true })
             ], 3, 2, 1, 'mixed'),
-            clicks_only: winnerTakeAll('click-earliest', '100.00', 3, 2, 1, '28d_click', {
+            clicks_only: winnerTakeAll('click-earliest', '100.00', 3, 2, 1, '30d_click', {
                 directSuppressionApplied: true
             }),
             hinted_fallback_only: noCredit('blocked_by_deterministic', 3, 2, 1, 'mixed', {
@@ -196,19 +196,19 @@ export const NORTHBEAM_BENCHMARK_FIXTURES = [
             })
         ],
         northbeamReferenceByModel: {
-            first_touch: winnerTakeAll('search-click', '90.00', 2, 2, 0, '28d_click'),
-            last_touch: winnerTakeAll('direct-return', '90.00', 2, 2, 0, '28d_click', { isDirect: true }),
-            last_non_direct: winnerTakeAll('search-click', '90.00', 2, 2, 0, '28d_click', {
+            first_touch: winnerTakeAll('search-click', '90.00', 2, 2, 0, '30d_click'),
+            last_touch: winnerTakeAll('direct-return', '90.00', 2, 2, 0, '30d_click', { isDirect: true }),
+            last_non_direct: winnerTakeAll('search-click', '90.00', 2, 2, 0, '30d_click', {
                 directSuppressionApplied: true
             }),
             linear: linearSplit([
                 weightedCredit('search-click', '45.00', 0.5, true),
                 weightedCredit('direct-return', '45.00', 0.5, false, { isDirect: true })
-            ], 2, 2, 0, '28d_click'),
-            clicks_only: winnerTakeAll('search-click', '90.00', 2, 2, 0, '28d_click', {
+            ], 2, 2, 0, '30d_click'),
+            clicks_only: winnerTakeAll('search-click', '90.00', 2, 2, 0, '30d_click', {
                 directSuppressionApplied: true
             }),
-            hinted_fallback_only: noCredit('blocked_by_deterministic', 2, 2, 0, '28d_click', {
+            hinted_fallback_only: noCredit('blocked_by_deterministic', 2, 2, 0, '30d_click', {
                 deterministicBlockApplied: true
             })
         }
@@ -233,15 +233,15 @@ export const NORTHBEAM_BENCHMARK_FIXTURES = [
             })
         ],
         northbeamReferenceByModel: {
-            first_touch: winnerTakeAll('affiliate-early', '150.00', 2, 2, 0, '28d_click', {
+            first_touch: winnerTakeAll('affiliate-early', '150.00', 2, 2, 0, '30d_click', {
                 source: 'impact',
                 medium: 'affiliate'
             }),
-            last_touch: winnerTakeAll('meta-late', '150.00', 2, 2, 0, '28d_click', {
+            last_touch: winnerTakeAll('meta-late', '150.00', 2, 2, 0, '30d_click', {
                 source: 'meta',
                 medium: 'paid_social'
             }),
-            last_non_direct: winnerTakeAll('meta-late', '150.00', 2, 2, 0, '28d_click', {
+            last_non_direct: winnerTakeAll('meta-late', '150.00', 2, 2, 0, '30d_click', {
                 directSuppressionApplied: true,
                 source: 'meta',
                 medium: 'paid_social'
@@ -255,13 +255,13 @@ export const NORTHBEAM_BENCHMARK_FIXTURES = [
                     source: 'meta',
                     medium: 'paid_social'
                 })
-            ], 2, 2, 0, '28d_click'),
-            clicks_only: winnerTakeAll('meta-late', '150.00', 2, 2, 0, '28d_click', {
+            ], 2, 2, 0, '30d_click'),
+            clicks_only: winnerTakeAll('meta-late', '150.00', 2, 2, 0, '30d_click', {
                 directSuppressionApplied: true,
                 source: 'meta',
                 medium: 'paid_social'
             }),
-            hinted_fallback_only: noCredit('blocked_by_deterministic', 2, 2, 0, '28d_click', {
+            hinted_fallback_only: noCredit('blocked_by_deterministic', 2, 2, 0, '30d_click', {
                 deterministicBlockApplied: true
             })
         }
@@ -288,12 +288,12 @@ export const NORTHBEAM_BENCHMARK_FIXTURES = [
             })
         ],
         northbeamReferenceByModel: {
-            first_touch: noCredit('no_eligible_touches', 0, 0, 0, '28d_click'),
-            last_touch: noCredit('no_eligible_touches', 0, 0, 0, '28d_click'),
-            last_non_direct: noCredit('no_eligible_touches', 0, 0, 0, '28d_click'),
-            linear: noCredit('no_eligible_touches', 0, 0, 0, '28d_click'),
-            clicks_only: noCredit('no_eligible_touches', 0, 0, 0, '28d_click'),
-            hinted_fallback_only: winnerTakeAll('hint-meta', '80.00', 1, 1, 0, '28d_click', {
+            first_touch: noCredit('no_eligible_touches', 0, 0, 0, '30d_click'),
+            last_touch: noCredit('no_eligible_touches', 0, 0, 0, '30d_click'),
+            last_non_direct: noCredit('no_eligible_touches', 0, 0, 0, '30d_click'),
+            linear: noCredit('no_eligible_touches', 0, 0, 0, '30d_click'),
+            clicks_only: noCredit('no_eligible_touches', 0, 0, 0, '30d_click'),
+            hinted_fallback_only: winnerTakeAll('hint-meta', '80.00', 1, 1, 0, '30d_click', {
                 source: 'meta',
                 medium: 'paid_social'
             })
@@ -321,15 +321,15 @@ export const NORTHBEAM_BENCHMARK_FIXTURES = [
             })
         ],
         northbeamReferenceByModel: {
-            first_touch: winnerTakeAll('meta-landing', '110.00', 2, 2, 0, '28d_click', {
+            first_touch: winnerTakeAll('meta-landing', '110.00', 2, 2, 0, '30d_click', {
                 source: 'meta',
                 medium: 'paid_social'
             }),
-            last_touch: winnerTakeAll('meta-landing', '110.00', 2, 2, 0, '28d_click', {
+            last_touch: winnerTakeAll('meta-landing', '110.00', 2, 2, 0, '30d_click', {
                 source: 'meta',
                 medium: 'paid_social'
             }),
-            last_non_direct: winnerTakeAll('meta-landing', '110.00', 2, 2, 0, '28d_click', {
+            last_non_direct: winnerTakeAll('meta-landing', '110.00', 2, 2, 0, '30d_click', {
                 directSuppressionApplied: true,
                 source: 'meta',
                 medium: 'paid_social'
@@ -343,13 +343,13 @@ export const NORTHBEAM_BENCHMARK_FIXTURES = [
                     source: 'google',
                     medium: 'cpc'
                 })
-            ], 2, 2, 0, '28d_click'),
-            clicks_only: winnerTakeAll('meta-landing', '110.00', 2, 2, 0, '28d_click', {
+            ], 2, 2, 0, '30d_click'),
+            clicks_only: winnerTakeAll('meta-landing', '110.00', 2, 2, 0, '30d_click', {
                 directSuppressionApplied: true,
                 source: 'meta',
                 medium: 'paid_social'
             }),
-            hinted_fallback_only: noCredit('blocked_by_deterministic', 2, 2, 0, '28d_click', {
+            hinted_fallback_only: noCredit('blocked_by_deterministic', 2, 2, 0, '30d_click', {
                 deterministicBlockApplied: true
             })
         }
@@ -370,12 +370,12 @@ export const NORTHBEAM_BENCHMARK_FIXTURES = [
             })
         ],
         northbeamReferenceByModel: {
-            first_touch: noCredit('no_eligible_touches', 0, 0, 0, '28d_click'),
-            last_touch: noCredit('no_eligible_touches', 0, 0, 0, '28d_click'),
-            last_non_direct: noCredit('no_eligible_touches', 0, 0, 0, '28d_click'),
-            linear: noCredit('no_eligible_touches', 0, 0, 0, '28d_click'),
-            clicks_only: noCredit('no_eligible_touches', 0, 0, 0, '28d_click'),
-            hinted_fallback_only: noCredit('unattributed', 0, 0, 0, '28d_click')
+            first_touch: noCredit('no_eligible_touches', 0, 0, 0, '30d_click'),
+            last_touch: noCredit('no_eligible_touches', 0, 0, 0, '30d_click'),
+            last_non_direct: noCredit('no_eligible_touches', 0, 0, 0, '30d_click'),
+            linear: noCredit('no_eligible_touches', 0, 0, 0, '30d_click'),
+            clicks_only: noCredit('no_eligible_touches', 0, 0, 0, '30d_click'),
+            hinted_fallback_only: noCredit('unattributed', 0, 0, 0, '30d_click')
         }
     }
 ];

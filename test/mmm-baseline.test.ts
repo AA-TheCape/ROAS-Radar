@@ -114,14 +114,22 @@ test('MMM baseline uses attribution metrics as calibration diagnostics instead o
     endDate: '2026-04-03',
     attributionModel: 'last_touch',
     adstockDecay: 0,
+    posteriorChains: 2,
+    posteriorDraws: 200,
     holdoutRatio: 0
   });
 
   assert.equal(run.modelVersion, 'baseline_linear_mmm_v1');
+  assert.equal(run.runConfig.bayesianEngine, 'closed_form_linear_gaussian_posterior_v1');
   assert.equal(run.runConfig.responseVariable, 'daily_total_shopify_revenue_from_mart_outcomes');
   assert.equal(run.calibrationReport.deterministicAttributionUsage, 'calibration_and_validation_segments_only');
   assert.equal(run.validationReport.train.observationCount, 3);
+  assert.equal(run.validationReport.posteriorSanityChecks.status, 'pass');
+  assert.equal(run.validationReport.posteriorDiagnostics.chains, 2);
+  assert.equal(run.validationReport.posteriorDiagnostics.totalDraws, 200);
   assert.deepEqual(run.inputSummary.selectedSegments, ['meta|paid_social|prospecting', 'google|cpc|brand']);
+  assert.ok(run.modelArtifact.posteriorCoefficients);
+  assert.ok(run.modelArtifact.contributionOutputs);
 
   const calibrationSegments = run.calibrationReport.segments as Array<{ key: string; attributedRevenue: number }>;
   assert.deepEqual(
@@ -131,6 +139,20 @@ test('MMM baseline uses attribution metrics as calibration diagnostics instead o
       ['google|cpc|brand', 240]
     ]
   );
+
+  const contributionOutputs = run.modelArtifact.contributionOutputs as {
+    channels: Array<{
+      key: string;
+      contribution: { credibleInterval95: { lower: number; upper: number } };
+      contributionShare: { mean: number };
+    }>;
+  };
+  assert.deepEqual(
+    contributionOutputs.channels.map((channel) => channel.key),
+    ['meta|paid_social|prospecting', 'google|cpc|brand', '__other_paid__']
+  );
+  assert.ok(contributionOutputs.channels[0]?.contribution.credibleInterval95.upper);
+  assert.ok(contributionOutputs.channels[0]?.contributionShare.mean);
 });
 
 test('MMM baseline rejects insufficient mart observations', () => {
