@@ -482,6 +482,7 @@ test('campaign metadata resolution keeps duplicate platform entity ids isolated 
       campaignEntityType: 'campaign',
       campaignPlatform: 'google_ads',
       campaignNameResolutionStatus: 'resolved',
+      campaignMetadataSource: 'ad_platform_entity_metadata',
       lastSeenAt: '2026-04-10T08:00:00.000Z',
       updatedAt: '2026-04-10T08:05:00.000Z'
     });
@@ -495,6 +496,7 @@ test('campaign metadata resolution keeps duplicate platform entity ids isolated 
       campaignEntityType: 'campaign',
       campaignPlatform: 'google_ads',
       campaignNameResolutionStatus: 'resolved',
+      campaignMetadataSource: 'ad_platform_entity_metadata',
       lastSeenAt: '2026-04-10T09:00:00.000Z',
       updatedAt: '2026-04-10T09:05:00.000Z'
     });

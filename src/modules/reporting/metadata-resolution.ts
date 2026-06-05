@@ -3,8 +3,12 @@ import {
   emitCampaignMetadataResolutionCoverageLog,
   emitMetaMetadataRawIdFallbackLog
 } from '../../observability/index.js';
-import { env } from '../../config/env.js';
-import { resolveMetaMetadata, type MetaMetadataObjectType } from '../meta-ads/metadata-resolver.js';
+import {
+  resolveMetaMetadata,
+  type MetaMetadataObjectType,
+  type MetaMetadataResolutionResult,
+  type MetaMetadataUnresolvedObject
+} from '../meta-ads/metadata-resolver.js';
 
 export type CampaignNameResolutionStatus = 'resolved' | 'fallback_name' | 'unresolved';
 
@@ -19,6 +23,7 @@ export type CampaignDisplayResolution = {
   parentCampaignDisplayName?: string | null;
   campaignPlatform: 'google_ads' | 'meta_ads' | null;
   campaignNameResolutionStatus: CampaignNameResolutionStatus;
+  campaignMetadataSource?: 'ad_platform_entity_metadata' | 'spend' | 'cache' | 'meta_api' | 'active_account';
   lastSeenAt: string | null;
   updatedAt: string | null;
 };
@@ -59,6 +64,18 @@ type MetaAttributedIdCandidate = {
   metadataSource: MetaAttributedIdAccountRow['metadata_source'];
 };
 
+type CampaignMetadataSource = NonNullable<CampaignDisplayResolution['campaignMetadataSource']>;
+
+const campaignMetadataSourceRanks: Record<CampaignMetadataSource, number> = {
+  ad_platform_entity_metadata: 5,
+  cache: 4,
+  meta_api: 3,
+  active_account: 2,
+  spend: 1
+};
+const metaGraphBaseUrl = 'https://graph.facebook.com';
+const metaObjectFields = 'id,name,effective_status,status';
+
 export function buildCampaignResolutionGroupKey(source: string, medium: string, campaign: string): string {
   return `${source}\u0000${medium}\u0000${campaign}`;
 }
@@ -72,9 +89,154 @@ function normalizeString(value: string | null | undefined): string | null {
   return trimmed ? trimmed : null;
 }
 
+function normalizeMetaAdAccountId(value: string | null | undefined): string | null {
+  const normalized = normalizeString(value);
+
+  if (!normalized) {
+    return null;
+  }
+
+  return normalized.startsWith('act_') ? normalized.slice(4) : normalized;
+}
+
 function collapseWhitespace(value: string | null | undefined): string | null {
   const normalized = normalizeString(value);
   return normalized ? normalized.replace(/\s+/g, ' ') : null;
+}
+
+function readRuntimeMetaConfig(): {
+  adAccountId: string | null;
+  metadataAccessToken: string | null;
+  hasEncryptedConnectionSupport: boolean;
+  hasRuntimeMetadataToken: boolean;
+} {
+  const adAccountId = normalizeMetaAdAccountId(process.env.META_ADS_AD_ACCOUNT_ID);
+  const metadataAccessToken = normalizeString(process.env.META_ADS_METADATA_ACCESS_TOKEN);
+
+  return {
+    adAccountId,
+    metadataAccessToken,
+    hasEncryptedConnectionSupport: Boolean(normalizeString(process.env.META_ADS_ENCRYPTION_KEY)),
+    hasRuntimeMetadataToken: Boolean(adAccountId && metadataAccessToken)
+  };
+}
+
+async function fetchRuntimeMetaObjectsByIds(input: {
+  adAccountId: string;
+  accessToken: string;
+  objectType: MetaMetadataObjectType;
+  objectIds: string[];
+}): Promise<
+  Map<
+    string,
+    {
+      id: string;
+      name: string | null;
+      status: string | null;
+      objectType: MetaMetadataObjectType;
+    }
+  >
+> {
+  const resolved = new Map<
+    string,
+    {
+      id: string;
+      name: string | null;
+      status: string | null;
+      objectType: MetaMetadataObjectType;
+    }
+  >();
+  const edge = input.objectType === 'campaign' ? 'campaigns' : 'adsets';
+  const apiVersion = normalizeString(process.env.META_ADS_API_VERSION) ?? 'v25.0';
+
+  for (let index = 0; index < input.objectIds.length; index += 50) {
+    const chunk = input.objectIds.slice(index, index + 50);
+    const url = new URL(`${metaGraphBaseUrl}/${apiVersion}/act_${input.adAccountId}/${edge}`);
+
+    url.searchParams.set('access_token', input.accessToken);
+    url.searchParams.set('fields', metaObjectFields);
+    url.searchParams.set('filtering', JSON.stringify([{ field: 'id', operator: 'IN', value: chunk }]));
+    url.searchParams.set('limit', String(chunk.length));
+
+    const response = await fetch(url);
+    const payload = (await response.json()) as {
+      data?: Array<{
+        id?: string | null;
+        name?: string | null;
+        effective_status?: string | null;
+        status?: string | null;
+        error?: unknown;
+      }>;
+      error?: { message?: string | null };
+    };
+
+    if (!response.ok) {
+      throw new Error(payload.error?.message ?? `Meta Ads metadata lookup failed with status ${response.status}`);
+    }
+
+    for (const entry of payload.data ?? []) {
+      const id = normalizeString(entry.id);
+      const name = collapseWhitespace(entry.name);
+
+      if (!id || !name || entry.error) {
+        continue;
+      }
+
+      resolved.set(id, {
+        id,
+        name,
+        status: collapseWhitespace(entry.effective_status ?? entry.status),
+        objectType: input.objectType
+      });
+    }
+  }
+
+  return resolved;
+}
+
+function filterUnresolvedMetaRawIdFallbacks(
+  metaResult: MetaMetadataResolutionResult
+): MetaMetadataUnresolvedObject[] {
+  const resolvedObjectIds = new Set(
+    metaResult.resolved.map((entry) => `${entry.adAccountId}\u0000${entry.objectId}`)
+  );
+
+  return metaResult.unresolved.filter(
+    (entry) => !resolvedObjectIds.has(`${entry.adAccountId}\u0000${entry.objectId}`)
+  );
+}
+
+function summarizeUnresolvedMetaRawIds(unresolved: MetaMetadataUnresolvedObject[]): string[] {
+  return [...new Set(unresolved.map((entry) => entry.objectId))];
+}
+
+function summarizeUnresolvedMetaObjectScopes(unresolved: MetaMetadataUnresolvedObject[]): Array<{
+  objectId: string;
+  objectType: MetaMetadataObjectType;
+  reason: MetaMetadataUnresolvedObject['reason'];
+}> {
+  const objectTypeOrder: Record<MetaMetadataObjectType, number> = {
+    campaign: 0,
+    adset: 1
+  };
+
+  return unresolved
+    .map((entry) => ({
+      objectId: entry.objectId,
+      objectType: entry.objectType,
+      reason: entry.reason
+    }))
+    .sort((left, right) => {
+      if (left.objectId !== right.objectId) {
+        return left.objectId.localeCompare(right.objectId);
+      }
+
+      if (left.objectType !== right.objectType) {
+        return objectTypeOrder[left.objectType] - objectTypeOrder[right.objectType];
+      }
+
+      return left.reason.localeCompare(right.reason);
+    });
 }
 
 function chooseBetterResolution(
@@ -108,6 +270,17 @@ function chooseBetterResolution(
 
   if (candidateTimestamp !== currentTimestamp) {
     return candidateTimestamp > currentTimestamp ? candidate : current;
+  }
+
+  const currentSourceRank = current.campaignMetadataSource
+    ? campaignMetadataSourceRanks[current.campaignMetadataSource]
+    : 0;
+  const candidateSourceRank = candidate.campaignMetadataSource
+    ? campaignMetadataSourceRanks[candidate.campaignMetadataSource]
+    : 0;
+
+  if (candidateSourceRank !== currentSourceRank) {
+    return candidateSourceRank > currentSourceRank ? candidate : current;
   }
 
   return current;
@@ -166,6 +339,7 @@ function buildResolution(row: CampaignResolutionRow): CampaignDisplayResolution 
       campaignEntityType: 'campaign',
       campaignPlatform: row.platform,
       campaignNameResolutionStatus: 'resolved',
+      campaignMetadataSource: 'ad_platform_entity_metadata',
       lastSeenAt: row.last_seen_at?.toISOString() ?? null,
       updatedAt: row.updated_at?.toISOString() ?? null
     };
@@ -181,6 +355,7 @@ function buildResolution(row: CampaignResolutionRow): CampaignDisplayResolution 
       campaignEntityType: 'campaign',
       campaignPlatform: row.platform,
       campaignNameResolutionStatus: 'fallback_name',
+      campaignMetadataSource: 'spend',
       lastSeenAt: null,
       updatedAt: null
     };
@@ -195,6 +370,7 @@ function buildResolution(row: CampaignResolutionRow): CampaignDisplayResolution 
     campaignEntityType: 'campaign',
     campaignPlatform: row.platform,
     campaignNameResolutionStatus: 'unresolved',
+    campaignMetadataSource: 'spend',
     lastSeenAt: null,
     updatedAt: null
   };
@@ -207,6 +383,7 @@ function buildMetaAttributedIdResolution(input: {
   objectName: string;
   parentCampaignId?: string | null;
   parentCampaignName?: string | null;
+  metadataSource?: CampaignDisplayResolution['campaignMetadataSource'];
   lastFetchedAt: string | null;
 }): CampaignDisplayResolution {
   return {
@@ -220,6 +397,7 @@ function buildMetaAttributedIdResolution(input: {
     parentCampaignDisplayName: input.objectType === 'adset' ? collapseWhitespace(input.parentCampaignName) : null,
     campaignPlatform: 'meta_ads',
     campaignNameResolutionStatus: 'resolved',
+    campaignMetadataSource: input.metadataSource,
     lastSeenAt: input.lastFetchedAt,
     updatedAt: input.lastFetchedAt
   };
@@ -241,6 +419,7 @@ async function resolveAttributedMetaIdMetadata(
     return new Map();
   }
 
+  const runtimeMetaConfig = readRuntimeMetaConfig();
   const candidateMap = new Map<string, MetaAttributedIdCandidate[]>();
 
   const accountRows = await query<MetaAttributedIdAccountRow>(
@@ -359,9 +538,9 @@ async function resolveAttributedMetaIdMetadata(
       candidateIds,
       startDate,
       endDate,
-      env.META_ADS_AD_ACCOUNT_ID || null,
-      Boolean(env.META_ADS_ENCRYPTION_KEY),
-      Boolean(env.META_ADS_AD_ACCOUNT_ID && env.META_ADS_METADATA_ACCESS_TOKEN)
+      runtimeMetaConfig.adAccountId,
+      runtimeMetaConfig.hasEncryptedConnectionSupport,
+      runtimeMetaConfig.hasRuntimeMetadataToken
     ]
   );
 
@@ -375,7 +554,7 @@ async function resolveAttributedMetaIdMetadata(
   >();
 
   for (const row of accountRows.rows) {
-    const adAccountId = row.ad_account_id?.trim();
+    const adAccountId = normalizeMetaAdAccountId(row.ad_account_id);
     const objectId = row.object_id?.trim();
 
     if (!adAccountId || !objectId || !['campaign', 'adset'].includes(row.object_type)) {
@@ -413,23 +592,81 @@ async function resolveAttributedMetaIdMetadata(
     return new Map();
   }
 
+  const candidateIdOrder = new Map(candidateIds.map((candidateId, index) => [candidateId, index]));
+  const metaRequests = [...requestMap.values()].map((request) => ({
+    ...request,
+    objectIds: [...new Set(request.objectIds)].sort((left, right) => {
+      const leftRank = candidateIdOrder.get(left) ?? Number.MAX_SAFE_INTEGER;
+      const rightRank = candidateIdOrder.get(right) ?? Number.MAX_SAFE_INTEGER;
+
+      return leftRank === rightRank ? left.localeCompare(right) : leftRank - rightRank;
+    })
+  }));
+  const runtimeApiLookup =
+    runtimeMetaConfig.hasRuntimeMetadataToken && runtimeMetaConfig.adAccountId && runtimeMetaConfig.metadataAccessToken
+      ? {
+          adAccountId: runtimeMetaConfig.adAccountId,
+          accessToken: runtimeMetaConfig.metadataAccessToken
+        }
+      : null;
+  const runtimeApiResolvedObjects: MetaMetadataResolutionResult['resolved'] = [];
   const metaResult = await resolveMetaMetadata(
-    [...requestMap.values()].map((request) => ({
-      ...request,
-      objectIds: [...new Set(request.objectIds)]
-    }))
+    metaRequests,
+    runtimeApiLookup
+      ? {
+          apiLookup: async (input) => {
+            const adAccountId = normalizeMetaAdAccountId(input.adAccountId);
+
+            if (adAccountId !== runtimeApiLookup.adAccountId) {
+              return Promise.resolve(new Map());
+            }
+
+            const lookupResult = await fetchRuntimeMetaObjectsByIds({
+              adAccountId: runtimeApiLookup.adAccountId,
+              accessToken: runtimeApiLookup.accessToken,
+              objectType: input.objectType,
+              objectIds: input.objectIds
+            });
+
+            for (const apiObject of lookupResult.values()) {
+              const objectName = collapseWhitespace(apiObject.name);
+
+              if (!objectName || apiObject.objectType !== input.objectType) {
+                continue;
+              }
+
+              runtimeApiResolvedObjects.push({
+                adAccountId,
+                objectType: input.objectType,
+                objectId: apiObject.id,
+                objectName,
+                status: apiObject.status,
+                source: 'meta_api',
+                lastFetchedAt: null
+              });
+            }
+
+            return lookupResult;
+          }
+        }
+      : undefined
   );
 
-  if (metaResult.unresolved.length > 0) {
+  const rawIdFallbacks = filterUnresolvedMetaRawIdFallbacks(metaResult);
+
+  if (rawIdFallbacks.length > 0) {
+    const unresolvedEntityIds = summarizeUnresolvedMetaRawIds(rawIdFallbacks);
+
     emitMetaMetadataRawIdFallbackLog({
       resolutionScope: 'campaign_adset_metadata',
       startDate,
       endDate,
       source,
       requestedCount: candidateIds.length,
-      unresolvedCount: metaResult.unresolved.length,
-      unresolvedEntityIds: metaResult.unresolved.map((entry) => entry.objectId),
-      unresolvedReasons: metaResult.unresolved.reduce<Record<string, number>>((summary, entry) => {
+      unresolvedCount: unresolvedEntityIds.length,
+      unresolvedEntityIds,
+      unresolvedObjectScopes: summarizeUnresolvedMetaObjectScopes(rawIdFallbacks),
+      unresolvedReasons: rawIdFallbacks.reduce<Record<string, number>>((summary, entry) => {
         summary[entry.reason] = (summary[entry.reason] ?? 0) + 1;
         return summary;
       }, {})
@@ -494,6 +731,7 @@ async function resolveAttributedMetaIdMetadata(
         objectName: bestCandidate.objectName,
         parentCampaignId: parentCandidate?.parentCampaignId ?? null,
         parentCampaignName: parentCandidate?.parentCampaignName ?? null,
+        metadataSource: bestCandidate.metadataSource,
         lastFetchedAt: bestCandidate.lastSeenAt
       })
     );
@@ -562,6 +800,7 @@ async function resolveAttributedMetaIdMetadata(
       objectName: authoritativeCandidate?.objectName ?? resolved.objectName,
       parentCampaignId: parentCandidate?.parentCampaignId ?? null,
       parentCampaignName: parentCandidate?.parentCampaignName ?? null,
+      metadataSource: authoritativeCandidate?.metadataSource ?? resolved.source,
       lastFetchedAt: authoritativeCandidate?.lastSeenAt ?? bestCandidate?.lastSeenAt ?? resolved.lastFetchedAt
     });
     const resolutions = resolutionsByCampaign.get(resolved.objectId) ?? [];
@@ -609,6 +848,7 @@ async function resolveAttributedMetaIdMetadata(
       parentCampaignDisplayName: unresolved.objectType === 'adset' ? collapseWhitespace(bestCandidate?.parentCampaignName) : null,
       campaignPlatform: null,
       campaignNameResolutionStatus: 'unresolved',
+      campaignMetadataSource: bestCandidate?.metadataSource,
       lastSeenAt: bestCandidate?.lastSeenAt ?? null,
       updatedAt: null
     });
@@ -622,7 +862,57 @@ async function resolveAttributedMetaIdMetadata(
 
     if (collapsed) {
       byCampaign.set(campaign, collapsed);
+      continue;
     }
+
+    const apiResolvedCandidates = resolutions.filter(
+      (resolution) =>
+        resolution.campaignNameResolutionStatus === 'resolved' &&
+        resolution.campaignMetadataSource === 'meta_api'
+    );
+
+    if (apiResolvedCandidates.length === 1) {
+      byCampaign.set(campaign, apiResolvedCandidates[0]);
+    }
+  }
+
+  const directApiResolutionsByScopedKey = new Map<string, MetaMetadataResolutionResult['resolved'][number]>();
+
+  for (const resolved of [...metaResult.resolved, ...runtimeApiResolvedObjects]) {
+    if (resolved.source !== 'meta_api') {
+      continue;
+    }
+
+    directApiResolutionsByScopedKey.set(
+      `${resolved.adAccountId}\u0000${resolved.objectType}\u0000${resolved.objectId}`,
+      resolved
+    );
+  }
+
+  const directApiResolutionsByObjectId = new Map<string, MetaMetadataResolutionResult['resolved']>();
+
+  for (const resolved of directApiResolutionsByScopedKey.values()) {
+    const directResolutions = directApiResolutionsByObjectId.get(resolved.objectId) ?? [];
+    directResolutions.push(resolved);
+    directApiResolutionsByObjectId.set(resolved.objectId, directResolutions);
+  }
+
+  for (const [objectId, resolvedObjects] of directApiResolutionsByObjectId) {
+    if (resolvedObjects.length !== 1) {
+      continue;
+    }
+
+    const resolved = resolvedObjects[0];
+    const directResolution = buildMetaAttributedIdResolution({
+        campaign: resolved.objectId,
+        objectId: resolved.objectId,
+        objectType: resolved.objectType,
+        objectName: resolved.objectName,
+        metadataSource: resolved.source,
+        lastFetchedAt: resolved.lastFetchedAt
+    });
+
+    byCampaign.set(objectId, chooseBetterResolution(byCampaign.get(objectId), directResolution));
   }
 
   return byCampaign;

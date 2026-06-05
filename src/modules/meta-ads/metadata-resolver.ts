@@ -162,6 +162,37 @@ function buildResolutionKey(
 	return `${adAccountId}\u0000${objectType}\u0000${objectId}`;
 }
 
+function buildResolvedObjectIdKey(
+	adAccountId: string,
+	objectId: string,
+): string {
+	return `${adAccountId}\u0000${objectId}`;
+}
+
+function filterUnresolvedWithoutAcceptedResolution(
+	unresolved: MetaMetadataUnresolvedObject[],
+	resolved: MetaMetadataResolvedObject[],
+): MetaMetadataUnresolvedObject[] {
+	const resolvedObjectIds = new Set(
+		resolved.map((entry) =>
+			buildResolvedObjectIdKey(entry.adAccountId, entry.objectId),
+		),
+	);
+
+	return unresolved.filter(
+		(entry) =>
+			!resolvedObjectIds.has(
+				buildResolvedObjectIdKey(entry.adAccountId, entry.objectId),
+			),
+	);
+}
+
+function summarizeUnresolvedRawIds(
+	unresolved: MetaMetadataUnresolvedObject[],
+): string[] {
+	return [...new Set(unresolved.map((entry) => entry.objectId))];
+}
+
 function isWithinWindow(
 	timestamp: Date | null,
 	now: Date,
@@ -611,7 +642,12 @@ export async function resolveMetaMetadata(
 	);
 
 	if (missingByAccountType.size === 0) {
-		const unresolvedReasons = summarizeUnresolvedReasons(unresolved);
+		const loggableUnresolved = filterUnresolvedWithoutAcceptedResolution(
+			unresolved,
+			resolved,
+		);
+		const unresolvedEntityIds = summarizeUnresolvedRawIds(loggableUnresolved);
+		const unresolvedReasons = summarizeUnresolvedReasons(loggableUnresolved);
 
 		emitMetaMetadataLookupSummaryLog({
 			resolutionScope: "campaign_adset_metadata",
@@ -628,8 +664,10 @@ export async function resolveMetaMetadata(
 			apiNotFoundCount: 0,
 			apiFailureCount: 0,
 			missingConnectionCount: 0,
-			unresolvedCount: unresolved.length,
-			unresolvedEntityIds: unresolved.map((entry) => entry.objectId),
+			unresolvedCount: unresolvedEntityIds.length,
+			unresolvedEntityIds,
+			unresolvedObjectScopes:
+				summarizeUnresolvedObjectScopes(loggableUnresolved),
 			unresolvedReasons,
 		});
 
@@ -760,7 +798,13 @@ export async function resolveMetaMetadata(
 	await markFailedMetaMetadataLookups(apiUnresolved, fetchedAt);
 
 	const combinedUnresolved = [...unresolved, ...apiUnresolved];
-	const unresolvedReasons = summarizeUnresolvedReasons(combinedUnresolved);
+	const combinedResolved = [...resolved, ...apiResolved];
+	const loggableUnresolved = filterUnresolvedWithoutAcceptedResolution(
+		combinedUnresolved,
+		combinedResolved,
+	);
+	const unresolvedEntityIds = summarizeUnresolvedRawIds(loggableUnresolved);
+	const unresolvedReasons = summarizeUnresolvedReasons(loggableUnresolved);
 
 	emitMetaMetadataLookupSummaryLog({
 		resolutionScope: "campaign_adset_metadata",
@@ -781,8 +825,9 @@ export async function resolveMetaMetadata(
 		missingConnectionCount: apiUnresolved.filter(
 			(entry) => entry.reason === "missing_connection",
 		).length,
-		unresolvedCount: combinedUnresolved.length,
-		unresolvedEntityIds: combinedUnresolved.map((entry) => entry.objectId),
+		unresolvedCount: unresolvedEntityIds.length,
+		unresolvedEntityIds,
+		unresolvedObjectScopes: summarizeUnresolvedObjectScopes(loggableUnresolved),
 		unresolvedReasons,
 	});
 
@@ -799,4 +844,35 @@ function summarizeUnresolvedReasons(
 		summary[entry.reason] = (summary[entry.reason] ?? 0) + 1;
 		return summary;
 	}, {});
+}
+
+function summarizeUnresolvedObjectScopes(
+	unresolved: MetaMetadataUnresolvedObject[],
+): Array<{
+	objectId: string;
+	objectType: MetaMetadataObjectType;
+	reason: MetaMetadataUnresolvedObject["reason"];
+}> {
+	const objectTypeOrder: Record<MetaMetadataObjectType, number> = {
+		campaign: 0,
+		adset: 1,
+	};
+
+	return unresolved
+		.map((entry) => ({
+			objectId: entry.objectId,
+			objectType: entry.objectType,
+			reason: entry.reason,
+		}))
+		.sort((left, right) => {
+			if (left.objectId !== right.objectId) {
+				return left.objectId.localeCompare(right.objectId);
+			}
+
+			if (left.objectType !== right.objectType) {
+				return objectTypeOrder[left.objectType] - objectTypeOrder[right.objectType];
+			}
+
+			return left.reason.localeCompare(right.reason);
+		});
 }

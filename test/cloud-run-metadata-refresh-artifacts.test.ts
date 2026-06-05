@@ -114,6 +114,12 @@ test('cloud run environment templates declare per-platform metadata scheduler co
   }
 });
 
+test('staging cloud run environment enables the Meta Ads metadata scheduler', () => {
+  const text = readRepoFile('infra/cloud-run/environments/staging.env');
+
+  assert.match(text, /META_ADS_METADATA_SCHEDULER_ENABLED="true"/);
+});
+
 test('cloud run runbooks document metadata scheduler creation and pause or resume controls', () => {
   const cloudRunRunbook = readRepoFile('docs/runbooks/cloud-run-pipelines.md');
   const metadataRunbook = readRepoFile('docs/runbooks/campaign-metadata-resolution.md');

@@ -487,6 +487,21 @@ test("reporting campaigns resolves active-account Meta campaign and ad set ids w
 				campaignNameResolutionStatus: "resolved",
 			},
 		);
+		assert.deepEqual(campaignRow?.campaignLabel, {
+			displayName: "Awareness Campaign",
+			source: "meta",
+			rawId: "333",
+			entityId: "333",
+			objectType: "campaign",
+			entityType: "campaign",
+			parentCampaignEntityId: null,
+			parentCampaignDisplayName: null,
+			parentCampaign: null,
+			platform: "meta_ads",
+			resolutionStatus: "resolved",
+			lastSeenAt: "2026-04-10T18:00:00.000Z",
+			updatedAt: "2026-04-10T18:00:00.000Z",
+		});
 
 		assert.deepEqual(
 			{
@@ -522,6 +537,24 @@ test("reporting campaigns resolves active-account Meta campaign and ad set ids w
 				campaignNameResolutionStatus: "resolved",
 			},
 		);
+		assert.deepEqual(adSetRow?.campaignLabel, {
+			displayName: "US Prospecting Ad Set",
+			source: "meta",
+			rawId: "444",
+			entityId: "444",
+			objectType: "adset",
+			entityType: "adset",
+			parentCampaignEntityId: "333",
+			parentCampaignDisplayName: "Campaign Fallback",
+			parentCampaign: {
+				entityId: "333",
+				displayName: "Campaign Fallback",
+			},
+			platform: "meta_ads",
+			resolutionStatus: "resolved",
+			lastSeenAt: "2026-04-10T18:05:00.000Z",
+			updatedAt: "2026-04-10T18:05:00.000Z",
+		});
 
 		assert.deepEqual(
 			{
@@ -538,6 +571,7 @@ test("reporting campaigns resolves active-account Meta campaign and ad set ids w
 				campaignPlatform: unresolvedRow?.campaignPlatform,
 				campaignNameResolutionStatus:
 					unresolvedRow?.campaignNameResolutionStatus,
+				campaignLabel: unresolvedRow?.campaignLabel,
 			},
 			{
 				source: "facebook",
@@ -552,6 +586,7 @@ test("reporting campaigns resolves active-account Meta campaign and ad set ids w
 				campaignEntityId: undefined,
 				campaignPlatform: undefined,
 				campaignNameResolutionStatus: undefined,
+				campaignLabel: undefined,
 			},
 		);
 
@@ -583,6 +618,259 @@ test("reporting campaigns resolves active-account Meta campaign and ad set ids w
 		);
 	} finally {
 		globalThis.fetch = originalFetch;
+		await closeServer(server);
+		await resetE2EDatabase();
+	}
+});
+
+test("reporting campaigns labels unmapped rows from known Meta campaign metadata", async () => {
+	await resetE2EDatabase();
+	const reportDate = "2026-04-10";
+	const campaignId = "120251699446190386";
+
+	await pool.query(
+		`
+      INSERT INTO daily_reporting_metrics (
+        metric_date,
+        attribution_model,
+        source,
+        medium,
+        campaign,
+        content,
+        term,
+        visits,
+        attributed_orders,
+        attributed_revenue,
+        spend,
+        impressions,
+        clicks,
+        new_customer_orders,
+        returning_customer_orders,
+        new_customer_revenue,
+        returning_customer_revenue,
+        last_computed_at
+      )
+      VALUES (
+        $1::date,
+        'last_touch',
+        'unmapped',
+        'unmapped',
+        $2,
+        'unknown',
+        'unknown',
+        12,
+        2,
+        '240.00',
+        '0.00',
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        now()
+      )
+    `,
+		[reportDate, campaignId],
+	);
+
+	await pool.query(
+		`
+      INSERT INTO ad_platform_entity_metadata (
+        platform,
+        account_id,
+        entity_type,
+        entity_id,
+        latest_name,
+        last_seen_at
+      )
+      VALUES (
+        'meta_ads',
+        '987654321',
+        'campaign',
+        $1,
+        'Meta Prospecting Campaign',
+        '2026-04-10T18:00:00.000Z'
+      )
+    `,
+		[campaignId],
+	);
+
+	const server = createServer();
+
+	try {
+		const { response, body } = await requestJson(
+			server,
+			"/api/reporting/campaigns?startDate=2026-04-10&endDate=2026-04-10&limit=10",
+		);
+
+		assert.equal(response.status, 200);
+		const rows = body.rows as Array<Record<string, unknown>>;
+		const row = rows.find((candidate) => candidate.campaign === campaignId);
+
+		assert.equal(rows.length, 1);
+		assert.deepEqual(
+			{
+				source: row?.source,
+				medium: row?.medium,
+				campaign: row?.campaign,
+				content: row?.content,
+				visits: row?.visits,
+				orders: row?.orders,
+				revenue: row?.revenue,
+				conversionRate: row?.conversionRate,
+				campaignDisplayName: row?.campaignDisplayName,
+				campaignEntityId: row?.campaignEntityId,
+				campaignEntityType: row?.campaignEntityType,
+				campaignPlatform: row?.campaignPlatform,
+				campaignNameResolutionStatus: row?.campaignNameResolutionStatus,
+			},
+			{
+				source: "meta",
+				medium: "unmapped",
+				campaign: campaignId,
+				content: null,
+				visits: 12,
+				orders: 2,
+				revenue: 240,
+				conversionRate: 2 / 12,
+				campaignDisplayName: "Meta Prospecting Campaign",
+				campaignEntityId: campaignId,
+				campaignEntityType: "campaign",
+				campaignPlatform: "meta_ads",
+				campaignNameResolutionStatus: "resolved",
+			},
+		);
+		const campaignLabel = row?.campaignLabel as Record<string, unknown>;
+		assert.deepEqual(
+			{
+				displayName: campaignLabel?.displayName,
+				source: campaignLabel?.source,
+				rawId: campaignLabel?.rawId,
+				entityId: campaignLabel?.entityId,
+				objectType: campaignLabel?.objectType,
+				entityType: campaignLabel?.entityType,
+				platform: campaignLabel?.platform,
+				resolutionStatus: campaignLabel?.resolutionStatus,
+				lastSeenAt: campaignLabel?.lastSeenAt,
+				updatedAt: campaignLabel?.updatedAt,
+			},
+			{
+				displayName: "Meta Prospecting Campaign",
+				source: "meta",
+				rawId: campaignId,
+				entityId: campaignId,
+				objectType: "campaign",
+				entityType: "campaign",
+				platform: "meta_ads",
+				resolutionStatus: "resolved",
+				lastSeenAt: "2026-04-10T18:00:00.000Z",
+				updatedAt: "2026-04-10T18:00:00.000Z",
+			},
+		);
+	} finally {
+		await closeServer(server);
+		await resetE2EDatabase();
+	}
+});
+
+test("reporting campaigns leaves unmapped numeric campaign IDs unresolved without Meta metadata", async () => {
+	await resetE2EDatabase();
+	const reportDate = "2026-04-10";
+	const campaignId = "120251699446190386";
+
+	await pool.query(
+		`
+      INSERT INTO daily_reporting_metrics (
+        metric_date,
+        attribution_model,
+        source,
+        medium,
+        campaign,
+        content,
+        term,
+        visits,
+        attributed_orders,
+        attributed_revenue,
+        spend,
+        impressions,
+        clicks,
+        new_customer_orders,
+        returning_customer_orders,
+        new_customer_revenue,
+        returning_customer_revenue,
+        last_computed_at
+      )
+      VALUES (
+        $1::date,
+        'last_touch',
+        'unmapped',
+        'unmapped',
+        $2,
+        'unknown',
+        'unknown',
+        12,
+        2,
+        '240.00',
+        '0.00',
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        now()
+      )
+    `,
+		[reportDate, campaignId],
+	);
+
+	const server = createServer();
+
+	try {
+		const { response, body } = await requestJson(
+			server,
+			"/api/reporting/campaigns?startDate=2026-04-10&endDate=2026-04-10&limit=10",
+		);
+
+		assert.equal(response.status, 200);
+		const rows = body.rows as Array<Record<string, unknown>>;
+		const row = rows.find((candidate) => candidate.campaign === campaignId);
+
+		assert.equal(rows.length, 1);
+		assert.deepEqual(
+			{
+				source: row?.source,
+				medium: row?.medium,
+				campaign: row?.campaign,
+				content: row?.content,
+				visits: row?.visits,
+				orders: row?.orders,
+				revenue: row?.revenue,
+				conversionRate: row?.conversionRate,
+				campaignDisplayName: row?.campaignDisplayName,
+				campaignEntityId: row?.campaignEntityId,
+				campaignPlatform: row?.campaignPlatform,
+				campaignNameResolutionStatus: row?.campaignNameResolutionStatus,
+				campaignLabel: row?.campaignLabel,
+			},
+			{
+				source: "unmapped",
+				medium: "unmapped",
+				campaign: campaignId,
+				content: null,
+				visits: 12,
+				orders: 2,
+				revenue: 240,
+				conversionRate: 2 / 12,
+				campaignDisplayName: undefined,
+				campaignEntityId: undefined,
+				campaignPlatform: undefined,
+				campaignNameResolutionStatus: undefined,
+				campaignLabel: undefined,
+			},
+		);
+	} finally {
 		await closeServer(server);
 		await resetE2EDatabase();
 	}

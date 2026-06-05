@@ -177,6 +177,11 @@ type MetaMetadataLookupSummaryLogInput = {
   missingConnectionCount: number;
   unresolvedCount: number;
   unresolvedEntityIds?: string[];
+  unresolvedObjectScopes?: Array<{
+    objectId: string;
+    objectType: 'campaign' | 'adset';
+    reason: string;
+  }>;
   unresolvedReasons?: Record<string, number>;
 };
 
@@ -188,6 +193,11 @@ type MetaMetadataRawIdFallbackLogInput = {
   requestedCount: number;
   unresolvedCount: number;
   unresolvedEntityIds?: string[];
+  unresolvedObjectScopes?: Array<{
+    objectId: string;
+    objectType: 'campaign' | 'adset';
+    reason: string;
+  }>;
   unresolvedReasons?: Record<string, number>;
 };
 
@@ -1189,6 +1199,7 @@ export function emitMetaMetadataLookupSummaryLog(input: MetaMetadataLookupSummar
     unresolvedCount,
     unresolvedRate: normalizedRequestCount > 0 ? unresolvedCount / normalizedRequestCount : 0,
     unresolvedEntityIds: (input.unresolvedEntityIds ?? []).slice(0, 10),
+    ...(input.unresolvedObjectScopes ? { unresolvedObjectScopes: input.unresolvedObjectScopes.slice(0, 10) } : {}),
     unresolvedReasons: input.unresolvedReasons ?? {}
   });
 }
@@ -1201,6 +1212,7 @@ export function emitMetaMetadataRawIdFallbackLog(input: MetaMetadataRawIdFallbac
     requestedCount: Math.max(0, input.requestedCount),
     unresolvedCount: Math.max(0, input.unresolvedCount),
     unresolvedEntityIds: (input.unresolvedEntityIds ?? []).slice(0, 10),
+    ...(input.unresolvedObjectScopes ? { unresolvedObjectScopes: input.unresolvedObjectScopes.slice(0, 10) } : {}),
     unresolvedReasons: input.unresolvedReasons ?? {},
     fallback: 'raw_id',
     startDate: input.startDate,

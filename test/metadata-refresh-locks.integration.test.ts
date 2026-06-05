@@ -777,6 +777,7 @@ test('campaign metadata resolution isolates duplicate entity ids by platform and
     campaignEntityType: 'campaign',
     campaignPlatform: 'google_ads',
     campaignNameResolutionStatus: 'resolved',
+    campaignMetadataSource: 'ad_platform_entity_metadata',
     lastSeenAt: '2026-04-10T12:00:00.000Z',
     updatedAt: resolution.byCampaign.get('dup-google-one')?.updatedAt ?? null
   });
@@ -789,6 +790,7 @@ test('campaign metadata resolution isolates duplicate entity ids by platform and
     campaignEntityType: 'campaign',
     campaignPlatform: 'google_ads',
     campaignNameResolutionStatus: 'resolved',
+    campaignMetadataSource: 'ad_platform_entity_metadata',
     lastSeenAt: '2026-04-10T12:00:00.000Z',
     updatedAt: resolution.byCampaign.get('dup-google-two')?.updatedAt ?? null
   });
@@ -801,6 +803,7 @@ test('campaign metadata resolution isolates duplicate entity ids by platform and
     campaignEntityType: 'campaign',
     campaignPlatform: 'meta_ads',
     campaignNameResolutionStatus: 'resolved',
+    campaignMetadataSource: 'ad_platform_entity_metadata',
     lastSeenAt: '2026-04-10T12:00:00.000Z',
     updatedAt: resolution.byCampaign.get('dup-meta')?.updatedAt ?? null
   });

@@ -10,6 +10,9 @@ const { pool } = await import("../src/db/pool.js");
 const { resolveMetaMetadata } = await import(
 	"../src/modules/meta-ads/index.js"
 );
+const { resolveCampaignDisplayMetadata } = await import(
+	"../src/modules/reporting/metadata-resolution.js"
+);
 const { resetE2EDatabase } = await import("./e2e-harness.js");
 
 const originalMetaAdsAdAccountId = process.env.META_ADS_AD_ACCOUNT_ID;
@@ -355,6 +358,298 @@ test("resolveMetaMetadata rejects wrong Meta object types and does not cache the
 			},
 		],
 	);
+});
+
+test("resolveMetaMetadata does not log unresolved alternate scopes when the id resolved as an accepted Meta object type", async () => {
+	const { entries, result } = await captureStructuredLogs(() =>
+		resolveMetaMetadata(
+			[
+				{
+					adAccountId: "123456789",
+					objectType: "campaign",
+					objectIds: ["777"],
+				},
+				{
+					adAccountId: "123456789",
+					objectType: "adset",
+					objectIds: ["777", "888"],
+				},
+			],
+			{
+				now: new Date("2026-06-02T15:00:00.000Z"),
+				apiLookup: async ({ objectType, objectIds }) =>
+					new Map(
+						objectIds
+							.filter((objectId) => objectType === "campaign" && objectId === "777")
+							.map((objectId) => [
+								objectId,
+								{
+									id: objectId,
+									name: "Resolved Campaign",
+									status: "ACTIVE",
+									objectType: "campaign" as const,
+								},
+							]),
+					),
+			},
+		),
+	);
+
+	assert.deepEqual(
+		result.resolved.map((entry) => ({
+			objectType: entry.objectType,
+			objectId: entry.objectId,
+		})),
+		[
+			{
+				objectType: "campaign",
+				objectId: "777",
+			},
+		],
+	);
+	assert.deepEqual(
+		result.unresolved.map((entry) => ({
+			objectType: entry.objectType,
+			objectId: entry.objectId,
+			reason: entry.reason,
+		})),
+		[
+			{
+				objectType: "adset",
+				objectId: "777",
+				reason: "meta_api_not_found",
+			},
+			{
+				objectType: "adset",
+				objectId: "888",
+				reason: "meta_api_not_found",
+			},
+		],
+	);
+
+	const summary = entries.find(
+		(entry) => entry.event === "meta_metadata_lookup_summary",
+	);
+
+	assert.deepEqual(
+		{
+			apiLookupObjectCount: summary?.apiLookupObjectCount,
+			apiResolvedCount: summary?.apiResolvedCount,
+			apiNotFoundCount: summary?.apiNotFoundCount,
+			unresolvedCount: summary?.unresolvedCount,
+			unresolvedEntityIds: summary?.unresolvedEntityIds,
+			unresolvedObjectScopes: summary?.unresolvedObjectScopes,
+			unresolvedReasons: summary?.unresolvedReasons,
+		},
+		{
+			apiLookupObjectCount: 3,
+			apiResolvedCount: 1,
+			apiNotFoundCount: 2,
+			unresolvedCount: 1,
+			unresolvedEntityIds: ["888"],
+			unresolvedObjectScopes: [
+				{
+					objectId: "888",
+					objectType: "adset",
+					reason: "meta_api_not_found",
+				},
+			],
+			unresolvedReasons: {
+				meta_api_not_found: 1,
+			},
+		},
+	);
+});
+
+test("resolveCampaignDisplayMetadata does not log raw-id fallback for numeric campaign ids resolved by Meta API", async () => {
+	Reflect.deleteProperty(process.env, "META_ADS_ENCRYPTION_KEY");
+	process.env.META_ADS_AD_ACCOUNT_ID = "act_123456789";
+	process.env.META_ADS_METADATA_ACCESS_TOKEN = "runtime-meta-token";
+
+	const originalFetch = globalThis.fetch;
+	const fetchUrls: string[] = [];
+
+	globalThis.fetch = (async (url: string | URL | Request) => {
+		const requestUrl =
+			typeof url === "string" ? new URL(url) : new URL(url.toString());
+		fetchUrls.push(requestUrl.toString());
+
+		assert.equal(
+			requestUrl.searchParams.get("access_token"),
+			"runtime-meta-token",
+		);
+		assert.equal(
+			requestUrl.searchParams.get("fields"),
+			"id,name,effective_status,status",
+		);
+		assert.equal(requestUrl.searchParams.get("limit"), "2");
+
+		const filtering = JSON.parse(
+			requestUrl.searchParams.get("filtering") ?? "[]",
+		) as Array<{ field?: string; operator?: string; value?: string[] }>;
+		assert.deepEqual(filtering[0], {
+			field: "id",
+			operator: "IN",
+			value: ["777", "888"],
+		});
+
+		if (requestUrl.pathname.endsWith("/act_123456789/campaigns")) {
+			return new Response(
+				JSON.stringify({
+					data: [
+						{
+							id: "777",
+							name: "Resolved Campaign",
+							effective_status: "ACTIVE",
+						},
+					],
+				}),
+				{ status: 200 },
+			);
+		}
+
+		if (requestUrl.pathname.endsWith("/act_123456789/adsets")) {
+			return new Response(JSON.stringify({ data: [] }), { status: 200 });
+		}
+
+		return new Response(JSON.stringify({ error: { message: "unexpected" } }), {
+			status: 404,
+		});
+	}) as typeof globalThis.fetch;
+
+	try {
+		const { entries, result } = await captureStructuredLogs(() =>
+			resolveCampaignDisplayMetadata(
+				"2026-06-01",
+				"2026-06-02",
+				["777", "888"],
+				"meta",
+			),
+		);
+
+		assert.equal(fetchUrls.length, 2);
+		assert.deepEqual(
+			result.byCampaign.get("777")
+				? {
+						campaign: result.byCampaign.get("777")?.campaign,
+						campaignDisplayName:
+							result.byCampaign.get("777")?.campaignDisplayName,
+						campaignEntityType: result.byCampaign.get("777")?.campaignEntityType,
+						campaignNameResolutionStatus:
+							result.byCampaign.get("777")?.campaignNameResolutionStatus,
+						campaignMetadataSource:
+							result.byCampaign.get("777")?.campaignMetadataSource,
+					}
+				: null,
+			{
+				campaign: "777",
+				campaignDisplayName: "Resolved Campaign",
+				campaignEntityType: "campaign",
+				campaignNameResolutionStatus: "resolved",
+				campaignMetadataSource: "meta_api",
+			},
+		);
+
+		const summary = entries.find(
+			(entry) => entry.event === "meta_metadata_lookup_summary",
+		);
+		assert.deepEqual(
+			{
+				requestedCount: summary?.requestedCount,
+				normalizedRequestCount: summary?.normalizedRequestCount,
+				cacheHitCount: summary?.cacheHitCount,
+				cacheMissCount: summary?.cacheMissCount,
+				recentFailureCacheHitCount: summary?.recentFailureCacheHitCount,
+				apiRequestCount: summary?.apiRequestCount,
+				apiLookupObjectCount: summary?.apiLookupObjectCount,
+				apiResolvedCount: summary?.apiResolvedCount,
+				apiNotFoundCount: summary?.apiNotFoundCount,
+				apiFailureCount: summary?.apiFailureCount,
+				missingConnectionCount: summary?.missingConnectionCount,
+				unresolvedCount: summary?.unresolvedCount,
+				unresolvedEntityIds: summary?.unresolvedEntityIds,
+				unresolvedObjectScopes: summary?.unresolvedObjectScopes,
+				unresolvedReasons: summary?.unresolvedReasons,
+			},
+			{
+				requestedCount: 4,
+				normalizedRequestCount: 4,
+				cacheHitCount: 0,
+				cacheMissCount: 4,
+				recentFailureCacheHitCount: 0,
+				apiRequestCount: 2,
+				apiLookupObjectCount: 4,
+				apiResolvedCount: 1,
+				apiNotFoundCount: 3,
+				apiFailureCount: 0,
+				missingConnectionCount: 0,
+				unresolvedCount: 1,
+				unresolvedEntityIds: ["888"],
+				unresolvedObjectScopes: [
+					{
+						objectId: "888",
+						objectType: "campaign",
+						reason: "meta_api_not_found",
+					},
+					{
+						objectId: "888",
+						objectType: "adset",
+						reason: "meta_api_not_found",
+					},
+				],
+				unresolvedReasons: {
+					meta_api_not_found: 2,
+				},
+			},
+		);
+
+		const rawIdFallback = entries.find(
+			(entry) => entry.event === "meta_metadata_raw_id_fallback",
+		);
+		assert.deepEqual(
+			{
+				requestedCount: rawIdFallback?.requestedCount,
+				unresolvedCount: rawIdFallback?.unresolvedCount,
+				unresolvedEntityIds: rawIdFallback?.unresolvedEntityIds,
+				unresolvedObjectScopes: rawIdFallback?.unresolvedObjectScopes,
+				unresolvedReasons: rawIdFallback?.unresolvedReasons,
+				fallback: rawIdFallback?.fallback,
+				startDate: rawIdFallback?.startDate,
+				endDate: rawIdFallback?.endDate,
+				source: rawIdFallback?.source,
+			},
+			{
+				requestedCount: 2,
+				unresolvedCount: 1,
+				unresolvedEntityIds: ["888"],
+				unresolvedObjectScopes: [
+					{
+						objectId: "888",
+						objectType: "campaign",
+						reason: "meta_api_not_found",
+					},
+					{
+						objectId: "888",
+						objectType: "adset",
+						reason: "meta_api_not_found",
+					},
+				],
+				unresolvedReasons: {
+					meta_api_not_found: 2,
+				},
+				fallback: "raw_id",
+				startDate: "2026-06-01",
+				endDate: "2026-06-02",
+				source: "meta",
+			},
+		);
+		assert.equal(
+			JSON.stringify(rawIdFallback?.unresolvedObjectScopes).includes("777"),
+			false,
+		);
+	} finally {
+		globalThis.fetch = originalFetch;
+	}
 });
 
 test("resolveMetaMetadata reads cache first, fetches missing Meta ids, and returns unresolved ids", async () => {
