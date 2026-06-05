@@ -853,9 +853,26 @@ function summarizeUnresolvedObjectScopes(
 	objectType: MetaMetadataObjectType;
 	reason: MetaMetadataUnresolvedObject["reason"];
 }> {
-	return unresolved.map((entry) => ({
-		objectId: entry.objectId,
-		objectType: entry.objectType,
-		reason: entry.reason,
-	}));
+	const objectTypeOrder: Record<MetaMetadataObjectType, number> = {
+		campaign: 0,
+		adset: 1,
+	};
+
+	return unresolved
+		.map((entry) => ({
+			objectId: entry.objectId,
+			objectType: entry.objectType,
+			reason: entry.reason,
+		}))
+		.sort((left, right) => {
+			if (left.objectId !== right.objectId) {
+				return left.objectId.localeCompare(right.objectId);
+			}
+
+			if (left.objectType !== right.objectType) {
+				return objectTypeOrder[left.objectType] - objectTypeOrder[right.objectType];
+			}
+
+			return left.reason.localeCompare(right.reason);
+		});
 }
