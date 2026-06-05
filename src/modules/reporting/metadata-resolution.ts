@@ -867,22 +867,21 @@ async function resolveAttributedMetaIdMetadata(
   }
 
   for (const [objectId, resolvedObjects] of directApiResolutionsByObjectId) {
-    if (byCampaign.has(objectId) || resolvedObjects.length !== 1) {
+    if (resolvedObjects.length !== 1) {
       continue;
     }
 
     const resolved = resolvedObjects[0];
-    byCampaign.set(
-      objectId,
-      buildMetaAttributedIdResolution({
+    const directResolution = buildMetaAttributedIdResolution({
         campaign: resolved.objectId,
         objectId: resolved.objectId,
         objectType: resolved.objectType,
         objectName: resolved.objectName,
         metadataSource: resolved.source,
         lastFetchedAt: resolved.lastFetchedAt
-      })
-    );
+    });
+
+    byCampaign.set(objectId, chooseBetterResolution(byCampaign.get(objectId), directResolution));
   }
 
   return byCampaign;
