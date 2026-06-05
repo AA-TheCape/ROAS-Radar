@@ -19,6 +19,7 @@ export type CampaignDisplayResolution = {
   parentCampaignDisplayName?: string | null;
   campaignPlatform: 'google_ads' | 'meta_ads' | null;
   campaignNameResolutionStatus: CampaignNameResolutionStatus;
+  campaignMetadataSource?: 'ad_platform_entity_metadata' | 'spend' | 'cache' | 'meta_api' | 'active_account';
   lastSeenAt: string | null;
   updatedAt: string | null;
 };
@@ -166,6 +167,7 @@ function buildResolution(row: CampaignResolutionRow): CampaignDisplayResolution 
       campaignEntityType: 'campaign',
       campaignPlatform: row.platform,
       campaignNameResolutionStatus: 'resolved',
+      campaignMetadataSource: 'ad_platform_entity_metadata',
       lastSeenAt: row.last_seen_at?.toISOString() ?? null,
       updatedAt: row.updated_at?.toISOString() ?? null
     };
@@ -181,6 +183,7 @@ function buildResolution(row: CampaignResolutionRow): CampaignDisplayResolution 
       campaignEntityType: 'campaign',
       campaignPlatform: row.platform,
       campaignNameResolutionStatus: 'fallback_name',
+      campaignMetadataSource: 'spend',
       lastSeenAt: null,
       updatedAt: null
     };
@@ -195,6 +198,7 @@ function buildResolution(row: CampaignResolutionRow): CampaignDisplayResolution 
     campaignEntityType: 'campaign',
     campaignPlatform: row.platform,
     campaignNameResolutionStatus: 'unresolved',
+    campaignMetadataSource: 'spend',
     lastSeenAt: null,
     updatedAt: null
   };
@@ -207,6 +211,7 @@ function buildMetaAttributedIdResolution(input: {
   objectName: string;
   parentCampaignId?: string | null;
   parentCampaignName?: string | null;
+  metadataSource?: CampaignDisplayResolution['campaignMetadataSource'];
   lastFetchedAt: string | null;
 }): CampaignDisplayResolution {
   return {
@@ -220,6 +225,7 @@ function buildMetaAttributedIdResolution(input: {
     parentCampaignDisplayName: input.objectType === 'adset' ? collapseWhitespace(input.parentCampaignName) : null,
     campaignPlatform: 'meta_ads',
     campaignNameResolutionStatus: 'resolved',
+    campaignMetadataSource: input.metadataSource,
     lastSeenAt: input.lastFetchedAt,
     updatedAt: input.lastFetchedAt
   };
@@ -494,6 +500,7 @@ async function resolveAttributedMetaIdMetadata(
         objectName: bestCandidate.objectName,
         parentCampaignId: parentCandidate?.parentCampaignId ?? null,
         parentCampaignName: parentCandidate?.parentCampaignName ?? null,
+        metadataSource: bestCandidate.metadataSource,
         lastFetchedAt: bestCandidate.lastSeenAt
       })
     );
@@ -562,6 +569,7 @@ async function resolveAttributedMetaIdMetadata(
       objectName: authoritativeCandidate?.objectName ?? resolved.objectName,
       parentCampaignId: parentCandidate?.parentCampaignId ?? null,
       parentCampaignName: parentCandidate?.parentCampaignName ?? null,
+      metadataSource: authoritativeCandidate?.metadataSource ?? resolved.source,
       lastFetchedAt: authoritativeCandidate?.lastSeenAt ?? bestCandidate?.lastSeenAt ?? resolved.lastFetchedAt
     });
     const resolutions = resolutionsByCampaign.get(resolved.objectId) ?? [];
@@ -609,6 +617,7 @@ async function resolveAttributedMetaIdMetadata(
       parentCampaignDisplayName: unresolved.objectType === 'adset' ? collapseWhitespace(bestCandidate?.parentCampaignName) : null,
       campaignPlatform: null,
       campaignNameResolutionStatus: 'unresolved',
+      campaignMetadataSource: bestCandidate?.metadataSource,
       lastSeenAt: bestCandidate?.lastSeenAt ?? null,
       updatedAt: null
     });

@@ -793,6 +793,14 @@ function isMetaLikeAttributionSource(source: string, medium: string): boolean {
 	);
 }
 
+function isPlatformBackedMetaCampaignResolution(resolution: CampaignDisplayResolution | undefined): boolean {
+	return (
+		resolution?.campaignPlatform === 'meta_ads' &&
+		resolution.campaignNameResolutionStatus === 'resolved' &&
+		resolution.campaignMetadataSource === 'ad_platform_entity_metadata'
+	);
+}
+
 function selectCampaignResolution(
 	metadata: Awaited<ReturnType<typeof resolveCampaignDisplayMetadata>>,
 	row: { source: string; medium: string; campaign: string }
@@ -805,9 +813,13 @@ function selectCampaignResolution(
 		return groupResolution;
 	}
 
-	return isMetaLikeAttributionSource(row.source, row.medium)
-		? metadata.byCampaign.get(row.campaign)
-		: undefined;
+	const campaignResolution = metadata.byCampaign.get(row.campaign);
+
+	if (isPlatformBackedMetaCampaignResolution(campaignResolution)) {
+		return campaignResolution;
+	}
+
+	return isMetaLikeAttributionSource(row.source, row.medium) ? campaignResolution : undefined;
 }
 
 function resolveReportRowSource(row: { source: string }, resolution: CampaignDisplayResolution | undefined): string {
