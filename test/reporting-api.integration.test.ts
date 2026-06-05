@@ -739,6 +739,108 @@ test("reporting campaigns labels unmapped rows from known Meta campaign metadata
 	}
 });
 
+test("reporting campaigns leaves unmapped numeric campaign IDs unresolved without Meta metadata", async () => {
+	await resetE2EDatabase();
+	const reportDate = "2026-04-10";
+	const campaignId = "120251699446190386";
+
+	await pool.query(
+		`
+      INSERT INTO daily_reporting_metrics (
+        metric_date,
+        attribution_model,
+        source,
+        medium,
+        campaign,
+        content,
+        term,
+        visits,
+        attributed_orders,
+        attributed_revenue,
+        spend,
+        impressions,
+        clicks,
+        new_customer_orders,
+        returning_customer_orders,
+        new_customer_revenue,
+        returning_customer_revenue,
+        last_computed_at
+      )
+      VALUES (
+        $1::date,
+        'last_touch',
+        'unmapped',
+        'unmapped',
+        $2,
+        'unknown',
+        'unknown',
+        12,
+        2,
+        '240.00',
+        '0.00',
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        now()
+      )
+    `,
+		[reportDate, campaignId],
+	);
+
+	const server = createServer();
+
+	try {
+		const { response, body } = await requestJson(
+			server,
+			"/api/reporting/campaigns?startDate=2026-04-10&endDate=2026-04-10&limit=10",
+		);
+
+		assert.equal(response.status, 200);
+		const rows = body.rows as Array<Record<string, unknown>>;
+		const row = rows.find((candidate) => candidate.campaign === campaignId);
+
+		assert.equal(rows.length, 1);
+		assert.deepEqual(
+			{
+				source: row?.source,
+				medium: row?.medium,
+				campaign: row?.campaign,
+				content: row?.content,
+				visits: row?.visits,
+				orders: row?.orders,
+				revenue: row?.revenue,
+				conversionRate: row?.conversionRate,
+				campaignDisplayName: row?.campaignDisplayName,
+				campaignEntityId: row?.campaignEntityId,
+				campaignPlatform: row?.campaignPlatform,
+				campaignNameResolutionStatus: row?.campaignNameResolutionStatus,
+				campaignLabel: row?.campaignLabel,
+			},
+			{
+				source: "unmapped",
+				medium: "unmapped",
+				campaign: campaignId,
+				content: null,
+				visits: 12,
+				orders: 2,
+				revenue: 240,
+				conversionRate: 2 / 12,
+				campaignDisplayName: undefined,
+				campaignEntityId: undefined,
+				campaignPlatform: undefined,
+				campaignNameResolutionStatus: undefined,
+				campaignLabel: undefined,
+			},
+		);
+	} finally {
+		await closeServer(server);
+		await resetE2EDatabase();
+	}
+});
+
 test("reporting summary exposes Meta API view-through totals as a separate layer", async () => {
 	await resetE2EDatabase();
 	const connectionId = await seedMetaConnection("123456789");
