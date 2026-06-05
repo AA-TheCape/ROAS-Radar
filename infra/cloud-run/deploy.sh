@@ -223,7 +223,6 @@ for var in \
   MMM_BASELINE_LOOKBACK_DAYS \
   MMM_BASELINE_LAG_DAYS \
   MMM_BASELINE_SUBMITTED_BY \
-  MMM_BASELINE_FREEZE_ID \
   MMM_BAYESIAN_SCHEDULE \
   MMM_BAYESIAN_TIME_ZONE \
   MMM_BAYESIAN_SCHEDULER_PAUSED \
@@ -243,6 +242,12 @@ for var in \
 do
   require_var "$var"
 done
+
+if [ "$MMM_BASELINE_SCHEDULER_PAUSED" = "false" ] && [ -z "${MMM_BASELINE_FREEZE_ID:-}" ]; then
+  echo "MMM_BASELINE_FREEZE_ID is required when MMM_BASELINE_SCHEDULER_PAUSED=false in $ENV_FILE" >&2
+  echo "Create and approve an MMM baseline calibration freeze, promote its id into the environment file, then enable the scheduler." >&2
+  exit 1
+fi
 
 if [ "${VALIDATE_DEPLOY_CONFIG_ONLY:-false}" = "true" ]; then
   echo "Cloud Run deployment configuration is valid for $ENVIRONMENT"

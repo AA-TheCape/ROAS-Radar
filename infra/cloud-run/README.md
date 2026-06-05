@@ -179,7 +179,7 @@ For one-off environment deploys, run `infra/cloud-run/deploy.sh dev`, `infra/clo
 
 `infra/cloud-run/deploy.sh` now deploys the migrator job first, runs schema migration before any service rollout, then deploys the API, worker, dashboard, jobs, and schedulers. If `DEPLOY_METADATA_FILE` is set, the script also records the previous and newly deployed Cloud Run revisions for the API, worker, and dashboard so rollback can route traffic back to the prior revision quickly.
 
-`MMM_BASELINE_FREEZE_ID` is intentionally empty in checked-in environment files. Populate it with the approved `mmm_baseline_calibration_freezes.id` promoted for the target calibration window and attribution model before deploying the baseline MMM scheduler or manually executing the baseline Cloud Run Job. The deployment script validates this value before any Cloud Run changes; a config-only check is:
+`MMM_BASELINE_FREEZE_ID` is intentionally empty in checked-in environment files. Keep `MMM_BASELINE_SCHEDULER_PAUSED=true` until migrations have created the MMM tables and an approved `mmm_baseline_calibration_freezes.id` has been promoted for the target calibration window and attribution model. The deployment script allows an empty freeze id only while the baseline scheduler is paused; it rejects deploys that would enable the scheduler without a freeze id. Run the config-only check with:
 
 ```sh
 VALIDATE_DEPLOY_CONFIG_ONLY=true \
