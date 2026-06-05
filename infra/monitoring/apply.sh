@@ -112,7 +112,7 @@ for policy_file in "$SCRIPT_DIR"/alert-policies/*.json; do
   normalize_json_file "$rendered"
   display_name=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).displayName)' "$rendered")
   existing_name=$(
-    gcloud alpha monitoring policies list \
+    gcloud monitoring policies list \
       --project="$GCP_PROJECT_ID" \
       --filter="displayName=\"$display_name\"" \
       --format="value(name)" \
@@ -120,9 +120,9 @@ for policy_file in "$SCRIPT_DIR"/alert-policies/*.json; do
   )
 
   if [ -n "$existing_name" ]; then
-    gcloud alpha monitoring policies update "$existing_name" --project="$GCP_PROJECT_ID" --policy-from-file="$rendered"
+    gcloud monitoring policies update "$existing_name" --project="$GCP_PROJECT_ID" --policy-from-file="$rendered"
   else
-    gcloud alpha monitoring policies create --project="$GCP_PROJECT_ID" --policy-from-file="$rendered"
+    gcloud monitoring policies create --project="$GCP_PROJECT_ID" --policy-from-file="$rendered"
   fi
 done
 
