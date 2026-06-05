@@ -697,6 +697,17 @@ async function resolveAttributedMetaIdMetadata(
 
     if (collapsed) {
       byCampaign.set(campaign, collapsed);
+      continue;
+    }
+
+    const apiResolvedCandidates = resolutions.filter(
+      (resolution) =>
+        resolution.campaignNameResolutionStatus === 'resolved' &&
+        resolution.campaignMetadataSource === 'meta_api'
+    );
+
+    if (apiResolvedCandidates.length === 1) {
+      byCampaign.set(campaign, apiResolvedCandidates[0]);
     }
   }
 
