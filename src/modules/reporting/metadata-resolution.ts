@@ -525,7 +525,7 @@ async function resolveAttributedMetaIdMetadata(
   >();
 
   for (const row of accountRows.rows) {
-    const adAccountId = row.ad_account_id?.trim();
+    const adAccountId = normalizeMetaAdAccountId(row.ad_account_id);
     const objectId = row.object_id?.trim();
 
     if (!adAccountId || !objectId || !['campaign', 'adset'].includes(row.object_type)) {
