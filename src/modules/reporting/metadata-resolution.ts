@@ -574,21 +574,44 @@ async function resolveAttributedMetaIdMetadata(
           accessToken: runtimeMetaConfig.metadataAccessToken
         }
       : null;
+  const runtimeApiResolvedObjects: MetaMetadataResolutionResult['resolved'] = [];
   const metaResult = await resolveMetaMetadata(
     metaRequests,
     runtimeApiLookup
       ? {
-          apiLookup: (input) => {
-            if (normalizeMetaAdAccountId(input.adAccountId) !== runtimeApiLookup.adAccountId) {
+          apiLookup: async (input) => {
+            const adAccountId = normalizeMetaAdAccountId(input.adAccountId);
+
+            if (adAccountId !== runtimeApiLookup.adAccountId) {
               return Promise.resolve(new Map());
             }
 
-            return fetchRuntimeMetaObjectsByIds({
+            const lookupResult = await fetchRuntimeMetaObjectsByIds({
               adAccountId: runtimeApiLookup.adAccountId,
               accessToken: runtimeApiLookup.accessToken,
               objectType: input.objectType,
               objectIds: input.objectIds
             });
+
+            for (const apiObject of lookupResult.values()) {
+              const objectName = collapseWhitespace(apiObject.name);
+
+              if (!objectName || apiObject.objectType !== input.objectType) {
+                continue;
+              }
+
+              runtimeApiResolvedObjects.push({
+                adAccountId,
+                objectType: input.objectType,
+                objectId: apiObject.id,
+                objectName,
+                status: apiObject.status,
+                source: 'meta_api',
+                lastFetchedAt: null
+              });
+            }
+
+            return lookupResult;
           }
         }
       : undefined
@@ -822,13 +845,22 @@ async function resolveAttributedMetaIdMetadata(
     }
   }
 
-  const directApiResolutionsByObjectId = new Map<string, MetaMetadataResolutionResult['resolved']>();
+  const directApiResolutionsByScopedKey = new Map<string, MetaMetadataResolutionResult['resolved'][number]>();
 
-  for (const resolved of metaResult.resolved) {
+  for (const resolved of [...metaResult.resolved, ...runtimeApiResolvedObjects]) {
     if (resolved.source !== 'meta_api') {
       continue;
     }
 
+    directApiResolutionsByScopedKey.set(
+      `${resolved.adAccountId}\u0000${resolved.objectType}\u0000${resolved.objectId}`,
+      resolved
+    );
+  }
+
+  const directApiResolutionsByObjectId = new Map<string, MetaMetadataResolutionResult['resolved']>();
+
+  for (const resolved of directApiResolutionsByScopedKey.values()) {
     const directResolutions = directApiResolutionsByObjectId.get(resolved.objectId) ?? [];
     directResolutions.push(resolved);
     directApiResolutionsByObjectId.set(resolved.objectId, directResolutions);
