@@ -822,6 +822,37 @@ async function resolveAttributedMetaIdMetadata(
     }
   }
 
+  const directApiResolutionsByObjectId = new Map<string, MetaMetadataResolutionResult['resolved']>();
+
+  for (const resolved of metaResult.resolved) {
+    if (resolved.source !== 'meta_api') {
+      continue;
+    }
+
+    const directResolutions = directApiResolutionsByObjectId.get(resolved.objectId) ?? [];
+    directResolutions.push(resolved);
+    directApiResolutionsByObjectId.set(resolved.objectId, directResolutions);
+  }
+
+  for (const [objectId, resolvedObjects] of directApiResolutionsByObjectId) {
+    if (byCampaign.has(objectId) || resolvedObjects.length !== 1) {
+      continue;
+    }
+
+    const resolved = resolvedObjects[0];
+    byCampaign.set(
+      objectId,
+      buildMetaAttributedIdResolution({
+        campaign: resolved.objectId,
+        objectId: resolved.objectId,
+        objectType: resolved.objectType,
+        objectName: resolved.objectName,
+        metadataSource: resolved.source,
+        lastFetchedAt: resolved.lastFetchedAt
+      })
+    );
+  }
+
   return byCampaign;
 }
 
