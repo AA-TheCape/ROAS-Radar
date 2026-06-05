@@ -210,6 +210,35 @@ function summarizeUnresolvedMetaRawIds(unresolved: MetaMetadataUnresolvedObject[
   return [...new Set(unresolved.map((entry) => entry.objectId))];
 }
 
+function summarizeUnresolvedMetaObjectScopes(unresolved: MetaMetadataUnresolvedObject[]): Array<{
+  objectId: string;
+  objectType: MetaMetadataObjectType;
+  reason: MetaMetadataUnresolvedObject['reason'];
+}> {
+  const objectTypeOrder: Record<MetaMetadataObjectType, number> = {
+    campaign: 0,
+    adset: 1
+  };
+
+  return unresolved
+    .map((entry) => ({
+      objectId: entry.objectId,
+      objectType: entry.objectType,
+      reason: entry.reason
+    }))
+    .sort((left, right) => {
+      if (left.objectId !== right.objectId) {
+        return left.objectId.localeCompare(right.objectId);
+      }
+
+      if (left.objectType !== right.objectType) {
+        return objectTypeOrder[left.objectType] - objectTypeOrder[right.objectType];
+      }
+
+      return left.reason.localeCompare(right.reason);
+    });
+}
+
 function chooseBetterResolution(
   current: CampaignDisplayResolution | undefined,
   candidate: CampaignDisplayResolution
@@ -636,11 +665,7 @@ async function resolveAttributedMetaIdMetadata(
       requestedCount: candidateIds.length,
       unresolvedCount: unresolvedEntityIds.length,
       unresolvedEntityIds,
-      unresolvedObjectScopes: rawIdFallbacks.map((entry) => ({
-        objectId: entry.objectId,
-        objectType: entry.objectType,
-        reason: entry.reason
-      })),
+      unresolvedObjectScopes: summarizeUnresolvedMetaObjectScopes(rawIdFallbacks),
       unresolvedReasons: rawIdFallbacks.reduce<Record<string, number>>((summary, entry) => {
         summary[entry.reason] = (summary[entry.reason] ?? 0) + 1;
         return summary;
