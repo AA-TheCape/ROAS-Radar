@@ -95,6 +95,10 @@ function filterUnresolvedMetaRawIdFallbacks(
   );
 }
 
+function summarizeUnresolvedMetaRawIds(unresolved: MetaMetadataUnresolvedObject[]): string[] {
+  return [...new Set(unresolved.map((entry) => entry.objectId))];
+}
+
 function chooseBetterResolution(
   current: CampaignDisplayResolution | undefined,
   candidate: CampaignDisplayResolution
@@ -446,14 +450,16 @@ async function resolveAttributedMetaIdMetadata(
   const rawIdFallbacks = filterUnresolvedMetaRawIdFallbacks(metaResult);
 
   if (rawIdFallbacks.length > 0) {
+    const unresolvedEntityIds = summarizeUnresolvedMetaRawIds(rawIdFallbacks);
+
     emitMetaMetadataRawIdFallbackLog({
       resolutionScope: 'campaign_adset_metadata',
       startDate,
       endDate,
       source,
       requestedCount: candidateIds.length,
-      unresolvedCount: rawIdFallbacks.length,
-      unresolvedEntityIds: rawIdFallbacks.map((entry) => entry.objectId),
+      unresolvedCount: unresolvedEntityIds.length,
+      unresolvedEntityIds,
       unresolvedObjectScopes: rawIdFallbacks.map((entry) => ({
         objectId: entry.objectId,
         objectType: entry.objectType,

@@ -187,6 +187,12 @@ function filterUnresolvedWithoutAcceptedResolution(
 	);
 }
 
+function summarizeUnresolvedRawIds(
+	unresolved: MetaMetadataUnresolvedObject[],
+): string[] {
+	return [...new Set(unresolved.map((entry) => entry.objectId))];
+}
+
 function isWithinWindow(
 	timestamp: Date | null,
 	now: Date,
@@ -640,6 +646,7 @@ export async function resolveMetaMetadata(
 			unresolved,
 			resolved,
 		);
+		const unresolvedEntityIds = summarizeUnresolvedRawIds(loggableUnresolved);
 		const unresolvedReasons = summarizeUnresolvedReasons(loggableUnresolved);
 
 		emitMetaMetadataLookupSummaryLog({
@@ -657,9 +664,10 @@ export async function resolveMetaMetadata(
 			apiNotFoundCount: 0,
 			apiFailureCount: 0,
 			missingConnectionCount: 0,
-			unresolvedCount: loggableUnresolved.length,
-			unresolvedEntityIds: loggableUnresolved.map((entry) => entry.objectId),
-			unresolvedObjectScopes: summarizeUnresolvedObjectScopes(loggableUnresolved),
+			unresolvedCount: unresolvedEntityIds.length,
+			unresolvedEntityIds,
+			unresolvedObjectScopes:
+				summarizeUnresolvedObjectScopes(loggableUnresolved),
 			unresolvedReasons,
 		});
 
@@ -795,6 +803,7 @@ export async function resolveMetaMetadata(
 		combinedUnresolved,
 		combinedResolved,
 	);
+	const unresolvedEntityIds = summarizeUnresolvedRawIds(loggableUnresolved);
 	const unresolvedReasons = summarizeUnresolvedReasons(loggableUnresolved);
 
 	emitMetaMetadataLookupSummaryLog({
@@ -816,8 +825,8 @@ export async function resolveMetaMetadata(
 		missingConnectionCount: apiUnresolved.filter(
 			(entry) => entry.reason === "missing_connection",
 		).length,
-		unresolvedCount: loggableUnresolved.length,
-		unresolvedEntityIds: loggableUnresolved.map((entry) => entry.objectId),
+		unresolvedCount: unresolvedEntityIds.length,
+		unresolvedEntityIds,
 		unresolvedObjectScopes: summarizeUnresolvedObjectScopes(loggableUnresolved),
 		unresolvedReasons,
 	});

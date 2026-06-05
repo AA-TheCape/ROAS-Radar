@@ -583,8 +583,8 @@ test("resolveCampaignDisplayMetadata does not log raw-id fallback for numeric ca
 				apiNotFoundCount: 3,
 				apiFailureCount: 0,
 				missingConnectionCount: 0,
-				unresolvedCount: 2,
-				unresolvedEntityIds: ["888", "888"],
+				unresolvedCount: 1,
+				unresolvedEntityIds: ["888"],
 				unresolvedObjectScopes: [
 					{
 						objectId: "888",
@@ -620,8 +620,8 @@ test("resolveCampaignDisplayMetadata does not log raw-id fallback for numeric ca
 			},
 			{
 				requestedCount: 2,
-				unresolvedCount: 2,
-				unresolvedEntityIds: ["888", "888"],
+				unresolvedCount: 1,
+				unresolvedEntityIds: ["888"],
 				unresolvedObjectScopes: [
 					{
 						objectId: "888",
