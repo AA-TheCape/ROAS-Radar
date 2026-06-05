@@ -487,6 +487,21 @@ test("reporting campaigns resolves active-account Meta campaign and ad set ids w
 				campaignNameResolutionStatus: "resolved",
 			},
 		);
+		assert.deepEqual(campaignRow?.campaignLabel, {
+			displayName: "Awareness Campaign",
+			source: "meta",
+			rawId: "333",
+			entityId: "333",
+			objectType: "campaign",
+			entityType: "campaign",
+			parentCampaignEntityId: null,
+			parentCampaignDisplayName: null,
+			parentCampaign: null,
+			platform: "meta_ads",
+			resolutionStatus: "resolved",
+			lastSeenAt: "2026-04-10T18:00:00.000Z",
+			updatedAt: "2026-04-10T18:00:00.000Z",
+		});
 
 		assert.deepEqual(
 			{
@@ -522,6 +537,24 @@ test("reporting campaigns resolves active-account Meta campaign and ad set ids w
 				campaignNameResolutionStatus: "resolved",
 			},
 		);
+		assert.deepEqual(adSetRow?.campaignLabel, {
+			displayName: "US Prospecting Ad Set",
+			source: "meta",
+			rawId: "444",
+			entityId: "444",
+			objectType: "adset",
+			entityType: "adset",
+			parentCampaignEntityId: "333",
+			parentCampaignDisplayName: "Campaign Fallback",
+			parentCampaign: {
+				entityId: "333",
+				displayName: "Campaign Fallback",
+			},
+			platform: "meta_ads",
+			resolutionStatus: "resolved",
+			lastSeenAt: "2026-04-10T18:05:00.000Z",
+			updatedAt: "2026-04-10T18:05:00.000Z",
+		});
 
 		assert.deepEqual(
 			{
@@ -538,6 +571,7 @@ test("reporting campaigns resolves active-account Meta campaign and ad set ids w
 				campaignPlatform: unresolvedRow?.campaignPlatform,
 				campaignNameResolutionStatus:
 					unresolvedRow?.campaignNameResolutionStatus,
+				campaignLabel: unresolvedRow?.campaignLabel,
 			},
 			{
 				source: "facebook",
@@ -552,6 +586,7 @@ test("reporting campaigns resolves active-account Meta campaign and ad set ids w
 				campaignEntityId: undefined,
 				campaignPlatform: undefined,
 				campaignNameResolutionStatus: undefined,
+				campaignLabel: undefined,
 			},
 		);
 
