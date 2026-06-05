@@ -1157,6 +1157,122 @@ test('reporting campaigns resolve unmapped raw Meta campaign IDs from platform e
   }
 });
 
+test('reporting campaigns resolve unmapped raw Meta campaign IDs from metadata cache', async () => {
+  pool.query = (async (text: string, params?: unknown[]) => {
+    if (text.includes('FROM daily_reporting_metrics')) {
+      assert.deepEqual(params, ['2026-04-01', '2026-04-10', 'last_touch', 1]);
+
+      return {
+        rows: [
+          {
+            source: 'unmapped',
+            medium: 'unmapped',
+            campaign: '120251699446190386',
+            content: null,
+            visits: '11',
+            orders: '1',
+            revenue: '75.00'
+          }
+        ]
+      };
+    }
+
+    if (text.includes('FROM google_candidates')) {
+      assert.deepEqual(params, ['2026-04-01', '2026-04-10', ['120251699446190386'], null]);
+      return { rows: [] };
+    }
+
+    if (text.includes('WITH requested_ids')) {
+      assert.deepEqual(params, [['120251699446190386'], '2026-04-01', '2026-04-10', null, false, false]);
+      return {
+        rows: [
+          {
+            ad_account_id: '123456789',
+            object_type: 'campaign',
+            object_id: '120251699446190386',
+            object_name: 'Cached Meta Campaign Label',
+            parent_campaign_id: null,
+            parent_campaign_name: null,
+            last_seen_at: new Date('2026-04-10T15:30:00.000Z'),
+            metadata_source: 'cache'
+          }
+        ]
+      };
+    }
+
+    if (text.includes('FROM meta_ads_metadata_cache c')) {
+      assert.deepEqual(JSON.parse(String(params?.[0])), [
+        {
+          ad_account_id: '123456789',
+          object_type: 'campaign',
+          object_id: '120251699446190386'
+        }
+      ]);
+      return {
+        rows: [
+          {
+            ad_account_id: '123456789',
+            object_type: 'campaign',
+            object_id: '120251699446190386',
+            object_name: 'Cached Meta Campaign Label',
+            status: 'ACTIVE',
+            last_fetched_at: new Date('2026-04-10T15:30:00.000Z')
+          }
+        ]
+      };
+    }
+
+    throw new Error(`Unexpected query: ${text}`);
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(
+      server,
+      '/api/reporting/campaigns?startDate=2026-04-01&endDate=2026-04-10&limit=1'
+    );
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(body.rows, [
+      {
+        source: 'meta',
+        medium: 'unmapped',
+        campaign: '120251699446190386',
+        content: null,
+        visits: 11,
+        orders: 1,
+        revenue: 75,
+        conversionRate: 1 / 11,
+        campaignDisplayName: 'Cached Meta Campaign Label',
+        campaignEntityId: '120251699446190386',
+        campaignEntityType: 'campaign',
+        parentCampaignEntityId: null,
+        parentCampaignDisplayName: null,
+        campaignPlatform: 'meta_ads',
+        campaignNameResolutionStatus: 'resolved',
+        campaignLabel: buildCampaignLabel(
+          'Cached Meta Campaign Label',
+          '120251699446190386',
+          'meta_ads',
+          'resolved',
+          '2026-04-10T15:30:00.000Z',
+          '2026-04-10T15:30:00.000Z',
+          {
+            rawId: '120251699446190386',
+            entityType: 'campaign',
+            parentCampaignEntityId: null,
+            parentCampaignDisplayName: null
+          }
+        )
+      }
+    ]);
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
 test('reporting spend details return channel groups with campaign subtotals in descending order', async () => {
   pool.query = (async (text: string, params?: unknown[]) => {
     if (text.includes('FROM daily_reporting_metrics')) {
