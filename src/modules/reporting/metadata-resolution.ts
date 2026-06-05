@@ -73,6 +73,8 @@ const campaignMetadataSourceRanks: Record<CampaignMetadataSource, number> = {
   active_account: 2,
   spend: 1
 };
+const metaGraphBaseUrl = 'https://graph.facebook.com';
+const metaObjectFields = 'id,name,effective_status,status';
 
 export function buildCampaignResolutionGroupKey(source: string, medium: string, campaign: string): string {
   return `${source}\u0000${medium}\u0000${campaign}`;
@@ -87,6 +89,16 @@ function normalizeString(value: string | null | undefined): string | null {
   return trimmed ? trimmed : null;
 }
 
+function normalizeMetaAdAccountId(value: string | null | undefined): string | null {
+  const normalized = normalizeString(value);
+
+  if (!normalized) {
+    return null;
+  }
+
+  return normalized.startsWith('act_') ? normalized.slice(4) : normalized;
+}
+
 function collapseWhitespace(value: string | null | undefined): string | null {
   const normalized = normalizeString(value);
   return normalized ? normalized.replace(/\s+/g, ' ') : null;
@@ -94,17 +106,92 @@ function collapseWhitespace(value: string | null | undefined): string | null {
 
 function readRuntimeMetaConfig(): {
   adAccountId: string | null;
+  metadataAccessToken: string | null;
   hasEncryptedConnectionSupport: boolean;
   hasRuntimeMetadataToken: boolean;
 } {
-  const adAccountId = normalizeString(process.env.META_ADS_AD_ACCOUNT_ID);
+  const adAccountId = normalizeMetaAdAccountId(process.env.META_ADS_AD_ACCOUNT_ID);
   const metadataAccessToken = normalizeString(process.env.META_ADS_METADATA_ACCESS_TOKEN);
 
   return {
     adAccountId,
+    metadataAccessToken,
     hasEncryptedConnectionSupport: Boolean(normalizeString(process.env.META_ADS_ENCRYPTION_KEY)),
     hasRuntimeMetadataToken: Boolean(adAccountId && metadataAccessToken)
   };
+}
+
+async function fetchRuntimeMetaObjectsByIds(input: {
+  adAccountId: string;
+  accessToken: string;
+  objectType: MetaMetadataObjectType;
+  objectIds: string[];
+}): Promise<
+  Map<
+    string,
+    {
+      id: string;
+      name: string | null;
+      status: string | null;
+      objectType: MetaMetadataObjectType;
+    }
+  >
+> {
+  const resolved = new Map<
+    string,
+    {
+      id: string;
+      name: string | null;
+      status: string | null;
+      objectType: MetaMetadataObjectType;
+    }
+  >();
+  const edge = input.objectType === 'campaign' ? 'campaigns' : 'adsets';
+  const apiVersion = normalizeString(process.env.META_ADS_API_VERSION) ?? 'v25.0';
+
+  for (let index = 0; index < input.objectIds.length; index += 50) {
+    const chunk = input.objectIds.slice(index, index + 50);
+    const url = new URL(`${metaGraphBaseUrl}/${apiVersion}/act_${input.adAccountId}/${edge}`);
+
+    url.searchParams.set('access_token', input.accessToken);
+    url.searchParams.set('fields', metaObjectFields);
+    url.searchParams.set('filtering', JSON.stringify([{ field: 'id', operator: 'IN', value: chunk }]));
+    url.searchParams.set('limit', String(chunk.length));
+
+    const response = await fetch(url);
+    const payload = (await response.json()) as {
+      data?: Array<{
+        id?: string | null;
+        name?: string | null;
+        effective_status?: string | null;
+        status?: string | null;
+        error?: unknown;
+      }>;
+      error?: { message?: string | null };
+    };
+
+    if (!response.ok) {
+      throw new Error(payload.error?.message ?? `Meta Ads metadata lookup failed with status ${response.status}`);
+    }
+
+    for (const entry of payload.data ?? []) {
+      const id = normalizeString(entry.id);
+      const name = collapseWhitespace(entry.name);
+
+      if (!id || !name || entry.error) {
+        continue;
+      }
+
+      resolved.set(id, {
+        id,
+        name,
+        status: collapseWhitespace(entry.effective_status ?? entry.status),
+        objectType: input.objectType
+      });
+    }
+  }
+
+  return resolved;
 }
 
 function filterUnresolvedMetaRawIdFallbacks(
@@ -476,11 +563,35 @@ async function resolveAttributedMetaIdMetadata(
     return new Map();
   }
 
+  const metaRequests = [...requestMap.values()].map((request) => ({
+    ...request,
+    objectIds: [...new Set(request.objectIds)]
+  }));
+  const runtimeApiLookup =
+    runtimeMetaConfig.hasRuntimeMetadataToken && runtimeMetaConfig.adAccountId && runtimeMetaConfig.metadataAccessToken
+      ? {
+          adAccountId: runtimeMetaConfig.adAccountId,
+          accessToken: runtimeMetaConfig.metadataAccessToken
+        }
+      : null;
   const metaResult = await resolveMetaMetadata(
-    [...requestMap.values()].map((request) => ({
-      ...request,
-      objectIds: [...new Set(request.objectIds)]
-    }))
+    metaRequests,
+    runtimeApiLookup
+      ? {
+          apiLookup: (input) => {
+            if (normalizeMetaAdAccountId(input.adAccountId) !== runtimeApiLookup.adAccountId) {
+              return Promise.resolve(new Map());
+            }
+
+            return fetchRuntimeMetaObjectsByIds({
+              adAccountId: runtimeApiLookup.adAccountId,
+              accessToken: runtimeApiLookup.accessToken,
+              objectType: input.objectType,
+              objectIds: input.objectIds
+            });
+          }
+        }
+      : undefined
   );
 
   const rawIdFallbacks = filterUnresolvedMetaRawIdFallbacks(metaResult);
