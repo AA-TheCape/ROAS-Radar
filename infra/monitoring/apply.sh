@@ -66,7 +66,8 @@ render_template() {
     -e "s|__RUNBOOK_URL_API_LATENCY__|$(escape_for_sed "$(build_runbook_url "api-latency.md")")|g" \
     -e "s|__RUNBOOK_URL_DATA_QUALITY__|$(escape_for_sed "$(build_runbook_url "identity-data-quality.md")")|g" \
     -e "s|__RUNBOOK_URL_MMM__|$(escape_for_sed "$(build_runbook_url "mmm-pipelines.md")")|g" \
-    -e "s|__ALERT_NOTIFICATION_CHANNELS__|$notification_channels_json|g" \
+    -e "s|\"__ALERT_NOTIFICATION_CHANNELS__\"|$notification_channels_sed|g" \
+    -e "s|__ALERT_NOTIFICATION_CHANNELS__|$notification_channels_sed|g" \
     -e "s|__DASHBOARD_DISPLAY_NAME__|$(escape_for_sed "$OBSERVABILITY_DASHBOARD_DISPLAY_NAME")|g"
 }
 
@@ -75,6 +76,12 @@ normalize_json_file() {
     const fs = require("fs");
     const file = process.argv[1];
     const config = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (typeof config.notificationChannels === "string") {
+      config.notificationChannels = JSON.parse(config.notificationChannels);
+    }
+    if (Array.isArray(config.notificationChannels) && config.notificationChannels.length === 0) {
+      delete config.notificationChannels;
+    }
     fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);
   ' "$1"
 }
@@ -88,6 +95,7 @@ if [ "$ENVIRONMENT" = "production" ] && [ -z "${ALERT_NOTIFICATION_CHANNELS:-}" 
 fi
 
 notification_channels_json=$(json_array_from_csv "${ALERT_NOTIFICATION_CHANNELS:-}")
+notification_channels_sed=$(escape_for_sed "$notification_channels_json")
 tmp_dir=$(mktemp -d)
 trap 'rm -rf "$tmp_dir"' EXIT
 
