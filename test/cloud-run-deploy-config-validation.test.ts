@@ -46,6 +46,17 @@ test("Cloud Run deploy config validation fails when baseline MMM freeze id is mi
 	const fixture = createDeployFixture("");
 
 	try {
+		const envFile = path.join(
+			path.dirname(fixture.scriptPath),
+			"environments",
+			"fixture.env",
+		);
+		const activeEnv = readFileSync(envFile, "utf8").replace(
+			'MMM_BASELINE_SCHEDULER_PAUSED="true"',
+			'MMM_BASELINE_SCHEDULER_PAUSED="false"',
+		);
+		writeFileSync(envFile, activeEnv);
+
 		const result = spawnSync("sh", [fixture.scriptPath, "fixture"], {
 			env: {
 				...process.env,
@@ -58,6 +69,39 @@ test("Cloud Run deploy config validation fails when baseline MMM freeze id is mi
 		assert.match(
 			result.stderr,
 			/missing required variable MMM_BASELINE_FREEZE_ID/,
+		);
+	} finally {
+		fixture.cleanup();
+	}
+});
+
+test("Cloud Run deploy config validation allows missing baseline freeze id when scheduler is paused", () => {
+	const fixture = createDeployFixture("");
+
+	try {
+		const envFile = path.join(
+			path.dirname(fixture.scriptPath),
+			"environments",
+			"fixture.env",
+		);
+		const pausedEnv = readFileSync(envFile, "utf8").replace(
+			'MMM_BASELINE_SCHEDULER_PAUSED="false"',
+			'MMM_BASELINE_SCHEDULER_PAUSED="true"',
+		);
+		writeFileSync(envFile, pausedEnv);
+
+		const result = spawnSync("sh", [fixture.scriptPath, "fixture"], {
+			env: {
+				...process.env,
+				VALIDATE_DEPLOY_CONFIG_ONLY: "true",
+			},
+			encoding: "utf8",
+		});
+
+		assert.equal(result.status, 0, result.stderr);
+		assert.match(
+			result.stdout,
+			/Cloud Run deployment configuration is valid for fixture/,
 		);
 	} finally {
 		fixture.cleanup();

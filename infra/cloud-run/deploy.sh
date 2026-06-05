@@ -223,7 +223,6 @@ for var in \
   MMM_BASELINE_LOOKBACK_DAYS \
   MMM_BASELINE_LAG_DAYS \
   MMM_BASELINE_SUBMITTED_BY \
-  MMM_BASELINE_FREEZE_ID \
   MMM_BAYESIAN_SCHEDULE \
   MMM_BAYESIAN_TIME_ZONE \
   MMM_BAYESIAN_SCHEDULER_PAUSED \
@@ -243,6 +242,10 @@ for var in \
 do
   require_var "$var"
 done
+
+if [ "${MMM_BASELINE_SCHEDULER_PAUSED:-false}" != "true" ]; then
+  require_var MMM_BASELINE_FREEZE_ID
+fi
 
 if [ "${VALIDATE_DEPLOY_CONFIG_ONLY:-false}" = "true" ]; then
   echo "Cloud Run deployment configuration is valid for $ENVIRONMENT"
