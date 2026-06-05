@@ -793,11 +793,20 @@ function isMetaLikeAttributionSource(source: string, medium: string): boolean {
 	);
 }
 
+const PLATFORM_BACKED_META_CAMPAIGN_METADATA_SOURCES: ReadonlySet<
+	NonNullable<CampaignDisplayResolution['campaignMetadataSource']>
+> = new Set([
+	'ad_platform_entity_metadata',
+	'cache',
+	'meta_api',
+]);
+
 function isPlatformBackedMetaCampaignResolution(resolution: CampaignDisplayResolution | undefined): boolean {
 	return (
 		resolution?.campaignPlatform === 'meta_ads' &&
 		resolution.campaignNameResolutionStatus === 'resolved' &&
-		resolution.campaignMetadataSource === 'ad_platform_entity_metadata'
+		resolution.campaignMetadataSource !== undefined &&
+		PLATFORM_BACKED_META_CAMPAIGN_METADATA_SOURCES.has(resolution.campaignMetadataSource)
 	);
 }
 
