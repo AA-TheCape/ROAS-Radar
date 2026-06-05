@@ -8,7 +8,6 @@ Use this runbook for scheduled MMM mart refresh, baseline training, Bayesian hie
 - `ROAS Radar * MMM Baseline Drift`
 - `ROAS Radar * MMM Bayesian Failures`
 - `ROAS Radar * MMM Bayesian Diagnostics`
-- `ROAS Radar * MMM Bayesian Stale Success`
 - `ROAS Radar * Data Quality Alerts` for `mmm_readiness_*` checks
 - dashboard shows missing weekly MMM runs, stale readiness checks, or high deterministic-vs-MMM divergence
 

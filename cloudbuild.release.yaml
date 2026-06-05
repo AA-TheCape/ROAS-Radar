@@ -4,6 +4,8 @@ steps:
     args:
       - -ceu
       - |
+        apt-get update
+        apt-get install -y --no-install-recommends nodejs
         SHORT_SHA="$SHORT_SHA" \
         RUN_MIGRATIONS_ON_DEPLOY="${_RUN_MIGRATIONS_ON_DEPLOY}" \
         APPLY_MONITORING_ON_DEPLOY="${_APPLY_MONITORING_ON_DEPLOY}" \

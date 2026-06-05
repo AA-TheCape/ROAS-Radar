@@ -3,7 +3,6 @@ import {
   emitCampaignMetadataResolutionCoverageLog,
   emitMetaMetadataRawIdFallbackLog
 } from '../../observability/index.js';
-import { env } from '../../config/env.js';
 import {
   resolveMetaMetadata,
   type MetaMetadataObjectType,
@@ -65,6 +64,16 @@ type MetaAttributedIdCandidate = {
   metadataSource: MetaAttributedIdAccountRow['metadata_source'];
 };
 
+type CampaignMetadataSource = NonNullable<CampaignDisplayResolution['campaignMetadataSource']>;
+
+const campaignMetadataSourceRanks: Record<CampaignMetadataSource, number> = {
+  ad_platform_entity_metadata: 5,
+  cache: 4,
+  meta_api: 3,
+  active_account: 2,
+  spend: 1
+};
+
 export function buildCampaignResolutionGroupKey(source: string, medium: string, campaign: string): string {
   return `${source}\u0000${medium}\u0000${campaign}`;
 }
@@ -81,6 +90,21 @@ function normalizeString(value: string | null | undefined): string | null {
 function collapseWhitespace(value: string | null | undefined): string | null {
   const normalized = normalizeString(value);
   return normalized ? normalized.replace(/\s+/g, ' ') : null;
+}
+
+function readRuntimeMetaConfig(): {
+  adAccountId: string | null;
+  hasEncryptedConnectionSupport: boolean;
+  hasRuntimeMetadataToken: boolean;
+} {
+  const adAccountId = normalizeString(process.env.META_ADS_AD_ACCOUNT_ID);
+  const metadataAccessToken = normalizeString(process.env.META_ADS_METADATA_ACCESS_TOKEN);
+
+  return {
+    adAccountId,
+    hasEncryptedConnectionSupport: Boolean(normalizeString(process.env.META_ADS_ENCRYPTION_KEY)),
+    hasRuntimeMetadataToken: Boolean(adAccountId && metadataAccessToken)
+  };
 }
 
 function filterUnresolvedMetaRawIdFallbacks(
@@ -130,6 +154,17 @@ function chooseBetterResolution(
 
   if (candidateTimestamp !== currentTimestamp) {
     return candidateTimestamp > currentTimestamp ? candidate : current;
+  }
+
+  const currentSourceRank = current.campaignMetadataSource
+    ? campaignMetadataSourceRanks[current.campaignMetadataSource]
+    : 0;
+  const candidateSourceRank = candidate.campaignMetadataSource
+    ? campaignMetadataSourceRanks[candidate.campaignMetadataSource]
+    : 0;
+
+  if (candidateSourceRank !== currentSourceRank) {
+    return candidateSourceRank > currentSourceRank ? candidate : current;
   }
 
   return current;
@@ -268,6 +303,7 @@ async function resolveAttributedMetaIdMetadata(
     return new Map();
   }
 
+  const runtimeMetaConfig = readRuntimeMetaConfig();
   const candidateMap = new Map<string, MetaAttributedIdCandidate[]>();
 
   const accountRows = await query<MetaAttributedIdAccountRow>(
@@ -386,9 +422,9 @@ async function resolveAttributedMetaIdMetadata(
       candidateIds,
       startDate,
       endDate,
-      env.META_ADS_AD_ACCOUNT_ID || null,
-      Boolean(env.META_ADS_ENCRYPTION_KEY),
-      Boolean(env.META_ADS_AD_ACCOUNT_ID && env.META_ADS_METADATA_ACCESS_TOKEN)
+      runtimeMetaConfig.adAccountId,
+      runtimeMetaConfig.hasEncryptedConnectionSupport,
+      runtimeMetaConfig.hasRuntimeMetadataToken
     ]
   );
 

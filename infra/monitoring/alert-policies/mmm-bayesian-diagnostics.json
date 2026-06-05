@@ -10,9 +10,28 @@
   "notificationChannels": __ALERT_NOTIFICATION_CHANNELS__,
   "conditions": [
     {
-      "displayName": "Bayesian diagnostics or artifact persistence alert",
+      "displayName": "Bayesian posterior diagnostics failed",
       "conditionThreshold": {
-        "filter": "metric.type=\"logging.googleapis.com/user/roas_mmm_bayesian_jobs\" resource.type=\"cloud_run_revision\" metric.labels.stage=\"completed\" (metric.labels.posterior_sanity_status!=\"pass\" OR metric.labels.artifact_persisted=\"false\")",
+        "filter": "metric.type=\"logging.googleapis.com/user/roas_mmm_bayesian_jobs\" resource.type=\"cloud_run_revision\" metric.labels.stage=\"completed\" metric.labels.posterior_sanity_status!=\"pass\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 0,
+        "duration": "3600s",
+        "aggregations": [
+          {
+            "alignmentPeriod": "3600s",
+            "perSeriesAligner": "ALIGN_SUM",
+            "crossSeriesReducer": "REDUCE_SUM"
+          }
+        ],
+        "trigger": {
+          "count": 1
+        }
+      }
+    },
+    {
+      "displayName": "Bayesian artifacts were not persisted",
+      "conditionThreshold": {
+        "filter": "metric.type=\"logging.googleapis.com/user/roas_mmm_bayesian_jobs\" resource.type=\"cloud_run_revision\" metric.labels.stage=\"completed\" metric.labels.artifact_persisted=\"false\"",
         "comparison": "COMPARISON_GT",
         "thresholdValue": 0,
         "duration": "3600s",

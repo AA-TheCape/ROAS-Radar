@@ -13,7 +13,11 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-function createDeployFixture(freezeId: string) {
+function createDeployFixture(input: {
+	freezeId: string;
+	baselineSchedulerPaused: "true" | "false";
+	omitObservabilityDashboardName?: boolean;
+}) {
 	const tempDir = mkdtempSync(path.join(os.tmpdir(), "roas-radar-deploy-"));
 	const scriptDir = path.join(tempDir, "infra", "cloud-run");
 	const envDir = path.join(scriptDir, "environments");
@@ -25,13 +29,24 @@ function createDeployFixture(freezeId: string) {
 	);
 	chmodSync(path.join(scriptDir, "deploy.sh"), 0o755);
 
-	const productionEnv = readFileSync(
+	let productionEnv = readFileSync(
 		path.resolve("infra/cloud-run/environments/production.env"),
 		"utf8",
-	).replace(
-		'MMM_BASELINE_FREEZE_ID=""',
-		`MMM_BASELINE_FREEZE_ID="${freezeId}"`,
-	);
+	)
+		.replace(
+			/MMM_BASELINE_SCHEDULER_PAUSED="[^"]*"/,
+			`MMM_BASELINE_SCHEDULER_PAUSED="${input.baselineSchedulerPaused}"`,
+		)
+		.replace(
+			'MMM_BASELINE_FREEZE_ID=""',
+			`MMM_BASELINE_FREEZE_ID="${input.freezeId}"`,
+		);
+	if (input.omitObservabilityDashboardName) {
+		productionEnv = productionEnv.replace(
+			/^OBSERVABILITY_DASHBOARD_DISPLAY_NAME="[^"]*"\n/m,
+			"",
+		);
+	}
 	writeFileSync(path.join(envDir, "fixture.env"), productionEnv);
 
 	return {
@@ -42,21 +57,13 @@ function createDeployFixture(freezeId: string) {
 	};
 }
 
-test("Cloud Run deploy config validation fails when baseline MMM freeze id is missing", () => {
-	const fixture = createDeployFixture("");
+test("Cloud Run deploy config validation fails when baseline MMM scheduler is enabled without a freeze id", () => {
+	const fixture = createDeployFixture({
+		freezeId: "",
+		baselineSchedulerPaused: "false",
+	});
 
 	try {
-		const envFile = path.join(
-			path.dirname(fixture.scriptPath),
-			"environments",
-			"fixture.env",
-		);
-		const activeEnv = readFileSync(envFile, "utf8").replace(
-			'MMM_BASELINE_SCHEDULER_PAUSED="true"',
-			'MMM_BASELINE_SCHEDULER_PAUSED="false"',
-		);
-		writeFileSync(envFile, activeEnv);
-
 		const result = spawnSync("sh", [fixture.scriptPath, "fixture"], {
 			env: {
 				...process.env,
@@ -68,28 +75,20 @@ test("Cloud Run deploy config validation fails when baseline MMM freeze id is mi
 		assert.notEqual(result.status, 0);
 		assert.match(
 			result.stderr,
-			/missing required variable MMM_BASELINE_FREEZE_ID/,
+			/MMM_BASELINE_FREEZE_ID is required when MMM_BASELINE_SCHEDULER_PAUSED=false/,
 		);
 	} finally {
 		fixture.cleanup();
 	}
 });
 
-test("Cloud Run deploy config validation allows missing baseline freeze id when scheduler is paused", () => {
-	const fixture = createDeployFixture("");
+test("Cloud Run deploy config validation accepts missing baseline MMM freeze id while scheduler is paused", () => {
+	const fixture = createDeployFixture({
+		freezeId: "",
+		baselineSchedulerPaused: "true",
+	});
 
 	try {
-		const envFile = path.join(
-			path.dirname(fixture.scriptPath),
-			"environments",
-			"fixture.env",
-		);
-		const pausedEnv = readFileSync(envFile, "utf8").replace(
-			'MMM_BASELINE_SCHEDULER_PAUSED="false"',
-			'MMM_BASELINE_SCHEDULER_PAUSED="true"',
-		);
-		writeFileSync(envFile, pausedEnv);
-
 		const result = spawnSync("sh", [fixture.scriptPath, "fixture"], {
 			env: {
 				...process.env,
@@ -109,7 +108,10 @@ test("Cloud Run deploy config validation allows missing baseline freeze id when 
 });
 
 test("Cloud Run deploy config validation accepts configured baseline MMM freeze id", () => {
-	const fixture = createDeployFixture("22222222-2222-4222-8222-222222222222");
+	const fixture = createDeployFixture({
+		freezeId: "22222222-2222-4222-8222-222222222222",
+		baselineSchedulerPaused: "false",
+	});
 
 	try {
 		const result = spawnSync("sh", [fixture.scriptPath, "fixture"], {
@@ -124,6 +126,32 @@ test("Cloud Run deploy config validation accepts configured baseline MMM freeze 
 		assert.match(
 			result.stdout,
 			/Cloud Run deployment configuration is valid for fixture/,
+		);
+	} finally {
+		fixture.cleanup();
+	}
+});
+
+test("Cloud Run deploy config validation requires monitoring dashboard name", () => {
+	const fixture = createDeployFixture({
+		freezeId: "",
+		baselineSchedulerPaused: "true",
+		omitObservabilityDashboardName: true,
+	});
+
+	try {
+		const result = spawnSync("sh", [fixture.scriptPath, "fixture"], {
+			env: {
+				...process.env,
+				VALIDATE_DEPLOY_CONFIG_ONLY: "true",
+			},
+			encoding: "utf8",
+		});
+
+		assert.notEqual(result.status, 0);
+		assert.match(
+			result.stderr,
+			/missing required variable OBSERVABILITY_DASHBOARD_DISPLAY_NAME/,
 		);
 	} finally {
 		fixture.cleanup();

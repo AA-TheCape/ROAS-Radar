@@ -34,15 +34,6 @@ jobs:
 
       - run: chmod +x infra/cloud-run/bootstrap-iam.sh infra/cloud-run/deploy.sh
       - run: infra/cloud-run/bootstrap-iam.sh "${{ inputs.environment }}"
-      - name: Deploy staging through Cloud Build
-        if: inputs.environment == 'staging'
-        run: |
-          gcloud builds submit \
-            --project=roas-radar-staging \
-            --config=cloudbuild.staging.yaml \
-            --substitutions=SHORT_SHA="${GITHUB_SHA::7}",_RUN_MIGRATIONS_ON_DEPLOY=true,_APPLY_MONITORING_ON_DEPLOY=true
-      - name: Deploy production directly
-        if: inputs.environment == 'production'
-        run: infra/cloud-run/deploy.sh "${{ inputs.environment }}"
+      - run: infra/cloud-run/deploy.sh "${{ inputs.environment }}"
         env:
           RUN_MIGRATIONS_ON_DEPLOY: "true"
