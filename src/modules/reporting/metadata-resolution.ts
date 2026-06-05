@@ -563,9 +563,15 @@ async function resolveAttributedMetaIdMetadata(
     return new Map();
   }
 
+  const candidateIdOrder = new Map(candidateIds.map((candidateId, index) => [candidateId, index]));
   const metaRequests = [...requestMap.values()].map((request) => ({
     ...request,
-    objectIds: [...new Set(request.objectIds)]
+    objectIds: [...new Set(request.objectIds)].sort((left, right) => {
+      const leftRank = candidateIdOrder.get(left) ?? Number.MAX_SAFE_INTEGER;
+      const rightRank = candidateIdOrder.get(right) ?? Number.MAX_SAFE_INTEGER;
+
+      return leftRank === rightRank ? left.localeCompare(right) : leftRank - rightRank;
+    })
   }));
   const runtimeApiLookup =
     runtimeMetaConfig.hasRuntimeMetadataToken && runtimeMetaConfig.adAccountId && runtimeMetaConfig.metadataAccessToken
