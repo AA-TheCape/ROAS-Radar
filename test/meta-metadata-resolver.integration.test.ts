@@ -357,6 +357,107 @@ test("resolveMetaMetadata rejects wrong Meta object types and does not cache the
 	);
 });
 
+test("resolveMetaMetadata does not log unresolved alternate scopes when the id resolved as an accepted Meta object type", async () => {
+	const { entries, result } = await captureStructuredLogs(() =>
+		resolveMetaMetadata(
+			[
+				{
+					adAccountId: "123456789",
+					objectType: "campaign",
+					objectIds: ["777"],
+				},
+				{
+					adAccountId: "123456789",
+					objectType: "adset",
+					objectIds: ["777", "888"],
+				},
+			],
+			{
+				now: new Date("2026-06-02T15:00:00.000Z"),
+				apiLookup: async ({ objectType, objectIds }) =>
+					new Map(
+						objectIds
+							.filter((objectId) => objectType === "campaign" && objectId === "777")
+							.map((objectId) => [
+								objectId,
+								{
+									id: objectId,
+									name: "Resolved Campaign",
+									status: "ACTIVE",
+									objectType: "campaign" as const,
+								},
+							]),
+					),
+			},
+		),
+	);
+
+	assert.deepEqual(
+		result.resolved.map((entry) => ({
+			objectType: entry.objectType,
+			objectId: entry.objectId,
+		})),
+		[
+			{
+				objectType: "campaign",
+				objectId: "777",
+			},
+		],
+	);
+	assert.deepEqual(
+		result.unresolved.map((entry) => ({
+			objectType: entry.objectType,
+			objectId: entry.objectId,
+			reason: entry.reason,
+		})),
+		[
+			{
+				objectType: "adset",
+				objectId: "777",
+				reason: "meta_api_not_found",
+			},
+			{
+				objectType: "adset",
+				objectId: "888",
+				reason: "meta_api_not_found",
+			},
+		],
+	);
+
+	const summary = entries.find(
+		(entry) => entry.event === "meta_metadata_lookup_summary",
+	);
+
+	assert.deepEqual(
+		{
+			apiLookupObjectCount: summary?.apiLookupObjectCount,
+			apiResolvedCount: summary?.apiResolvedCount,
+			apiNotFoundCount: summary?.apiNotFoundCount,
+			unresolvedCount: summary?.unresolvedCount,
+			unresolvedEntityIds: summary?.unresolvedEntityIds,
+			unresolvedObjectScopes: summary?.unresolvedObjectScopes,
+			unresolvedReasons: summary?.unresolvedReasons,
+		},
+		{
+			apiLookupObjectCount: 3,
+			apiResolvedCount: 1,
+			apiNotFoundCount: 2,
+			unresolvedCount: 1,
+			unresolvedEntityIds: ["888"],
+			unresolvedObjectScopes: [
+				{
+					objectId: "888",
+					objectType: "adset",
+					reason: "meta_api_not_found",
+				},
+			],
+			unresolvedReasons: {
+				meta_api_not_found: 1,
+			},
+		},
+	);
+});
+
 test("resolveMetaMetadata reads cache first, fetches missing Meta ids, and returns unresolved ids", async () => {
 	await pool.query(
 		`

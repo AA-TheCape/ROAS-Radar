@@ -4,7 +4,12 @@ import {
   emitMetaMetadataRawIdFallbackLog
 } from '../../observability/index.js';
 import { env } from '../../config/env.js';
-import { resolveMetaMetadata, type MetaMetadataObjectType } from '../meta-ads/metadata-resolver.js';
+import {
+  resolveMetaMetadata,
+  type MetaMetadataObjectType,
+  type MetaMetadataResolutionResult,
+  type MetaMetadataUnresolvedObject
+} from '../meta-ads/metadata-resolver.js';
 
 export type CampaignNameResolutionStatus = 'resolved' | 'fallback_name' | 'unresolved';
 
@@ -76,6 +81,18 @@ function normalizeString(value: string | null | undefined): string | null {
 function collapseWhitespace(value: string | null | undefined): string | null {
   const normalized = normalizeString(value);
   return normalized ? normalized.replace(/\s+/g, ' ') : null;
+}
+
+function filterUnresolvedMetaRawIdFallbacks(
+  metaResult: MetaMetadataResolutionResult
+): MetaMetadataUnresolvedObject[] {
+  const resolvedObjectIds = new Set(
+    metaResult.resolved.map((entry) => `${entry.adAccountId}\u0000${entry.objectId}`)
+  );
+
+  return metaResult.unresolved.filter(
+    (entry) => !resolvedObjectIds.has(`${entry.adAccountId}\u0000${entry.objectId}`)
+  );
 }
 
 function chooseBetterResolution(
@@ -426,16 +443,23 @@ async function resolveAttributedMetaIdMetadata(
     }))
   );
 
-  if (metaResult.unresolved.length > 0) {
+  const rawIdFallbacks = filterUnresolvedMetaRawIdFallbacks(metaResult);
+
+  if (rawIdFallbacks.length > 0) {
     emitMetaMetadataRawIdFallbackLog({
       resolutionScope: 'campaign_adset_metadata',
       startDate,
       endDate,
       source,
       requestedCount: candidateIds.length,
-      unresolvedCount: metaResult.unresolved.length,
-      unresolvedEntityIds: metaResult.unresolved.map((entry) => entry.objectId),
-      unresolvedReasons: metaResult.unresolved.reduce<Record<string, number>>((summary, entry) => {
+      unresolvedCount: rawIdFallbacks.length,
+      unresolvedEntityIds: rawIdFallbacks.map((entry) => entry.objectId),
+      unresolvedObjectScopes: rawIdFallbacks.map((entry) => ({
+        objectId: entry.objectId,
+        objectType: entry.objectType,
+        reason: entry.reason
+      })),
+      unresolvedReasons: rawIdFallbacks.reduce<Record<string, number>>((summary, entry) => {
         summary[entry.reason] = (summary[entry.reason] ?? 0) + 1;
         return summary;
       }, {})
