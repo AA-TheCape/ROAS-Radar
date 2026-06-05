@@ -17,7 +17,7 @@ locals {
     identity_graph_backfill           = "roas-radar-idbf-${var.environment}"
     order_attribution_materialization = "roas-radar-ordmat-${var.environment}"
     mmm_baseline                      = "roas-radar-mmm-${var.environment}"
-    mmm_bayesian                      = "roas-radar-mmm-bayesian-${var.environment}"
+    mmm_bayesian                      = "roas-radar-mmm-by-${var.environment}"
     scheduler                         = "roas-radar-scheduler-${var.environment}"
     deployer                          = "roas-radar-deployer-${var.environment}"
   }
