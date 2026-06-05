@@ -12,7 +12,7 @@
     {
       "displayName": "Any null-canonical spike anomaly is emitted in 30 minutes",
       "conditionThreshold": {
-        "filter": "metric.type=\"logging.googleapis.com/user/roas_meta_order_value_sync_anomalies\" resource.type=\"cloud_run_revision\" metric.labels.anomaly_type=(\"null_attributed_revenue_spike\" OR \"null_purchase_count_spike\" OR \"null_action_type_spike\")",
+        "filter": "metric.type=\"logging.googleapis.com/user/roas_meta_order_value_sync_anomalies\" resource.type=\"cloud_run_revision\" (metric.labels.anomaly_type=\"null_attributed_revenue_spike\" OR metric.labels.anomaly_type=\"null_purchase_count_spike\" OR metric.labels.anomaly_type=\"null_action_type_spike\")",
         "comparison": "COMPARISON_GT",
         "thresholdValue": 0,
         "duration": "1800s",

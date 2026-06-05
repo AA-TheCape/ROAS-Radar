@@ -1,11 +1,14 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(root, '../..');
 const metricsDir = path.join(root, 'log-metrics');
 const alertsDir = path.join(root, 'alert-policies');
 const dashboardPath = path.join(root, 'dashboard.json');
+const maxThresholdDurationSeconds = 24 * 60 * 60 + 30 * 60;
 
 function renderPlaceholders(raw) {
   return raw
@@ -56,6 +59,23 @@ function validateAlert(filePath) {
     if (kinds[0] === 'conditionMatchedLog') {
       hasLogMatch = true;
     }
+
+    const threshold = condition.conditionThreshold;
+    if (threshold) {
+      const duration = parseDurationSeconds(threshold.duration);
+      if (duration > maxThresholdDurationSeconds) {
+        issues.push(`${path.basename(filePath)}: conditions[${index}].conditionThreshold.duration must be <= 88200s`);
+      }
+
+      const filter = threshold.filter ?? '';
+      if (/metric\.labels\.[A-Za-z0-9_]+\s*=\s*\([^)]*\bOR\b/.test(filter)) {
+        issues.push(`${path.basename(filePath)}: conditions[${index}].conditionThreshold.filter must repeat metric label comparisons instead of using label=(... OR ...)`);
+      }
+
+      if (/metric\.labels\.[A-Za-z0-9_]+\s*!?=\s*"[^"]+"\s+\(metric\.labels\.[^)]*\bOR\b/.test(filter)) {
+        issues.push(`${path.basename(filePath)}: conditions[${index}].conditionThreshold.filter must not mix AND and OR metric label restrictions`);
+      }
+    }
   });
 
   const rateLimit = data.alertStrategy?.notificationRateLimit?.period;
@@ -66,6 +86,26 @@ function validateAlert(filePath) {
   }
 
   return issues;
+}
+
+function parseDurationSeconds(duration) {
+  const match = /^(\d+)s$/.exec(duration ?? '');
+  return match ? Number(match[1]) : 0;
+}
+
+function trackedJsonFiles(dir, fallbackDir) {
+  try {
+    return execFileSync('git', ['-C', repoRoot, 'ls-files', dir], { encoding: 'utf8' })
+      .split('\n')
+      .filter(Boolean)
+      .map((fileName) => path.join(repoRoot, fileName))
+      .filter((fileName) => existsSync(fileName));
+  } catch {
+    return readdirSync(fallbackDir)
+      .filter((name) => name.endsWith('.json'))
+      .sort()
+      .map((name) => path.join(fallbackDir, name));
+  }
 }
 
 function validateDashboard(filePath) {
@@ -104,11 +144,11 @@ function validateDashboard(filePath) {
 }
 
 const issues = [];
-for (const fileName of readdirSync(metricsDir).filter((name) => name.endsWith('.json')).sort()) {
-  issues.push(...validateMetric(path.join(metricsDir, fileName)));
+for (const filePath of trackedJsonFiles('infra/monitoring/log-metrics/*.json', metricsDir)) {
+  issues.push(...validateMetric(filePath));
 }
-for (const fileName of readdirSync(alertsDir).filter((name) => name.endsWith('.json')).sort()) {
-  issues.push(...validateAlert(path.join(alertsDir, fileName)));
+for (const filePath of trackedJsonFiles('infra/monitoring/alert-policies/*.json', alertsDir)) {
+  issues.push(...validateAlert(filePath));
 }
 issues.push(...validateDashboard(dashboardPath));
 

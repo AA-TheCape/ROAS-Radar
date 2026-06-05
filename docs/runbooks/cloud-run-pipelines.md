@@ -73,7 +73,7 @@ Do not sign off staging or continue to production unless the smoke evidence incl
 - `MMM_BAYESIAN_FREEZE_ID` is required before running or enabling the scheduler for `bayesian_hierarchical_mmm_v1`; keep it empty until the approved freeze id is promoted as a release gate.
 - `MMM_BAYESIAN_SCHEDULER_PAUSED`, `MMM_BAYESIAN_SCHEDULE`, `MMM_BAYESIAN_TIME_ZONE`, `MMM_BAYESIAN_LOOKBACK_DAYS`, `MMM_BAYESIAN_LAG_DAYS`, and `MMM_BAYESIAN_ATTRIBUTION_MODEL` control the separate Bayesian job.
 - `MMM_BAYESIAN_JOB_CPU`, `MMM_BAYESIAN_JOB_MEMORY`, `MMM_BAYESIAN_JOB_TIMEOUT_SECONDS`, and `MMM_BAYESIAN_JOB_MAX_RETRIES` control Bayesian Cloud Run resources and retry behavior.
-- `mmm_bayesian_job_lifecycle` logs are the source for Bayesian failure, stale success, diagnostics, and missing artifact alerts.
+- `mmm_bayesian_job_lifecycle` logs are the source for Bayesian failure, diagnostics, and missing artifact alerts. Use the scheduler state and latest successful lifecycle log to verify weekly freshness.
 
 Recommended operating posture:
 

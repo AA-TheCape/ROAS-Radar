@@ -86,6 +86,15 @@ normalize_json_file() {
   ' "$1"
 }
 
+tracked_json_files() {
+  git -C "$REPO_ROOT" ls-files "$1" | while IFS= read -r rel_path; do
+    file_path="$REPO_ROOT/$rel_path"
+    if [ -f "$file_path" ]; then
+      printf '%s\n' "$file_path"
+    fi
+  done
+}
+
 require_var GCP_PROJECT_ID
 require_var OBSERVABILITY_DASHBOARD_DISPLAY_NAME
 
@@ -101,7 +110,7 @@ trap 'rm -rf "$tmp_dir"' EXIT
 
 node "$SCRIPT_DIR/validate.mjs"
 
-for metric_file in "$SCRIPT_DIR"/log-metrics/*.json; do
+tracked_json_files "infra/monitoring/log-metrics/*.json" | while IFS= read -r metric_file; do
   metric_name=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).name)' "$metric_file")
   rendered="$tmp_dir/$(basename "$metric_file")"
   render_template <"$metric_file" >"$rendered"
@@ -114,18 +123,23 @@ for metric_file in "$SCRIPT_DIR"/log-metrics/*.json; do
   fi
 done
 
-for policy_file in "$SCRIPT_DIR"/alert-policies/*.json; do
+policies_index="$tmp_dir/alert-policies.json"
+gcloud monitoring policies list --project="$GCP_PROJECT_ID" --format=json >"$policies_index"
+
+tracked_json_files "infra/monitoring/alert-policies/*.json" | while IFS= read -r policy_file; do
   rendered="$tmp_dir/$(basename "$policy_file")"
   render_template <"$policy_file" >"$rendered"
   normalize_json_file "$rendered"
   display_name=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).displayName)' "$rendered")
-  existing_name=$(
-    gcloud monitoring policies list \
-      --project="$GCP_PROJECT_ID" \
-      --filter="displayName=\"$display_name\"" \
-      --format="value(name)" \
-      --limit=1 2>/dev/null || true
-  )
+  existing_name=$(node -e '
+    const fs = require("fs");
+    const policies = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const displayName = process.argv[2];
+    const match = policies.find((policy) => policy.displayName === displayName);
+    if (match) {
+      console.log(match.name);
+    }
+  ' "$policies_index" "$display_name")
 
   if [ -n "$existing_name" ]; then
     gcloud monitoring policies update "$existing_name" --project="$GCP_PROJECT_ID" --policy-from-file="$rendered"
@@ -146,6 +160,19 @@ dashboard_name=$(
 )
 
 if [ -n "$dashboard_name" ]; then
+  dashboard_etag=$(
+    gcloud monitoring dashboards describe "$dashboard_name" \
+      --project="$GCP_PROJECT_ID" \
+      --format="value(etag)"
+  )
+  node -e '
+    const fs = require("fs");
+    const file = process.argv[1];
+    const etag = process.argv[2];
+    const config = JSON.parse(fs.readFileSync(file, "utf8"));
+    config.etag = etag;
+    fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`);
+  ' "$dashboard_file" "$dashboard_etag"
   gcloud monitoring dashboards update "$dashboard_name" --project="$GCP_PROJECT_ID" --config-from-file="$dashboard_file"
 else
   gcloud monitoring dashboards create --project="$GCP_PROJECT_ID" --config-from-file="$dashboard_file"
