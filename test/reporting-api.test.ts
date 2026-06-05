@@ -1273,6 +1273,73 @@ test('reporting campaigns resolve unmapped raw Meta campaign IDs from metadata c
   }
 });
 
+test('reporting campaigns leave unmapped numeric campaign IDs unlabeled without Meta metadata', async () => {
+  pool.query = (async (text: string, params?: unknown[]) => {
+    if (text.includes('FROM daily_reporting_metrics')) {
+      assert.deepEqual(params, ['2026-04-01', '2026-04-10', 'last_touch', 1]);
+
+      return {
+        rows: [
+          {
+            source: 'unmapped',
+            medium: 'unmapped',
+            campaign: '120251699446190386',
+            content: null,
+            visits: '13',
+            orders: '2',
+            revenue: '180.00'
+          }
+        ]
+      };
+    }
+
+    if (text.includes('FROM google_candidates')) {
+      assert.deepEqual(params, ['2026-04-01', '2026-04-10', ['120251699446190386'], null]);
+      return { rows: [] };
+    }
+
+    if (text.includes('WITH requested_ids')) {
+      assert.deepEqual(params, [
+        ['120251699446190386'],
+        '2026-04-01',
+        '2026-04-10',
+        null,
+        false,
+        false
+      ]);
+      return { rows: [] };
+    }
+
+    throw new Error(`Unexpected query: ${text}`);
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(
+      server,
+      '/api/reporting/campaigns?startDate=2026-04-01&endDate=2026-04-10&limit=1'
+    );
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(body.rows, [
+      {
+        source: 'unmapped',
+        medium: 'unmapped',
+        campaign: '120251699446190386',
+        content: null,
+        visits: 13,
+        orders: 2,
+        revenue: 180,
+        conversionRate: 2 / 13
+      }
+    ]);
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
 test('reporting spend details return channel groups with campaign subtotals in descending order', async () => {
   pool.query = (async (text: string, params?: unknown[]) => {
     if (text.includes('FROM daily_reporting_metrics')) {
