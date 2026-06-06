@@ -1,0 +1,35 @@
+{
+  "name": "roas_meta_attribution_signal_ingestion_quality",
+  "description": "Counts accepted Meta platform-reported attribution evidence by eligibility, traceability, match quality, and normalization diagnostics.",
+  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"meta_order_attribution_evidence_ingested\"",
+  "labelExtractors": {
+    "service": "EXTRACT(jsonPayload.service)",
+    "source_kind": "EXTRACT(jsonPayload.sourceKind)",
+    "eligibility_outcome": "EXTRACT(jsonPayload.eligibilityOutcome)",
+    "match_basis": "EXTRACT(jsonPayload.matchBasis)",
+    "confidence_bucket": "EXTRACT(jsonPayload.confidenceBucket)",
+    "raw_payload_traceable": "EXTRACT(jsonPayload.rawPayloadTraceable)",
+    "has_ingestion_run_reference": "EXTRACT(jsonPayload.hasIngestionRunReference)",
+    "has_normalization_failures": "EXTRACT(jsonPayload.hasNormalizationFailures)",
+    "first_normalization_failure_reason": "EXTRACT(jsonPayload.firstNormalizationFailureReason)",
+    "first_disqualification_reason": "EXTRACT(jsonPayload.firstDisqualificationReason)"
+  },
+  "metricDescriptor": {
+    "metricKind": "DELTA",
+    "valueType": "INT64",
+    "unit": "1",
+    "displayName": "ROAS Radar Meta Attribution Signal Ingestion Quality",
+    "labels": [
+      { "key": "service", "valueType": "STRING", "description": "Service emitting the ingestion telemetry." },
+      { "key": "source_kind", "valueType": "STRING", "description": "Whether the Meta source is order-scoped, order-joinable, aggregate-only, or unknown." },
+      { "key": "eligibility_outcome", "valueType": "STRING", "description": "Canonical, parallel-only, or ineligible evaluation outcome." },
+      { "key": "match_basis", "valueType": "STRING", "description": "Strongest approved match basis used by the Meta evidence." },
+      { "key": "confidence_bucket", "valueType": "STRING", "description": "Operational confidence band for the evidence score." },
+      { "key": "raw_payload_traceable", "valueType": "STRING", "description": "Whether raw payload or raw record traceability exists." },
+      { "key": "has_ingestion_run_reference", "valueType": "STRING", "description": "Whether the evidence links back to an ingestion run." },
+      { "key": "has_normalization_failures", "valueType": "STRING", "description": "Whether normalization failures were recorded." },
+      { "key": "first_normalization_failure_reason", "valueType": "STRING", "description": "First normalization failure reason, if any." },
+      { "key": "first_disqualification_reason", "valueType": "STRING", "description": "First eligibility disqualification reason, if any." }
+    ]
+  }
+}

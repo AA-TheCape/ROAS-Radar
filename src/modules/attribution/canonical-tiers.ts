@@ -55,7 +55,8 @@ const EVIDENCE_SOURCE_PRECEDENCE: Record<AttributionEvidenceSource, number> = {
   cart_token: 2,
   customer_identity: 3,
   shopify_marketing_hint: 4,
-  ga4_fallback: 5
+  meta_platform_reported: 5,
+  ga4_fallback: 6
 };
 
 const STRICT_EVIDENCE_SOURCES = new Set<AttributionEvidenceSource>([
@@ -79,6 +80,7 @@ function inferEvidenceSource(touchpoint: AttributionTouchpoint): AttributionEvid
     case 'cart_token':
     case 'customer_identity':
     case 'shopify_marketing_hint':
+    case 'meta_platform_reported':
     case 'ga4_fallback':
       return rawEvidenceSource;
     default:

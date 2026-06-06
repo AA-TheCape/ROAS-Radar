@@ -1,0 +1,31 @@
+{
+  "name": "roas_meta_attribution_resolver_decisions",
+  "description": "Counts attribution resolver outcomes where Meta platform-reported evidence was present, including canonical impact and fallback reasons.",
+  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"attribution_resolver_outcome\" AND jsonPayload.metaPresent=true",
+  "labelExtractors": {
+    "service": "EXTRACT(jsonPayload.service)",
+    "pipeline": "EXTRACT(jsonPayload.pipeline)",
+    "attribution_tier": "EXTRACT(jsonPayload.attributionTier)",
+    "meta_evaluation_outcome": "EXTRACT(jsonPayload.metaEvaluationOutcome)",
+    "meta_affected_canonical": "EXTRACT(jsonPayload.metaAffectedCanonical)",
+    "meta_confidence_bucket": "EXTRACT(jsonPayload.metaConfidenceBucket)",
+    "meta_resolver_fallback_reason": "EXTRACT(jsonPayload.metaResolverFallbackReason)",
+    "resolver_rule_version": "EXTRACT(jsonPayload.resolverRuleVersion)"
+  },
+  "metricDescriptor": {
+    "metricKind": "DELTA",
+    "valueType": "INT64",
+    "unit": "1",
+    "displayName": "ROAS Radar Meta Attribution Resolver Decisions",
+    "labels": [
+      { "key": "service", "valueType": "STRING", "description": "Service emitting the resolver decision." },
+      { "key": "pipeline", "valueType": "STRING", "description": "Realtime or backfill resolver path." },
+      { "key": "attribution_tier", "valueType": "STRING", "description": "Final canonical attribution tier." },
+      { "key": "meta_evaluation_outcome", "valueType": "STRING", "description": "Meta eligibility result observed by the resolver." },
+      { "key": "meta_affected_canonical", "valueType": "STRING", "description": "Whether Meta changed the canonical attribution decision." },
+      { "key": "meta_confidence_bucket", "valueType": "STRING", "description": "Operational confidence band for the primary Meta evidence." },
+      { "key": "meta_resolver_fallback_reason", "valueType": "STRING", "description": "Why Meta did or did not become canonical." },
+      { "key": "resolver_rule_version", "valueType": "STRING", "description": "Resolver rule version used for the decision." }
+    ]
+  }
+}

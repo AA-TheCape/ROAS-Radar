@@ -37,10 +37,12 @@ import {
   dedupeDeterministicCandidates,
   isDirectTouchpoint,
   resolveAttributionTier,
+  resolveAttributionTierForVersion,
   selectLastNonDirectWinner,
   type ResolvedJourney,
   type ResolvedAttributionTouchpoint
 } from './resolver.js';
+import { ATTRIBUTION_RESOLVER_RULE_VERSION } from './rule-version.js';
 import {
   loadAttributionPreprocessingSnapshot,
   preprocessAttributionOrders,
@@ -1103,6 +1105,7 @@ export async function applySyntheticAttributionForOrder(
         winner: touchpoint,
         confidenceScore,
         attributionReason: input.attributionReason,
+        resolverRuleVersion: ATTRIBUTION_RESOLVER_RULE_VERSION,
         orderOccurredAtUtc: orderOccurredAt,
         normalizationFailures: []
       },
@@ -1115,6 +1118,7 @@ export async function applySyntheticAttributionForOrder(
             : 'ingested_at',
         deterministicFirstParty: [],
         shopifyHint: syntheticTier === 'deterministic_shopify_hint' ? [syntheticCandidate] : [],
+        platformReportedMeta: [],
         ga4Fallback: syntheticTier === 'ga4_fallback' ? [syntheticCandidate] : [],
         normalizationFailures: []
       }
@@ -1219,6 +1223,7 @@ export const __attributionTestUtils = {
   selectLastNonDirectWinner,
   confidenceScoreForWinner,
   resolveAttributionTier,
+  resolveAttributionTierForVersion,
   collectDeterministicFirstPartyCandidates,
   extractAttributionCandidatesForOrder,
   preprocessAttributionSnapshot

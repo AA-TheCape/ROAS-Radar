@@ -1613,6 +1613,110 @@ test('reporting orders returns order-level attribution details for debugging', a
   }
 });
 
+test('reporting orders filters and serializes Meta platform-reported attribution separately from GA4 fallback', async () => {
+  pool.query = (async (text: string, params?: unknown[]) => {
+    if (text.includes('INSERT INTO app_settings')) {
+      assert.deepEqual(params, ['America/Los_Angeles']);
+      return { rows: [], rowCount: 0 };
+    }
+
+    if (text.includes('SELECT reporting_timezone')) {
+      return {
+        rows: [
+          {
+            reporting_timezone: 'America/Los_Angeles',
+            updated_at: new Date('2026-04-01T00:00:00.000Z')
+          }
+        ],
+        rowCount: 1
+      };
+    }
+
+    assert.match(text, /COALESCE\(o\.attribution_tier, 'unattributed'\) = \$4/);
+    assert.deepEqual(params, [
+      '2026-04-01',
+      '2026-04-10',
+      'last_touch',
+      'platform_reported_meta',
+      'America/Los_Angeles',
+      10
+    ]);
+
+    return {
+      rows: [
+        {
+          shopify_order_id: 'meta-order-1',
+          processed_at: new Date('2026-04-10T13:00:00.000Z'),
+          total_price: '140.00',
+          attribution_tier: 'platform_reported_meta',
+          attribution_source: 'meta_platform_reported',
+          order_attribution_reason: 'meta_platform_reported_match',
+          attribution_matched_at: new Date('2026-04-10T13:01:00.000Z'),
+          attribution_snapshot: {
+            confidenceScore: 0.72,
+            winner: {
+              source: 'meta',
+              medium: 'paid_social',
+              campaign: 'retargeting-us',
+              clickIdType: 'fbclid',
+              clickIdValue: 'FB-META-123'
+            }
+          },
+          meta_attribution_evidence_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          meta_attribution_evaluation_outcome: 'eligible_canonical',
+          meta_attribution_confidence_score: '0.7200',
+          meta_attribution_confidence_label: 'medium',
+          meta_attribution_present: true,
+          meta_attribution_affected_canonical: true,
+          attributed_source: 'meta',
+          attributed_medium: 'paid_social',
+          attributed_campaign: 'retargeting-us',
+          primary_credit_attribution_reason: 'meta_platform_reported_match'
+        }
+      ]
+    };
+  }) as typeof pool.query;
+
+  const server = createServer();
+
+  try {
+    const { response, body } = await requestJson(
+      server,
+      '/api/reporting/orders?startDate=2026-04-01&endDate=2026-04-10&attributionTier=platform_reported_meta&limit=10'
+    );
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(body.rows[0], {
+      shopifyOrderId: 'meta-order-1',
+      processedAt: '2026-04-10T13:00:00.000Z',
+      orderOccurredAtUtc: '2026-04-10T13:00:00.000Z',
+      totalPrice: 140,
+      source: 'meta',
+      medium: 'paid_social',
+      campaign: 'retargeting-us',
+      attributionReason: 'meta_platform_reported_match',
+      primaryCreditAttributionReason: 'meta_platform_reported_match',
+      attributionTier: 'platform_reported_meta',
+      attributionTierLabel: 'Meta platform-reported',
+      attributionTierDescription:
+        'Recovered from Meta platform-reported attribution after first-party and Shopify-hint matches were unavailable.',
+      attributionSource: 'meta_platform_reported',
+      attributionMatchedAt: '2026-04-10T13:01:00.000Z',
+      confidenceScore: 0.72,
+      metaAttributionEvidenceId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      metaAttributionEligibilityOutcome: 'eligible_canonical',
+      metaAttributionConfidenceScore: 0.72,
+      metaAttributionConfidenceLabel: 'medium',
+      metaAttributionPresent: true,
+      metaAttributionAffectedCanonical: true,
+      sessionId: null
+    });
+  } finally {
+    pool.query = originalPoolQuery as typeof pool.query;
+    await closeServer(server);
+  }
+});
+
 test('reporting order details expose attribution tier metadata additively', async () => {
   pool.query = (async (text: string, params?: unknown[]) => {
     if (text.includes('FROM shopify_orders o')) {
@@ -1660,6 +1764,25 @@ test('reporting order details expose attribution tier metadata additively', asyn
               }
             },
             attribution_snapshot_updated_at: new Date('2026-04-10T13:01:30.000Z'),
+            meta_attribution_evidence_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            meta_attribution_evaluation_outcome: 'not_evaluated',
+            meta_attribution_confidence_score: '0.72',
+            meta_attribution_confidence_label: 'medium',
+            meta_attribution_present: true,
+            meta_attribution_affected_canonical: false,
+            attribution_decision_artifact_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+            attribution_decision_reason: 'meta_not_evaluated_higher_precedence_winner',
+            attribution_decision_reason_detail: 'Deterministic first-party evidence outranked Meta evidence.',
+            meta_attribution_match_basis: 'fbclid',
+            meta_attribution_window_days: 7,
+            meta_attribution_touchpoint_occurred_at: new Date('2026-04-09T13:00:00.000Z'),
+            meta_attribution_reported_at: new Date('2026-04-10T13:00:30.000Z'),
+            meta_attribution_is_click_through: true,
+            meta_attribution_is_view_through: false,
+            meta_attribution_eligibility_reasons: ['within_attribution_window', 'confidence_above_canonical_threshold'],
+            meta_attribution_disqualification_reasons: [],
+            meta_attribution_parallel_only_reasons: ['higher_precedence_winner'],
+            meta_attribution_normalization_failures: [],
             ingested_at: new Date('2026-04-10T13:02:00.000Z'),
             raw_payload: { id: '1234567890' }
           }
@@ -1710,6 +1833,28 @@ test('reporting order details expose attribution tier metadata additively', asyn
     assert.equal(body.order.attributedTerm, 'widget');
     assert.equal(body.order.attributedClickIdType, 'gclid');
     assert.equal(body.order.attributedClickIdValue, 'gclid-123');
+    assert.equal(body.order.metaAttributionEvidenceId, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+    assert.equal(body.order.metaAttributionEligibilityOutcome, 'not_evaluated');
+    assert.equal(body.order.metaAttributionConfidenceScore, 0.72);
+    assert.equal(body.order.metaAttributionConfidenceLabel, 'medium');
+    assert.equal(body.order.metaAttributionPresent, true);
+    assert.equal(body.order.metaAttributionAffectedCanonical, false);
+    assert.equal(body.order.attributionDecisionArtifactId, 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
+    assert.equal(body.order.attributionDecisionReason, 'meta_not_evaluated_higher_precedence_winner');
+    assert.equal(body.order.attributionDecisionReasonDetail, 'Deterministic first-party evidence outranked Meta evidence.');
+    assert.equal(body.order.metaAttributionMatchBasis, 'fbclid');
+    assert.equal(body.order.metaAttributionWindowDays, 7);
+    assert.equal(body.order.metaAttributionTouchpointOccurredAt, '2026-04-09T13:00:00.000Z');
+    assert.equal(body.order.metaAttributionReportedAt, '2026-04-10T13:00:30.000Z');
+    assert.equal(body.order.metaAttributionIsClickThrough, true);
+    assert.equal(body.order.metaAttributionIsViewThrough, false);
+    assert.deepEqual(body.order.metaAttributionEligibilityReasons, [
+      'within_attribution_window',
+      'confidence_above_canonical_threshold'
+    ]);
+    assert.deepEqual(body.order.metaAttributionDisqualificationReasons, []);
+    assert.deepEqual(body.order.metaAttributionParallelOnlyReasons, ['higher_precedence_winner']);
+    assert.deepEqual(body.order.metaAttributionNormalizationFailures, []);
     assert.equal(body.order.attributionSnapshotUpdatedAt, '2026-04-10T13:01:30.000Z');
   } finally {
     pool.query = originalPoolQuery as typeof pool.query;

@@ -13,22 +13,26 @@
 1. Open the monitoring dashboard and inspect the attribution tier distribution, resolver fallthrough, unattributed trend, and unattributed-by-reason widgets.
 2. Filter Cloud Logging on `attribution_capture_observed`, `tracking_dual_write_consistency`, `shopify_writeback_observed`, and `attribution_resolver_outcome`.
 3. Split the issue by `pipeline`, `attributionTier`, `fallthroughStage`, and `firstNormalizationFailureReason` before changing code or infra.
+4. For V2 orders, compare canonical `platform_reported_meta` counts with parallel-only Meta evidence counts before treating a Meta movement as a canonical attribution change.
 
 ## Resolver Outcome Interpretation
 
 - `deterministic_first_party` means the resolver stayed in the highest-confidence tier.
 - `deterministic_shopify_hint` means first-party matching failed and Shopify hint recovery won.
-- `ga4_fallback` means both first-party and Shopify hint matching failed and GA4 fallback won.
+- `platform_reported_meta` means first-party and Shopify hint matching failed, and canonical-eligible Meta platform-reported evidence won under `attribution_resolver_v2`.
+- `ga4_fallback` means first-party, Shopify hint, and canonical Meta matching failed and GA4 fallback won.
 - `unattributed` means all tiers failed or order timestamp normalization made the order ineligible.
 
-Treat a rise in lower tiers or `unattributed` as a fallthrough problem first, then isolate whether the break is caused by capture loss, hint extraction, GA4 matching, or timestamp normalization.
+Treat a rise in lower tiers or `unattributed` as a fallthrough problem first, then isolate whether the break is caused by capture loss, hint extraction, Meta evidence eligibility, GA4 matching, or timestamp normalization.
+
+Parallel-only Meta evidence is not a resolver outcome tier. It means Meta reported influence without changing the canonical winner; use it for diagnostics and platform comparison only.
 
 ## Triage Order
 
 1. Check whether the spike is isolated to `order_backfill` or `realtime_queue`.
 2. If only `order_backfill` is affected, inspect the exact rollout window and recent recovery jobs before changing live ingest.
 3. If both pipelines are affected, compare `fallthroughStage` and `firstNormalizationFailureReason` labels to see whether the issue is upstream capture loss or resolver eligibility failure.
-4. If unattributed volume rises without matching normalization failures, inspect Shopify hint extraction and GA4 candidate availability next.
+4. If unattributed volume rises without matching normalization failures, inspect Shopify hint extraction, Meta evidence eligibility, and GA4 candidate availability next.
 
 ## Shopify Recovery Order
 

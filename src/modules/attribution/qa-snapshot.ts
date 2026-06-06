@@ -97,6 +97,10 @@ function resolveMatchSource(
     return 'shopify_marketing_hint';
   }
 
+  if (source === 'meta_platform_reported') {
+    return 'meta_platform_reported';
+  }
+
   if (source === 'ga4_fallback') {
     return 'ga4_fallback';
   }
@@ -163,6 +167,7 @@ function flattenCandidates(candidates: AttributionCandidateExtractionResult): At
   return [
     ...candidates.deterministicFirstParty,
     ...candidates.shopifyHint,
+    ...candidates.platformReportedMeta,
     ...candidates.ga4Fallback
   ];
 }
@@ -216,7 +221,7 @@ function buildDiagnosticsNotes(
   journey: ResolvedJourney
 ): string[] {
   const notes = [
-    `candidate_counts deterministic_first_party=${candidates.deterministicFirstParty.length} shopify_hint=${candidates.shopifyHint.length} ga4_fallback=${candidates.ga4Fallback.length}`,
+    `candidate_counts deterministic_first_party=${candidates.deterministicFirstParty.length} shopify_hint=${candidates.shopifyHint.length} platform_reported_meta=${candidates.platformReportedMeta.length} ga4_fallback=${candidates.ga4Fallback.length}`,
     journey.winner
       ? `winner selected from ${journey.tier} with reason ${journey.attributionReason}`
       : `no winner selected with reason ${journey.attributionReason}`
@@ -446,6 +451,9 @@ export function buildAttributionQaSnapshot(input: {
         mapCandidate(candidate, input.journey)
       ),
       shopify_hint: input.candidates.shopifyHint.map((candidate) => mapCandidate(candidate, input.journey)),
+      platform_reported_meta: input.candidates.platformReportedMeta.map((candidate) =>
+        mapCandidate(candidate, input.journey)
+      ),
       ga4_fallback: input.candidates.ga4Fallback.map((candidate) => mapCandidate(candidate, input.journey))
     },
     model_summaries: buildModelSummaries(runId, input.order.shopify_order_id, input.generatedAt, input.execution),
