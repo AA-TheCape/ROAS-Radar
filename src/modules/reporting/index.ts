@@ -831,6 +831,19 @@ function selectCampaignResolution(
 	return isMetaLikeAttributionSource(row.source, row.medium) ? campaignResolution : undefined;
 }
 
+function selectNullableCampaignResolution(
+	metadata: Awaited<ReturnType<typeof resolveCampaignDisplayMetadata>>,
+	row: { source: string | null; medium: string | null; campaign: string | null }
+): CampaignDisplayResolution | undefined {
+	const { source, medium, campaign } = row;
+
+	if (!source || !medium || !campaign) {
+		return undefined;
+	}
+
+	return selectCampaignResolution(metadata, { source, medium, campaign });
+}
+
 function resolveReportRowSource(row: { source: string }, resolution: CampaignDisplayResolution | undefined): string {
 	return resolution?.campaignPlatform === 'meta_ads' ? 'meta' : row.source;
 }
@@ -1659,21 +1672,47 @@ export function createReportingRouter(): Router {
 					input.limit,
 				],
 			);
+      const orderRowsWithMetadata = result.rows.map((row) => {
+        const metadata = extractOrderAttributionMetadata(row.attribution_snapshot);
+
+        return {
+          row,
+          metadata,
+          attribution: {
+            source: row.attributed_source ?? metadata.winner.source,
+            medium: row.attributed_medium ?? metadata.winner.medium,
+            campaign: row.attributed_campaign ?? metadata.winner.campaign
+          }
+        };
+      });
+      const campaignMetadata = await resolveCampaignDisplayMetadata(
+        input.startDate,
+        input.endDate,
+        orderRowsWithMetadata
+          .map((entry) => entry.attribution.campaign)
+          .filter((campaign): campaign is string => Boolean(campaign)),
+        input.source
+      );
 
       res.json({
-        rows: result.rows.map((row) => {
-          const metadata = extractOrderAttributionMetadata(row.attribution_snapshot);
+        rows: orderRowsWithMetadata.map(({ row, metadata, attribution }) => {
           const attributionTier = normalizeAttributionTier(row.attribution_tier);
           const orderAttributionReason = row.order_attribution_reason ?? 'unattributed';
+          const campaignResolution = selectNullableCampaignResolution(campaignMetadata, attribution);
 
           return {
             shopifyOrderId: row.shopify_order_id,
             processedAt: row.processed_at?.toISOString() ?? null,
             orderOccurredAtUtc: row.processed_at?.toISOString() ?? null,
             totalPrice: Number(row.total_price),
-            source: row.attributed_source ?? metadata.winner.source,
-            medium: row.attributed_medium ?? metadata.winner.medium,
-            campaign: row.attributed_campaign ?? metadata.winner.campaign,
+            source: attribution.source,
+            medium: attribution.medium,
+            campaign: attribution.campaign,
+            campaignName: campaignResolution?.campaignDisplayName ?? null,
+            ...buildCampaignLabelFields(campaignResolution, {
+              source: attribution.source ?? undefined,
+              rawId: attribution.campaign ?? undefined
+            }),
             attributionReason: orderAttributionReason,
             primaryCreditAttributionReason: row.primary_credit_attribution_reason ?? orderAttributionReason,
             attributionTier,
@@ -1816,6 +1855,30 @@ export function createReportingRouter(): Router {
 
       const order = orderResult.rows[0];
       const metadata = extractOrderAttributionMetadata(order.attribution_snapshot);
+      const orderAttribution = {
+        source: metadata.winner.source,
+        medium: metadata.winner.medium,
+        campaign: metadata.winner.campaign
+      };
+      const attributionSources = [
+        orderAttribution.source,
+        ...creditsResult.rows.map((row) => row.attributed_source)
+      ].filter((source): source is string => Boolean(source));
+      const scopedAttributionSources = [...new Set(attributionSources)];
+      const campaignMetadata = await resolveCampaignDisplayMetadata(
+        order.processed_at?.toISOString().slice(0, 10) ??
+          order.created_at_shopify?.toISOString().slice(0, 10) ??
+          order.ingested_at.toISOString().slice(0, 10),
+        order.processed_at?.toISOString().slice(0, 10) ??
+          order.created_at_shopify?.toISOString().slice(0, 10) ??
+          order.ingested_at.toISOString().slice(0, 10),
+        [
+          orderAttribution.campaign,
+          ...creditsResult.rows.map((row) => row.attributed_campaign)
+        ].filter((campaign): campaign is string => Boolean(campaign)),
+        scopedAttributionSources.length === 1 ? scopedAttributionSources[0] : undefined
+      );
+      const orderCampaignResolution = selectNullableCampaignResolution(campaignMetadata, orderAttribution);
 
       res.json({
         order: {
@@ -1861,6 +1924,11 @@ export function createReportingRouter(): Router {
           attributedSource: metadata.winner.source,
           attributedMedium: metadata.winner.medium,
           attributedCampaign: metadata.winner.campaign,
+          attributedCampaignName: orderCampaignResolution?.campaignDisplayName ?? null,
+          ...buildCampaignLabelFields(orderCampaignResolution, {
+            source: metadata.winner.source ?? undefined,
+            rawId: metadata.winner.campaign ?? undefined
+          }),
           attributedContent: metadata.winner.content,
           attributedTerm: metadata.winner.term,
           attributedClickIdType: metadata.winner.clickIdType,
@@ -1887,27 +1955,40 @@ export function createReportingRouter(): Router {
           ingestedAt: row.ingested_at.toISOString(),
           rawPayload: row.raw_payload
         })),
-        attributionCredits: creditsResult.rows.map((row) => ({
-          attributionModel: row.attribution_model,
-          touchpointPosition: row.touchpoint_position,
-          sessionId: row.session_id,
-          touchpointOccurredAt: row.touchpoint_occurred_at?.toISOString() ?? null,
-          source: row.attributed_source,
-          medium: row.attributed_medium,
-          campaign: row.attributed_campaign,
-          content: row.attributed_content,
-          term: row.attributed_term,
-          clickIdType: row.attributed_click_id_type,
-          clickIdValue: row.attributed_click_id_value,
-          creditWeight: Number(row.credit_weight),
-          revenueCredit: Number(row.revenue_credit),
-          isPrimary: row.is_primary,
-          attributionReason: row.attribution_reason,
-          matchSource: row.match_source,
-          confidenceLabel: row.confidence_label,
-          createdAt: row.created_at.toISOString(),
-          modelVersion: row.model_version
-        }))
+        attributionCredits: creditsResult.rows.map((row) => {
+          const campaignResolution = selectNullableCampaignResolution(campaignMetadata, {
+            source: row.attributed_source,
+            medium: row.attributed_medium,
+            campaign: row.attributed_campaign
+          });
+
+          return {
+            attributionModel: row.attribution_model,
+            touchpointPosition: row.touchpoint_position,
+            sessionId: row.session_id,
+            touchpointOccurredAt: row.touchpoint_occurred_at?.toISOString() ?? null,
+            source: row.attributed_source,
+            medium: row.attributed_medium,
+            campaign: row.attributed_campaign,
+            campaignName: campaignResolution?.campaignDisplayName ?? null,
+            ...buildCampaignLabelFields(campaignResolution, {
+              source: row.attributed_source ?? undefined,
+              rawId: row.attributed_campaign ?? undefined
+            }),
+            content: row.attributed_content,
+            term: row.attributed_term,
+            clickIdType: row.attributed_click_id_type,
+            clickIdValue: row.attributed_click_id_value,
+            creditWeight: Number(row.credit_weight),
+            revenueCredit: Number(row.revenue_credit),
+            isPrimary: row.is_primary,
+            attributionReason: row.attribution_reason,
+            matchSource: row.match_source,
+            confidenceLabel: row.confidence_label,
+            createdAt: row.created_at.toISOString(),
+            modelVersion: row.model_version
+          };
+        })
       });
     } catch (error) {
       next(error);

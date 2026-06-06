@@ -1431,6 +1431,7 @@ test('reporting orders only returns online store Shopify orders', async () => {
           source: 'facebook',
           medium: 'paid_social',
           campaign: 'prospecting-us',
+          campaignName: null,
           attributionReason: 'unattributed',
           primaryCreditAttributionReason: 'matched_by_checkout_token',
           attributionTier: 'unattributed',
