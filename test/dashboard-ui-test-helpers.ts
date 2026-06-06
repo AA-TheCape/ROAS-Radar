@@ -579,7 +579,7 @@ export function createReportingDashboardProps(
           attributionTier: 'unattributed',
           attributionTierLabel: 'Unattributed',
           attributionTierDescription:
-            'No eligible first-party, Shopify hint, or GA4 fallback match qualified, or the required timing data could not be normalized.',
+            'No eligible first-party, Shopify hint, Meta platform-reported, or GA4 fallback match qualified, or the required timing data could not be normalized.',
           attributionSource: 'unattributed',
           matchingMethod: 'unattributed',
           attributionMatchedAt: null,
