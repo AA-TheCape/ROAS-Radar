@@ -347,6 +347,35 @@ async function fetchAttributionResult(shopifyOrderId: string) {
   return result.rows[0];
 }
 
+async function fetchPrimaryLastNonDirectCredit(shopifyOrderId: string) {
+  const { pool } = await getModules();
+
+  const result = await pool.query<{
+    attributed_source: string | null;
+    attributed_medium: string | null;
+    attributed_campaign: string | null;
+    attributed_click_id_type: string | null;
+    attributed_click_id_value: string | null;
+  }>(
+    `
+      SELECT
+        attributed_source,
+        attributed_medium,
+        attributed_campaign,
+        attributed_click_id_type,
+        attributed_click_id_value
+      FROM attribution_order_credits
+      WHERE shopify_order_id = $1
+        AND attribution_model = 'last_non_direct'
+        AND is_primary = true
+    `,
+    [shopifyOrderId]
+  );
+
+  assert.equal(result.rowCount, 1);
+  return result.rows[0];
+}
+
 async function fetchOrderSnapshot(shopifyOrderId: string) {
   const { pool } = await getModules();
   const result = await pool.query<{ attribution_snapshot: Record<string, unknown> | null }>(
@@ -854,6 +883,132 @@ test('click-id-only identity touches stay non-direct and beat later direct revis
       attributed_click_id_value: 'fbclid-abc',
       confidence_score: '0.60',
       attribution_reason: 'matched_by_customer_identity'
+    });
+  } finally {
+    await resetIntegrationDatabase();
+  }
+});
+
+test('Google CPC order attribution persists campaign names only when attribution data provides them', async () => {
+  await resetIntegrationDatabase();
+  const { pool } = await getModules();
+
+  try {
+    const googleCampaignSessionId = await insertTrackingSession(pool, {
+      firstSeenAt: '2026-04-04T10:00:00.000Z',
+      landingPage: 'https://store.example/products/widget?utm_source=google&utm_medium=cpc',
+      utmSource: 'google',
+      utmMedium: 'cpc',
+      gclid: 'gclid-google-campaign'
+    });
+    await insertTrackingEvent(pool, {
+      sessionId: googleCampaignSessionId,
+      eventType: 'page_view',
+      occurredAt: '2026-04-04T10:00:00.000Z',
+      pageUrl: 'https://store.example/products/widget?utm_source=google&utm_medium=cpc&utm_campaign=brand-search',
+      utmSource: 'google',
+      utmMedium: 'cpc',
+      utmCampaign: 'brand-search',
+      gclid: 'gclid-google-campaign'
+    });
+    await insertShopifyOrder(pool, {
+      shopifyOrderId: 'order-google-cpc-campaign-1',
+      processedAt: '2026-04-04T10:05:00.000Z',
+      landingSessionId: googleCampaignSessionId
+    });
+
+    const googleMissingCampaignSessionId = await insertTrackingSession(pool, {
+      firstSeenAt: '2026-04-04T11:00:00.000Z',
+      landingPage: 'https://store.example/products/widget?utm_source=google&utm_medium=cpc',
+      utmSource: 'google',
+      utmMedium: 'cpc',
+      gclid: 'gclid-google-missing-campaign'
+    });
+    await insertTrackingEvent(pool, {
+      sessionId: googleMissingCampaignSessionId,
+      eventType: 'page_view',
+      occurredAt: '2026-04-04T11:00:00.000Z',
+      pageUrl: 'https://store.example/products/widget?utm_source=google&utm_medium=cpc',
+      utmSource: 'google',
+      utmMedium: 'cpc',
+      gclid: 'gclid-google-missing-campaign'
+    });
+    await insertShopifyOrder(pool, {
+      shopifyOrderId: 'order-google-cpc-no-campaign-1',
+      processedAt: '2026-04-04T11:05:00.000Z',
+      landingSessionId: googleMissingCampaignSessionId
+    });
+
+    const nonGoogleSessionId = await insertTrackingSession(pool, {
+      firstSeenAt: '2026-04-04T12:00:00.000Z',
+      landingPage: 'https://store.example/products/widget?utm_source=meta&utm_medium=paid_social',
+      utmSource: 'meta',
+      utmMedium: 'paid_social',
+      fbclid: 'fbclid-non-google-campaign'
+    });
+    await insertTrackingEvent(pool, {
+      sessionId: nonGoogleSessionId,
+      eventType: 'page_view',
+      occurredAt: '2026-04-04T12:00:00.000Z',
+      pageUrl: 'https://store.example/products/widget?utm_source=meta&utm_medium=paid_social&utm_campaign=retargeting',
+      utmSource: 'meta',
+      utmMedium: 'paid_social',
+      utmCampaign: 'retargeting',
+      fbclid: 'fbclid-non-google-campaign'
+    });
+    await insertShopifyOrder(pool, {
+      shopifyOrderId: 'order-non-google-campaign-1',
+      processedAt: '2026-04-04T12:05:00.000Z',
+      landingSessionId: nonGoogleSessionId
+    });
+
+    await processOrder('order-google-cpc-campaign-1');
+    await processOrder('order-google-cpc-no-campaign-1');
+    await processOrder('order-non-google-campaign-1');
+
+    const googleCampaignResult = await fetchAttributionResult('order-google-cpc-campaign-1');
+    assert.equal(googleCampaignResult.session_id, googleCampaignSessionId);
+    assert.equal(googleCampaignResult.attributed_source, 'google');
+    assert.equal(googleCampaignResult.attributed_medium, 'cpc');
+    assert.equal(googleCampaignResult.attributed_campaign, 'brand-search');
+    assert.equal(googleCampaignResult.attributed_click_id_type, 'gclid');
+    assert.equal(googleCampaignResult.attributed_click_id_value, 'gclid-google-campaign');
+    assert.deepEqual(await fetchPrimaryLastNonDirectCredit('order-google-cpc-campaign-1'), {
+      attributed_source: 'google',
+      attributed_medium: 'cpc',
+      attributed_campaign: 'brand-search',
+      attributed_click_id_type: 'gclid',
+      attributed_click_id_value: 'gclid-google-campaign'
+    });
+
+    const googleMissingCampaignResult = await fetchAttributionResult('order-google-cpc-no-campaign-1');
+    assert.equal(googleMissingCampaignResult.session_id, googleMissingCampaignSessionId);
+    assert.equal(googleMissingCampaignResult.attributed_source, 'google');
+    assert.equal(googleMissingCampaignResult.attributed_medium, 'cpc');
+    assert.equal(googleMissingCampaignResult.attributed_campaign, null);
+    assert.equal(googleMissingCampaignResult.attributed_click_id_type, 'gclid');
+    assert.equal(googleMissingCampaignResult.attributed_click_id_value, 'gclid-google-missing-campaign');
+    assert.deepEqual(await fetchPrimaryLastNonDirectCredit('order-google-cpc-no-campaign-1'), {
+      attributed_source: 'google',
+      attributed_medium: 'cpc',
+      attributed_campaign: null,
+      attributed_click_id_type: 'gclid',
+      attributed_click_id_value: 'gclid-google-missing-campaign'
+    });
+
+    const nonGoogleResult = await fetchAttributionResult('order-non-google-campaign-1');
+    assert.equal(nonGoogleResult.session_id, nonGoogleSessionId);
+    assert.equal(nonGoogleResult.attributed_source, 'meta');
+    assert.equal(nonGoogleResult.attributed_medium, 'paid_social');
+    assert.equal(nonGoogleResult.attributed_campaign, null);
+    assert.equal(nonGoogleResult.attributed_click_id_type, 'fbclid');
+    assert.equal(nonGoogleResult.attributed_click_id_value, 'fbclid-non-google-campaign');
+    assert.deepEqual(await fetchPrimaryLastNonDirectCredit('order-non-google-campaign-1'), {
+      attributed_source: 'meta',
+      attributed_medium: 'paid_social',
+      attributed_campaign: null,
+      attributed_click_id_type: 'fbclid',
+      attributed_click_id_value: 'fbclid-non-google-campaign'
     });
   } finally {
     await resetIntegrationDatabase();
