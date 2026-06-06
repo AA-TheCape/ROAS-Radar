@@ -314,6 +314,41 @@ async function processOrder(shopifyOrderId: string) {
   assert.equal(queueResult.failedJobs, 0);
 }
 
+async function captureStructuredLogs<T>(callback: () => T | Promise<T>): Promise<{
+  entries: Array<Record<string, unknown>>;
+  result: T;
+}> {
+  const stdoutChunks: string[] = [];
+  const stderrChunks: string[] = [];
+  const originalStdoutWrite = process.stdout.write.bind(process.stdout);
+  const originalStderrWrite = process.stderr.write.bind(process.stderr);
+
+  process.stdout.write = ((chunk: string | Uint8Array) => {
+    stdoutChunks.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+    return true;
+  }) as typeof process.stdout.write;
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    stderrChunks.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+    return true;
+  }) as typeof process.stderr.write;
+
+  try {
+    const result = await callback();
+    const entries = [...stdoutChunks, ...stderrChunks]
+      .join('')
+      .trim()
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith('{') && line.endsWith('}'))
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+
+    return { entries, result };
+  } finally {
+    process.stdout.write = originalStdoutWrite as typeof process.stdout.write;
+    process.stderr.write = originalStderrWrite as typeof process.stderr.write;
+  }
+}
+
 async function fetchAttributionResult(shopifyOrderId: string) {
   const { pool } = await getModules();
 
@@ -322,6 +357,7 @@ async function fetchAttributionResult(shopifyOrderId: string) {
     attributed_source: string | null;
     attributed_medium: string | null;
     attributed_campaign: string | null;
+    attributed_campaign_id: string | null;
     attributed_click_id_type: string | null;
     attributed_click_id_value: string | null;
     confidence_score: string;
@@ -333,6 +369,7 @@ async function fetchAttributionResult(shopifyOrderId: string) {
         attributed_source,
         attributed_medium,
         attributed_campaign,
+        attributed_campaign_id,
         attributed_click_id_type,
         attributed_click_id_value,
         confidence_score::text,
@@ -354,6 +391,7 @@ async function fetchPrimaryLastNonDirectCredit(shopifyOrderId: string) {
     attributed_source: string | null;
     attributed_medium: string | null;
     attributed_campaign: string | null;
+    attributed_campaign_id: string | null;
     attributed_click_id_type: string | null;
     attributed_click_id_value: string | null;
   }>(
@@ -362,6 +400,7 @@ async function fetchPrimaryLastNonDirectCredit(shopifyOrderId: string) {
         attributed_source,
         attributed_medium,
         attributed_campaign,
+        attributed_campaign_id,
         attributed_click_id_type,
         attributed_click_id_value
       FROM attribution_order_credits
@@ -450,6 +489,7 @@ async function resetIntegrationDatabase() {
     'shopify_order_writeback_jobs',
     'attribution_order_credits',
     'attribution_results',
+    'ga4_fallback_candidates',
     'daily_reporting_metrics',
     'order_attribution_links',
     'session_attribution_touch_events',
@@ -816,6 +856,7 @@ test('latest non-direct winner survives a multi-touch timeline with a later dire
       attributed_source: 'meta',
       attributed_medium: 'paid_social',
       attributed_campaign: 'retargeting',
+      attributed_campaign_id: null,
       attributed_click_id_type: null,
       attributed_click_id_value: null,
       confidence_score: '0.60',
@@ -879,6 +920,7 @@ test('click-id-only identity touches stay non-direct and beat later direct revis
       attributed_source: null,
       attributed_medium: null,
       attributed_campaign: null,
+      attributed_campaign_id: null,
       attributed_click_id_type: 'fbclid',
       attributed_click_id_value: 'fbclid-abc',
       confidence_score: '0.60',
@@ -939,6 +981,45 @@ test('Google CPC order attribution persists campaign names only when attribution
       landingSessionId: googleMissingCampaignSessionId
     });
 
+    const { upsertGa4FallbackCandidates } = await import('../src/modules/attribution/ga4-fallback-candidates.js');
+    await upsertGa4FallbackCandidates(
+      [
+        {
+          occurredAt: '2026-04-04T11:30:00.000Z',
+          ga4UserKey: 'ga4-user-google-cpc-campaign-id-fallback',
+          ga4ClientId: 'client-google-cpc-campaign-id-fallback',
+          ga4SessionId: 'session-google-cpc-campaign-id-fallback',
+          transactionId: 'order-google-cpc-campaign-id-fallback-1',
+          emailHash: null,
+          customerIdentityId: null,
+          source: 'google',
+          medium: 'cpc',
+          campaign: null,
+          campaignId: '987654321',
+          content: null,
+          term: null,
+          clickIdType: null,
+          clickIdValue: null,
+          accountId: '1234567890',
+          accountName: 'Cape Google Ads',
+          channelType: 'SEARCH',
+          channelSubtype: 'SEARCH_STANDARD',
+          campaignMetadataSource: 'google_ads_transfer',
+          accountMetadataSource: 'google_ads_transfer',
+          channelMetadataSource: 'google_ads_transfer',
+          sessionHasRequiredFields: true,
+          sourceExportHour: '2026-04-04T11:00:00.000Z',
+          sourceDataset: 'ga4_export',
+          sourceTableType: 'events'
+        }
+      ],
+      pool
+    );
+    await insertShopifyOrder(pool, {
+      shopifyOrderId: 'order-google-cpc-campaign-id-fallback-1',
+      processedAt: '2026-04-04T11:35:00.000Z'
+    });
+
     const nonGoogleSessionId = await insertTrackingSession(pool, {
       firstSeenAt: '2026-04-04T12:00:00.000Z',
       landingPage: 'https://store.example/products/widget?utm_source=meta&utm_medium=paid_social',
@@ -962,23 +1043,74 @@ test('Google CPC order attribution persists campaign names only when attribution
       landingSessionId: nonGoogleSessionId
     });
 
-    await processOrder('order-google-cpc-campaign-1');
-    await processOrder('order-google-cpc-no-campaign-1');
-    await processOrder('order-non-google-campaign-1');
+    const { entries } = await captureStructuredLogs(async () => {
+      await processOrder('order-google-cpc-campaign-1');
+      await processOrder('order-google-cpc-campaign-id-fallback-1');
+      await processOrder('order-google-cpc-no-campaign-1');
+      await processOrder('order-non-google-campaign-1');
+    });
+
+    const missingCampaignWriteEvents = entries.filter(
+      (entry) => entry.event === 'google_cpc_missing_campaign_name_attribution_write'
+    );
+    assert.equal(missingCampaignWriteEvents.length, 1);
+    assert.deepEqual(missingCampaignWriteEvents[0], {
+      severity: 'INFO',
+      event: 'google_cpc_missing_campaign_name_attribution_write',
+      message: 'google_cpc_missing_campaign_name_attribution_write',
+      timestamp: missingCampaignWriteEvents[0]?.timestamp,
+      service: missingCampaignWriteEvents[0]?.service,
+      platform: 'google_ads',
+      source: 'google',
+      medium: 'cpc',
+      writePath: 'attribution_results_upsert',
+      attributionModel: 'last_non_direct',
+      accountId: null,
+      hasCampaignId: false,
+      hasAccountMetadata: false,
+      hasCampaignMetadata: false
+    });
+    assert.equal('shopifyOrderId' in missingCampaignWriteEvents[0], false);
+    assert.equal('orderId' in missingCampaignWriteEvents[0], false);
+    assert.equal('customerId' in missingCampaignWriteEvents[0], false);
+    assert.equal('sessionId' in missingCampaignWriteEvents[0], false);
+    assert.equal('campaignId' in missingCampaignWriteEvents[0], false);
+    assert.equal('email' in missingCampaignWriteEvents[0], false);
 
     const googleCampaignResult = await fetchAttributionResult('order-google-cpc-campaign-1');
     assert.equal(googleCampaignResult.session_id, googleCampaignSessionId);
     assert.equal(googleCampaignResult.attributed_source, 'google');
     assert.equal(googleCampaignResult.attributed_medium, 'cpc');
     assert.equal(googleCampaignResult.attributed_campaign, 'brand-search');
+    assert.equal(googleCampaignResult.attributed_campaign_id, null);
     assert.equal(googleCampaignResult.attributed_click_id_type, 'gclid');
     assert.equal(googleCampaignResult.attributed_click_id_value, 'gclid-google-campaign');
     assert.deepEqual(await fetchPrimaryLastNonDirectCredit('order-google-cpc-campaign-1'), {
       attributed_source: 'google',
       attributed_medium: 'cpc',
       attributed_campaign: 'brand-search',
+      attributed_campaign_id: null,
       attributed_click_id_type: 'gclid',
       attributed_click_id_value: 'gclid-google-campaign'
+    });
+
+    const googleCampaignIdFallbackResult = await fetchAttributionResult(
+      'order-google-cpc-campaign-id-fallback-1'
+    );
+    assert.equal(googleCampaignIdFallbackResult.session_id, null);
+    assert.equal(googleCampaignIdFallbackResult.attributed_source, 'google');
+    assert.equal(googleCampaignIdFallbackResult.attributed_medium, 'cpc');
+    assert.equal(googleCampaignIdFallbackResult.attributed_campaign, '987654321');
+    assert.equal(googleCampaignIdFallbackResult.attributed_campaign_id, '987654321');
+    assert.equal(googleCampaignIdFallbackResult.attributed_click_id_type, null);
+    assert.equal(googleCampaignIdFallbackResult.attributed_click_id_value, null);
+    assert.deepEqual(await fetchPrimaryLastNonDirectCredit('order-google-cpc-campaign-id-fallback-1'), {
+      attributed_source: 'google',
+      attributed_medium: 'cpc',
+      attributed_campaign: '987654321',
+      attributed_campaign_id: '987654321',
+      attributed_click_id_type: null,
+      attributed_click_id_value: null
     });
 
     const googleMissingCampaignResult = await fetchAttributionResult('order-google-cpc-no-campaign-1');
@@ -986,12 +1118,14 @@ test('Google CPC order attribution persists campaign names only when attribution
     assert.equal(googleMissingCampaignResult.attributed_source, 'google');
     assert.equal(googleMissingCampaignResult.attributed_medium, 'cpc');
     assert.equal(googleMissingCampaignResult.attributed_campaign, null);
+    assert.equal(googleMissingCampaignResult.attributed_campaign_id, null);
     assert.equal(googleMissingCampaignResult.attributed_click_id_type, 'gclid');
     assert.equal(googleMissingCampaignResult.attributed_click_id_value, 'gclid-google-missing-campaign');
     assert.deepEqual(await fetchPrimaryLastNonDirectCredit('order-google-cpc-no-campaign-1'), {
       attributed_source: 'google',
       attributed_medium: 'cpc',
       attributed_campaign: null,
+      attributed_campaign_id: null,
       attributed_click_id_type: 'gclid',
       attributed_click_id_value: 'gclid-google-missing-campaign'
     });
@@ -1001,12 +1135,14 @@ test('Google CPC order attribution persists campaign names only when attribution
     assert.equal(nonGoogleResult.attributed_source, 'meta');
     assert.equal(nonGoogleResult.attributed_medium, 'paid_social');
     assert.equal(nonGoogleResult.attributed_campaign, null);
+    assert.equal(nonGoogleResult.attributed_campaign_id, null);
     assert.equal(nonGoogleResult.attributed_click_id_type, 'fbclid');
     assert.equal(nonGoogleResult.attributed_click_id_value, 'fbclid-non-google-campaign');
     assert.deepEqual(await fetchPrimaryLastNonDirectCredit('order-non-google-campaign-1'), {
       attributed_source: 'meta',
       attributed_medium: 'paid_social',
       attributed_campaign: null,
+      attributed_campaign_id: null,
       attributed_click_id_type: 'fbclid',
       attributed_click_id_value: 'fbclid-non-google-campaign'
     });
@@ -1207,6 +1343,7 @@ test('out-of-window and future-dated candidates are excluded so in-window direct
       attributed_source: null,
       attributed_medium: null,
       attributed_campaign: null,
+      attributed_campaign_id: null,
       attributed_click_id_type: null,
       attributed_click_id_value: null,
       confidence_score: '0.60',
@@ -1329,6 +1466,7 @@ test('orders with no deterministic candidates persist an unattributed fallback s
       attributed_source: null,
       attributed_medium: null,
       attributed_campaign: null,
+      attributed_campaign_id: null,
       attributed_click_id_type: null,
       attributed_click_id_value: null,
       confidence_score: '0.00',
