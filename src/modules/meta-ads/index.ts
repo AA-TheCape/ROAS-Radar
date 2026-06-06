@@ -20,6 +20,7 @@ import {
   __metaAdsTestUtils as __metaOrderValueTestUtils,
   runMetaAdsOrderValueSync
 } from './order-value.js';
+import { createMetaAttributionEvidenceAdminRouter } from './order-attribution-evidence.js';
 export { runMetaDeterministicSync, processMetaDeterministicSyncQueue } from './deterministic-events.js';
 export {
   type MetaMetadataObjectType,
@@ -1959,6 +1960,7 @@ export function createMetaAdsAdminRouter(): Router {
 
   router.use(attachAuthContext);
   router.use(requireAdmin);
+  router.use(createMetaAttributionEvidenceAdminRouter());
 
   router.get('/oauth/start', async (req, res, next) => {
     try {

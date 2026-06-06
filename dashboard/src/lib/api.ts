@@ -27,6 +27,7 @@ export type {
 export type AttributionTier =
   | 'deterministic_first_party'
   | 'deterministic_shopify_hint'
+  | 'platform_reported_meta'
   | 'ga4_fallback'
   | 'unattributed';
 

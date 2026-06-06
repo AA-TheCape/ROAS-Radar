@@ -1,0 +1,35 @@
+{
+  "displayName": "ROAS Radar __ENVIRONMENT__ Meta Attribution Ineligible Spike",
+  "documentation": {
+    "content": "Meta platform-reported attribution evidence is being accepted but marked ineligible above the rollout threshold. Inspect source_kind, match_basis, traceability, and first_disqualification_reason labels on the Meta attribution dashboard.",
+    "mimeType": "text/markdown"
+  },
+  "combiner": "OR",
+  "enabled": true,
+  "severity": "WARNING",
+  "notificationChannels": __ALERT_NOTIFICATION_CHANNELS__,
+  "conditions": [
+    {
+      "displayName": "Ineligible Meta evidence exceeds 25 records in 15 minutes",
+      "conditionThreshold": {
+        "filter": "metric.type=\"logging.googleapis.com/user/roas_meta_attribution_signal_ingestion_quality\" resource.type=\"cloud_run_revision\" metric.labels.eligibility_outcome=\"ineligible\"",
+        "comparison": "COMPARISON_GT",
+        "thresholdValue": 25,
+        "duration": "900s",
+        "aggregations": [
+          {
+            "alignmentPeriod": "900s",
+            "perSeriesAligner": "ALIGN_SUM",
+            "crossSeriesReducer": "REDUCE_SUM",
+            "groupByFields": [
+              "metric.labels.first_disqualification_reason"
+            ]
+          }
+        ],
+        "trigger": {
+          "count": 1
+        }
+      }
+    }
+  ]
+}

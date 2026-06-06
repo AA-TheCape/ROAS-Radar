@@ -53,12 +53,21 @@ function toUtcWindowEnd(dateOnly: string): Date {
   return new Date(`${dateOnly}T23:59:59.999Z`);
 }
 
-function extractFailedRunReport(error: unknown): OrderAttributionBackfillReport | null {
+function extractFailedRunReport(
+  error: unknown,
+  submittedOptions: OrderAttributionBackfillClaimedRun['options']
+): OrderAttributionBackfillReport | null {
   if (!(error instanceof OrderAttributionBackfillRunError)) {
     return null;
   }
 
-  return orderAttributionBackfillReportSchema.parse(error.report);
+  return orderAttributionBackfillReportSchema.parse({
+    ...error.report,
+    dryRun: submittedOptions.dryRun,
+    reclassificationTarget:
+      'reclassificationTarget' in submittedOptions ? submittedOptions.reclassificationTarget : 'full_rebuild',
+    organizationIds: 'organizationIds' in submittedOptions ? submittedOptions.organizationIds : []
+  });
 }
 
 export function buildBackfillExecutionOptions(
@@ -74,6 +83,8 @@ export function buildBackfillExecutionOptions(
     workerId,
     limit: run.options.limit,
     dryRun: run.options.dryRun,
+    reclassificationTarget: 'reclassificationTarget' in run.options ? run.options.reclassificationTarget : 'full_rebuild',
+    organizationIds: 'organizationIds' in run.options ? run.options.organizationIds : [],
     onlyWebOrders: run.options.webOrdersOnly,
     writeToShopifyWhenAvailable: !run.options.skipShopifyWriteback
   };
@@ -136,7 +147,7 @@ export async function processOrderAttributionBackfillRuns(
       completedRuns += 1;
     } catch (error) {
       failedRuns += 1;
-      const failedReport = extractFailedRunReport(error);
+      const failedReport = extractFailedRunReport(error, submittedOptions);
       const completedAt = new Date();
 
       emitOrderAttributionBackfillJobLifecycleLog({

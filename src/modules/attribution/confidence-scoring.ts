@@ -10,6 +10,7 @@ const DEFAULT_SOURCE_CONFIDENCE: Record<ResolvedIngestionSource, number> = {
   cart_token: 0.9,
   customer_identity: 0.6,
   shopify_marketing_hint: 0.55,
+  meta_platform_reported: 0.5,
   ga4_fallback: 0.35
 };
 

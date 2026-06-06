@@ -13,6 +13,13 @@ const { pool } = poolModule;
 const { closeServer, createServer } = serverModule;
 const { attributionQaPayloadV1SuccessFixture } = schemaModule;
 const originalPoolQuery = pool.query.bind(pool);
+const emptyTierCounts = {
+  deterministic_first_party: 0,
+  deterministic_shopify_hint: 0,
+  platform_reported_meta: 0,
+  ga4_fallback: 0,
+  unattributed: 0
+};
 
 async function requestJson(
   server: ReturnType<typeof createServer>,
@@ -772,6 +779,8 @@ test('order attribution backfill admin route enqueues normalized jobs and return
     assert.equal(body.options.endDate, '2026-04-05');
     assert.equal(body.options.dryRun, true);
     assert.equal(body.options.limit, 500);
+    assert.equal(body.options.reclassificationTarget, 'full_rebuild');
+    assert.deepEqual(body.options.organizationIds, []);
     assert.equal(body.options.webOrdersOnly, true);
     assert.equal(body.options.skipShopifyWriteback, false);
     assert.match(body.jobId, /^[0-9a-f-]{36}$/i);
@@ -786,6 +795,8 @@ test('order attribution backfill admin route enqueues normalized jobs and return
       endDate: '2026-04-05',
       dryRun: true,
       limit: 500,
+      reclassificationTarget: 'full_rebuild',
+      organizationIds: [],
       webOrdersOnly: true,
       skipShopifyWriteback: false
     });
@@ -827,6 +838,8 @@ test('order attribution backfill admin route preserves explicit options, includi
       endDate: '2026-04-05',
       dryRun: false,
       limit: 5000,
+      reclassificationTarget: 'full_rebuild',
+      organizationIds: [],
       webOrdersOnly: false,
       skipShopifyWriteback: true
     });
@@ -836,6 +849,8 @@ test('order attribution backfill admin route preserves explicit options, includi
       endDate: '2026-04-05',
       dryRun: false,
       limit: 5000,
+      reclassificationTarget: 'full_rebuild',
+      organizationIds: [],
       webOrdersOnly: false,
       skipShopifyWriteback: true
     });
@@ -910,6 +925,8 @@ test('order attribution backfill admin route returns persisted partial reports f
           endDate: '2026-04-05',
           dryRun: false,
           limit: 500,
+          reclassificationTarget: 'full_rebuild',
+          organizationIds: [],
           webOrdersOnly: true,
           skipShopifyWriteback: false
         },
@@ -918,6 +935,11 @@ test('order attribution backfill admin route returns persisted partial reports f
           recovered: 4,
           unrecoverable: 3,
           writebackCompleted: 2,
+          dryRun: false,
+          reclassificationTarget: 'full_rebuild',
+          organizationIds: [],
+          beforeCounts: emptyTierCounts,
+          afterCounts: emptyTierCounts,
           failures: [
             {
               orderId: 'order-9',
@@ -950,6 +972,11 @@ test('order attribution backfill admin route returns persisted partial reports f
       recovered: 4,
       unrecoverable: 3,
       writebackCompleted: 2,
+      dryRun: false,
+      reclassificationTarget: 'full_rebuild',
+      organizationIds: [],
+      beforeCounts: emptyTierCounts,
+      afterCounts: emptyTierCounts,
       failures: [
         {
           orderId: 'order-9',
@@ -1068,6 +1095,8 @@ test('order attribution backfill admin route returns queued and completed pollin
           endDate: '2026-04-05',
           dryRun: true,
           limit: 500,
+          reclassificationTarget: 'full_rebuild',
+          organizationIds: [],
           webOrdersOnly: true,
           skipShopifyWriteback: false
         },
@@ -1090,6 +1119,8 @@ test('order attribution backfill admin route returns queued and completed pollin
           endDate: '2026-04-08',
           dryRun: false,
           limit: 5000,
+          reclassificationTarget: 'full_rebuild',
+          organizationIds: [],
           webOrdersOnly: false,
           skipShopifyWriteback: true
         },
@@ -1098,6 +1129,11 @@ test('order attribution backfill admin route returns queued and completed pollin
           recovered: 9,
           unrecoverable: 9,
           writebackCompleted: 0,
+          dryRun: false,
+          reclassificationTarget: 'full_rebuild',
+          organizationIds: [],
+          beforeCounts: emptyTierCounts,
+          afterCounts: emptyTierCounts,
           failures: [
             {
               orderId: 'order-22',
@@ -1144,6 +1180,8 @@ test('order attribution backfill admin route returns queued and completed pollin
         endDate: '2026-04-05',
         dryRun: true,
         limit: 500,
+        reclassificationTarget: 'full_rebuild',
+        organizationIds: [],
         webOrdersOnly: true,
         skipShopifyWriteback: false
       },
@@ -1165,6 +1203,8 @@ test('order attribution backfill admin route returns queued and completed pollin
         endDate: '2026-04-08',
         dryRun: false,
         limit: 5000,
+        reclassificationTarget: 'full_rebuild',
+        organizationIds: [],
         webOrdersOnly: false,
         skipShopifyWriteback: true
       },
@@ -1173,6 +1213,11 @@ test('order attribution backfill admin route returns queued and completed pollin
         recovered: 9,
         unrecoverable: 9,
         writebackCompleted: 0,
+        dryRun: false,
+        reclassificationTarget: 'full_rebuild',
+        organizationIds: [],
+        beforeCounts: emptyTierCounts,
+        afterCounts: emptyTierCounts,
         failures: [
           {
             orderId: 'order-22',

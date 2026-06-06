@@ -12,7 +12,7 @@ export function createServer(port = 0): Server {
 }
 
 export async function closeServer(server: Server): Promise<void> {
-	await new Promise<void>((resolve, reject) => {
+	const closed = new Promise<void>((resolve, reject) => {
 		server.close((error) => {
 			if (error) {
 				reject(error);
@@ -22,6 +22,9 @@ export async function closeServer(server: Server): Promise<void> {
 			resolve();
 		});
 	});
+	server.closeIdleConnections?.();
+	server.closeAllConnections?.();
+	await closed;
 }
 
 const isEntrypoint =

@@ -8,10 +8,19 @@ async function getTestUtils() {
   return attributionModule.__attributionTestUtils;
 }
 
+function buildFakeClient(rows: unknown[] = []) {
+  return {
+    query: async () => ({
+      rows,
+      rowCount: rows.length
+    })
+  } as never;
+}
+
 test('extractAttributionCandidatesForOrder groups first-party, Shopify hint, and GA4 candidates with normalized metadata', async () => {
   const testUtils = await getTestUtils();
 
-  const fakeClient = {} as never;
+  const fakeClient = buildFakeClient();
   const result = await testUtils.extractAttributionCandidatesForOrder(
     fakeClient,
     {
@@ -71,6 +80,8 @@ test('extractAttributionCandidatesForOrder groups first-party, Shopify hint, and
   assert.equal(result.shopifyHint[0].source, 'google');
   assert.equal(result.shopifyHint[0].medium, 'paid_social');
   assert.equal(result.ga4Fallback[0].source, 'google');
+  assert.equal(result.ga4Fallback[0].sourceClass, 'ga4_fallback');
+  assert.equal(result.ga4Fallback[0].ingestionSource, 'ga4_fallback');
   assert.equal(result.ga4Fallback[0].campaign, 'brand search');
   assert.equal(result.ga4Fallback[0].confidenceScore, 0.35);
   assert.deepEqual(result.normalizationFailures, []);
@@ -79,7 +90,7 @@ test('extractAttributionCandidatesForOrder groups first-party, Shopify hint, and
 test('extractAttributionCandidatesForOrder records timestamp failures and drops invalid GA4 candidates', async () => {
   const testUtils = await getTestUtils();
 
-  const fakeClient = {} as never;
+  const fakeClient = buildFakeClient();
   const result = await testUtils.extractAttributionCandidatesForOrder(
     fakeClient,
     {
@@ -121,7 +132,7 @@ test('extractAttributionCandidatesForOrder records timestamp failures and drops 
 test('extractAttributionCandidatesForOrder records non-order normalization failures and dedupes GA4 candidates by stable key', async () => {
   const testUtils = await getTestUtils();
 
-  const fakeClient = {} as never;
+  const fakeClient = buildFakeClient();
   const result = await testUtils.extractAttributionCandidatesForOrder(
     fakeClient,
     {
@@ -164,6 +175,8 @@ test('extractAttributionCandidatesForOrder records non-order normalization failu
   assert.equal(result.orderOccurredAtUtc?.toISOString(), '2026-04-02T14:00:00.000Z');
   assert.equal(result.ga4Fallback.length, 1);
   assert.equal(result.ga4Fallback[0].sourceKey, 'ga4-dup');
+  assert.equal(result.ga4Fallback[0].sourceClass, 'ga4_fallback');
+  assert.equal(result.ga4Fallback[0].ingestionSource, 'ga4_fallback');
   assert.equal(result.ga4Fallback[0].clickIdValue, 'gclid-1');
   assert.deepEqual(result.normalizationFailures, [
     {
@@ -177,6 +190,65 @@ test('extractAttributionCandidatesForOrder records non-order normalization failu
       sourceKey: 'ga4-future'
     }
   ]);
+});
+
+test('extractAttributionCandidatesForOrder labels platform-reported Meta evidence separately from GA4 fallback', async () => {
+  const testUtils = await getTestUtils();
+
+  const fakeClient = buildFakeClient([
+    {
+      id: 'meta-evidence-1',
+      meta_signal_id: 'signal-1',
+      meta_touchpoint_occurred_at_utc: new Date('2026-04-02T13:40:00.000Z'),
+      campaign_id: 'campaign-1',
+      campaign_name: 'Prospecting',
+      ad_id: 'ad-1',
+      match_basis: 'fbclid',
+      confidence_score: '0.62',
+      eligibility_outcome: 'eligible_canonical',
+      is_click_through: true,
+      is_view_through: false
+    }
+  ]);
+
+  const result = await testUtils.extractAttributionCandidatesForOrder(
+    fakeClient,
+    {
+      shopifyOrderId: 'order-4',
+      processedAt: '2026-04-02T14:00:00.000Z',
+      createdAtShopify: null,
+      ingestedAt: null,
+      landingSessionId: null,
+      checkoutToken: null,
+      cartToken: null,
+      rawPayload: null
+    },
+    {
+      loadDeterministicFirstPartyCandidates: async () => [],
+      loadGa4Candidates: async () => [
+        {
+          stableIdentifier: 'ga4-session-4',
+          occurredAt: '2026-04-02T13:50:00.000Z',
+          source: 'google',
+          medium: 'cpc',
+          campaign: 'brand'
+        }
+      ]
+    }
+  );
+
+  assert.equal(result.platformReportedMeta.length, 1);
+  assert.equal(result.platformReportedMeta[0].sourceClass, 'platform_reported_meta');
+  assert.equal(result.platformReportedMeta[0].ingestionSource, 'meta_platform_reported');
+  assert.equal(result.platformReportedMeta[0].sourceKey, 'meta:meta-evidence-1');
+  assert.equal(result.platformReportedMeta[0].metaAttributionEvidenceId, 'meta-evidence-1');
+  assert.equal(result.platformReportedMeta[0].metaEligibilityOutcome, 'eligible_canonical');
+
+  assert.equal(result.ga4Fallback.length, 1);
+  assert.equal(result.ga4Fallback[0].sourceClass, 'ga4_fallback');
+  assert.equal(result.ga4Fallback[0].ingestionSource, 'ga4_fallback');
+  assert.equal(result.ga4Fallback[0].sourceKey, 'ga4-session-4');
+  assert.deepEqual(result.normalizationFailures, []);
 });
 
 test('normalizeTimestampToUtc rejects naive timestamp strings and accepts zoned timestamps', async () => {

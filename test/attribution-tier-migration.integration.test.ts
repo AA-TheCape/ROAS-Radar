@@ -137,6 +137,10 @@ test('migration 0037 preserves GA4 legacy rows as ga4_fallback without changing 
     await client.query('BEGIN');
 
     await client.query(`
+      DROP TRIGGER IF EXISTS shopify_orders_canonical_precedence_guard
+        ON shopify_orders
+    `);
+    await client.query(`
       ALTER TABLE shopify_orders
         DROP CONSTRAINT IF EXISTS shopify_orders_attribution_tier_chk
     `);
