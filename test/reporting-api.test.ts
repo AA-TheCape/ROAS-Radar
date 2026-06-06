@@ -1688,7 +1688,7 @@ test('reporting order details expose attribution tier metadata additively', asyn
                 sessionId: '33333333-3333-4333-8333-333333333333',
                 source: 'google',
                 medium: 'cpc',
-                campaign: 'brand-search',
+                campaign: null,
                 content: 'hero',
                 term: 'widget',
                 clickIdType: 'gclid',
@@ -1696,6 +1696,15 @@ test('reporting order details expose attribution tier metadata additively', asyn
               }
             },
             attribution_snapshot_updated_at: new Date('2026-04-10T13:01:30.000Z'),
+            result_attribution_model: 'last_touch',
+            result_session_id: '33333333-3333-4333-8333-333333333333',
+            result_attributed_source: 'google',
+            result_attributed_medium: 'cpc',
+            result_attributed_campaign: '555',
+            result_attributed_content: 'hero',
+            result_attributed_term: 'widget',
+            result_attributed_click_id_type: 'gclid',
+            result_attributed_click_id_value: 'gclid-123',
             ingested_at: new Date('2026-04-10T13:02:00.000Z'),
             raw_payload: { id: '1234567890' }
           }
@@ -1741,21 +1750,9 @@ test('reporting order details expose attribution tier metadata additively', asyn
     }
 
     if (text.includes('WITH google_candidates')) {
-      assert.deepEqual(params, ['2026-04-10', '2026-04-10', ['brand-search', '555'], 'google']);
+      assert.deepEqual(params, ['2026-04-10', '2026-04-10', ['555'], 'google']);
       return {
         rows: [
-          {
-            campaign: 'brand-search',
-            source: 'google',
-            medium: 'cpc',
-            platform: 'google_ads',
-            account_id: 'acct-google',
-            campaign_id: '555',
-            fallback_name: 'Google Raw Brand',
-            latest_name: 'Google Brand Search',
-            last_seen_at: new Date('2026-04-09T00:00:00.000Z'),
-            updated_at: new Date('2026-04-10T00:00:00.000Z')
-          },
           {
             campaign: '555',
             source: 'google',
@@ -1769,7 +1766,7 @@ test('reporting order details expose attribution tier metadata additively', asyn
             updated_at: new Date('2026-04-10T00:00:00.000Z')
           }
         ],
-        rowCount: 2
+        rowCount: 1
       };
     }
 
@@ -1796,7 +1793,7 @@ test('reporting order details expose attribution tier metadata additively', asyn
     assert.equal(body.order.sessionId, '33333333-3333-4333-8333-333333333333');
     assert.equal(body.order.attributedSource, 'google');
     assert.equal(body.order.attributedMedium, 'cpc');
-    assert.equal(body.order.attributedCampaign, 'brand-search');
+    assert.equal(body.order.attributedCampaign, '555');
     assert.equal(body.order.attributedCampaignName, 'Google Brand Search');
     assert.equal(body.order.campaignDisplayName, 'Google Brand Search');
     assert.equal(body.order.campaignPlatform, 'google_ads');
@@ -1809,7 +1806,7 @@ test('reporting order details expose attribution tier metadata additively', asyn
         'resolved',
         '2026-04-09T00:00:00.000Z',
         '2026-04-10T00:00:00.000Z',
-        { source: 'google', rawId: 'brand-search', entityType: 'campaign' }
+        { source: 'google', rawId: '555', entityType: 'campaign' }
       )
     );
     assert.equal(body.order.attributedContent, 'hero');

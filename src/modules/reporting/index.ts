@@ -357,6 +357,15 @@ type OrderDetailsRow = {
   last_attribution_run_at: Date | null;
   attribution_snapshot: unknown;
   attribution_snapshot_updated_at: Date | null;
+  result_attribution_model: string | null;
+  result_session_id: string | null;
+  result_attributed_source: string | null;
+  result_attributed_medium: string | null;
+  result_attributed_campaign: string | null;
+  result_attributed_content: string | null;
+  result_attributed_term: string | null;
+  result_attributed_click_id_type: string | null;
+  result_attributed_click_id_value: string | null;
   ingested_at: Date;
   raw_payload: unknown;
 };
@@ -710,6 +719,50 @@ function extractOrderAttributionMetadata(snapshot: unknown): OrderAttributionMet
       clickIdType: readNullableString(winnerRecord?.clickIdType),
       clickIdValue: readNullableString(winnerRecord?.clickIdValue)
     }
+  };
+}
+
+function selectPrimaryAttributionCredit(
+  rows: AttributionCreditRow[],
+  attributionModel: string | null
+): AttributionCreditRow | undefined {
+  if (attributionModel) {
+    const modelPrimary = rows.find((row) => row.attribution_model === attributionModel && row.is_primary);
+
+    if (modelPrimary) {
+      return modelPrimary;
+    }
+  }
+
+  return rows.find((row) => row.is_primary) ?? rows[0];
+}
+
+function coalesceNullableString(...values: Array<string | null | undefined>): string | null {
+  return values.find((value): value is string => typeof value === 'string' && value.trim().length > 0) ?? null;
+}
+
+function buildPersistedOrderAttribution(
+  order: OrderDetailsRow,
+  primaryCredit: AttributionCreditRow | undefined,
+  metadata: OrderAttributionMetadata
+): AttributionWinnerMetadata {
+  return {
+    sessionId: coalesceNullableString(order.result_session_id, primaryCredit?.session_id, metadata.winner.sessionId),
+    source: coalesceNullableString(order.result_attributed_source, primaryCredit?.attributed_source, metadata.winner.source),
+    medium: coalesceNullableString(order.result_attributed_medium, primaryCredit?.attributed_medium, metadata.winner.medium),
+    campaign: coalesceNullableString(order.result_attributed_campaign, primaryCredit?.attributed_campaign, metadata.winner.campaign),
+    content: coalesceNullableString(order.result_attributed_content, primaryCredit?.attributed_content, metadata.winner.content),
+    term: coalesceNullableString(order.result_attributed_term, primaryCredit?.attributed_term, metadata.winner.term),
+    clickIdType: coalesceNullableString(
+      order.result_attributed_click_id_type,
+      primaryCredit?.attributed_click_id_type,
+      metadata.winner.clickIdType
+    ),
+    clickIdValue: coalesceNullableString(
+      order.result_attributed_click_id_value,
+      primaryCredit?.attributed_click_id_value,
+      metadata.winner.clickIdValue
+    )
   };
 }
 
@@ -1821,6 +1874,15 @@ export function createReportingRouter(): Router {
             o.last_attribution_run_at,
             o.attribution_snapshot,
             o.attribution_snapshot_updated_at,
+            results.attribution_model AS result_attribution_model,
+            results.session_id::text AS result_session_id,
+            results.attributed_source AS result_attributed_source,
+            results.attributed_medium AS result_attributed_medium,
+            results.attributed_campaign AS result_attributed_campaign,
+            results.attributed_content AS result_attributed_content,
+            results.attributed_term AS result_attributed_term,
+            results.attributed_click_id_type AS result_attributed_click_id_type,
+            results.attributed_click_id_value AS result_attributed_click_id_value,
             o.ingested_at,
             o.attribution_snapshot,
             o.raw_payload
@@ -1829,6 +1891,8 @@ export function createReportingRouter(): Router {
             ON sources.id = o.attribution_source_id
           LEFT JOIN matching_methods methods
             ON methods.id = o.matching_method_id
+          LEFT JOIN attribution_results results
+            ON results.shopify_order_id = o.shopify_order_id
           WHERE o.shopify_order_id = $1
           LIMIT 1
         `,
@@ -1899,11 +1963,8 @@ export function createReportingRouter(): Router {
 
       const order = orderResult.rows[0];
       const metadata = extractOrderAttributionMetadata(order.attribution_snapshot);
-      const orderAttribution = {
-        source: metadata.winner.source,
-        medium: metadata.winner.medium,
-        campaign: metadata.winner.campaign
-      };
+      const primaryCredit = selectPrimaryAttributionCredit(creditsResult.rows, order.result_attribution_model);
+      const orderAttribution = buildPersistedOrderAttribution(order, primaryCredit, metadata);
       const attributionSources = [
         orderAttribution.source,
         ...creditsResult.rows.map((row) => row.attributed_source)
@@ -2022,19 +2083,19 @@ export function createReportingRouter(): Router {
             metadata.confidenceScore
           ),
           lastAttributionRunAt: order.last_attribution_run_at?.toISOString() ?? null,
-          sessionId: metadata.winner.sessionId,
-          attributedSource: metadata.winner.source,
-          attributedMedium: metadata.winner.medium,
-          attributedCampaign: metadata.winner.campaign,
+          sessionId: orderAttribution.sessionId,
+          attributedSource: orderAttribution.source,
+          attributedMedium: orderAttribution.medium,
+          attributedCampaign: orderAttribution.campaign,
           attributedCampaignName: orderCampaignResolution?.campaignDisplayName ?? null,
           ...buildCampaignLabelFields(orderCampaignResolution, {
-            source: metadata.winner.source ?? undefined,
-            rawId: metadata.winner.campaign ?? undefined
+            source: orderAttribution.source ?? undefined,
+            rawId: orderAttribution.campaign ?? undefined
           }),
-          attributedContent: metadata.winner.content,
-          attributedTerm: metadata.winner.term,
-          attributedClickIdType: metadata.winner.clickIdType,
-          attributedClickIdValue: metadata.winner.clickIdValue,
+          attributedContent: orderAttribution.content,
+          attributedTerm: orderAttribution.term,
+          attributedClickIdType: orderAttribution.clickIdType,
+          attributedClickIdValue: orderAttribution.clickIdValue,
           attributionSnapshot: order.attribution_snapshot,
           attributionSnapshotUpdatedAt: order.attribution_snapshot_updated_at?.toISOString() ?? null,
           ingestedAt: order.ingested_at.toISOString(),
