@@ -491,6 +491,15 @@ type CampaignDisplayFields = Pick<
 	| "campaignLabel"
 >;
 
+type OrderCampaignDisplayFields = Pick<
+	OrderRow,
+	| "campaign"
+	| "campaignName"
+	| "campaignDisplayName"
+	| "campaignLabel"
+	| "campaignNameResolutionStatus"
+>;
+
 function formatSourceLabel(
 	source: string | null | undefined,
 	platform?: CampaignDisplayFields["campaignPlatform"],
@@ -563,6 +572,37 @@ function getCampaignDisplayName(row: CampaignDisplayFields) {
 		row.campaignDisplayName?.trim() ||
 		row.campaign
 	);
+}
+
+function getOrderCampaignDisplayName(row: OrderCampaignDisplayFields) {
+	const campaignName =
+		row.campaignLabel?.displayName?.trim() ||
+		row.campaignDisplayName?.trim() ||
+		row.campaignName?.trim();
+
+	if (campaignName && row.campaignNameResolutionStatus !== "unresolved") {
+		return campaignName;
+	}
+
+	return row.campaign;
+}
+
+function getOrderCampaignFallbackLabel(row: OrderRow) {
+	const confidenceState = getConfidenceDisplay(row).state;
+
+	if (confidenceState === "pending") {
+		return "Pending";
+	}
+
+	if (row.attributionTier === "unattributed") {
+		return "No attributed campaign";
+	}
+
+	return "No campaign";
+}
+
+function getOrderCampaignSortValue(row: OrderRow) {
+	return getOrderCampaignDisplayName(row) ?? row.campaign ?? "";
 }
 
 function getParentCampaignDisplayName(row: CampaignDisplayFields) {
@@ -1743,6 +1783,11 @@ const ReportingDashboard = memo(function ReportingDashboard({
             row.source,
             row.medium,
             row.campaign,
+            row.campaignName,
+            row.campaignDisplayName,
+            row.campaignLabel?.displayName,
+            row.campaignLabel?.rawId,
+            row.campaignLabel?.entityId,
             row.attributionReason,
             row.primaryCreditAttributionReason,
             row.attributionTier,
@@ -1764,7 +1809,7 @@ const ReportingDashboard = memo(function ReportingDashboard({
         order: (row) => row.shopifyOrderId,
         processedAt: (row) => row.processedAt ?? '',
         source: (row) => `${row.source ?? ''} ${row.medium ?? ''}`,
-        campaign: (row) => row.campaign ?? '',
+        campaign: getOrderCampaignSortValue,
         totalPrice: (row) => row.totalPrice,
         confidenceScore: (row) => row.confidenceScore ?? (row.lastAttributionRunAt ? -1 : -2),
         lastAttributionRunAt: (row) => row.lastAttributionRunAt ?? ''
@@ -2273,7 +2318,18 @@ const ReportingDashboard = memo(function ReportingDashboard({
                           <span>{row.attributionSource ?? 'No persisted source'}</span>
                         </PrimaryCell>
                       </TableCell>
-                      <TableCell>{row.campaign ?? (getConfidenceDisplay(row).state === 'pending' ? 'Pending' : row.attributionTier === 'unattributed' ? 'No attributed campaign' : 'No campaign')}</TableCell>
+                      <TableCell>
+                        {getOrderCampaignDisplayName(row) ? (
+                          <PrimaryCell className="gap-0.5">
+                            <strong>{getOrderCampaignDisplayName(row)}</strong>
+                            {row.campaign && row.campaign !== getOrderCampaignDisplayName(row) ? (
+                              <span>{row.campaign}</span>
+                            ) : null}
+                          </PrimaryCell>
+                        ) : (
+                          getOrderCampaignFallbackLabel(row)
+                        )}
+                      </TableCell>
                       <TableCell>{formatCurrency(row.totalPrice)}</TableCell>
                       <TableCell>
                         <PrimaryCell className="gap-0.5">
