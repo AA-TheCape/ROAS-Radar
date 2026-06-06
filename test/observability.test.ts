@@ -14,6 +14,7 @@ const {
   emitCampaignMetadataFreshnessSnapshotLog,
   emitCampaignMetadataResolutionCoverageLog,
   emitCampaignMetadataSyncJobLifecycleLog,
+  emitGoogleCpcMissingCampaignNameAttributionWriteLog,
   emitGoogleCpcMissingCampaignNameLog,
   emitMmmBayesianJobLifecycleLog,
   emitMetaMetadataLookupSummaryLog,
@@ -222,6 +223,77 @@ test('google cpc missing campaign name log is skipped when there are no misses',
       campaignIds: ['555']
     })
   );
+
+  assert.equal(entries.length, 0);
+});
+
+test('google cpc missing campaign name attribution write log emits sanitized write-path dimensions', async () => {
+  const { entries } = await captureStructuredLogs(() =>
+    emitGoogleCpcMissingCampaignNameAttributionWriteLog({
+      writePath: 'attribution_results_upsert',
+      attributionModel: 'last_non_direct',
+      source: ' Google ',
+      medium: ' CPC ',
+      effectiveCampaign: null,
+      campaignId: '987654321',
+      accountId: ' 1234567890 ',
+      campaignMetadataSource: 'google_ads_transfer',
+      accountMetadataSource: 'google_ads_transfer'
+    })
+  );
+
+  assert.equal(entries.length, 1);
+  assert.deepEqual(entries[0], {
+    severity: 'INFO',
+    event: 'google_cpc_missing_campaign_name_attribution_write',
+    message: 'google_cpc_missing_campaign_name_attribution_write',
+    timestamp: entries[0]?.timestamp,
+    service: 'roas-radar-observability-test',
+    platform: 'google_ads',
+    source: 'google',
+    medium: 'cpc',
+    writePath: 'attribution_results_upsert',
+    attributionModel: 'last_non_direct',
+    accountId: '1234567890',
+    hasCampaignId: true,
+    hasAccountMetadata: true,
+    hasCampaignMetadata: true
+  });
+  assert.equal('shopifyOrderId' in entries[0], false);
+  assert.equal('orderId' in entries[0], false);
+  assert.equal('customerId' in entries[0], false);
+  assert.equal('sessionId' in entries[0], false);
+  assert.equal('campaignId' in entries[0], false);
+  assert.equal('email' in entries[0], false);
+});
+
+test('google cpc missing campaign name attribution write log skips present campaign and non-google-cpc records', async () => {
+  const { entries } = await captureStructuredLogs(() => {
+    emitGoogleCpcMissingCampaignNameAttributionWriteLog({
+      writePath: 'attribution_results_upsert',
+      attributionModel: 'last_non_direct',
+      source: 'google',
+      medium: 'cpc',
+      effectiveCampaign: '987654321',
+      campaignId: '987654321'
+    });
+    emitGoogleCpcMissingCampaignNameAttributionWriteLog({
+      writePath: 'attribution_results_upsert',
+      attributionModel: 'last_non_direct',
+      source: 'google',
+      medium: 'organic',
+      effectiveCampaign: null,
+      campaignId: '987654321'
+    });
+    emitGoogleCpcMissingCampaignNameAttributionWriteLog({
+      writePath: 'attribution_results_upsert',
+      attributionModel: 'last_non_direct',
+      source: 'meta',
+      medium: 'cpc',
+      effectiveCampaign: null,
+      campaignId: '987654321'
+    });
+  });
 
   assert.equal(entries.length, 0);
 });

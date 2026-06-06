@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 
 import { withTransaction } from '../../db/pool.js';
 import {
+  emitGoogleCpcMissingCampaignNameAttributionWriteLog,
   emitAttributionQaSnapshotWriteLog,
   emitAttributionResolverOutcomeLog,
   logError
@@ -1010,6 +1011,18 @@ async function persistAttribution(
       confidenceMetadata.confidenceContractVersion
     ]
   );
+
+  emitGoogleCpcMissingCampaignNameAttributionWriteLog({
+    writePath: 'attribution_results_upsert',
+    attributionModel: 'last_non_direct',
+    source: primaryCredit?.source,
+    medium: primaryCredit?.medium,
+    effectiveCampaign: primaryCredit?.campaign,
+    campaignId: primaryCredit?.campaignId,
+    accountId: primaryCredit?.accountId,
+    campaignMetadataSource: primaryCredit?.campaignMetadataSource,
+    accountMetadataSource: primaryCredit?.accountMetadataSource
+  });
 
   try {
     await client.query(
