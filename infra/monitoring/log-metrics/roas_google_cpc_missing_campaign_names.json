@@ -1,0 +1,31 @@
+{
+  "name": "roas_google_cpc_missing_campaign_names",
+  "description": "Distribution of Google CPC attribution rows whose campaign name could not be resolved on order reporting reads.",
+  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"google_cpc_missing_campaign_name\"",
+  "valueExtractor": "EXTRACT(jsonPayload.missingCampaignNameCount)",
+  "labelExtractors": {
+    "service": "EXTRACT(jsonPayload.service)",
+    "endpoint": "EXTRACT(jsonPayload.endpoint)",
+    "source": "EXTRACT(jsonPayload.source)",
+    "medium": "EXTRACT(jsonPayload.medium)",
+    "platform": "EXTRACT(jsonPayload.platform)"
+  },
+  "metricDescriptor": {
+    "metricKind": "DELTA",
+    "valueType": "DISTRIBUTION",
+    "unit": "1",
+    "displayName": "ROAS Radar Google CPC Missing Campaign Names",
+    "labels": [
+      { "key": "service", "valueType": "STRING", "description": "Service emitting the event." },
+      { "key": "endpoint", "valueType": "STRING", "description": "Reporting endpoint where the missing name was observed." },
+      { "key": "source", "valueType": "STRING", "description": "Attribution source." },
+      { "key": "medium", "valueType": "STRING", "description": "Attribution medium." },
+      { "key": "platform", "valueType": "STRING", "description": "Ad platform for campaign metadata resolution." }
+    ]
+  },
+  "bucketOptions": {
+    "explicitBuckets": {
+      "bounds": [0, 1, 2, 5, 10, 25, 50, 100]
+    }
+  }
+}

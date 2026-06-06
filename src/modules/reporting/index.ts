@@ -3,7 +3,11 @@ import { z } from "zod";
 
 import { env } from "../../config/env.js";
 import { query } from "../../db/pool.js";
-import { logError, logInfo } from "../../observability/index.js";
+import {
+	emitGoogleCpcMissingCampaignNameLog,
+	logError,
+	logInfo,
+} from "../../observability/index.js";
 import { calculatePerformanceMetrics } from "../../shared/metrics.js";
 import { ATTRIBUTION_MODELS } from "../attribution/engine.js";
 import { attachAuthContext, requireAuthenticated } from "../auth/index.js";
@@ -842,6 +846,22 @@ function selectNullableCampaignResolution(
 	}
 
 	return selectCampaignResolution(metadata, { source, medium, campaign });
+}
+
+function isGoogleCpcAttributedCampaign(row: {
+	source: string | null;
+	medium: string | null;
+	campaign: string | null;
+}): row is { source: string; medium: string; campaign: string } {
+	return (
+		row.source?.trim().toLowerCase() === 'google' &&
+		row.medium?.trim().toLowerCase() === 'cpc' &&
+		Boolean(row.campaign?.trim())
+	);
+}
+
+function toDateString(value: Date | null | undefined): string | null {
+	return value?.toISOString().slice(0, 10) ?? null;
 }
 
 function resolveReportRowSource(row: { source: string }, resolution: CampaignDisplayResolution | undefined): string {
@@ -1694,11 +1714,25 @@ export function createReportingRouter(): Router {
         input.source
       );
 
-      res.json({
-        rows: orderRowsWithMetadata.map(({ row, metadata, attribution }) => {
+      const googleCpcMissingCampaignIds: string[] = [];
+      let googleCpcAttributionRowCount = 0;
+      const rows = orderRowsWithMetadata.map(({ row, metadata, attribution }) => {
           const attributionTier = normalizeAttributionTier(row.attribution_tier);
           const orderAttributionReason = row.order_attribution_reason ?? 'unattributed';
           const campaignResolution = selectNullableCampaignResolution(campaignMetadata, attribution);
+          const creditAttribution = {
+            source: row.attributed_source,
+            medium: row.attributed_medium,
+            campaign: row.attributed_campaign
+          };
+
+          if (isGoogleCpcAttributedCampaign(creditAttribution)) {
+            googleCpcAttributionRowCount += 1;
+
+            if (!campaignResolution?.campaignDisplayName) {
+              googleCpcMissingCampaignIds.push(creditAttribution.campaign);
+            }
+          }
 
           return {
             shopifyOrderId: row.shopify_order_id,
@@ -1733,8 +1767,18 @@ export function createReportingRouter(): Router {
             lastAttributionRunAt: row.last_attribution_run_at?.toISOString() ?? null,
             sessionId: metadata.winner.sessionId
           };
-        })
+        });
+
+      emitGoogleCpcMissingCampaignNameLog({
+        endpoint: 'reporting_orders_list',
+        startDate: input.startDate,
+        endDate: input.endDate,
+        attributionRowCount: googleCpcAttributionRowCount,
+        missingCampaignNameCount: googleCpcMissingCampaignIds.length,
+        campaignIds: googleCpcMissingCampaignIds
       });
+
+      res.json({ rows });
     } catch (error) {
       next(error);
     }
@@ -1879,6 +1923,64 @@ export function createReportingRouter(): Router {
         scopedAttributionSources.length === 1 ? scopedAttributionSources[0] : undefined
       );
       const orderCampaignResolution = selectNullableCampaignResolution(campaignMetadata, orderAttribution);
+      const orderDate =
+        toDateString(order.processed_at) ??
+        toDateString(order.created_at_shopify) ??
+        toDateString(order.ingested_at);
+      const googleCpcMissingCampaignIds: string[] = [];
+      let googleCpcAttributionRowCount = 0;
+      const attributionCredits = creditsResult.rows.map((row) => {
+        const creditAttribution = {
+          source: row.attributed_source,
+          medium: row.attributed_medium,
+          campaign: row.attributed_campaign
+        };
+        const campaignResolution = selectNullableCampaignResolution(campaignMetadata, creditAttribution);
+
+        if (isGoogleCpcAttributedCampaign(creditAttribution)) {
+          googleCpcAttributionRowCount += 1;
+
+          if (!campaignResolution?.campaignDisplayName) {
+            googleCpcMissingCampaignIds.push(creditAttribution.campaign);
+          }
+        }
+
+        return {
+          attributionModel: row.attribution_model,
+          touchpointPosition: row.touchpoint_position,
+          sessionId: row.session_id,
+          touchpointOccurredAt: row.touchpoint_occurred_at?.toISOString() ?? null,
+          source: row.attributed_source,
+          medium: row.attributed_medium,
+          campaign: row.attributed_campaign,
+          campaignName: campaignResolution?.campaignDisplayName ?? null,
+          ...buildCampaignLabelFields(campaignResolution, {
+            source: row.attributed_source ?? undefined,
+            rawId: row.attributed_campaign ?? undefined
+          }),
+          content: row.attributed_content,
+          term: row.attributed_term,
+          clickIdType: row.attributed_click_id_type,
+          clickIdValue: row.attributed_click_id_value,
+          creditWeight: Number(row.credit_weight),
+          revenueCredit: Number(row.revenue_credit),
+          isPrimary: row.is_primary,
+          attributionReason: row.attribution_reason,
+          matchSource: row.match_source,
+          confidenceLabel: row.confidence_label,
+          createdAt: row.created_at.toISOString(),
+          modelVersion: row.model_version
+        };
+      });
+
+      emitGoogleCpcMissingCampaignNameLog({
+        endpoint: 'reporting_order_details',
+        startDate: orderDate,
+        endDate: orderDate,
+        attributionRowCount: googleCpcAttributionRowCount,
+        missingCampaignNameCount: googleCpcMissingCampaignIds.length,
+        campaignIds: googleCpcMissingCampaignIds
+      });
 
       res.json({
         order: {
@@ -1955,40 +2057,7 @@ export function createReportingRouter(): Router {
           ingestedAt: row.ingested_at.toISOString(),
           rawPayload: row.raw_payload
         })),
-        attributionCredits: creditsResult.rows.map((row) => {
-          const campaignResolution = selectNullableCampaignResolution(campaignMetadata, {
-            source: row.attributed_source,
-            medium: row.attributed_medium,
-            campaign: row.attributed_campaign
-          });
-
-          return {
-            attributionModel: row.attribution_model,
-            touchpointPosition: row.touchpoint_position,
-            sessionId: row.session_id,
-            touchpointOccurredAt: row.touchpoint_occurred_at?.toISOString() ?? null,
-            source: row.attributed_source,
-            medium: row.attributed_medium,
-            campaign: row.attributed_campaign,
-            campaignName: campaignResolution?.campaignDisplayName ?? null,
-            ...buildCampaignLabelFields(campaignResolution, {
-              source: row.attributed_source ?? undefined,
-              rawId: row.attributed_campaign ?? undefined
-            }),
-            content: row.attributed_content,
-            term: row.attributed_term,
-            clickIdType: row.attributed_click_id_type,
-            clickIdValue: row.attributed_click_id_value,
-            creditWeight: Number(row.credit_weight),
-            revenueCredit: Number(row.revenue_credit),
-            isPrimary: row.is_primary,
-            attributionReason: row.attribution_reason,
-            matchSource: row.match_source,
-            confidenceLabel: row.confidence_label,
-            createdAt: row.created_at.toISOString(),
-            modelVersion: row.model_version
-          };
-        })
+        attributionCredits
       });
     } catch (error) {
       next(error);

@@ -103,6 +103,15 @@ type CampaignMetadataCoverageLogInput = {
   source?: string | null;
 };
 
+type GoogleCpcMissingCampaignNameLogInput = {
+  endpoint: 'reporting_orders_list' | 'reporting_order_details' | string;
+  startDate: string | null;
+  endDate: string | null;
+  attributionRowCount: number;
+  missingCampaignNameCount: number;
+  campaignIds?: string[];
+};
+
 type CampaignMetadataFreshnessSnapshotLogInput = {
   platform: 'google_ads' | 'meta_ads';
   entityType: 'campaign' | 'adset' | 'ad';
@@ -1017,6 +1026,30 @@ export function emitCampaignMetadataResolutionCoverageLog(input: CampaignMetadat
     startDate: input.startDate,
     endDate: input.endDate,
     source: input.source ?? null
+  });
+}
+
+export function emitGoogleCpcMissingCampaignNameLog(input: GoogleCpcMissingCampaignNameLogInput): void {
+  const attributionRowCount = Math.max(0, input.attributionRowCount);
+  const missingCampaignNameCount = Math.max(0, input.missingCampaignNameCount);
+
+  if (missingCampaignNameCount === 0) {
+    return;
+  }
+
+  logInfo('google_cpc_missing_campaign_name', {
+    service: process.env.K_SERVICE ?? 'roas-radar-api',
+    endpoint: input.endpoint,
+    platform: 'google_ads',
+    source: 'google',
+    medium: 'cpc',
+    startDate: input.startDate,
+    endDate: input.endDate,
+    attributionRowCount,
+    missingCampaignNameCount,
+    missingCampaignNameRate:
+      attributionRowCount > 0 ? missingCampaignNameCount / attributionRowCount : 0,
+    campaignIds: [...new Set(input.campaignIds ?? [])].slice(0, 10)
   });
 }
 

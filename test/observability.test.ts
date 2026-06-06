@@ -14,6 +14,7 @@ const {
   emitCampaignMetadataFreshnessSnapshotLog,
   emitCampaignMetadataResolutionCoverageLog,
   emitCampaignMetadataSyncJobLifecycleLog,
+  emitGoogleCpcMissingCampaignNameLog,
   emitMmmBayesianJobLifecycleLog,
   emitMetaMetadataLookupSummaryLog,
   emitMetaMetadataRawIdFallbackLog,
@@ -172,6 +173,57 @@ test('campaign metadata freshness snapshot logs expose the fields used by freshn
     oldestLastSeenAt: '2026-04-08T10:00:00.000Z',
     newestLastSeenAt: '2026-04-10T09:00:00.000Z'
   });
+});
+
+test('google cpc missing campaign name logs expose aggregate diagnostics without order or customer fields', async () => {
+  const { entries } = await captureStructuredLogs(() =>
+    emitGoogleCpcMissingCampaignNameLog({
+      endpoint: 'reporting_orders_list',
+      startDate: '2026-04-01',
+      endDate: '2026-04-10',
+      attributionRowCount: 4,
+      missingCampaignNameCount: 2,
+      campaignIds: ['555', '777', '555']
+    })
+  );
+
+  assert.equal(entries.length, 1);
+  assert.deepEqual(entries[0], {
+    severity: 'INFO',
+    event: 'google_cpc_missing_campaign_name',
+    message: 'google_cpc_missing_campaign_name',
+    timestamp: entries[0]?.timestamp,
+    service: 'roas-radar-observability-test',
+    endpoint: 'reporting_orders_list',
+    platform: 'google_ads',
+    source: 'google',
+    medium: 'cpc',
+    startDate: '2026-04-01',
+    endDate: '2026-04-10',
+    attributionRowCount: 4,
+    missingCampaignNameCount: 2,
+    missingCampaignNameRate: 0.5,
+    campaignIds: ['555', '777']
+  });
+  assert.equal('shopifyOrderId' in entries[0], false);
+  assert.equal('orderId' in entries[0], false);
+  assert.equal('customerId' in entries[0], false);
+  assert.equal('email' in entries[0], false);
+});
+
+test('google cpc missing campaign name log is skipped when there are no misses', async () => {
+  const { entries } = await captureStructuredLogs(() =>
+    emitGoogleCpcMissingCampaignNameLog({
+      endpoint: 'reporting_orders_list',
+      startDate: '2026-04-01',
+      endDate: '2026-04-10',
+      attributionRowCount: 4,
+      missingCampaignNameCount: 0,
+      campaignIds: ['555']
+    })
+  );
+
+  assert.equal(entries.length, 0);
 });
 
 test('meta metadata lookup summary logs expose lookup cache and API counters', async () => {
