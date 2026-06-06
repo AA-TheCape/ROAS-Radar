@@ -20,10 +20,18 @@ type PersistedGa4FallbackCandidateRow = {
 	source: string | null;
 	medium: string | null;
 	campaign: string | null;
+	campaign_id: string | null;
 	content: string | null;
 	term: string | null;
 	click_id_type: string | null;
 	click_id_value: string | null;
+	account_id: string | null;
+	account_name: string | null;
+	channel_type: string | null;
+	channel_subtype: string | null;
+	campaign_metadata_source: string | null;
+	account_metadata_source: string | null;
+	channel_metadata_source: string | null;
 	session_has_required_fields: boolean;
 	source_export_hour: Date;
 	source_dataset: string;
@@ -46,10 +54,18 @@ export type Ga4FallbackCandidateInput = {
 	source?: string | null;
 	medium?: string | null;
 	campaign?: string | null;
+	campaignId?: string | null;
 	content?: string | null;
 	term?: string | null;
 	clickIdType?: string | null;
 	clickIdValue?: string | null;
+	accountId?: string | null;
+	accountName?: string | null;
+	channelType?: string | null;
+	channelSubtype?: string | null;
+	campaignMetadataSource?: string | null;
+	accountMetadataSource?: string | null;
+	channelMetadataSource?: string | null;
 	sessionHasRequiredFields: boolean;
 	sourceExportHour: string;
 	sourceDataset: string;
@@ -69,10 +85,18 @@ export type PersistedGa4FallbackCandidate = {
 	source: string | null;
 	medium: string | null;
 	campaign: string | null;
+	campaignId: string | null;
 	content: string | null;
 	term: string | null;
 	clickIdType: string | null;
 	clickIdValue: string | null;
+	accountId: string | null;
+	accountName: string | null;
+	channelType: string | null;
+	channelSubtype: string | null;
+	campaignMetadataSource: string | null;
+	accountMetadataSource: string | null;
+	channelMetadataSource: string | null;
 	sessionHasRequiredFields: boolean;
 	sourceExportHour: string;
 	sourceDataset: string;
@@ -171,10 +195,18 @@ function mapPersistedCandidate(
 		source: row.source,
 		medium: row.medium,
 		campaign: row.campaign,
+		campaignId: row.campaign_id,
 		content: row.content,
 		term: row.term,
 		clickIdType: row.click_id_type,
 		clickIdValue: row.click_id_value,
+		accountId: row.account_id,
+		accountName: row.account_name,
+		channelType: row.channel_type,
+		channelSubtype: row.channel_subtype,
+		campaignMetadataSource: row.campaign_metadata_source,
+		accountMetadataSource: row.account_metadata_source,
+		channelMetadataSource: row.channel_metadata_source,
 		sessionHasRequiredFields: row.session_has_required_fields,
 		sourceExportHour: row.source_export_hour.toISOString(),
 		sourceDataset: row.source_dataset,
@@ -216,6 +248,7 @@ function buildGa4SignalSql(alias: string): string {
     OR ${alias}.source IS NOT NULL
     OR ${alias}.medium IS NOT NULL
     OR ${alias}.campaign IS NOT NULL
+    OR ${alias}.campaign_id IS NOT NULL
     OR ${alias}.content IS NOT NULL
     OR ${alias}.term IS NOT NULL)`;
 }
@@ -225,6 +258,7 @@ function buildGa4DimensionCountSql(alias: string): string {
     (${alias}.source IS NOT NULL)::int
     + (${alias}.medium IS NOT NULL)::int
     + (${alias}.campaign IS NOT NULL)::int
+    + (${alias}.campaign_id IS NOT NULL)::int
     + (${alias}.content IS NOT NULL)::int
     + (${alias}.term IS NOT NULL)::int
   )`;
@@ -299,12 +333,26 @@ export async function upsertGa4FallbackCandidates(
 			source: normalizeNullableString(candidate.source, { lowerCase: true }),
 			medium: normalizeNullableString(candidate.medium, { lowerCase: true }),
 			campaign: normalizeNullableString(candidate.campaign),
+			campaignId: normalizeNullableString(candidate.campaignId),
 			content: normalizeNullableString(candidate.content),
 			term: normalizeNullableString(candidate.term),
 			clickIdType: normalizeNullableString(candidate.clickIdType, {
 				lowerCase: true,
 			}),
 			clickIdValue: normalizeNullableString(candidate.clickIdValue),
+			accountId: normalizeNullableString(candidate.accountId),
+			accountName: normalizeNullableString(candidate.accountName),
+			channelType: normalizeNullableString(candidate.channelType),
+			channelSubtype: normalizeNullableString(candidate.channelSubtype),
+			campaignMetadataSource: normalizeNullableString(candidate.campaignMetadataSource, {
+				lowerCase: true,
+			}),
+			accountMetadataSource: normalizeNullableString(candidate.accountMetadataSource, {
+				lowerCase: true,
+			}),
+			channelMetadataSource: normalizeNullableString(candidate.channelMetadataSource, {
+				lowerCase: true,
+			}),
 			sessionHasRequiredFields: Boolean(candidate.sessionHasRequiredFields),
 			sourceExportHour: new Date(candidate.sourceExportHour).toISOString(),
 			sourceDataset: normalizeNullableString(candidate.sourceDataset),
@@ -349,10 +397,18 @@ export async function upsertGa4FallbackCandidates(
           source,
           medium,
           campaign,
+          campaign_id,
           content,
           term,
           click_id_type,
           click_id_value,
+          account_id,
+          account_name,
+          channel_type,
+          channel_subtype,
+          campaign_metadata_source,
+          account_metadata_source,
+          channel_metadata_source,
           session_has_required_fields,
           source_export_hour,
           source_dataset,
@@ -377,10 +433,19 @@ export async function upsertGa4FallbackCandidates(
           $14,
           $15,
           $16,
-          $17::timestamptz,
+          $17,
           $18,
           $19,
-          $20::timestamptz,
+          $20,
+          $21,
+          $22,
+          $23,
+          $24,
+          $25,
+          $26::timestamptz,
+          $27,
+          $28,
+          $29::timestamptz,
           now()
         )
         ON CONFLICT (candidate_key, occurred_at)
@@ -394,6 +459,7 @@ export async function upsertGa4FallbackCandidates(
           source = CASE WHEN ${shouldReplaceBundleSql} THEN EXCLUDED.source ELSE ga4_fallback_candidates.source END,
           medium = CASE WHEN ${shouldReplaceBundleSql} THEN EXCLUDED.medium ELSE ga4_fallback_candidates.medium END,
           campaign = CASE WHEN ${shouldReplaceBundleSql} THEN EXCLUDED.campaign ELSE ga4_fallback_candidates.campaign END,
+          campaign_id = CASE WHEN ${shouldReplaceBundleSql} THEN EXCLUDED.campaign_id ELSE ga4_fallback_candidates.campaign_id END,
           content = CASE WHEN ${shouldReplaceBundleSql} THEN EXCLUDED.content ELSE ga4_fallback_candidates.content END,
           term = CASE WHEN ${shouldReplaceBundleSql} THEN EXCLUDED.term ELSE ga4_fallback_candidates.term END,
           click_id_type = CASE
@@ -406,6 +472,13 @@ export async function upsertGa4FallbackCandidates(
             THEN EXCLUDED.click_id_value
             ELSE ga4_fallback_candidates.click_id_value
           END,
+          account_id = CASE WHEN ${shouldReplaceBundleSql} THEN EXCLUDED.account_id ELSE ga4_fallback_candidates.account_id END,
+          account_name = CASE WHEN ${shouldReplaceBundleSql} THEN EXCLUDED.account_name ELSE ga4_fallback_candidates.account_name END,
+          channel_type = CASE WHEN ${shouldReplaceBundleSql} THEN EXCLUDED.channel_type ELSE ga4_fallback_candidates.channel_type END,
+          channel_subtype = CASE WHEN ${shouldReplaceBundleSql} THEN EXCLUDED.channel_subtype ELSE ga4_fallback_candidates.channel_subtype END,
+          campaign_metadata_source = CASE WHEN ${shouldReplaceBundleSql} THEN EXCLUDED.campaign_metadata_source ELSE ga4_fallback_candidates.campaign_metadata_source END,
+          account_metadata_source = CASE WHEN ${shouldReplaceBundleSql} THEN EXCLUDED.account_metadata_source ELSE ga4_fallback_candidates.account_metadata_source END,
+          channel_metadata_source = CASE WHEN ${shouldReplaceBundleSql} THEN EXCLUDED.channel_metadata_source ELSE ga4_fallback_candidates.channel_metadata_source END,
           session_has_required_fields = ga4_fallback_candidates.session_has_required_fields OR EXCLUDED.session_has_required_fields,
           source_export_hour = CASE
             WHEN ${shouldReplaceBundleSql}
@@ -437,10 +510,18 @@ export async function upsertGa4FallbackCandidates(
 				normalized.source,
 				normalized.medium,
 				normalized.campaign,
+				normalized.campaignId,
 				normalized.content,
 				normalized.term,
 				normalized.clickIdType,
 				normalized.clickIdValue,
+				normalized.accountId,
+				normalized.accountName,
+				normalized.channelType,
+				normalized.channelSubtype,
+				normalized.campaignMetadataSource,
+				normalized.accountMetadataSource,
+				normalized.channelMetadataSource,
 				normalized.sessionHasRequiredFields,
 				normalized.sourceExportHour,
 				normalized.sourceDataset,
@@ -577,10 +658,18 @@ export async function lookupGa4FallbackCandidates(
             source,
             medium,
             campaign,
+            campaign_id,
             content,
             term,
             click_id_type,
             click_id_value,
+            account_id,
+            account_name,
+            channel_type,
+            channel_subtype,
+            campaign_metadata_source,
+            account_metadata_source,
+            channel_metadata_source,
             session_has_required_fields,
             source_export_hour,
             source_dataset,
@@ -614,10 +703,18 @@ export async function lookupGa4FallbackCandidates(
             source,
             medium,
             campaign,
+            campaign_id,
             content,
             term,
             click_id_type,
             click_id_value,
+            account_id,
+            account_name,
+            channel_type,
+            channel_subtype,
+            campaign_metadata_source,
+            account_metadata_source,
+            channel_metadata_source,
             session_has_required_fields,
             source_export_hour,
             source_dataset,
@@ -651,10 +748,18 @@ export async function lookupGa4FallbackCandidates(
             source,
             medium,
             campaign,
+            campaign_id,
             content,
             term,
             click_id_type,
             click_id_value,
+            account_id,
+            account_name,
+            channel_type,
+            channel_subtype,
+            campaign_metadata_source,
+            account_metadata_source,
+            channel_metadata_source,
             session_has_required_fields,
             source_export_hour,
             source_dataset,
@@ -684,10 +789,18 @@ export async function lookupGa4FallbackCandidates(
         source,
         medium,
         campaign,
+        campaign_id,
         content,
         term,
         click_id_type,
         click_id_value,
+        account_id,
+        account_name,
+        channel_type,
+        channel_subtype,
+        campaign_metadata_source,
+        account_metadata_source,
+        channel_metadata_source,
         session_has_required_fields,
         source_export_hour,
         source_dataset,
@@ -701,6 +814,7 @@ export async function lookupGa4FallbackCandidates(
           OR source IS NOT NULL
           OR medium IS NOT NULL
           OR campaign IS NOT NULL
+          OR campaign_id IS NOT NULL
           OR content IS NOT NULL
           OR term IS NOT NULL
         )
@@ -738,10 +852,18 @@ export async function listGa4FallbackCandidates(
         source,
         medium,
         campaign,
+        campaign_id,
         content,
         term,
         click_id_type,
         click_id_value,
+        account_id,
+        account_name,
+        channel_type,
+        channel_subtype,
+        campaign_metadata_source,
+        account_metadata_source,
+        channel_metadata_source,
         session_has_required_fields,
         source_export_hour,
         source_dataset,

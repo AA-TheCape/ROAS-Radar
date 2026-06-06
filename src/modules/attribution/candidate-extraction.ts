@@ -34,6 +34,8 @@ type SessionCandidateRow = {
 
 const GOOGLE_CPC_SOURCE_SQL = "lower(btrim(COALESCE(%SOURCE%, ''))) IN ('google', 'google_ads', 'googleadwords', 'google_adwords', 'adwords', 'youtube')";
 const GOOGLE_CPC_MEDIUM_SQL = "lower(btrim(COALESCE(%MEDIUM%, ''))) IN ('cpc', 'ppc', 'sem', 'paidsearch', 'paid_search')";
+const GOOGLE_CPC_SOURCES = new Set(['google', 'google_ads', 'googleadwords', 'google_adwords', 'adwords', 'youtube']);
+const GOOGLE_CPC_MEDIUMS = new Set(['cpc', 'ppc', 'sem', 'paidsearch', 'paid_search']);
 
 function googleCpcCampaignFallbackSql(
   sourceExpression: string,
@@ -101,10 +103,18 @@ export type AttributionCandidate = {
   source: string | null;
   medium: string | null;
   campaign: string | null;
+  campaignId?: string | null;
   content: string | null;
   term: string | null;
   clickIdType: string | null;
   clickIdValue: string | null;
+  accountId?: string | null;
+  accountName?: string | null;
+  channelType?: string | null;
+  channelSubtype?: string | null;
+  campaignMetadataSource?: string | null;
+  accountMetadataSource?: string | null;
+  channelMetadataSource?: string | null;
   attributionReason: string;
   confidenceScore: number;
   isDirect: boolean;
@@ -119,6 +129,7 @@ export type Ga4AttributionCandidateInput = {
   source?: string | null;
   medium?: string | null;
   campaign?: string | null;
+  campaignId?: string | null;
   content?: string | null;
   term?: string | null;
   clickIdType?: string | null;
@@ -129,6 +140,13 @@ export type Ga4AttributionCandidateInput = {
   fbclid?: string | null;
   ttclid?: string | null;
   msclkid?: string | null;
+  accountId?: string | null;
+  accountName?: string | null;
+  channelType?: string | null;
+  channelSubtype?: string | null;
+  campaignMetadataSource?: string | null;
+  accountMetadataSource?: string | null;
+  channelMetadataSource?: string | null;
   attributionReason?: string | null;
   confidenceScore?: number | null;
 };
@@ -156,6 +174,15 @@ export type AttributionCandidateExtractionResult = {
 function normalizeNullableString(value: string | null | undefined): string | null {
   const normalized = value?.trim();
   return normalized ? normalized : null;
+}
+
+function isGoogleCpcTouchpoint(source: string | null, medium: string | null): boolean {
+  return Boolean(
+    source &&
+      medium &&
+      GOOGLE_CPC_SOURCES.has(source.trim().toLowerCase()) &&
+      GOOGLE_CPC_MEDIUMS.has(medium.trim().toLowerCase())
+  );
 }
 
 export function normalizeTimestampToUtc(value: Date | string | null | undefined): Date | null {
@@ -476,6 +503,7 @@ function mapDeterministicCandidate(candidate: ResolvedAttributionTouchpoint): At
     source: candidate.source,
     medium: candidate.medium,
     campaign: candidate.campaign,
+    campaignId: candidate.campaignId,
     content: candidate.content,
     term: candidate.term,
     clickIdType: candidate.clickIdType,
@@ -558,6 +586,13 @@ async function loadDefaultGa4Candidates(
     term: candidate.term,
     clickIdType: candidate.clickIdType,
     clickIdValue: candidate.clickIdValue,
+    accountId: candidate.accountId,
+    accountName: candidate.accountName,
+    channelType: candidate.channelType,
+    channelSubtype: candidate.channelSubtype,
+    campaignMetadataSource: candidate.campaignMetadataSource,
+    accountMetadataSource: candidate.accountMetadataSource,
+    channelMetadataSource: candidate.channelMetadataSource,
     attributionReason: 'ga4_fallback_derived',
     confidenceScore: candidate.clickIdValue ? 0.35 : 0.25
   }));
@@ -602,10 +637,19 @@ function mapGa4Candidate(
     };
   }
 
+  const rawSource = normalizeNullableString(rawCandidate.source);
+  const rawMedium = normalizeNullableString(rawCandidate.medium);
+  const rawCampaign = normalizeNullableString(rawCandidate.campaign);
+  const rawCampaignId = normalizeNullableString(rawCandidate.campaignId);
+  const effectiveCampaign =
+    !rawCampaign && rawCampaignId && isGoogleCpcTouchpoint(rawSource, rawMedium)
+      ? rawCampaignId
+      : rawCampaign;
+
   const canonicalDimensions = buildCanonicalTouchpointDimensions({
     source: rawCandidate.source,
     medium: rawCandidate.medium,
-    campaign: rawCandidate.campaign,
+    campaign: effectiveCampaign,
     content: rawCandidate.content,
     term: rawCandidate.term,
     clickIdType: rawCandidate.clickIdType,
@@ -629,10 +673,18 @@ function mapGa4Candidate(
       source: canonicalDimensions.source,
       medium: canonicalDimensions.medium,
       campaign: canonicalDimensions.campaign,
+      campaignId: rawCampaignId,
       content: canonicalDimensions.content,
       term: canonicalDimensions.term,
       clickIdType: canonicalDimensions.clickIdType,
       clickIdValue: canonicalDimensions.clickIdValue,
+      accountId: normalizeNullableString(rawCandidate.accountId),
+      accountName: normalizeNullableString(rawCandidate.accountName),
+      channelType: normalizeNullableString(rawCandidate.channelType),
+      channelSubtype: normalizeNullableString(rawCandidate.channelSubtype),
+      campaignMetadataSource: normalizeNullableString(rawCandidate.campaignMetadataSource),
+      accountMetadataSource: normalizeNullableString(rawCandidate.accountMetadataSource),
+      channelMetadataSource: normalizeNullableString(rawCandidate.channelMetadataSource),
       attributionReason: normalizeNullableString(rawCandidate.attributionReason) ?? 'ga4_fallback_match',
       confidenceScore: boundConfidenceScore(rawCandidate.confidenceScore, canonicalDimensions.clickIdValue ? 0.35 : 0.25),
       isDirect: isDirectTouchpoint({

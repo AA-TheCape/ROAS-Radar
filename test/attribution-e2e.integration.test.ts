@@ -20,6 +20,7 @@ let cachedModules: {
 	closeServer: typeof import("../src/server.js").closeServer;
 	enqueueAttributionForOrder: typeof import("../src/modules/attribution/index.js").enqueueAttributionForOrder;
 	processAttributionQueue: typeof import("../src/modules/attribution/index.js").processAttributionQueue;
+	upsertGa4FallbackCandidates: typeof import("../src/modules/attribution/ga4-fallback-candidates.js").upsertGa4FallbackCandidates;
 	enqueueShopifyOrderWriteback: typeof import("../src/modules/shopify/writeback.js").enqueueShopifyOrderWriteback;
 	processShopifyOrderWritebackQueue: typeof import("../src/modules/shopify/writeback.js").processShopifyOrderWritebackQueue;
 	testUtils: typeof import("../src/modules/shopify/writeback.js").__shopifyWritebackTestUtils;
@@ -35,12 +36,14 @@ async function getModules() {
 		poolModule,
 		serverModule,
 		attributionModule,
+		ga4FallbackModule,
 		writebackModule,
 		harnessModule,
 	] = await Promise.all([
 		import("../src/db/pool.js"),
 		import("../src/server.js"),
 		import("../src/modules/attribution/index.js"),
+		import("../src/modules/attribution/ga4-fallback-candidates.js"),
 		import("../src/modules/shopify/writeback.js"),
 		import("./e2e-harness.js"),
 	]);
@@ -51,6 +54,7 @@ async function getModules() {
 		closeServer: serverModule.closeServer,
 		enqueueAttributionForOrder: attributionModule.enqueueAttributionForOrder,
 		processAttributionQueue: attributionModule.processAttributionQueue,
+		upsertGa4FallbackCandidates: ga4FallbackModule.upsertGa4FallbackCandidates,
 		enqueueShopifyOrderWriteback: writebackModule.enqueueShopifyOrderWriteback,
 		processShopifyOrderWritebackQueue:
 			writebackModule.processShopifyOrderWritebackQueue,
@@ -111,6 +115,209 @@ test.beforeEach(async () => {
 	const { resetE2EDatabase, testUtils } = await getModules();
 	testUtils.reset();
 	await resetE2EDatabase();
+});
+
+test("GA4 Google CPC fallback preserves campaign and account metadata without campaign name", async () => {
+	const {
+		pool,
+		enqueueAttributionForOrder,
+		processAttributionQueue,
+		upsertGa4FallbackCandidates,
+	} = await getModules();
+
+	const customerIdentityId = "11111111-1111-4111-8111-111111111111";
+	const orderProcessedAt = new Date("2026-04-27T12:00:00.000Z");
+	const orderFixture = buildRawPayloadFixture(
+		{
+			id: "e2e-ga4-google-campaign-metadata",
+		},
+		"e2e-ga4-google-campaign-metadata",
+	);
+
+	await pool.query(
+		`
+        INSERT INTO customer_identities (
+          id,
+          hashed_email,
+          created_at,
+          updated_at,
+          last_stitched_at
+        )
+        VALUES (
+          $1::uuid,
+          $2,
+          now(),
+          now(),
+          now()
+        )
+      `,
+		[
+			customerIdentityId,
+			"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+		],
+	);
+
+	await pool.query(
+		`
+        INSERT INTO shopify_orders (
+          shopify_order_id,
+          currency_code,
+          subtotal_price,
+          total_price,
+          processed_at,
+          customer_identity_id,
+          source_name,
+          payload_external_id,
+          payload_size_bytes,
+          payload_hash,
+          raw_payload,
+          ingested_at
+        )
+        VALUES (
+          'e2e-ga4-google-campaign-metadata',
+          'USD',
+          '88.00',
+          '88.00',
+          $1,
+          $2::uuid,
+          'web',
+          $3,
+          $4,
+          $5,
+          $6::jsonb,
+          now()
+        )
+      `,
+		[
+			orderProcessedAt.toISOString(),
+			customerIdentityId,
+			orderFixture.payloadExternalId,
+			orderFixture.payloadSizeBytes,
+			orderFixture.payloadHash,
+			orderFixture.rawPayloadJson,
+		],
+	);
+
+	await upsertGa4FallbackCandidates([
+		{
+			occurredAt: "2026-04-26T11:00:00.000Z",
+			ga4UserKey: "ga4-user-google-campaign-metadata",
+			ga4ClientId: "client-google-campaign-metadata",
+			ga4SessionId: "session-google-campaign-metadata",
+			transactionId: null,
+			emailHash: null,
+			customerIdentityId,
+			source: "google",
+			medium: "cpc",
+			campaignId: "987654321",
+			campaign: null,
+			content: null,
+			term: null,
+			clickIdType: null,
+			clickIdValue: null,
+			accountId: "1234567890",
+			accountName: "Cape Google Ads",
+			channelType: "SEARCH",
+			channelSubtype: "SEARCH_STANDARD",
+			campaignMetadataSource: "google_ads_transfer",
+			accountMetadataSource: "google_ads_transfer",
+			channelMetadataSource: "google_ads_transfer",
+			sessionHasRequiredFields: true,
+			sourceExportHour: "2026-04-26T12:00:00.000Z",
+			sourceDataset: "ga4_export",
+			sourceTableType: "events",
+		},
+	]);
+
+	await enqueueAttributionForOrder(
+		"e2e-ga4-google-campaign-metadata",
+		"test_ga4_google_campaign_metadata",
+	);
+	const attributionReport = await processAttributionQueue({
+		workerId: "test-e2e-ga4-google-campaign-metadata",
+		limit: 10,
+		staleScanLimit: 0,
+		emitMetrics: false,
+	});
+
+	assert.equal(attributionReport.succeededJobs, 1);
+	assert.equal(attributionReport.failedJobs, 0);
+
+	const attributionResult = await pool.query<{
+		attributed_source: string | null;
+		attributed_medium: string | null;
+		attributed_campaign: string | null;
+		attributed_campaign_id: string | null;
+		attributed_account_id: string | null;
+		attributed_account_name: string | null;
+		attributed_channel_type: string | null;
+		attributed_channel_subtype: string | null;
+		attributed_campaign_metadata_source: string | null;
+		attributed_account_metadata_source: string | null;
+		attributed_channel_metadata_source: string | null;
+		attribution_reason: string;
+		match_source: string;
+	}>(
+		`
+        SELECT
+          attributed_source,
+          attributed_medium,
+          attributed_campaign,
+          attributed_campaign_id,
+          attributed_account_id,
+          attributed_account_name,
+          attributed_channel_type,
+          attributed_channel_subtype,
+          attributed_campaign_metadata_source,
+          attributed_account_metadata_source,
+          attributed_channel_metadata_source,
+          attribution_reason,
+          match_source
+        FROM attribution_results
+        WHERE shopify_order_id = 'e2e-ga4-google-campaign-metadata'
+      `,
+	);
+
+	assert.equal(attributionResult.rowCount, 1);
+	assert.deepEqual(attributionResult.rows[0], {
+		attributed_source: "google",
+		attributed_medium: "cpc",
+		attributed_campaign: "987654321",
+		attributed_campaign_id: "987654321",
+		attributed_account_id: "1234567890",
+		attributed_account_name: "Cape Google Ads",
+		attributed_channel_type: "SEARCH",
+		attributed_channel_subtype: "SEARCH_STANDARD",
+		attributed_campaign_metadata_source: "google_ads_transfer",
+		attributed_account_metadata_source: "google_ads_transfer",
+		attributed_channel_metadata_source: "google_ads_transfer",
+		attribution_reason: "ga4_fallback_derived",
+		match_source: "ga4_fallback",
+	});
+
+	const creditResult = await pool.query<{
+		attributed_campaign_id: string | null;
+		attributed_account_id: string | null;
+		attributed_account_name: string | null;
+	}>(
+		`
+        SELECT
+          attributed_campaign_id,
+          attributed_account_id,
+          attributed_account_name
+        FROM attribution_order_credits
+        WHERE shopify_order_id = 'e2e-ga4-google-campaign-metadata'
+          AND attribution_model = 'hinted_fallback_only'
+          AND is_primary = true
+      `,
+	);
+
+	assert.equal(creditResult.rowCount, 1);
+	assert.deepEqual(creditResult.rows[0], {
+		attributed_campaign_id: "987654321",
+		attributed_account_id: "1234567890",
+		attributed_account_name: "Cape Google Ads",
+	});
 });
 
 test.after(async () => {

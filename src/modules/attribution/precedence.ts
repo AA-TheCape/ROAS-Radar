@@ -38,10 +38,18 @@ export type AttributionComparableFields = {
 	source: string | null;
 	medium: string | null;
 	campaign: string | null;
+	campaignId?: string | null;
 	content: string | null;
 	term: string | null;
 	clickIdType: string | null;
 	clickIdValue: string | null;
+	accountId?: string | null;
+	accountName?: string | null;
+	channelType?: string | null;
+	channelSubtype?: string | null;
+	campaignMetadataSource?: string | null;
+	accountMetadataSource?: string | null;
+	channelMetadataSource?: string | null;
 	attributionReason: string | null;
 };
 
@@ -185,10 +193,18 @@ export function attributionFieldsEqual(
 		left.source === right.source &&
 		left.medium === right.medium &&
 		left.campaign === right.campaign &&
+		left.campaignId === right.campaignId &&
 		left.content === right.content &&
 		left.term === right.term &&
 		left.clickIdType === right.clickIdType &&
 		left.clickIdValue === right.clickIdValue &&
+		left.accountId === right.accountId &&
+		left.accountName === right.accountName &&
+		left.channelType === right.channelType &&
+		left.channelSubtype === right.channelSubtype &&
+		left.campaignMetadataSource === right.campaignMetadataSource &&
+		left.accountMetadataSource === right.accountMetadataSource &&
+		left.channelMetadataSource === right.channelMetadataSource &&
 		left.attributionReason === right.attributionReason
 	);
 }

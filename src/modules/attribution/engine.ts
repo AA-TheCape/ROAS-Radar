@@ -39,10 +39,18 @@ export type AttributionTouchpoint = {
   source: string | null;
   medium: string | null;
   campaign: string | null;
+  campaignId?: string | null;
   content: string | null;
   term: string | null;
   clickIdType: string | null;
   clickIdValue: string | null;
+  accountId?: string | null;
+  accountName?: string | null;
+  channelType?: string | null;
+  channelSubtype?: string | null;
+  campaignMetadataSource?: string | null;
+  accountMetadataSource?: string | null;
+  channelMetadataSource?: string | null;
   attributionReason: string;
   isDirect: boolean;
   isForced: boolean;
@@ -70,10 +78,18 @@ export type AttributionCredit = {
   source: string | null;
   medium: string | null;
   campaign: string | null;
+  campaignId: string | null;
   content: string | null;
   term: string | null;
   clickIdType: string | null;
   clickIdValue: string | null;
+  accountId: string | null;
+  accountName: string | null;
+  channelType: string | null;
+  channelSubtype: string | null;
+  campaignMetadataSource: string | null;
+  accountMetadataSource: string | null;
+  channelMetadataSource: string | null;
   attributionReason: string;
   evidenceSource: AttributionEvidenceSource | null;
   engagementType: AttributionEngagementType;
@@ -476,10 +492,18 @@ function buildCredits(
     source: touchpoint.source,
     medium: touchpoint.medium,
     campaign: touchpoint.campaign,
+    campaignId: normalizeNullableString(touchpoint.campaignId),
     content: touchpoint.content,
     term: touchpoint.term,
     clickIdType: touchpoint.clickIdType,
     clickIdValue: touchpoint.clickIdValue,
+    accountId: normalizeNullableString(touchpoint.accountId),
+    accountName: normalizeNullableString(touchpoint.accountName),
+    channelType: normalizeNullableString(touchpoint.channelType),
+    channelSubtype: normalizeNullableString(touchpoint.channelSubtype),
+    campaignMetadataSource: normalizeNullableString(touchpoint.campaignMetadataSource),
+    accountMetadataSource: normalizeNullableString(touchpoint.accountMetadataSource),
+    channelMetadataSource: normalizeNullableString(touchpoint.channelMetadataSource),
     attributionReason: touchpoint.attributionReason,
     evidenceSource: touchpoint.evidenceSource,
     engagementType: touchpoint.engagementType,
