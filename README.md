@@ -16,21 +16,23 @@ ROAS Radar is a Node.js backend plus React dashboard for Shopify attribution, re
 
 ## Required backend verification order
 
-Run these from a clean checkout before merge or deploy:
+Run the supported full verification path from a clean checkout before merge or deploy. This path requires Node `22.13.0+` and a PostgreSQL database reachable through `DATABASE_URL`.
 
 ```bash
-npm ci --include=dev
-npm run build
-npm run start:api
-npm run ga4:ingest:start
-npm run db:migrate:check
-npm run test:unit
-npm run test:integration
-npm run test:attribution
-docker build -t roas-radar .
+export DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/roas_radar
+export REPORTING_API_TOKEN=dev-reporting-token
+npm run verify:full
 ```
 
-`npm run start:api` and `npm run ga4:ingest:start` are runtime smoke steps against the compiled `dist/` output, so run them after `npm run build`.
+`npm run verify:full` runs backend install, backend build/lint, dashboard install/build/lint, `db:migrate:check`, DB-backed integration tests, and the attribution critical suite. The attribution suite runs migrations before exercising persistence paths, including GA4 fallback campaign metadata handling through the attribution candidate and integration coverage.
+
+Optional release smoke checks after `npm run build`:
+
+```bash
+npm run start:api
+npm run ga4:ingest:start
+docker build -t roas-radar .
+```
 
 ## Docs map
 

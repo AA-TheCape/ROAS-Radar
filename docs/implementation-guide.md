@@ -295,7 +295,7 @@ The backend `package.json` declares `node >=22`. Root `npm install` also runs th
 From the repository root:
 
 ```bash
-npm install
+npm ci --include=dev
 ```
 
 ### 2. Create a local database
@@ -325,7 +325,17 @@ npm run db:migrate
 
 The migration runner in `src/db/migrate.ts` acquires a PostgreSQL advisory lock, creates `schema_migrations` if needed, and applies pending SQL files from `db/migrations/` in lexical order.
 
-### 4. Start the API
+### 4. Run full verification
+
+Use this command before merge or deploy when you need the same supported path CI enforces:
+
+```bash
+npm run verify:full
+```
+
+`npm run verify:full` requires Node 22.13.0 or newer and `DATABASE_URL`. It installs backend and dashboard dependencies with `npm ci`, builds and lints both projects, runs `db:migrate:check`, runs DB-backed integration tests, and runs the attribution critical suite. This covers migration validity and attribution persistence behavior, including GA4 fallback campaign metadata persistence.
+
+### 5. Start the API
 
 ```bash
 npm run dev
@@ -509,22 +519,24 @@ The fastest reliable way to validate the MVP is to use the existing integration 
 ### 1. Run the full automated test suite
 
 ```bash
-npm test
+npm run verify:full
 ```
 
-`scripts/run-tests.mjs` will:
+The full verification command will:
 
-- run migrations before integration tests
-- execute unit tests under `test/*.test.ts`
-- execute integration tests:
-  - `test/attribution-e2e.integration.test.ts`
-  - `test/reporting-api.integration.test.ts`
+- fail early when the current Node runtime is older than 22.13.0
+- require `DATABASE_URL` so migration and persistence tests run against PostgreSQL
+- run backend and dashboard build/lint
+- run migration validation with `db:migrate:check`
+- execute integration and attribution persistence tests
 
 Use these narrower commands when iterating:
 
 ```bash
+npm test
 npm run test:unit
 npm run test:integration
+npm run test:attribution
 ```
 
 ### 2. Understand what the synthetic harness validates

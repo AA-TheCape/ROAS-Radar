@@ -77,6 +77,7 @@ jobs:
       - run: npm ci --include=dev
       - run: npm run db:migrate:check
       - run: npm run test:integration
+      - run: npm run test:attribution
 
   deploy-staging:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
