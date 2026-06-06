@@ -172,6 +172,97 @@ test(
 );
 
 test(
+	"default GA4 fallback loader preserves campaign id when campaign name is absent",
+	{ concurrency: false },
+	async () => {
+		const [
+			{ upsertGa4FallbackCandidates },
+			{ extractAttributionCandidatesForOrder },
+			{ pool },
+		] = await Promise.all([
+			import("../src/modules/attribution/ga4-fallback-candidates.js"),
+			import("../src/modules/attribution/candidate-extraction.js"),
+			import("../src/db/pool.js"),
+		]);
+
+		await upsertGa4FallbackCandidates(
+			[
+				{
+					occurredAt: "2026-04-26T11:00:00.000Z",
+					ga4UserKey: "ga4-user-google-campaign-id",
+					ga4ClientId: "client-google-campaign-id",
+					ga4SessionId: "session-google-campaign-id",
+					transactionId: "shopify-order-google-campaign-id",
+					emailHash: null,
+					customerIdentityId: null,
+					source: "google",
+					medium: "cpc",
+					campaign: null,
+					campaignId: "987654321",
+					content: null,
+					term: null,
+					clickIdType: null,
+					clickIdValue: null,
+					accountId: "1234567890",
+					accountName: "Cape Google Ads",
+					channelType: "SEARCH",
+					channelSubtype: "SEARCH_STANDARD",
+					campaignMetadataSource: "google_ads_transfer",
+					accountMetadataSource: "google_ads_transfer",
+					channelMetadataSource: "google_ads_transfer",
+					sessionHasRequiredFields: true,
+					sourceExportHour: "2026-04-26T11:00:00.000Z",
+					sourceDataset: "ga4_export",
+					sourceTableType: "events",
+				},
+			],
+			pool,
+		);
+
+		const result = await extractAttributionCandidatesForOrder(
+			pool,
+			{
+				shopifyOrderId: "shopify-order-google-campaign-id",
+				processedAt: "2026-04-27T12:00:00.000Z",
+				createdAtShopify: null,
+				ingestedAt: "2026-04-27T12:05:00.000Z",
+				landingSessionId: null,
+				checkoutToken: null,
+				cartToken: null,
+				rawPayload: null,
+			},
+			{
+				loadDeterministicFirstPartyCandidates: async () => [],
+			},
+		);
+
+		assert.equal(result.ga4Fallback.length, 1);
+		assert.equal(result.ga4Fallback[0]?.sourceClass, "ga4_fallback");
+		assert.equal(result.ga4Fallback[0]?.ingestionSource, "ga4_fallback");
+		assert.equal(result.ga4Fallback[0]?.source, "google");
+		assert.equal(result.ga4Fallback[0]?.medium, "cpc");
+		assert.equal(result.ga4Fallback[0]?.campaign, "987654321");
+		assert.equal(result.ga4Fallback[0]?.campaignId, "987654321");
+		assert.equal(result.ga4Fallback[0]?.accountId, "1234567890");
+		assert.equal(result.ga4Fallback[0]?.accountName, "Cape Google Ads");
+		assert.equal(result.ga4Fallback[0]?.channelType, "SEARCH");
+		assert.equal(result.ga4Fallback[0]?.channelSubtype, "SEARCH_STANDARD");
+		assert.equal(
+			result.ga4Fallback[0]?.campaignMetadataSource,
+			"google_ads_transfer",
+		);
+		assert.equal(
+			result.ga4Fallback[0]?.accountMetadataSource,
+			"google_ads_transfer",
+		);
+		assert.equal(
+			result.ga4Fallback[0]?.channelMetadataSource,
+			"google_ads_transfer",
+		);
+	},
+);
+
+test(
 	"GA4 fallback candidate store deduplicates repeated ingestion and keeps coherent attribution bundles",
 	{ concurrency: false },
 	async () => {
