@@ -582,6 +582,7 @@ async function loadDefaultGa4Candidates(
     source: candidate.source,
     medium: candidate.medium,
     campaign: candidate.campaign,
+    campaignId: candidate.campaignId,
     content: candidate.content,
     term: candidate.term,
     clickIdType: candidate.clickIdType,
