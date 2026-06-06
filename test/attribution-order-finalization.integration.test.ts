@@ -451,7 +451,6 @@ test('order finalization persists a deterministic last non-direct winner snapsho
           referrer_url,
           initial_utm_source,
           initial_utm_medium,
-          initial_utm_campaign,
           initial_gclid
         )
         VALUES (
@@ -461,7 +460,6 @@ test('order finalization persists a deterministic last non-direct winner snapsho
           'https://www.google.com/search?q=widget',
           'google',
           'cpc',
-          'brand-search',
           'gclid-123'
         )
         RETURNING id::text
@@ -479,7 +477,6 @@ test('order finalization persists a deterministic last non-direct winner snapsho
           referrer_url,
           utm_source,
           utm_medium,
-          utm_campaign,
           gclid,
           payload_size_bytes,
           payload_hash,
@@ -493,7 +490,6 @@ test('order finalization persists a deterministic last non-direct winner snapsho
           'https://www.google.com/search?q=widget',
           'google',
           'cpc',
-          'brand-search',
           'gclid-123',
           $2,
           $3,
@@ -509,6 +505,48 @@ test('order finalization persists a deterministic last non-direct winner snapsho
       ]
     );
     const paidEventId = paidEventResult.rows[0].id;
+
+    await pool.query(
+      `
+        INSERT INTO session_attribution_identities (
+          roas_radar_session_id,
+          initial_utm_source,
+          initial_utm_medium
+        )
+        VALUES (
+          $1::uuid,
+          'google',
+          'cpc'
+        )
+      `,
+      [paidSessionId]
+    );
+
+    await pool.query(
+      `
+        INSERT INTO session_attribution_touch_events (
+          roas_radar_session_id,
+          event_type,
+          occurred_at,
+          page_url,
+          utm_source,
+          utm_medium,
+          utm_campaign,
+          gclid
+        )
+        VALUES (
+          $1::uuid,
+          'page_view',
+          '2026-04-01T10:00:00.000Z',
+          'https://store.example/products/widget?utm_source=google&utm_medium=cpc&utm_campaign=brand-search',
+          'google',
+          'cpc',
+          'brand-search',
+          'gclid-123'
+        )
+      `,
+      [paidSessionId]
+    );
 
     const directSessionResult = await pool.query<{ id: string }>(
       `

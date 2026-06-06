@@ -32,6 +32,44 @@ type SessionCandidateRow = {
   click_id_value: string | null;
 };
 
+const GOOGLE_CPC_SOURCE_SQL = "lower(btrim(COALESCE(%SOURCE%, ''))) IN ('google', 'google_ads', 'googleadwords', 'google_adwords', 'adwords', 'youtube')";
+const GOOGLE_CPC_MEDIUM_SQL = "lower(btrim(COALESCE(%MEDIUM%, ''))) IN ('cpc', 'ppc', 'sem', 'paidsearch', 'paid_search')";
+
+function googleCpcCampaignFallbackSql(
+  sourceExpression: string,
+  mediumExpression: string,
+  campaignExpressions: string[]
+): string {
+  const normalizedCampaigns = campaignExpressions.map((expression) => `NULLIF(btrim(${expression}), '')`).join(', ');
+
+  return `
+        CASE
+          WHEN ${GOOGLE_CPC_SOURCE_SQL.replace('%SOURCE%', sourceExpression)}
+           AND ${GOOGLE_CPC_MEDIUM_SQL.replace('%MEDIUM%', mediumExpression)}
+          THEN COALESCE(${normalizedCampaigns})
+          ELSE ${campaignExpressions[0]}
+        END`;
+}
+
+const LANDING_SESSION_CAMPAIGN_SQL = googleCpcCampaignFallbackSql('s.initial_utm_source', 's.initial_utm_medium', [
+  's.initial_utm_campaign',
+  'first_event.utm_campaign',
+  'first_touch.utm_campaign',
+  'attribution_identity.initial_utm_campaign'
+]);
+
+const TOKEN_CAMPAIGN_SQL = googleCpcCampaignFallbackSql(
+  'COALESCE(e.utm_source, s.initial_utm_source)',
+  'COALESCE(e.utm_medium, s.initial_utm_medium)',
+  ['e.utm_campaign', 'token_touch.utm_campaign', 's.initial_utm_campaign', 'attribution_identity.initial_utm_campaign']
+);
+
+const IDENTITY_CAMPAIGN_SQL = googleCpcCampaignFallbackSql(
+  'COALESCE(s.initial_utm_source, attribution_identity.initial_utm_source)',
+  'COALESCE(s.initial_utm_medium, attribution_identity.initial_utm_medium)',
+  ['s.initial_utm_campaign', 'attribution_identity.initial_utm_campaign', 'first_touch.utm_campaign']
+);
+
 export type AttributionCandidateOrder = {
   shopifyOrderId: string;
   processedAt: Date | string | null;
@@ -207,7 +245,7 @@ async function fetchLandingSessionCandidate(
         NULL::text AS attribution_reason,
         s.initial_utm_source AS source,
         s.initial_utm_medium AS medium,
-        s.initial_utm_campaign AS campaign,
+        ${LANDING_SESSION_CAMPAIGN_SQL} AS campaign,
         s.initial_utm_content AS content,
         s.initial_utm_term AS term,
         CASE
@@ -229,12 +267,21 @@ async function fetchLandingSessionCandidate(
         ) AS click_id_value
       FROM tracking_sessions s
       LEFT JOIN LATERAL (
-        SELECT e.id
+        SELECT e.id, e.utm_campaign
         FROM tracking_events e
         WHERE e.session_id = s.id
         ORDER BY e.occurred_at ASC, e.id ASC
         LIMIT 1
       ) AS first_event ON true
+      LEFT JOIN session_attribution_identities attribution_identity
+        ON attribution_identity.roas_radar_session_id = s.id
+      LEFT JOIN LATERAL (
+        SELECT touch.utm_campaign
+        FROM session_attribution_touch_events touch
+        WHERE touch.roas_radar_session_id = s.id
+        ORDER BY touch.occurred_at ASC, touch.id ASC
+        LIMIT 1
+      ) AS first_touch ON true
       WHERE s.id = $1::uuid
       LIMIT 1
     `,
@@ -262,7 +309,7 @@ async function fetchLatestTokenCandidate(
         NULL::text AS attribution_reason,
         COALESCE(e.utm_source, s.initial_utm_source) AS source,
         COALESCE(e.utm_medium, s.initial_utm_medium) AS medium,
-        COALESCE(e.utm_campaign, s.initial_utm_campaign) AS campaign,
+        ${TOKEN_CAMPAIGN_SQL} AS campaign,
         COALESCE(e.utm_content, s.initial_utm_content) AS content,
         COALESCE(e.utm_term, s.initial_utm_term) AS term,
         CASE
@@ -297,6 +344,16 @@ async function fetchLatestTokenCandidate(
       FROM tracking_events e
       INNER JOIN tracking_sessions s
         ON s.id = e.session_id
+      LEFT JOIN session_attribution_identities attribution_identity
+        ON attribution_identity.roas_radar_session_id = s.id
+      LEFT JOIN LATERAL (
+        SELECT touch.utm_campaign
+        FROM session_attribution_touch_events touch
+        WHERE touch.roas_radar_session_id = e.session_id
+          AND touch.${tokenColumn} = $1
+        ORDER BY touch.occurred_at DESC, touch.id DESC
+        LIMIT 1
+      ) AS token_touch ON true
       WHERE ${tokenColumn} = $1
         AND e.occurred_at <= $2
         AND e.occurred_at >= $2 - ($3::int * interval '1 day')
@@ -338,9 +395,9 @@ async function fetchIdentityCandidates(
           ) THEN 'matched_by_identity_journey'
           ELSE 'matched_by_customer_identity'
         END AS attribution_reason,
-        s.initial_utm_source AS source,
-        s.initial_utm_medium AS medium,
-        s.initial_utm_campaign AS campaign,
+        COALESCE(s.initial_utm_source, attribution_identity.initial_utm_source) AS source,
+        COALESCE(s.initial_utm_medium, attribution_identity.initial_utm_medium) AS medium,
+        ${IDENTITY_CAMPAIGN_SQL} AS campaign,
         s.initial_utm_content AS content,
         s.initial_utm_term AS term,
         CASE
@@ -361,6 +418,8 @@ async function fetchIdentityCandidates(
           s.initial_msclkid
         ) AS click_id_value
       FROM tracking_sessions s
+      LEFT JOIN session_attribution_identities attribution_identity
+        ON attribution_identity.roas_radar_session_id = s.id
       LEFT JOIN LATERAL (
         SELECT e.id
         FROM tracking_events e
@@ -368,6 +427,13 @@ async function fetchIdentityCandidates(
         ORDER BY e.occurred_at ASC, e.id ASC
         LIMIT 1
       ) AS first_event ON true
+      LEFT JOIN LATERAL (
+        SELECT touch.utm_campaign
+        FROM session_attribution_touch_events touch
+        WHERE touch.roas_radar_session_id = s.id
+        ORDER BY touch.occurred_at ASC, touch.id ASC
+        LIMIT 1
+      ) AS first_touch ON true
       WHERE (
         ($1::uuid IS NOT NULL AND s.identity_journey_id = $1::uuid)
         OR ($2::uuid IS NOT NULL AND s.customer_identity_id = $2::uuid)
