@@ -134,9 +134,10 @@ export async function enqueueOrderAttributionBackfillRun(
   submittedBy: string,
   now = new Date()
 ): Promise<OrderAttributionBackfillEnqueueResponse> {
+  const normalizedSubmittedOptions = orderAttributionBackfillSubmittedOptionsSchema.parse(options);
   const jobId = randomUUID();
   const submittedAt = now.toISOString();
-  const idempotencyKey = buildIdempotencyKey(options);
+  const idempotencyKey = buildIdempotencyKey(normalizedSubmittedOptions);
 
   const result = await query<OrderAttributionBackfillRunRow>(
     `
@@ -181,7 +182,7 @@ export async function enqueueOrderAttributionBackfillRun(
       jobId,
       submittedAt,
       submittedBy,
-      JSON.stringify(options),
+      JSON.stringify(normalizedSubmittedOptions),
       JSON.stringify(buildEmptyOrderAttributionBackfillProgress()),
       idempotencyKey
     ]
@@ -195,7 +196,7 @@ export async function enqueueOrderAttributionBackfillRun(
       status: 'queued',
       submittedAt,
       submittedBy,
-      options
+      options: normalizedSubmittedOptions
     });
   }
 

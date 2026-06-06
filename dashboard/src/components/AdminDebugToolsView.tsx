@@ -449,6 +449,8 @@ export default function AdminDebugToolsView({ reportingTimezone }: { reportingTi
         endDate: recomputeForm.endDate,
         dryRun: recomputeForm.dryRun,
         limit: recomputeLimit,
+        reclassificationTarget: 'full_rebuild',
+        organizationIds: [],
         webOrdersOnly: false,
         skipShopifyWriteback: true
       });

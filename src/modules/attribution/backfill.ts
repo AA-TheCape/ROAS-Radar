@@ -964,7 +964,7 @@ async function fetchScopeMetrics(client: PoolClient, options: BackfillScopeOptio
   }>(
     `
       WITH scoped_orders AS (
-        SELECT o.shopify_order_id
+        SELECT o.shopify_order_id, o.attribution_tier
         FROM shopify_orders o
         WHERE COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) >= $1
           AND COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) <= $2
@@ -974,11 +974,11 @@ async function fetchScopeMetrics(client: PoolClient, options: BackfillScopeOptio
         COUNT(*)::text AS total_orders_in_scope,
         COUNT(*) FILTER (WHERE ${MISSING_ATTRIBUTION_SQL})::text AS orders_missing_attribution,
         COUNT(*) FILTER (WHERE NOT (${MISSING_ATTRIBUTION_SQL}))::text AS orders_with_attribution,
-        COUNT(*) FILTER (WHERE COALESCE(attribution.attribution_tier, 'unattributed') = 'deterministic_first_party')::text AS deterministic_first_party,
-        COUNT(*) FILTER (WHERE COALESCE(attribution.attribution_tier, 'unattributed') = 'deterministic_shopify_hint')::text AS deterministic_shopify_hint,
-        COUNT(*) FILTER (WHERE COALESCE(attribution.attribution_tier, 'unattributed') = 'platform_reported_meta')::text AS platform_reported_meta,
-        COUNT(*) FILTER (WHERE COALESCE(attribution.attribution_tier, 'unattributed') = 'ga4_fallback')::text AS ga4_fallback,
-        COUNT(*) FILTER (WHERE COALESCE(attribution.attribution_tier, 'unattributed') = 'unattributed')::text AS unattributed
+        COUNT(*) FILTER (WHERE COALESCE(scoped.attribution_tier, 'unattributed') = 'deterministic_first_party')::text AS deterministic_first_party,
+        COUNT(*) FILTER (WHERE COALESCE(scoped.attribution_tier, 'unattributed') = 'deterministic_shopify_hint')::text AS deterministic_shopify_hint,
+        COUNT(*) FILTER (WHERE COALESCE(scoped.attribution_tier, 'unattributed') = 'platform_reported_meta')::text AS platform_reported_meta,
+        COUNT(*) FILTER (WHERE COALESCE(scoped.attribution_tier, 'unattributed') = 'ga4_fallback')::text AS ga4_fallback,
+        COUNT(*) FILTER (WHERE COALESCE(scoped.attribution_tier, 'unattributed') = 'unattributed')::text AS unattributed
       FROM scoped_orders scoped
       LEFT JOIN attribution_results attribution
         ON attribution.shopify_order_id = scoped.shopify_order_id

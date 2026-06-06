@@ -21,6 +21,29 @@ const {
 const originalPoolQuery = pool.query.bind(pool);
 const originalPoolConnect = pool.connect.bind(pool);
 
+const emptyTierCounts = {
+	deterministic_first_party: 0,
+	deterministic_shopify_hint: 0,
+	platform_reported_meta: 0,
+	ga4_fallback: 0,
+	unattributed: 0,
+};
+
+const expectedOptionsDefaults = {
+	reclassificationTarget: "full_rebuild",
+	organizationIds: [],
+};
+
+function expectedReportDefaults(dryRun: boolean) {
+	return {
+		dryRun,
+		reclassificationTarget: "full_rebuild",
+		organizationIds: [],
+		beforeCounts: emptyTierCounts,
+		afterCounts: emptyTierCounts,
+	};
+}
+
 test("enqueueOrderAttributionBackfillRun persists normalized options and returns the shared enqueue shape", async () => {
 	const capturedQueries: Array<{ text: string; params?: unknown[] }> = [];
 
@@ -52,6 +75,7 @@ test("enqueueOrderAttributionBackfillRun persists normalized options and returns
 			endDate: "2026-04-05",
 			dryRun: true,
 			limit: 500,
+			...expectedOptionsDefaults,
 			webOrdersOnly: true,
 			skipShopifyWriteback: false,
 		});
@@ -130,6 +154,7 @@ test("claimOrderAttributionBackfillRuns returns normalized claimed runs and rese
           endDate: '2026-04-05',
           dryRun: true,
           limit: 500,
+          ...expectedOptionsDefaults,
           webOrdersOnly: true,
           skipShopifyWriteback: false
         },
@@ -218,6 +243,7 @@ test('getOrderAttributionBackfillRun maps persisted failure details into the sha
 				endDate: "2026-04-05",
 				dryRun: false,
 				limit: 500,
+				...expectedOptionsDefaults,
 				webOrdersOnly: true,
 				skipShopifyWriteback: false,
 			},
@@ -226,6 +252,7 @@ test('getOrderAttributionBackfillRun maps persisted failure details into the sha
 				recovered: 4,
 				unrecoverable: 3,
 				writebackCompleted: 2,
+				...expectedReportDefaults(false),
 				failures: [
 					{
 						orderId: "order-9",
@@ -356,6 +383,7 @@ test('getOrderAttributionBackfillRun maps queued, processing, and completed reco
 				endDate: "2026-04-05",
 				dryRun: true,
 				limit: 500,
+				...expectedOptionsDefaults,
 				webOrdersOnly: true,
 				skipShopifyWriteback: false,
 			},
@@ -375,6 +403,7 @@ test('getOrderAttributionBackfillRun maps queued, processing, and completed reco
 				endDate: "2026-04-08",
 				dryRun: false,
 				limit: 5000,
+				...expectedOptionsDefaults,
 				webOrdersOnly: false,
 				skipShopifyWriteback: true,
 			},
@@ -394,6 +423,7 @@ test('getOrderAttributionBackfillRun maps queued, processing, and completed reco
 				endDate: "2026-04-12",
 				dryRun: false,
 				limit: 250,
+				...expectedOptionsDefaults,
 				webOrdersOnly: true,
 				skipShopifyWriteback: false,
 			},
@@ -402,6 +432,7 @@ test('getOrderAttributionBackfillRun maps queued, processing, and completed reco
 				recovered: 80,
 				unrecoverable: 20,
 				writebackCompleted: 80,
+				...expectedReportDefaults(false),
 				failures: [
 					{
 						orderId: "order-17",
@@ -462,6 +493,7 @@ test("markOrderAttributionBackfillRunCompleted and markOrderAttributionBackfillR
 			recovered: 2,
 			unrecoverable: 3,
 			writebackCompleted: 1,
+			...expectedReportDefaults(false),
 			failures: [],
 		});
 		assert.match(capturedQueries[1].text, /status = 'failed'/);
@@ -470,6 +502,7 @@ test("markOrderAttributionBackfillRunCompleted and markOrderAttributionBackfillR
 			recovered: 0,
 			unrecoverable: 1,
 			writebackCompleted: 0,
+			...expectedReportDefaults(false),
 			failures: [],
 		});
 		assert.equal(capturedQueries[1].params?.[3], "Error");
