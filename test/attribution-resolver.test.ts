@@ -600,7 +600,7 @@ test('resolveAttributionTierForVersion replays deterministically and keeps Meta 
   );
 });
 
-test('forward-processing resolver version selection preserves historical orders until manual backfill', async () => {
+test('forward-processing resolver version selection uses the current resolver for recomputed orders', async () => {
   const ruleVersionModule = await import('../src/modules/attribution/rule-version.js');
 
   assert.equal(
@@ -615,14 +615,14 @@ test('forward-processing resolver version selection preserves historical orders 
       attributionTier: 'ga4_fallback',
       attributionResolverRuleVersion: 'attribution_resolver_v1'
     }),
-    'attribution_resolver_v1'
+    'attribution_resolver_v2'
   );
   assert.equal(
     ruleVersionModule.selectResolverRuleVersionForForwardProcessing({
       attributionTier: 'deterministic_first_party',
       attributionResolverRuleVersion: null
     }),
-    'attribution_resolver_v1'
+    'attribution_resolver_v2'
   );
   assert.equal(
     ruleVersionModule.selectResolverRuleVersionForForwardProcessing({

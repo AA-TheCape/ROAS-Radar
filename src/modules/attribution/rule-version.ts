@@ -31,15 +31,7 @@ export function assertSupportedAttributionResolverRuleVersion(
 }
 
 export function selectResolverRuleVersionForForwardProcessing(
-  order: ForwardProcessingResolverVersionOrder
+  _order: ForwardProcessingResolverVersionOrder
 ): AttributionResolverRuleVersion {
-  if (!order.attributionTier) {
-    return ATTRIBUTION_RESOLVER_RULE_VERSION;
-  }
-
-  if (isSupportedAttributionResolverRuleVersion(order.attributionResolverRuleVersion)) {
-    return order.attributionResolverRuleVersion;
-  }
-
-  return 'attribution_resolver_v1';
+  return ATTRIBUTION_RESOLVER_RULE_VERSION;
 }

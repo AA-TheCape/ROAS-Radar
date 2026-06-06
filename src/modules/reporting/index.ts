@@ -65,7 +65,7 @@ const ATTRIBUTION_TIER_DESCRIPTIONS: Record<ReportingAttributionTier, string> = 
   ga4_fallback:
     'Recovered from the GA4 fallback contract only after first-party and Shopify-hint matches were unavailable.',
   unattributed:
-    'No eligible first-party, Shopify hint, or GA4 fallback match qualified, or the required timing data could not be normalized.'
+    'No eligible first-party, Shopify hint, Meta platform-reported, or GA4 fallback match qualified, or the required timing data could not be normalized.'
 };
 
 const baseFiltersObjectSchema = z.object({
