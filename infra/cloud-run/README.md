@@ -2,7 +2,7 @@
 
 This directory contains the checked-in deployment contract for the Node backend, the optional dashboard service, and the scheduled jobs that support attribution and ad-ingestion workloads.
 
-The root backend `Dockerfile` is the production packaging path for every backend Cloud Run workload in this directory. It builds on `node:22-bookworm-slim` and defaults the API container command to `npm run start:api`.
+The root backend `Dockerfile` is the production packaging path for every backend Cloud Run workload in this directory. It builds on `node:22.13.0-bookworm-slim` and defaults the API container command to `npm run start:api`.
 
 The deployment flow assumes these Cloud Run workloads and Cloud Scheduler triggers:
 
@@ -161,7 +161,7 @@ The checked-in env files are valid shell files. Replace the placeholder project 
 - `SESSION_ATTRIBUTION_RETENTION_BATCH_SIZE`
 - `SESSION_ATTRIBUTION_RETENTION_MAX_BATCHES`
 
-Run these commands from the repo root on Node 22 before deploying:
+Run these commands from the repo root on Node 22.13.0 or newer before deploying:
 
 1. Provision deterministic GCP infrastructure from `infra/terraform/gcp-pipeline/`.
 2. Populate the Secret Manager secret versions created by Terraform.

@@ -82,7 +82,7 @@ Production Bayesian training is gated on the same approved immutable calibration
 
 Diagnostics are computed from retained Markov chains, not from synthetic independent draws. The run fails before completion when R-hat exceeds `1.1`, minimum effective sample size is below `100`, or posterior contribution sanity checks fail. Failed diagnostics therefore keep the run out of production-ready API readiness.
 
-Cloud Run assumptions: use Node 22, at least 1 vCPU, and 1 GiB memory for default `MMM_BAYESIAN_POSTERIOR_CHAINS=4`, `MMM_BAYESIAN_POSTERIOR_DRAWS=1000`, `MMM_BAYESIAN_POSTERIOR_WARMUP_DRAWS=500`, and up to 12 selected channels. Increase `MMM_BAYESIAN_JOB_TIMEOUT_SECONDS`, `MMM_BAYESIAN_JOB_CPU`, or reduce `MMM_BAYESIAN_MAX_CHANNELS` before increasing chains/draws on wide channel windows. Use `MMM_BAYESIAN_RANDOM_SEED` only for reproducible validation runs.
+Cloud Run assumptions: use Node 22.13.0 or newer, at least 1 vCPU, and 1 GiB memory for default `MMM_BAYESIAN_POSTERIOR_CHAINS=4`, `MMM_BAYESIAN_POSTERIOR_DRAWS=1000`, `MMM_BAYESIAN_POSTERIOR_WARMUP_DRAWS=500`, and up to 12 selected channels. Increase `MMM_BAYESIAN_JOB_TIMEOUT_SECONDS`, `MMM_BAYESIAN_JOB_CPU`, or reduce `MMM_BAYESIAN_MAX_CHANNELS` before increasing chains/draws on wide channel windows. Use `MMM_BAYESIAN_RANDOM_SEED` only for reproducible validation runs.
 
 Manual release gate:
 

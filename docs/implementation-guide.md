@@ -284,7 +284,7 @@ These are required only if you are running the Shopify OAuth install flow or val
 
 ### Prerequisites
 
-- Node.js 22.12.0 or newer. Run `nvm use` from the repository root if you use nvm; `.nvmrc` pins the local baseline used by dashboard tooling.
+- Node.js 22.13.0 or newer. Run `nvm use` from the repository root if you use nvm; `.nvmrc` and `.node-version` pin the local baseline used by backend and dashboard tooling.
 - npm
 - PostgreSQL
 

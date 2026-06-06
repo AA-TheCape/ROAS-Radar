@@ -5,7 +5,17 @@ steps:
       - -ceu
       - |
         apt-get update
-        apt-get install -y --no-install-recommends nodejs
+        apt-get install -y --no-install-recommends ca-certificates curl xz-utils
+        NODE_VERSION="${_NODE_VERSION}"
+        NODE_ARCH="$(dpkg --print-architecture)"
+        case "$NODE_ARCH" in
+          amd64) NODE_DIST_ARCH=x64 ;;
+          arm64) NODE_DIST_ARCH=arm64 ;;
+          *) echo "unsupported Node architecture: $NODE_ARCH" >&2; exit 1 ;;
+        esac
+        curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_DIST_ARCH}.tar.xz" \
+          | tar -xJ --strip-components=1 -C /usr/local
+        node --version
         SHORT_SHA="$SHORT_SHA" \
         RUN_MIGRATIONS_ON_DEPLOY="${_RUN_MIGRATIONS_ON_DEPLOY}" \
         APPLY_MONITORING_ON_DEPLOY="${_APPLY_MONITORING_ON_DEPLOY}" \
@@ -15,6 +25,7 @@ steps:
 
 substitutions:
   _PROMOTION_TARGET: production
+  _NODE_VERSION: "22.13.0"
   _RUN_MIGRATIONS_ON_DEPLOY: "true"
   _APPLY_MONITORING_ON_DEPLOY: "true"
   _RUN_STAGING_ROLLBACK_DRILL: "true"
