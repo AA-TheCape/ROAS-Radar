@@ -166,7 +166,10 @@ test("reporting dashboard search and order drill-in stay wired for high-traffic 
     assert.match(mounted.container.textContent ?? '', /Campaign performance/);
     assert.match(mounted.container.textContent ?? '', /Order attribution rows/);
     assert.match(mounted.container.textContent ?? '', /Deterministic first-party/);
+    assert.match(mounted.container.textContent ?? '', /Spring Search/);
+    assert.match(mounted.container.textContent ?? '', /google_cpc_123/);
     assert.match(mounted.container.textContent ?? '', /Unattributed/);
+    assert.match(mounted.container.textContent ?? '', /No campaign/);
     assert.match(mounted.container.textContent ?? '', /Pending/);
     assert.match(mounted.container.textContent ?? '', /Awaiting attribution run/);
 
@@ -706,6 +709,8 @@ test("order details renders attribution confidence lookup metadata", async () =>
 		assert.match(text, /Matching method/);
 		assert.match(text, /matched_by_landing_session/);
 		assert.match(text, /Confidence score/);
+		assert.match(text, /Brand Search/);
+		assert.match(text, /brand-search/);
 		assert.match(text, /Last attribution run/);
 		assert.match(text, /Apr 20, 11:00 AM/);
 	} finally {

@@ -365,6 +365,40 @@ components:
               format: date-time
             totalPrice:
               type: number
+            source:
+              type:
+                - string
+                - "null"
+            medium:
+              type:
+                - string
+                - "null"
+            campaign:
+              type:
+                - string
+                - "null"
+            campaignName:
+              type:
+                - string
+                - "null"
+              description: Resolved ad-platform campaign name when campaign metadata is available.
+            campaignDisplayName:
+              type: string
+              description: Backward-compatible campaign display label used by reporting views.
+            campaignPlatform:
+              type:
+                - string
+                - "null"
+              enum:
+                - google_ads
+                - meta_ads
+                - null
+            campaignNameResolutionStatus:
+              type: string
+              enum:
+                - resolved
+                - fallback_name
+                - unresolved
             attributionTier:
               $ref: "#/components/schemas/OrderAttributionTier"
             attributionMatchedAt:
@@ -379,6 +413,11 @@ components:
         - $ref: "#/components/schemas/ReportingOrderSummary"
         - type: object
           properties:
+            attributedCampaignName:
+              type:
+                - string
+                - "null"
+              description: Resolved name for the order winner campaign when campaign metadata is available.
             attributionSnapshot:
               type:
                 - object

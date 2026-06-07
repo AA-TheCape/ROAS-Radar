@@ -18,7 +18,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.13.0
           cache: npm
 
       - run: npm ci --include=dev
@@ -34,7 +34,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.13.0
           cache: npm
           cache-dependency-path: dashboard/package-lock.json
 
@@ -71,12 +71,13 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.13.0
           cache: npm
 
       - run: npm ci --include=dev
       - run: npm run db:migrate:check
       - run: npm run test:integration
+      - run: npm run test:attribution
 
   deploy-staging:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'

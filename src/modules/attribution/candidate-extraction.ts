@@ -32,6 +32,46 @@ type SessionCandidateRow = {
   click_id_value: string | null;
 };
 
+const GOOGLE_CPC_SOURCE_SQL = "lower(btrim(COALESCE(%SOURCE%, ''))) IN ('google', 'google_ads', 'googleadwords', 'google_adwords', 'adwords', 'youtube')";
+const GOOGLE_CPC_MEDIUM_SQL = "lower(btrim(COALESCE(%MEDIUM%, ''))) IN ('cpc', 'ppc', 'sem', 'paidsearch', 'paid_search')";
+const GOOGLE_CPC_SOURCES = new Set(['google', 'google_ads', 'googleadwords', 'google_adwords', 'adwords', 'youtube']);
+const GOOGLE_CPC_MEDIUMS = new Set(['cpc', 'ppc', 'sem', 'paidsearch', 'paid_search']);
+
+function googleCpcCampaignFallbackSql(
+  sourceExpression: string,
+  mediumExpression: string,
+  campaignExpressions: string[]
+): string {
+  const normalizedCampaigns = campaignExpressions.map((expression) => `NULLIF(btrim(${expression}), '')`).join(', ');
+
+  return `
+        CASE
+          WHEN ${GOOGLE_CPC_SOURCE_SQL.replace('%SOURCE%', sourceExpression)}
+           AND ${GOOGLE_CPC_MEDIUM_SQL.replace('%MEDIUM%', mediumExpression)}
+          THEN COALESCE(${normalizedCampaigns})
+          ELSE ${campaignExpressions[0]}
+        END`;
+}
+
+const LANDING_SESSION_CAMPAIGN_SQL = googleCpcCampaignFallbackSql('s.initial_utm_source', 's.initial_utm_medium', [
+  's.initial_utm_campaign',
+  'first_event.utm_campaign',
+  'first_touch.utm_campaign',
+  'attribution_identity.initial_utm_campaign'
+]);
+
+const TOKEN_CAMPAIGN_SQL = googleCpcCampaignFallbackSql(
+  'COALESCE(e.utm_source, s.initial_utm_source)',
+  'COALESCE(e.utm_medium, s.initial_utm_medium)',
+  ['e.utm_campaign', 'token_touch.utm_campaign', 's.initial_utm_campaign', 'attribution_identity.initial_utm_campaign']
+);
+
+const IDENTITY_CAMPAIGN_SQL = googleCpcCampaignFallbackSql(
+  'COALESCE(s.initial_utm_source, attribution_identity.initial_utm_source)',
+  'COALESCE(s.initial_utm_medium, attribution_identity.initial_utm_medium)',
+  ['s.initial_utm_campaign', 'attribution_identity.initial_utm_campaign', 'first_touch.utm_campaign']
+);
+
 export type AttributionCandidateOrder = {
   shopifyOrderId: string;
   processedAt: Date | string | null;
@@ -67,10 +107,18 @@ export type AttributionCandidate = {
   source: string | null;
   medium: string | null;
   campaign: string | null;
+  campaignId?: string | null;
   content: string | null;
   term: string | null;
   clickIdType: string | null;
   clickIdValue: string | null;
+  accountId?: string | null;
+  accountName?: string | null;
+  channelType?: string | null;
+  channelSubtype?: string | null;
+  campaignMetadataSource?: string | null;
+  accountMetadataSource?: string | null;
+  channelMetadataSource?: string | null;
   attributionReason: string;
   confidenceScore: number;
   isDirect: boolean;
@@ -91,6 +139,7 @@ export type Ga4AttributionCandidateInput = {
   source?: string | null;
   medium?: string | null;
   campaign?: string | null;
+  campaignId?: string | null;
   content?: string | null;
   term?: string | null;
   clickIdType?: string | null;
@@ -101,6 +150,13 @@ export type Ga4AttributionCandidateInput = {
   fbclid?: string | null;
   ttclid?: string | null;
   msclkid?: string | null;
+  accountId?: string | null;
+  accountName?: string | null;
+  channelType?: string | null;
+  channelSubtype?: string | null;
+  campaignMetadataSource?: string | null;
+  accountMetadataSource?: string | null;
+  channelMetadataSource?: string | null;
   attributionReason?: string | null;
   confidenceScore?: number | null;
 };
@@ -143,6 +199,15 @@ type MetaAttributionCandidateRow = {
 function normalizeNullableString(value: string | null | undefined): string | null {
   const normalized = value?.trim();
   return normalized ? normalized : null;
+}
+
+function isGoogleCpcTouchpoint(source: string | null, medium: string | null): boolean {
+  return Boolean(
+    source &&
+      medium &&
+      GOOGLE_CPC_SOURCES.has(source.trim().toLowerCase()) &&
+      GOOGLE_CPC_MEDIUMS.has(medium.trim().toLowerCase())
+  );
 }
 
 function buildMetaPaidSocialMedium(row: Pick<MetaAttributionCandidateRow, 'is_click_through' | 'is_view_through'>): string {
@@ -244,7 +309,7 @@ async function fetchLandingSessionCandidate(
         NULL::text AS attribution_reason,
         s.initial_utm_source AS source,
         s.initial_utm_medium AS medium,
-        s.initial_utm_campaign AS campaign,
+        ${LANDING_SESSION_CAMPAIGN_SQL} AS campaign,
         s.initial_utm_content AS content,
         s.initial_utm_term AS term,
         CASE
@@ -266,12 +331,21 @@ async function fetchLandingSessionCandidate(
         ) AS click_id_value
       FROM tracking_sessions s
       LEFT JOIN LATERAL (
-        SELECT e.id
+        SELECT e.id, e.utm_campaign
         FROM tracking_events e
         WHERE e.session_id = s.id
         ORDER BY e.occurred_at ASC, e.id ASC
         LIMIT 1
       ) AS first_event ON true
+      LEFT JOIN session_attribution_identities attribution_identity
+        ON attribution_identity.roas_radar_session_id = s.id
+      LEFT JOIN LATERAL (
+        SELECT touch.utm_campaign
+        FROM session_attribution_touch_events touch
+        WHERE touch.roas_radar_session_id = s.id
+        ORDER BY touch.occurred_at ASC, touch.id ASC
+        LIMIT 1
+      ) AS first_touch ON true
       WHERE s.id = $1::uuid
       LIMIT 1
     `,
@@ -299,7 +373,7 @@ async function fetchLatestTokenCandidate(
         NULL::text AS attribution_reason,
         COALESCE(e.utm_source, s.initial_utm_source) AS source,
         COALESCE(e.utm_medium, s.initial_utm_medium) AS medium,
-        COALESCE(e.utm_campaign, s.initial_utm_campaign) AS campaign,
+        ${TOKEN_CAMPAIGN_SQL} AS campaign,
         COALESCE(e.utm_content, s.initial_utm_content) AS content,
         COALESCE(e.utm_term, s.initial_utm_term) AS term,
         CASE
@@ -334,6 +408,16 @@ async function fetchLatestTokenCandidate(
       FROM tracking_events e
       INNER JOIN tracking_sessions s
         ON s.id = e.session_id
+      LEFT JOIN session_attribution_identities attribution_identity
+        ON attribution_identity.roas_radar_session_id = s.id
+      LEFT JOIN LATERAL (
+        SELECT touch.utm_campaign
+        FROM session_attribution_touch_events touch
+        WHERE touch.roas_radar_session_id = e.session_id
+          AND touch.${tokenColumn} = $1
+        ORDER BY touch.occurred_at DESC, touch.id DESC
+        LIMIT 1
+      ) AS token_touch ON true
       WHERE ${tokenColumn} = $1
         AND e.occurred_at <= $2
         AND e.occurred_at >= $2 - ($3::int * interval '1 day')
@@ -375,9 +459,9 @@ async function fetchIdentityCandidates(
           ) THEN 'matched_by_identity_journey'
           ELSE 'matched_by_customer_identity'
         END AS attribution_reason,
-        s.initial_utm_source AS source,
-        s.initial_utm_medium AS medium,
-        s.initial_utm_campaign AS campaign,
+        COALESCE(s.initial_utm_source, attribution_identity.initial_utm_source) AS source,
+        COALESCE(s.initial_utm_medium, attribution_identity.initial_utm_medium) AS medium,
+        ${IDENTITY_CAMPAIGN_SQL} AS campaign,
         s.initial_utm_content AS content,
         s.initial_utm_term AS term,
         CASE
@@ -398,6 +482,8 @@ async function fetchIdentityCandidates(
           s.initial_msclkid
         ) AS click_id_value
       FROM tracking_sessions s
+      LEFT JOIN session_attribution_identities attribution_identity
+        ON attribution_identity.roas_radar_session_id = s.id
       LEFT JOIN LATERAL (
         SELECT e.id
         FROM tracking_events e
@@ -405,6 +491,13 @@ async function fetchIdentityCandidates(
         ORDER BY e.occurred_at ASC, e.id ASC
         LIMIT 1
       ) AS first_event ON true
+      LEFT JOIN LATERAL (
+        SELECT touch.utm_campaign
+        FROM session_attribution_touch_events touch
+        WHERE touch.roas_radar_session_id = s.id
+        ORDER BY touch.occurred_at ASC, touch.id ASC
+        LIMIT 1
+      ) AS first_touch ON true
       WHERE (
         ($1::uuid IS NOT NULL AND s.identity_journey_id = $1::uuid)
         OR ($2::uuid IS NOT NULL AND s.customer_identity_id = $2::uuid)
@@ -447,6 +540,7 @@ function mapDeterministicCandidate(candidate: ResolvedAttributionTouchpoint): At
     source: candidate.source,
     medium: candidate.medium,
     campaign: candidate.campaign,
+    campaignId: candidate.campaignId,
     content: candidate.content,
     term: candidate.term,
     clickIdType: candidate.clickIdType,
@@ -525,10 +619,18 @@ async function loadDefaultGa4Candidates(
     source: candidate.source,
     medium: candidate.medium,
     campaign: candidate.campaign,
+    campaignId: candidate.campaignId,
     content: candidate.content,
     term: candidate.term,
     clickIdType: candidate.clickIdType,
     clickIdValue: candidate.clickIdValue,
+    accountId: candidate.accountId,
+    accountName: candidate.accountName,
+    channelType: candidate.channelType,
+    channelSubtype: candidate.channelSubtype,
+    campaignMetadataSource: candidate.campaignMetadataSource,
+    accountMetadataSource: candidate.accountMetadataSource,
+    channelMetadataSource: candidate.channelMetadataSource,
     attributionReason: 'ga4_fallback_derived',
     confidenceScore: candidate.clickIdValue ? 0.35 : 0.25
   }));
@@ -573,10 +675,19 @@ function mapGa4Candidate(
     };
   }
 
+  const rawSource = normalizeNullableString(rawCandidate.source);
+  const rawMedium = normalizeNullableString(rawCandidate.medium);
+  const rawCampaign = normalizeNullableString(rawCandidate.campaign);
+  const rawCampaignId = normalizeNullableString(rawCandidate.campaignId);
+  const effectiveCampaign =
+    !rawCampaign && rawCampaignId && isGoogleCpcTouchpoint(rawSource, rawMedium)
+      ? rawCampaignId
+      : rawCampaign;
+
   const canonicalDimensions = buildCanonicalTouchpointDimensions({
     source: rawCandidate.source,
     medium: rawCandidate.medium,
-    campaign: rawCandidate.campaign,
+    campaign: effectiveCampaign,
     content: rawCandidate.content,
     term: rawCandidate.term,
     clickIdType: rawCandidate.clickIdType,
@@ -600,10 +711,18 @@ function mapGa4Candidate(
       source: canonicalDimensions.source,
       medium: canonicalDimensions.medium,
       campaign: canonicalDimensions.campaign,
+      campaignId: rawCampaignId,
       content: canonicalDimensions.content,
       term: canonicalDimensions.term,
       clickIdType: canonicalDimensions.clickIdType,
       clickIdValue: canonicalDimensions.clickIdValue,
+      accountId: normalizeNullableString(rawCandidate.accountId),
+      accountName: normalizeNullableString(rawCandidate.accountName),
+      channelType: normalizeNullableString(rawCandidate.channelType),
+      channelSubtype: normalizeNullableString(rawCandidate.channelSubtype),
+      campaignMetadataSource: normalizeNullableString(rawCandidate.campaignMetadataSource),
+      accountMetadataSource: normalizeNullableString(rawCandidate.accountMetadataSource),
+      channelMetadataSource: normalizeNullableString(rawCandidate.channelMetadataSource),
       attributionReason: normalizeNullableString(rawCandidate.attributionReason) ?? 'ga4_fallback_match',
       confidenceScore: boundConfidenceScore(rawCandidate.confidenceScore, canonicalDimensions.clickIdValue ? 0.35 : 0.25),
       isDirect: isDirectTouchpoint({

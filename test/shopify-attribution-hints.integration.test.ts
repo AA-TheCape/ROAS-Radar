@@ -10,6 +10,17 @@ process.env.REPORTING_API_TOKEN = 'test-reporting-token';
 process.env.SHOPIFY_APP_API_SECRET ??= 'test-app-secret';
 process.env.SHOPIFY_WEBHOOK_SECRET ??= 'test-webhook-secret';
 
+const NULL_ATTRIBUTION_METADATA = {
+	campaignId: null,
+	accountId: null,
+	accountName: null,
+	channelType: null,
+	channelSubtype: null,
+	campaignMetadataSource: null,
+	accountMetadataSource: null,
+	channelMetadataSource: null,
+};
+
 async function getModules() {
 	const poolModule = await import("../src/db/pool.js");
 	const attributionModule = await import("../src/modules/attribution/index.js");
@@ -361,7 +372,8 @@ test("recoverShopifyAttributionHints applies click-id-backed synthetic attributi
       clickIdValue: 'FB-CLICK-123',
       attributionReason: 'shopify_hint_derived',
       ingestionSource: 'shopify_marketing_hint',
-      isDirect: false
+      isDirect: false,
+      ...NULL_ATTRIBUTION_METADATA
     });
     assert.deepEqual(snapshot?.timeline, [snapshot?.winner]);
 
@@ -547,6 +559,7 @@ test("recoverShopifyAttributionHints suppresses Shopify fallback when checkout o
 				attributionReason: "matched_by_landing_session",
 				ingestionSource: "landing_session_id",
 				isDirect: false,
+				...NULL_ATTRIBUTION_METADATA,
 			});
 	} finally {
 		await resetIntegrationDatabase();

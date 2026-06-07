@@ -62,6 +62,17 @@ type OrderDetailsViewProps = {
 	orderDetailsSection: AsyncSection<OrderDetailsResponse>;
 };
 
+type CampaignDisplayFields = {
+	campaign: string | null;
+	campaignName?: string | null;
+	attributedCampaignName?: string | null;
+	campaignDisplayName?: string | null;
+	campaignNameResolutionStatus?: "resolved" | "fallback_name" | "unresolved";
+	campaignLabel?: {
+		displayName?: string | null;
+	};
+};
+
 function formatOptionalDateTime(
 	value: string | null | undefined,
 	reportingTimezone: string,
@@ -99,6 +110,41 @@ function formatContractValue(value: string | null | undefined): string {
 	}
 
 	return value.replace(/_/g, " ");
+}
+
+function getCampaignDisplayName(row: CampaignDisplayFields) {
+	const campaignName =
+		row.campaignLabel?.displayName?.trim() ||
+		row.campaignDisplayName?.trim() ||
+		row.attributedCampaignName?.trim() ||
+		row.campaignName?.trim();
+
+	if (campaignName && row.campaignNameResolutionStatus !== "unresolved") {
+		return campaignName;
+	}
+
+	return row.campaign;
+}
+
+function CampaignValue({
+	row,
+	emptyLabel = "No campaign",
+}: {
+	row: CampaignDisplayFields;
+	emptyLabel?: string;
+}) {
+	const displayName = getCampaignDisplayName(row);
+
+	if (!displayName) {
+		return <>{emptyLabel}</>;
+	}
+
+	return (
+		<PrimaryCell className="gap-0.5">
+			<strong>{displayName}</strong>
+			{row.campaign && row.campaign !== displayName ? <span>{row.campaign}</span> : null}
+		</PrimaryCell>
+	);
 }
 
 function readSnapshotWinner(
@@ -244,6 +290,9 @@ export default function OrderDetailsView({
 						credit.source,
 						credit.medium,
 						credit.campaign,
+						credit.campaignName,
+						credit.campaignDisplayName,
+						credit.campaignLabel?.displayName,
 						credit.attributionReason,
 						credit.matchSource,
 						credit.confidenceLabel,
@@ -261,7 +310,7 @@ export default function OrderDetailsView({
 				model: (credit) => credit.attributionModel,
 				position: (credit) => credit.touchpointPosition,
 				source: (credit) => `${credit.source ?? ""} ${credit.medium ?? ""}`,
-				campaign: (credit) => credit.campaign ?? "",
+				campaign: (credit) => getCampaignDisplayName(credit) ?? "",
 				time: (credit) => credit.touchpointOccurredAt ?? "",
 				revenueCredit: (credit) => credit.revenueCredit,
 				weight: (credit) => credit.creditWeight,
@@ -401,7 +450,22 @@ export default function OrderDetailsView({
                 </div>
                 <div>
                   <dt>Attributed campaign</dt>
-                  <dd>{formatOptionalValue(order?.attributedCampaign)}</dd>
+                  <dd>
+                    {order ? (
+                      <CampaignValue
+                        row={{
+                          campaign: order.attributedCampaign,
+                          attributedCampaignName: order.attributedCampaignName,
+                          campaignDisplayName: order.campaignDisplayName,
+                          campaignNameResolutionStatus: order.campaignNameResolutionStatus,
+                          campaignLabel: order.campaignLabel
+                        }}
+                        emptyLabel="Not available"
+                      />
+                    ) : (
+                      "Not available"
+                    )}
+                  </dd>
                 </div>
                 <div className="md:col-[1/-1]">
                   <dt>Attributed click ID</dt>
@@ -795,7 +859,9 @@ export default function OrderDetailsView({
 												</span>
 											</PrimaryCell>
 										</TableCell>
-										<TableCell>{credit.campaign ?? "No campaign"}</TableCell>
+										<TableCell>
+											<CampaignValue row={credit} />
+										</TableCell>
 										<TableCell>
 											{formatOptionalDateTime(
 												credit.touchpointOccurredAt,

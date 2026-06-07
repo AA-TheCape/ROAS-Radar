@@ -9,6 +9,17 @@ process.env.REPORTING_API_TOKEN = 'test-reporting-token';
 process.env.SHOPIFY_APP_API_SECRET ??= 'test-app-secret';
 process.env.SHOPIFY_WEBHOOK_SECRET ??= 'test-webhook-secret';
 
+const NULL_ATTRIBUTION_METADATA = {
+  campaignId: null,
+  accountId: null,
+  accountName: null,
+  channelType: null,
+  channelSubtype: null,
+  campaignMetadataSource: null,
+  accountMetadataSource: null,
+  channelMetadataSource: null
+};
+
 async function getModules() {
   const poolModule = await import('../src/db/pool.js');
   const attributionModule = await import('../src/modules/attribution/index.js');
@@ -314,6 +325,41 @@ async function processOrder(shopifyOrderId: string) {
   assert.equal(queueResult.failedJobs, 0);
 }
 
+async function captureStructuredLogs<T>(callback: () => T | Promise<T>): Promise<{
+  entries: Array<Record<string, unknown>>;
+  result: T;
+}> {
+  const stdoutChunks: string[] = [];
+  const stderrChunks: string[] = [];
+  const originalStdoutWrite = process.stdout.write.bind(process.stdout);
+  const originalStderrWrite = process.stderr.write.bind(process.stderr);
+
+  process.stdout.write = ((chunk: string | Uint8Array) => {
+    stdoutChunks.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+    return true;
+  }) as typeof process.stdout.write;
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    stderrChunks.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+    return true;
+  }) as typeof process.stderr.write;
+
+  try {
+    const result = await callback();
+    const entries = [...stdoutChunks, ...stderrChunks]
+      .join('')
+      .trim()
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith('{') && line.endsWith('}'))
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+
+    return { entries, result };
+  } finally {
+    process.stdout.write = originalStdoutWrite as typeof process.stdout.write;
+    process.stderr.write = originalStderrWrite as typeof process.stderr.write;
+  }
+}
+
 async function fetchAttributionResult(shopifyOrderId: string) {
   const { pool } = await getModules();
 
@@ -322,6 +368,7 @@ async function fetchAttributionResult(shopifyOrderId: string) {
     attributed_source: string | null;
     attributed_medium: string | null;
     attributed_campaign: string | null;
+    attributed_campaign_id: string | null;
     attributed_click_id_type: string | null;
     attributed_click_id_value: string | null;
     confidence_score: string;
@@ -333,6 +380,7 @@ async function fetchAttributionResult(shopifyOrderId: string) {
         attributed_source,
         attributed_medium,
         attributed_campaign,
+        attributed_campaign_id,
         attributed_click_id_type,
         attributed_click_id_value,
         confidence_score::text,
@@ -345,6 +393,41 @@ async function fetchAttributionResult(shopifyOrderId: string) {
 
   assert.equal(result.rowCount, 1);
   return result.rows[0];
+}
+
+async function fetchPrimaryCredit(shopifyOrderId: string, attributionModel = 'last_non_direct') {
+  const { pool } = await getModules();
+
+  const result = await pool.query<{
+    attributed_source: string | null;
+    attributed_medium: string | null;
+    attributed_campaign: string | null;
+    attributed_campaign_id: string | null;
+    attributed_click_id_type: string | null;
+    attributed_click_id_value: string | null;
+  }>(
+    `
+      SELECT
+        attributed_source,
+        attributed_medium,
+        attributed_campaign,
+        attributed_campaign_id,
+        attributed_click_id_type,
+        attributed_click_id_value
+      FROM attribution_order_credits
+      WHERE shopify_order_id = $1
+        AND attribution_model = $2
+        AND is_primary = true
+    `,
+    [shopifyOrderId, attributionModel]
+  );
+
+  assert.equal(result.rowCount, 1);
+  return result.rows[0];
+}
+
+async function fetchPrimaryLastNonDirectCredit(shopifyOrderId: string) {
+  return fetchPrimaryCredit(shopifyOrderId);
 }
 
 async function fetchOrderSnapshot(shopifyOrderId: string) {
@@ -421,6 +504,7 @@ async function resetIntegrationDatabase() {
     'shopify_order_writeback_jobs',
     'attribution_order_credits',
     'attribution_results',
+    'ga4_fallback_candidates',
     'daily_reporting_metrics',
     'order_attribution_links',
     'session_attribution_touch_events',
@@ -451,7 +535,6 @@ test('order finalization persists a deterministic last non-direct winner snapsho
           referrer_url,
           initial_utm_source,
           initial_utm_medium,
-          initial_utm_campaign,
           initial_gclid
         )
         VALUES (
@@ -461,7 +544,6 @@ test('order finalization persists a deterministic last non-direct winner snapsho
           'https://www.google.com/search?q=widget',
           'google',
           'cpc',
-          'brand-search',
           'gclid-123'
         )
         RETURNING id::text
@@ -479,7 +561,6 @@ test('order finalization persists a deterministic last non-direct winner snapsho
           referrer_url,
           utm_source,
           utm_medium,
-          utm_campaign,
           gclid,
           payload_size_bytes,
           payload_hash,
@@ -493,7 +574,6 @@ test('order finalization persists a deterministic last non-direct winner snapsho
           'https://www.google.com/search?q=widget',
           'google',
           'cpc',
-          'brand-search',
           'gclid-123',
           $2,
           $3,
@@ -509,6 +589,59 @@ test('order finalization persists a deterministic last non-direct winner snapsho
       ]
     );
     const paidEventId = paidEventResult.rows[0].id;
+
+    await pool.query(
+      `
+        INSERT INTO session_attribution_identities (
+          roas_radar_session_id,
+          initial_utm_source,
+          initial_utm_medium
+        )
+        VALUES (
+          $1::uuid,
+          'google',
+          'cpc'
+        )
+      `,
+      [paidSessionId]
+    );
+
+    await pool.query(
+      `
+        INSERT INTO session_attribution_touch_events (
+          roas_radar_session_id,
+          event_type,
+          occurred_at,
+          page_url,
+          utm_source,
+          utm_medium,
+          utm_campaign,
+          gclid,
+          payload_size_bytes,
+          payload_hash,
+          raw_payload
+        )
+        VALUES (
+          $1::uuid,
+          'page_view',
+          '2026-04-01T10:00:00.000Z',
+          'https://store.example/products/widget?utm_source=google&utm_medium=cpc&utm_campaign=brand-search',
+          'google',
+          'cpc',
+          'brand-search',
+          'gclid-123',
+          $2,
+          $3,
+          $4::jsonb
+        )
+      `,
+      [
+        paidSessionId,
+        emptyRawPayloadFixture.payloadSizeBytes,
+        emptyRawPayloadFixture.payloadHash,
+        emptyRawPayloadFixture.rawPayloadJson
+      ]
+    );
 
     const directSessionResult = await pool.query<{ id: string }>(
       `
@@ -689,7 +822,8 @@ test('order finalization persists a deterministic last non-direct winner snapsho
       clickIdValue: 'gclid-123',
       attributionReason: 'matched_by_landing_session',
       ingestionSource: 'landing_session_id',
-      isDirect: false
+      isDirect: false,
+      ...NULL_ATTRIBUTION_METADATA
     });
     assert.equal(Array.isArray(snapshot?.timeline), true);
     assert.equal((snapshot?.timeline as unknown[]).length, 2);
@@ -791,6 +925,7 @@ test('latest non-direct winner survives a multi-touch timeline with a later dire
       attributed_source: 'meta',
       attributed_medium: 'paid_social',
       attributed_campaign: 'retargeting',
+      attributed_campaign_id: null,
       attributed_click_id_type: null,
       attributed_click_id_value: null,
       confidence_score: '0.60',
@@ -854,10 +989,231 @@ test('click-id-only identity touches stay non-direct and beat later direct revis
       attributed_source: null,
       attributed_medium: null,
       attributed_campaign: null,
+      attributed_campaign_id: null,
       attributed_click_id_type: 'fbclid',
       attributed_click_id_value: 'fbclid-abc',
       confidence_score: '0.60',
       attribution_reason: 'matched_by_customer_identity'
+    });
+  } finally {
+    await resetIntegrationDatabase();
+  }
+});
+
+test('Google CPC order attribution persists campaign names only when attribution data provides them', async () => {
+  await resetIntegrationDatabase();
+  const { pool } = await getModules();
+
+  try {
+    const googleCampaignSessionId = await insertTrackingSession(pool, {
+      firstSeenAt: '2026-04-04T10:00:00.000Z',
+      landingPage: 'https://store.example/products/widget?utm_source=google&utm_medium=cpc',
+      utmSource: 'google',
+      utmMedium: 'cpc',
+      gclid: 'gclid-google-campaign'
+    });
+    await insertTrackingEvent(pool, {
+      sessionId: googleCampaignSessionId,
+      eventType: 'page_view',
+      occurredAt: '2026-04-04T10:00:00.000Z',
+      pageUrl: 'https://store.example/products/widget?utm_source=google&utm_medium=cpc&utm_campaign=brand-search',
+      utmSource: 'google',
+      utmMedium: 'cpc',
+      utmCampaign: 'brand-search',
+      gclid: 'gclid-google-campaign'
+    });
+    await insertShopifyOrder(pool, {
+      shopifyOrderId: 'order-google-cpc-campaign-1',
+      processedAt: '2026-04-04T10:05:00.000Z',
+      landingSessionId: googleCampaignSessionId
+    });
+
+    const googleMissingCampaignSessionId = await insertTrackingSession(pool, {
+      firstSeenAt: '2026-04-04T11:00:00.000Z',
+      landingPage: 'https://store.example/products/widget?utm_source=google&utm_medium=cpc',
+      utmSource: 'google',
+      utmMedium: 'cpc',
+      gclid: 'gclid-google-missing-campaign'
+    });
+    await insertTrackingEvent(pool, {
+      sessionId: googleMissingCampaignSessionId,
+      eventType: 'page_view',
+      occurredAt: '2026-04-04T11:00:00.000Z',
+      pageUrl: 'https://store.example/products/widget?utm_source=google&utm_medium=cpc',
+      utmSource: 'google',
+      utmMedium: 'cpc',
+      gclid: 'gclid-google-missing-campaign'
+    });
+    await insertShopifyOrder(pool, {
+      shopifyOrderId: 'order-google-cpc-no-campaign-1',
+      processedAt: '2026-04-04T11:05:00.000Z',
+      landingSessionId: googleMissingCampaignSessionId
+    });
+
+    const { upsertGa4FallbackCandidates } = await import('../src/modules/attribution/ga4-fallback-candidates.js');
+    await upsertGa4FallbackCandidates(
+      [
+        {
+          occurredAt: '2026-04-04T11:30:00.000Z',
+          ga4UserKey: 'ga4-user-google-cpc-campaign-id-fallback',
+          ga4ClientId: 'client-google-cpc-campaign-id-fallback',
+          ga4SessionId: 'session-google-cpc-campaign-id-fallback',
+          transactionId: 'order-google-cpc-campaign-id-fallback-1',
+          emailHash: null,
+          customerIdentityId: null,
+          source: 'google',
+          medium: 'cpc',
+          campaign: null,
+          campaignId: '987654321',
+          content: null,
+          term: null,
+          clickIdType: null,
+          clickIdValue: null,
+          accountId: '1234567890',
+          accountName: 'Cape Google Ads',
+          channelType: 'SEARCH',
+          channelSubtype: 'SEARCH_STANDARD',
+          campaignMetadataSource: 'google_ads_transfer',
+          accountMetadataSource: 'google_ads_transfer',
+          channelMetadataSource: 'google_ads_transfer',
+          sessionHasRequiredFields: true,
+          sourceExportHour: '2026-04-04T11:00:00.000Z',
+          sourceDataset: 'ga4_export',
+          sourceTableType: 'events'
+        }
+      ],
+      pool
+    );
+    await insertShopifyOrder(pool, {
+      shopifyOrderId: 'order-google-cpc-campaign-id-fallback-1',
+      processedAt: '2026-04-04T11:35:00.000Z'
+    });
+
+    const nonGoogleSessionId = await insertTrackingSession(pool, {
+      firstSeenAt: '2026-04-04T12:00:00.000Z',
+      landingPage: 'https://store.example/products/widget?utm_source=meta&utm_medium=paid_social',
+      utmSource: 'meta',
+      utmMedium: 'paid_social',
+      fbclid: 'fbclid-non-google-campaign'
+    });
+    await insertTrackingEvent(pool, {
+      sessionId: nonGoogleSessionId,
+      eventType: 'page_view',
+      occurredAt: '2026-04-04T12:00:00.000Z',
+      pageUrl: 'https://store.example/products/widget?utm_source=meta&utm_medium=paid_social&utm_campaign=retargeting',
+      utmSource: 'meta',
+      utmMedium: 'paid_social',
+      utmCampaign: 'retargeting',
+      fbclid: 'fbclid-non-google-campaign'
+    });
+    await insertShopifyOrder(pool, {
+      shopifyOrderId: 'order-non-google-campaign-1',
+      processedAt: '2026-04-04T12:05:00.000Z',
+      landingSessionId: nonGoogleSessionId
+    });
+
+    const { entries } = await captureStructuredLogs(async () => {
+      await processOrder('order-google-cpc-campaign-1');
+      await processOrder('order-google-cpc-campaign-id-fallback-1');
+      await processOrder('order-google-cpc-no-campaign-1');
+      await processOrder('order-non-google-campaign-1');
+    });
+
+    const missingCampaignWriteEvents = entries.filter(
+      (entry) => entry.event === 'google_cpc_missing_campaign_name_attribution_write'
+    );
+    assert.equal(missingCampaignWriteEvents.length, 1);
+    assert.deepEqual(missingCampaignWriteEvents[0], {
+      severity: 'INFO',
+      event: 'google_cpc_missing_campaign_name_attribution_write',
+      message: 'google_cpc_missing_campaign_name_attribution_write',
+      timestamp: missingCampaignWriteEvents[0]?.timestamp,
+      service: missingCampaignWriteEvents[0]?.service,
+      platform: 'google_ads',
+      source: 'google',
+      medium: 'cpc',
+      writePath: 'attribution_results_upsert',
+      attributionModel: 'last_non_direct',
+      accountId: null,
+      hasCampaignId: false,
+      hasAccountMetadata: false,
+      hasCampaignMetadata: false
+    });
+    assert.equal('shopifyOrderId' in missingCampaignWriteEvents[0], false);
+    assert.equal('orderId' in missingCampaignWriteEvents[0], false);
+    assert.equal('customerId' in missingCampaignWriteEvents[0], false);
+    assert.equal('sessionId' in missingCampaignWriteEvents[0], false);
+    assert.equal('campaignId' in missingCampaignWriteEvents[0], false);
+    assert.equal('email' in missingCampaignWriteEvents[0], false);
+
+    const googleCampaignResult = await fetchAttributionResult('order-google-cpc-campaign-1');
+    assert.equal(googleCampaignResult.session_id, googleCampaignSessionId);
+    assert.equal(googleCampaignResult.attributed_source, 'google');
+    assert.equal(googleCampaignResult.attributed_medium, 'cpc');
+    assert.equal(googleCampaignResult.attributed_campaign, 'brand-search');
+    assert.equal(googleCampaignResult.attributed_campaign_id, null);
+    assert.equal(googleCampaignResult.attributed_click_id_type, 'gclid');
+    assert.equal(googleCampaignResult.attributed_click_id_value, 'gclid-google-campaign');
+    assert.deepEqual(await fetchPrimaryLastNonDirectCredit('order-google-cpc-campaign-1'), {
+      attributed_source: 'google',
+      attributed_medium: 'cpc',
+      attributed_campaign: 'brand-search',
+      attributed_campaign_id: null,
+      attributed_click_id_type: 'gclid',
+      attributed_click_id_value: 'gclid-google-campaign'
+    });
+
+    const googleCampaignIdFallbackResult = await fetchAttributionResult(
+      'order-google-cpc-campaign-id-fallback-1'
+    );
+    assert.equal(googleCampaignIdFallbackResult.session_id, null);
+    assert.equal(googleCampaignIdFallbackResult.attributed_source, 'google');
+    assert.equal(googleCampaignIdFallbackResult.attributed_medium, 'cpc');
+    assert.equal(googleCampaignIdFallbackResult.attributed_campaign, '987654321');
+    assert.equal(googleCampaignIdFallbackResult.attributed_campaign_id, '987654321');
+    assert.equal(googleCampaignIdFallbackResult.attributed_click_id_type, null);
+    assert.equal(googleCampaignIdFallbackResult.attributed_click_id_value, null);
+    assert.deepEqual(await fetchPrimaryCredit('order-google-cpc-campaign-id-fallback-1', 'hinted_fallback_only'), {
+      attributed_source: 'google',
+      attributed_medium: 'cpc',
+      attributed_campaign: '987654321',
+      attributed_campaign_id: '987654321',
+      attributed_click_id_type: null,
+      attributed_click_id_value: null
+    });
+
+    const googleMissingCampaignResult = await fetchAttributionResult('order-google-cpc-no-campaign-1');
+    assert.equal(googleMissingCampaignResult.session_id, googleMissingCampaignSessionId);
+    assert.equal(googleMissingCampaignResult.attributed_source, 'google');
+    assert.equal(googleMissingCampaignResult.attributed_medium, 'cpc');
+    assert.equal(googleMissingCampaignResult.attributed_campaign, null);
+    assert.equal(googleMissingCampaignResult.attributed_campaign_id, null);
+    assert.equal(googleMissingCampaignResult.attributed_click_id_type, 'gclid');
+    assert.equal(googleMissingCampaignResult.attributed_click_id_value, 'gclid-google-missing-campaign');
+    assert.deepEqual(await fetchPrimaryLastNonDirectCredit('order-google-cpc-no-campaign-1'), {
+      attributed_source: 'google',
+      attributed_medium: 'cpc',
+      attributed_campaign: null,
+      attributed_campaign_id: null,
+      attributed_click_id_type: 'gclid',
+      attributed_click_id_value: 'gclid-google-missing-campaign'
+    });
+
+    const nonGoogleResult = await fetchAttributionResult('order-non-google-campaign-1');
+    assert.equal(nonGoogleResult.session_id, nonGoogleSessionId);
+    assert.equal(nonGoogleResult.attributed_source, 'meta');
+    assert.equal(nonGoogleResult.attributed_medium, 'paid_social');
+    assert.equal(nonGoogleResult.attributed_campaign, null);
+    assert.equal(nonGoogleResult.attributed_campaign_id, null);
+    assert.equal(nonGoogleResult.attributed_click_id_type, 'fbclid');
+    assert.equal(nonGoogleResult.attributed_click_id_value, 'fbclid-non-google-campaign');
+    assert.deepEqual(await fetchPrimaryLastNonDirectCredit('order-non-google-campaign-1'), {
+      attributed_source: 'meta',
+      attributed_medium: 'paid_social',
+      attributed_campaign: null,
+      attributed_campaign_id: null,
+      attributed_click_id_type: 'fbclid',
+      attributed_click_id_value: 'fbclid-non-google-campaign'
     });
   } finally {
     await resetIntegrationDatabase();
@@ -978,7 +1334,8 @@ test('same-session evidence is deduped before winner selection and keeps the str
       clickIdValue: null,
       attributionReason: 'matched_by_landing_session',
       ingestionSource: 'landing_session_id',
-      isDirect: false
+      isDirect: false,
+      ...NULL_ATTRIBUTION_METADATA
     });
   } finally {
     await resetIntegrationDatabase();
@@ -1056,6 +1413,7 @@ test('out-of-window and future-dated candidates are excluded so in-window direct
       attributed_source: null,
       attributed_medium: null,
       attributed_campaign: null,
+      attributed_campaign_id: null,
       attributed_click_id_type: null,
       attributed_click_id_value: null,
       confidence_score: '0.60',
@@ -1178,6 +1536,7 @@ test('orders with no deterministic candidates persist an unattributed fallback s
       attributed_source: null,
       attributed_medium: null,
       attributed_campaign: null,
+      attributed_campaign_id: null,
       attributed_click_id_type: null,
       attributed_click_id_value: null,
       confidence_score: '0.00',

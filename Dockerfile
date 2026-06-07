@@ -1,4 +1,4 @@
-FROM node:22-bookworm-slim AS deps
+FROM node:22.13.0-bookworm-slim AS deps
 WORKDIR /app
 
 COPY package.json package-lock.json ./
@@ -12,7 +12,7 @@ COPY packages ./packages
 COPY src ./src
 RUN npm run build
 
-FROM node:22-bookworm-slim AS runtime
+FROM node:22.13.0-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 

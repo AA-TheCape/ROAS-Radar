@@ -3,7 +3,11 @@ import { z } from "zod";
 
 import { env } from "../../config/env.js";
 import { query } from "../../db/pool.js";
-import { logError, logInfo } from "../../observability/index.js";
+import {
+	emitGoogleCpcMissingCampaignNameLog,
+	logError,
+	logInfo,
+} from "../../observability/index.js";
 import { calculatePerformanceMetrics } from "../../shared/metrics.js";
 import { ATTRIBUTION_MODELS } from "../attribution/engine.js";
 import { attachAuthContext, requireAuthenticated } from "../auth/index.js";
@@ -363,6 +367,15 @@ type OrderDetailsRow = {
   last_attribution_run_at: Date | null;
   attribution_snapshot: unknown;
   attribution_snapshot_updated_at: Date | null;
+  result_attribution_model: string | null;
+  result_session_id: string | null;
+  result_attributed_source: string | null;
+  result_attributed_medium: string | null;
+  result_attributed_campaign: string | null;
+  result_attributed_content: string | null;
+  result_attributed_term: string | null;
+  result_attributed_click_id_type: string | null;
+  result_attributed_click_id_value: string | null;
   meta_attribution_evidence_id: string | null;
   meta_attribution_evaluation_outcome: string | null;
   meta_attribution_confidence_score: string | number | null;
@@ -755,6 +768,50 @@ function extractOrderAttributionMetadata(snapshot: unknown): OrderAttributionMet
   };
 }
 
+function selectPrimaryAttributionCredit(
+  rows: AttributionCreditRow[],
+  attributionModel: string | null
+): AttributionCreditRow | undefined {
+  if (attributionModel) {
+    const modelPrimary = rows.find((row) => row.attribution_model === attributionModel && row.is_primary);
+
+    if (modelPrimary) {
+      return modelPrimary;
+    }
+  }
+
+  return rows.find((row) => row.is_primary) ?? rows[0];
+}
+
+function coalesceNullableString(...values: Array<string | null | undefined>): string | null {
+  return values.find((value): value is string => typeof value === 'string' && value.trim().length > 0) ?? null;
+}
+
+function buildPersistedOrderAttribution(
+  order: OrderDetailsRow,
+  primaryCredit: AttributionCreditRow | undefined,
+  metadata: OrderAttributionMetadata
+): AttributionWinnerMetadata {
+  return {
+    sessionId: coalesceNullableString(order.result_session_id, primaryCredit?.session_id, metadata.winner.sessionId),
+    source: coalesceNullableString(order.result_attributed_source, primaryCredit?.attributed_source, metadata.winner.source),
+    medium: coalesceNullableString(order.result_attributed_medium, primaryCredit?.attributed_medium, metadata.winner.medium),
+    campaign: coalesceNullableString(order.result_attributed_campaign, primaryCredit?.attributed_campaign, metadata.winner.campaign),
+    content: coalesceNullableString(order.result_attributed_content, primaryCredit?.attributed_content, metadata.winner.content),
+    term: coalesceNullableString(order.result_attributed_term, primaryCredit?.attributed_term, metadata.winner.term),
+    clickIdType: coalesceNullableString(
+      order.result_attributed_click_id_type,
+      primaryCredit?.attributed_click_id_type,
+      metadata.winner.clickIdType
+    ),
+    clickIdValue: coalesceNullableString(
+      order.result_attributed_click_id_value,
+      primaryCredit?.attributed_click_id_value,
+      metadata.winner.clickIdValue
+    )
+  };
+}
+
 function readOrderConfidenceScore(
   persistedScore: string | number | null,
   lastAttributionRunAt: Date | null,
@@ -875,6 +932,35 @@ function selectCampaignResolution(
 	}
 
 	return isMetaLikeAttributionSource(row.source, row.medium) ? campaignResolution : undefined;
+}
+
+function selectNullableCampaignResolution(
+	metadata: Awaited<ReturnType<typeof resolveCampaignDisplayMetadata>>,
+	row: { source: string | null; medium: string | null; campaign: string | null }
+): CampaignDisplayResolution | undefined {
+	const { source, medium, campaign } = row;
+
+	if (!source || !medium || !campaign) {
+		return undefined;
+	}
+
+	return selectCampaignResolution(metadata, { source, medium, campaign });
+}
+
+function isGoogleCpcAttributedCampaign(row: {
+	source: string | null;
+	medium: string | null;
+	campaign: string | null;
+}): row is { source: string; medium: string; campaign: string } {
+	return (
+		row.source?.trim().toLowerCase() === 'google' &&
+		row.medium?.trim().toLowerCase() === 'cpc' &&
+		Boolean(row.campaign?.trim())
+	);
+}
+
+function toDateString(value: Date | null | undefined): string | null {
+	return value?.toISOString().slice(0, 10) ?? null;
 }
 
 function resolveReportRowSource(row: { source: string }, resolution: CampaignDisplayResolution | undefined): string {
@@ -1719,23 +1805,64 @@ export function createReportingRouter(): Router {
 				],
 			);
 
-      res.json({
-        rows: result.rows.map((row) => {
-          const metadata = extractOrderAttributionMetadata(row.attribution_snapshot);
+      const orderRowsWithMetadata = result.rows.map((row) => {
+        const metadata = extractOrderAttributionMetadata(row.attribution_snapshot);
+
+        return {
+          row,
+          metadata,
+          attribution: {
+            source: row.attributed_source ?? metadata.winner.source,
+            medium: row.attributed_medium ?? metadata.winner.medium,
+            campaign: row.attributed_campaign ?? metadata.winner.campaign
+          }
+        };
+      });
+      const campaignMetadata = await resolveCampaignDisplayMetadata(
+        input.startDate,
+        input.endDate,
+        orderRowsWithMetadata
+          .map((entry) => entry.attribution.campaign)
+          .filter((campaign): campaign is string => Boolean(campaign)),
+        input.source
+      );
+
+      const googleCpcMissingCampaignIds: string[] = [];
+      let googleCpcAttributionRowCount = 0;
+      const rows = orderRowsWithMetadata.map(({ row, metadata, attribution }) => {
           const attributionTier = normalizeAttributionTier(row.attribution_tier);
           const orderAttributionReason = row.order_attribution_reason ?? 'unattributed';
           const matchingMethod = readAttributionLookupCode(null, row.matching_method_code, row.last_attribution_run_at);
           const lastAttributionRunAt = row.last_attribution_run_at?.toISOString() ?? null;
           const hasMetaAttribution = row.meta_attribution_present === true || row.meta_attribution_evidence_id != null;
+          const campaignResolution = selectNullableCampaignResolution(campaignMetadata, attribution);
+          const creditAttribution = {
+            source: row.attributed_source,
+            medium: row.attributed_medium,
+            campaign: row.attributed_campaign
+          };
+
+          if (isGoogleCpcAttributedCampaign(creditAttribution)) {
+            googleCpcAttributionRowCount += 1;
+
+            if (!campaignResolution?.campaignDisplayName) {
+              googleCpcMissingCampaignIds.push(creditAttribution.campaign);
+            }
+          }
 
           return {
             shopifyOrderId: row.shopify_order_id,
             processedAt: row.processed_at?.toISOString() ?? null,
             orderOccurredAtUtc: row.processed_at?.toISOString() ?? null,
             totalPrice: Number(row.total_price),
-            source: row.attributed_source ?? metadata.winner.source,
-            medium: row.attributed_medium ?? metadata.winner.medium,
-            campaign: row.attributed_campaign ?? metadata.winner.campaign,
+            source: attribution.source,
+            medium: attribution.medium,
+            campaign: attribution.campaign,
+            campaignName: campaignResolution?.campaignDisplayName ?? null,
+            ...buildCampaignLabelFields(campaignResolution, {
+              source: attribution.source ?? undefined,
+              rawId: attribution.campaign ?? undefined
+            }),
             attributionReason: orderAttributionReason,
             primaryCreditAttributionReason: row.primary_credit_attribution_reason ?? orderAttributionReason,
             attributionTier,
@@ -1766,8 +1893,18 @@ export function createReportingRouter(): Router {
             ...(lastAttributionRunAt ? { lastAttributionRunAt } : {}),
             sessionId: metadata.winner.sessionId
           };
-        })
+        });
+
+      emitGoogleCpcMissingCampaignNameLog({
+        endpoint: 'reporting_orders_list',
+        startDate: input.startDate,
+        endDate: input.endDate,
+        attributionRowCount: googleCpcAttributionRowCount,
+        missingCampaignNameCount: googleCpcMissingCampaignIds.length,
+        campaignIds: googleCpcMissingCampaignIds
       });
+
+      res.json({ rows });
     } catch (error) {
       next(error);
     }
@@ -1810,6 +1947,15 @@ export function createReportingRouter(): Router {
             o.last_attribution_run_at,
             o.attribution_snapshot,
             o.attribution_snapshot_updated_at,
+            results.attribution_model AS result_attribution_model,
+            results.session_id::text AS result_session_id,
+            results.attributed_source AS result_attributed_source,
+            results.attributed_medium AS result_attributed_medium,
+            results.attributed_campaign AS result_attributed_campaign,
+            results.attributed_content AS result_attributed_content,
+            results.attributed_term AS result_attributed_term,
+            results.attributed_click_id_type AS result_attributed_click_id_type,
+            results.attributed_click_id_value AS result_attributed_click_id_value,
             COALESCE(o.meta_attribution_evidence_id::text, ada.meta_attribution_evidence_id::text) AS meta_attribution_evidence_id,
             ada.meta_evaluation_outcome AS meta_attribution_evaluation_outcome,
             ada.confidence_score::text AS meta_attribution_confidence_score,
@@ -1858,6 +2004,8 @@ export function createReportingRouter(): Router {
             ON ada.id = o.latest_attribution_decision_artifact_id
           LEFT JOIN meta_order_attribution_evidence moe
             ON moe.id = COALESCE(o.meta_attribution_evidence_id, ada.meta_attribution_evidence_id)
+          LEFT JOIN attribution_results results
+            ON results.shopify_order_id = o.shopify_order_id
           WHERE o.shopify_order_id = $1
           LIMIT 1
         `,
@@ -1928,6 +2076,82 @@ export function createReportingRouter(): Router {
 
       const order = orderResult.rows[0];
       const metadata = extractOrderAttributionMetadata(order.attribution_snapshot);
+      const primaryCredit = selectPrimaryAttributionCredit(creditsResult.rows, order.result_attribution_model);
+      const orderAttribution = buildPersistedOrderAttribution(order, primaryCredit, metadata);
+      const attributionSources = [
+        orderAttribution.source,
+        ...creditsResult.rows.map((row) => row.attributed_source)
+      ].filter((source): source is string => Boolean(source));
+      const scopedAttributionSources = [...new Set(attributionSources)];
+      const orderDate =
+        toDateString(order.processed_at) ??
+        toDateString(order.created_at_shopify) ??
+        toDateString(order.ingested_at) ??
+        new Date().toISOString().slice(0, 10);
+      const campaignMetadata = await resolveCampaignDisplayMetadata(
+        orderDate,
+        orderDate,
+        [
+          orderAttribution.campaign,
+          ...creditsResult.rows.map((row) => row.attributed_campaign)
+        ].filter((campaign): campaign is string => Boolean(campaign)),
+        scopedAttributionSources.length === 1 ? scopedAttributionSources[0] : undefined
+      );
+      const orderCampaignResolution = selectNullableCampaignResolution(campaignMetadata, orderAttribution);
+      const googleCpcMissingCampaignIds: string[] = [];
+      let googleCpcAttributionRowCount = 0;
+      const attributionCredits = creditsResult.rows.map((row) => {
+        const creditAttribution = {
+          source: row.attributed_source,
+          medium: row.attributed_medium,
+          campaign: row.attributed_campaign
+        };
+        const campaignResolution = selectNullableCampaignResolution(campaignMetadata, creditAttribution);
+
+        if (isGoogleCpcAttributedCampaign(creditAttribution)) {
+          googleCpcAttributionRowCount += 1;
+
+          if (!campaignResolution?.campaignDisplayName) {
+            googleCpcMissingCampaignIds.push(creditAttribution.campaign);
+          }
+        }
+
+        return {
+          attributionModel: row.attribution_model,
+          touchpointPosition: row.touchpoint_position,
+          sessionId: row.session_id,
+          touchpointOccurredAt: row.touchpoint_occurred_at?.toISOString() ?? null,
+          source: row.attributed_source,
+          medium: row.attributed_medium,
+          campaign: row.attributed_campaign,
+          campaignName: campaignResolution?.campaignDisplayName ?? null,
+          ...buildCampaignLabelFields(campaignResolution, {
+            source: row.attributed_source ?? undefined,
+            rawId: row.attributed_campaign ?? undefined
+          }),
+          content: row.attributed_content,
+          term: row.attributed_term,
+          clickIdType: row.attributed_click_id_type,
+          clickIdValue: row.attributed_click_id_value,
+          creditWeight: Number(row.credit_weight),
+          revenueCredit: Number(row.revenue_credit),
+          isPrimary: row.is_primary,
+          attributionReason: row.attribution_reason,
+          matchSource: row.match_source,
+          confidenceLabel: row.confidence_label,
+          createdAt: row.created_at.toISOString(),
+          modelVersion: row.model_version
+        };
+      });
+
+      emitGoogleCpcMissingCampaignNameLog({
+        endpoint: 'reporting_order_details',
+        startDate: orderDate,
+        endDate: orderDate,
+        attributionRowCount: googleCpcAttributionRowCount,
+        missingCampaignNameCount: googleCpcMissingCampaignIds.length,
+        campaignIds: googleCpcMissingCampaignIds
+      });
 
       res.json({
         order: {
@@ -1969,14 +2193,19 @@ export function createReportingRouter(): Router {
             metadata.confidenceScore
           ),
           lastAttributionRunAt: order.last_attribution_run_at?.toISOString() ?? null,
-          sessionId: metadata.winner.sessionId,
-          attributedSource: metadata.winner.source,
-          attributedMedium: metadata.winner.medium,
-          attributedCampaign: metadata.winner.campaign,
-          attributedContent: metadata.winner.content,
-          attributedTerm: metadata.winner.term,
-          attributedClickIdType: metadata.winner.clickIdType,
-          attributedClickIdValue: metadata.winner.clickIdValue,
+          sessionId: orderAttribution.sessionId,
+          attributedSource: orderAttribution.source,
+          attributedMedium: orderAttribution.medium,
+          attributedCampaign: orderAttribution.campaign,
+          attributedCampaignName: orderCampaignResolution?.campaignDisplayName ?? null,
+          ...buildCampaignLabelFields(orderCampaignResolution, {
+            source: orderAttribution.source ?? undefined,
+            rawId: orderAttribution.campaign ?? undefined
+          }),
+          attributedContent: orderAttribution.content,
+          attributedTerm: orderAttribution.term,
+          attributedClickIdType: orderAttribution.clickIdType,
+          attributedClickIdValue: orderAttribution.clickIdValue,
           metaAttributionEvidenceId: order.meta_attribution_evidence_id,
           metaAttributionEligibilityOutcome: order.meta_attribution_evaluation_outcome,
           metaAttributionConfidenceScore: readOptionalNumber(order.meta_attribution_confidence_score),
@@ -2018,27 +2247,7 @@ export function createReportingRouter(): Router {
           ingestedAt: row.ingested_at.toISOString(),
           rawPayload: row.raw_payload
         })),
-        attributionCredits: creditsResult.rows.map((row) => ({
-          attributionModel: row.attribution_model,
-          touchpointPosition: row.touchpoint_position,
-          sessionId: row.session_id,
-          touchpointOccurredAt: row.touchpoint_occurred_at?.toISOString() ?? null,
-          source: row.attributed_source,
-          medium: row.attributed_medium,
-          campaign: row.attributed_campaign,
-          content: row.attributed_content,
-          term: row.attributed_term,
-          clickIdType: row.attributed_click_id_type,
-          clickIdValue: row.attributed_click_id_value,
-          creditWeight: Number(row.credit_weight),
-          revenueCredit: Number(row.revenue_credit),
-          isPrimary: row.is_primary,
-          attributionReason: row.attribution_reason,
-          matchSource: row.match_source,
-          confidenceLabel: row.confidence_label,
-          createdAt: row.created_at.toISOString(),
-          modelVersion: row.model_version
-        }))
+        attributionCredits
       });
     } catch (error) {
       next(error);

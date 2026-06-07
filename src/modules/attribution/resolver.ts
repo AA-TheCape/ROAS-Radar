@@ -69,10 +69,18 @@ export type TieredAttributionCandidate = {
   source: string | null;
   medium: string | null;
   campaign: string | null;
+  campaignId?: string | null;
   content: string | null;
   term: string | null;
   clickIdType: string | null;
   clickIdValue: string | null;
+  accountId?: string | null;
+  accountName?: string | null;
+  channelType?: string | null;
+  channelSubtype?: string | null;
+  campaignMetadataSource?: string | null;
+  accountMetadataSource?: string | null;
+  channelMetadataSource?: string | null;
   attributionReason: string;
   confidenceScore: number;
   isDirect: boolean;
@@ -243,10 +251,18 @@ function mapCandidateToResolvedTouchpoint(candidate: TieredAttributionCandidate)
     source: candidate.source,
     medium: candidate.medium,
     campaign: candidate.campaign,
+    campaignId: candidate.campaignId,
     content: candidate.content,
     term: candidate.term,
     clickIdType: candidate.clickIdType,
     clickIdValue: candidate.clickIdValue,
+    accountId: candidate.accountId,
+    accountName: candidate.accountName,
+    channelType: candidate.channelType,
+    channelSubtype: candidate.channelSubtype,
+    campaignMetadataSource: candidate.campaignMetadataSource,
+    accountMetadataSource: candidate.accountMetadataSource,
+    channelMetadataSource: candidate.channelMetadataSource,
     attributionReason: candidate.attributionReason,
     engagementType: 'click',
     ingestionSource: candidate.ingestionSource,

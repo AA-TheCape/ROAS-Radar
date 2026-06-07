@@ -129,6 +129,126 @@ test('extractAttributionCandidatesForOrder records timestamp failures and drops 
   ]);
 });
 
+test('extractAttributionCandidatesForOrder keeps GA4 Google campaign metadata when campaign name is absent', async () => {
+  const testUtils = await getTestUtils();
+
+  const fakeClient = buildFakeClient();
+  const result = await testUtils.extractAttributionCandidatesForOrder(
+    fakeClient,
+    {
+      shopifyOrderId: 'order-google-campaign-metadata',
+      processedAt: '2026-04-02T14:00:00.000Z',
+      createdAtShopify: null,
+      ingestedAt: '2026-04-02T14:05:00.000Z',
+      landingSessionId: null,
+      checkoutToken: null,
+      cartToken: null,
+      rawPayload: 'not-an-object'
+    },
+    {
+      loadDeterministicFirstPartyCandidates: async () => [],
+      loadGa4Candidates: async () => [
+        {
+          stableIdentifier: 'ga4-google-campaign-metadata',
+          occurredAt: '2026-04-02T13:30:00.000Z',
+          source: 'google',
+          medium: 'cpc',
+          campaignId: '987654321',
+          campaign: null,
+          accountId: '1234567890',
+          accountName: 'Cape Google Ads',
+          channelType: 'SEARCH',
+          channelSubtype: 'SEARCH_STANDARD',
+          campaignMetadataSource: 'google_ads_transfer',
+          accountMetadataSource: 'google_ads_transfer',
+          channelMetadataSource: 'google_ads_transfer'
+        }
+      ]
+    }
+  );
+
+  assert.equal(result.ga4Fallback.length, 1);
+  assert.equal(result.ga4Fallback[0].source, 'google');
+  assert.equal(result.ga4Fallback[0].medium, 'cpc');
+  assert.equal(result.ga4Fallback[0].campaign, '987654321');
+  assert.equal(result.ga4Fallback[0].campaignId, '987654321');
+  assert.equal(result.ga4Fallback[0].accountId, '1234567890');
+  assert.equal(result.ga4Fallback[0].accountName, 'Cape Google Ads');
+  assert.equal(result.ga4Fallback[0].channelType, 'SEARCH');
+  assert.equal(result.ga4Fallback[0].channelSubtype, 'SEARCH_STANDARD');
+  assert.equal(result.ga4Fallback[0].campaignMetadataSource, 'google_ads_transfer');
+  assert.equal(result.ga4Fallback[0].accountMetadataSource, 'google_ads_transfer');
+  assert.equal(result.ga4Fallback[0].channelMetadataSource, 'google_ads_transfer');
+});
+
+test('extractAttributionCandidatesForOrder preserves campaign id from default GA4 fallback rows', async () => {
+  const testUtils = await getTestUtils();
+
+  const fakeClient = {
+    query: async () => ({
+      rows: [
+        {
+          candidate_key: 'ga4-default-google-campaign-metadata',
+          occurred_at: new Date('2026-04-02T13:30:00.000Z'),
+          ga4_user_key: 'client:123.456',
+          ga4_client_id: '123.456',
+          ga4_session_id: '9001',
+          transaction_id: 'order-default-google-campaign-metadata',
+          email_hash: null,
+          customer_identity_id: null,
+          source: 'google',
+          medium: 'cpc',
+          campaign: null,
+          campaign_id: '987654321',
+          content: null,
+          term: null,
+          click_id_type: null,
+          click_id_value: null,
+          account_id: '1234567890',
+          account_name: 'Cape Google Ads',
+          channel_type: 'SEARCH',
+          channel_subtype: 'SEARCH_STANDARD',
+          campaign_metadata_source: 'google_ads_transfer',
+          account_metadata_source: 'google_ads_transfer',
+          channel_metadata_source: 'google_ads_transfer',
+          session_has_required_fields: true,
+          source_export_hour: new Date('2026-04-02T13:00:00.000Z'),
+          source_dataset: 'analytics_123',
+          source_table_type: 'events',
+          retained_until: new Date('2026-05-07T13:30:00.000Z'),
+          matched_on: 'transaction_id'
+        }
+      ]
+    })
+  } as never;
+
+  const result = await testUtils.extractAttributionCandidatesForOrder(
+    fakeClient,
+    {
+      shopifyOrderId: 'order-default-google-campaign-metadata',
+      processedAt: '2026-04-02T14:00:00.000Z',
+      createdAtShopify: null,
+      ingestedAt: '2026-04-02T14:05:00.000Z',
+      landingSessionId: null,
+      checkoutToken: null,
+      cartToken: null,
+      rawPayload: 'not-an-object'
+    },
+    {
+      loadDeterministicFirstPartyCandidates: async () => []
+    }
+  );
+
+  assert.equal(result.ga4Fallback.length, 1);
+  assert.equal(result.ga4Fallback[0].source, 'google');
+  assert.equal(result.ga4Fallback[0].medium, 'cpc');
+  assert.equal(result.ga4Fallback[0].campaign, '987654321');
+  assert.equal(result.ga4Fallback[0].campaignId, '987654321');
+  assert.equal(result.ga4Fallback[0].accountId, '1234567890');
+  assert.equal(result.ga4Fallback[0].accountName, 'Cape Google Ads');
+  assert.equal(result.ga4Fallback[0].campaignMetadataSource, 'google_ads_transfer');
+});
+
 test('extractAttributionCandidatesForOrder records non-order normalization failures and dedupes GA4 candidates by stable key', async () => {
   const testUtils = await getTestUtils();
 

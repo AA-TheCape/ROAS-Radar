@@ -638,6 +638,10 @@ export async function refreshDailyMmmInputMart(
           COALESCE(c.attributed_campaign, 'unknown') AS campaign,
           COALESCE(c.attributed_content, 'unknown') AS content,
           COALESCE(c.attributed_term, 'unknown') AS term,
+          NULLIF(c.attributed_account_id, '') AS account_id,
+          NULLIF(c.attributed_account_name, '') AS account_name,
+          NULLIF(c.attributed_campaign_id, '') AS campaign_id,
+          NULLIF(c.attributed_campaign, '') AS campaign_name,
           o.shopify_order_id,
           o.total_price,
           o.ingested_at,
@@ -664,6 +668,10 @@ export async function refreshDailyMmmInputMart(
           campaign,
           content,
           term,
+          account_id,
+          account_name,
+          campaign_id,
+          campaign_name,
           COUNT(DISTINCT shopify_order_id)::bigint AS shopify_orders,
           COALESCE(SUM(total_price), 0)::numeric(12, 2) AS shopify_revenue
         FROM (
@@ -675,12 +683,16 @@ export async function refreshDailyMmmInputMart(
             campaign,
             content,
             term,
+            account_id,
+            account_name,
+            campaign_id,
+            campaign_name,
             shopify_order_id,
             total_price
           FROM attribution_base
           WHERE credit_weight > 0
         ) distinct_attributed_orders
-        GROUP BY 1, 2, 3, 4, 5, 6, 7
+        GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11
       ),
       attribution_credit_metrics AS (
         SELECT
@@ -691,6 +703,10 @@ export async function refreshDailyMmmInputMart(
           campaign,
           content,
           term,
+          account_id,
+          account_name,
+          campaign_id,
+          campaign_name,
           COALESCE(SUM(credit_weight), 0)::numeric(12, 8) AS attribution_credit_orders,
           COALESCE(SUM(revenue_credit), 0)::numeric(12, 2) AS attribution_credit_revenue,
           COALESCE(SUM(CASE WHEN customer_order_rank = 1 THEN credit_weight ELSE 0 END), 0)::numeric(12, 8) AS new_customer_credit_orders,
@@ -700,7 +716,7 @@ export async function refreshDailyMmmInputMart(
           MAX(ingested_at) AS shopify_last_ingested_at,
           MAX(created_at) AS attribution_last_computed_at
         FROM attribution_base
-        GROUP BY 1, 2, 3, 4, 5, 6, 7
+        GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11
       ),
       attribution_metrics AS (
         SELECT
@@ -711,6 +727,10 @@ export async function refreshDailyMmmInputMart(
           credits.campaign,
           credits.content,
           credits.term,
+          credits.account_id,
+          credits.account_name,
+          credits.campaign_id,
+          credits.campaign_name,
           COALESCE(orders.shopify_orders, 0)::bigint AS shopify_orders,
           COALESCE(orders.shopify_revenue, 0)::numeric(12, 2) AS shopify_revenue,
           credits.attribution_credit_orders,
@@ -730,6 +750,10 @@ export async function refreshDailyMmmInputMart(
          AND orders.campaign = credits.campaign
          AND orders.content = credits.content
          AND orders.term = credits.term
+         AND orders.account_id IS NOT DISTINCT FROM credits.account_id
+         AND orders.account_name IS NOT DISTINCT FROM credits.account_name
+         AND orders.campaign_id IS NOT DISTINCT FROM credits.campaign_id
+         AND orders.campaign_name IS NOT DISTINCT FROM credits.campaign_name
       ),
       match_source_coverage AS (
         SELECT
@@ -740,6 +764,10 @@ export async function refreshDailyMmmInputMart(
           campaign,
           content,
           term,
+          account_id,
+          account_name,
+          campaign_id,
+          campaign_name,
           jsonb_object_agg(match_source, credited_orders ORDER BY match_source) AS coverage
         FROM (
           SELECT
@@ -750,12 +778,16 @@ export async function refreshDailyMmmInputMart(
             campaign,
             content,
             term,
+            account_id,
+            account_name,
+            campaign_id,
+            campaign_name,
             COALESCE(match_source, 'unknown') AS match_source,
             SUM(credit_weight)::numeric(12, 8) AS credited_orders
           FROM attribution_base
-          GROUP BY 1, 2, 3, 4, 5, 6, 7, 8
+          GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12
         ) grouped_match_sources
-        GROUP BY 1, 2, 3, 4, 5, 6, 7
+        GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11
       ),
       confidence_label_coverage AS (
         SELECT
@@ -766,6 +798,10 @@ export async function refreshDailyMmmInputMart(
           campaign,
           content,
           term,
+          account_id,
+          account_name,
+          campaign_id,
+          campaign_name,
           jsonb_object_agg(confidence_label, credited_orders ORDER BY confidence_label) AS coverage
         FROM (
           SELECT
@@ -776,12 +812,16 @@ export async function refreshDailyMmmInputMart(
             campaign,
             content,
             term,
+            account_id,
+            account_name,
+            campaign_id,
+            campaign_name,
             COALESCE(confidence_label, 'none') AS confidence_label,
             SUM(credit_weight)::numeric(12, 8) AS credited_orders
           FROM attribution_base
-          GROUP BY 1, 2, 3, 4, 5, 6, 7, 8
+          GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12
         ) grouped_confidence_labels
-        GROUP BY 1, 2, 3, 4, 5, 6, 7
+        GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11
       )
       INSERT INTO mmm_daily_input_mart_v1 (
         metric_date,
@@ -877,14 +917,17 @@ export async function refreshDailyMmmInputMart(
         'v1',
         'attribution',
         metrics.attribution_model,
-        'taxonomy',
+        CASE WHEN metrics.campaign_id IS NOT NULL THEN 'google_ads' ELSE 'taxonomy' END,
         NULL,
-        'taxonomy',
-        concat_ws('|', metrics.source, metrics.medium, metrics.campaign, metrics.content, metrics.term),
-        NULL,
-        NULL,
-        NULL,
-        NULL,
+        CASE WHEN metrics.campaign_id IS NOT NULL THEN 'campaign' ELSE 'taxonomy' END,
+        CASE
+          WHEN metrics.campaign_id IS NOT NULL THEN concat_ws('|', 'google_ads', metrics.account_id, metrics.campaign_id)
+          ELSE concat_ws('|', metrics.source, metrics.medium, metrics.campaign, metrics.content, metrics.term)
+        END,
+        metrics.account_id,
+        metrics.account_name,
+        metrics.campaign_id,
+        metrics.campaign_name,
         NULL,
         NULL,
         NULL,
@@ -923,6 +966,10 @@ export async function refreshDailyMmmInputMart(
        AND match_sources.campaign = metrics.campaign
        AND match_sources.content = metrics.content
        AND match_sources.term = metrics.term
+       AND match_sources.account_id IS NOT DISTINCT FROM metrics.account_id
+       AND match_sources.account_name IS NOT DISTINCT FROM metrics.account_name
+       AND match_sources.campaign_id IS NOT DISTINCT FROM metrics.campaign_id
+       AND match_sources.campaign_name IS NOT DISTINCT FROM metrics.campaign_name
       LEFT JOIN confidence_label_coverage confidence_labels
         ON confidence_labels.metric_date = metrics.metric_date
        AND confidence_labels.attribution_model = metrics.attribution_model
@@ -931,6 +978,10 @@ export async function refreshDailyMmmInputMart(
        AND confidence_labels.campaign = metrics.campaign
        AND confidence_labels.content = metrics.content
        AND confidence_labels.term = metrics.term
+       AND confidence_labels.account_id IS NOT DISTINCT FROM metrics.account_id
+       AND confidence_labels.account_name IS NOT DISTINCT FROM metrics.account_name
+       AND confidence_labels.campaign_id IS NOT DISTINCT FROM metrics.campaign_id
+       AND confidence_labels.campaign_name IS NOT DISTINCT FROM metrics.campaign_name
 	`,
 		[normalizedMetricDates, reportingTimezone],
 	);

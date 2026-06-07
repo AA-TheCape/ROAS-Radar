@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 
 import { withTransaction } from '../../db/pool.js';
 import {
+  emitGoogleCpcMissingCampaignNameAttributionWriteLog,
   emitAttributionQaSnapshotWriteLog,
   emitAttributionResolverOutcomeLog,
   logError
@@ -86,10 +87,18 @@ type CurrentAttributionRow = {
   attributed_source: string | null;
   attributed_medium: string | null;
   attributed_campaign: string | null;
+  attributed_campaign_id: string | null;
   attributed_content: string | null;
   attributed_term: string | null;
   attributed_click_id_type: string | null;
   attributed_click_id_value: string | null;
+  attributed_account_id: string | null;
+  attributed_account_name: string | null;
+  attributed_channel_type: string | null;
+  attributed_channel_subtype: string | null;
+  attributed_campaign_metadata_source: string | null;
+  attributed_account_metadata_source: string | null;
+  attributed_channel_metadata_source: string | null;
   attribution_reason: string | null;
   match_source: string | null;
   order_attribution_tier: string | null;
@@ -134,10 +143,18 @@ type PersistedAttributionTouchpoint = Pick<
   | 'source'
   | 'medium'
   | 'campaign'
+  | 'campaignId'
   | 'content'
   | 'term'
   | 'clickIdType'
   | 'clickIdValue'
+  | 'accountId'
+  | 'accountName'
+  | 'channelType'
+  | 'channelSubtype'
+  | 'campaignMetadataSource'
+  | 'accountMetadataSource'
+  | 'channelMetadataSource'
   | 'attributionReason'
 >;
 
@@ -381,10 +398,21 @@ function serializeResolvedTouchpoint(touchpoint: ResolvedAttributionTouchpoint) 
     source: touchpoint.source,
     medium: touchpoint.medium,
     campaign: touchpoint.campaign,
+    campaignId: 'campaignId' in touchpoint ? normalizeNullableString(touchpoint.campaignId) : null,
     content: touchpoint.content,
     term: touchpoint.term,
     clickIdType: touchpoint.clickIdType,
     clickIdValue: touchpoint.clickIdValue,
+    accountId: 'accountId' in touchpoint ? normalizeNullableString(touchpoint.accountId) : null,
+    accountName: 'accountName' in touchpoint ? normalizeNullableString(touchpoint.accountName) : null,
+    channelType: 'channelType' in touchpoint ? normalizeNullableString(touchpoint.channelType) : null,
+    channelSubtype: 'channelSubtype' in touchpoint ? normalizeNullableString(touchpoint.channelSubtype) : null,
+    campaignMetadataSource:
+      'campaignMetadataSource' in touchpoint ? normalizeNullableString(touchpoint.campaignMetadataSource) : null,
+    accountMetadataSource:
+      'accountMetadataSource' in touchpoint ? normalizeNullableString(touchpoint.accountMetadataSource) : null,
+    channelMetadataSource:
+      'channelMetadataSource' in touchpoint ? normalizeNullableString(touchpoint.channelMetadataSource) : null,
     attributionReason: touchpoint.attributionReason,
     ingestionSource: touchpoint.ingestionSource,
     isDirect: touchpoint.isDirect
@@ -415,10 +443,18 @@ async function fetchCurrentAttribution(
         results.attributed_source,
         results.attributed_medium,
         results.attributed_campaign,
+        results.attributed_campaign_id,
         results.attributed_content,
         results.attributed_term,
         results.attributed_click_id_type,
         results.attributed_click_id_value,
+        results.attributed_account_id,
+        results.attributed_account_name,
+        results.attributed_channel_type,
+        results.attributed_channel_subtype,
+        results.attributed_campaign_metadata_source,
+        results.attributed_account_metadata_source,
+        results.attributed_channel_metadata_source,
         results.attribution_reason,
         results.match_source,
         orders.attribution_tier AS order_attribution_tier,
@@ -442,10 +478,18 @@ function buildCurrentAttributionComparable(row: CurrentAttributionRow): Attribut
     source: row.attributed_source,
     medium: row.attributed_medium,
     campaign: row.attributed_campaign,
+    campaignId: row.attributed_campaign_id,
     content: row.attributed_content,
     term: row.attributed_term,
     clickIdType: row.attributed_click_id_type,
     clickIdValue: row.attributed_click_id_value,
+    accountId: row.attributed_account_id,
+    accountName: row.attributed_account_name,
+    channelType: row.attributed_channel_type,
+    channelSubtype: row.attributed_channel_subtype,
+    campaignMetadataSource: row.attributed_campaign_metadata_source,
+    accountMetadataSource: row.attributed_account_metadata_source,
+    channelMetadataSource: row.attributed_channel_metadata_source,
     attributionReason: row.attribution_reason
   };
 }
@@ -457,10 +501,18 @@ function buildProposedAttributionComparable(
     | 'source'
     | 'medium'
     | 'campaign'
+    | 'campaignId'
     | 'content'
     | 'term'
     | 'clickIdType'
     | 'clickIdValue'
+    | 'accountId'
+    | 'accountName'
+    | 'channelType'
+    | 'channelSubtype'
+    | 'campaignMetadataSource'
+    | 'accountMetadataSource'
+    | 'channelMetadataSource'
     | 'attributionReason'
   > | null,
   journey: ResolvedJourney
@@ -470,10 +522,18 @@ function buildProposedAttributionComparable(
     source: normalizeNullableString(primaryCredit?.source),
     medium: normalizeNullableString(primaryCredit?.medium),
     campaign: normalizeNullableString(primaryCredit?.campaign),
+    campaignId: normalizeNullableString(primaryCredit?.campaignId),
     content: normalizeNullableString(primaryCredit?.content),
     term: normalizeNullableString(primaryCredit?.term),
     clickIdType: normalizeNullableString(primaryCredit?.clickIdType),
     clickIdValue: normalizeNullableString(primaryCredit?.clickIdValue),
+    accountId: normalizeNullableString(primaryCredit?.accountId),
+    accountName: normalizeNullableString(primaryCredit?.accountName),
+    channelType: normalizeNullableString(primaryCredit?.channelType),
+    channelSubtype: normalizeNullableString(primaryCredit?.channelSubtype),
+    campaignMetadataSource: normalizeNullableString(primaryCredit?.campaignMetadataSource),
+    accountMetadataSource: normalizeNullableString(primaryCredit?.accountMetadataSource),
+    channelMetadataSource: normalizeNullableString(primaryCredit?.channelMetadataSource),
     attributionReason: primaryCredit?.attributionReason ?? journey.attributionReason
   };
 }
@@ -525,10 +585,21 @@ function selectPersistedPrimaryTouchpoint(
     source: journey.winner.source,
     medium: journey.winner.medium,
     campaign: journey.winner.campaign,
+    campaignId: 'campaignId' in journey.winner ? normalizeNullableString(journey.winner.campaignId) : null,
     content: journey.winner.content,
     term: journey.winner.term,
     clickIdType: journey.winner.clickIdType,
     clickIdValue: journey.winner.clickIdValue,
+    accountId: 'accountId' in journey.winner ? normalizeNullableString(journey.winner.accountId) : null,
+    accountName: 'accountName' in journey.winner ? normalizeNullableString(journey.winner.accountName) : null,
+    channelType: 'channelType' in journey.winner ? normalizeNullableString(journey.winner.channelType) : null,
+    channelSubtype: 'channelSubtype' in journey.winner ? normalizeNullableString(journey.winner.channelSubtype) : null,
+    campaignMetadataSource:
+      'campaignMetadataSource' in journey.winner ? normalizeNullableString(journey.winner.campaignMetadataSource) : null,
+    accountMetadataSource:
+      'accountMetadataSource' in journey.winner ? normalizeNullableString(journey.winner.accountMetadataSource) : null,
+    channelMetadataSource:
+      'channelMetadataSource' in journey.winner ? normalizeNullableString(journey.winner.channelMetadataSource) : null,
     attributionReason: journey.winner.attributionReason
   };
 }
@@ -765,10 +836,18 @@ async function persistAttribution(
             attributed_source,
             attributed_medium,
             attributed_campaign,
+            attributed_campaign_id,
             attributed_content,
             attributed_term,
             attributed_click_id_type,
             attributed_click_id_value,
+            attributed_account_id,
+            attributed_account_name,
+            attributed_channel_type,
+            attributed_channel_subtype,
+            attributed_campaign_metadata_source,
+            attributed_account_metadata_source,
+            attributed_channel_metadata_source,
             credit_weight,
             revenue_credit,
             is_primary,
@@ -798,7 +877,15 @@ async function persistAttribution(
             $17,
             $18,
             $19,
-            $20
+            $20,
+            $21,
+            $22,
+            $23,
+	            $24,
+	            $25,
+	            $26,
+	            $27,
+	            $28
           )
         `,
         [
@@ -810,10 +897,18 @@ async function persistAttribution(
           normalizeNullableString(credit.source),
           normalizeNullableString(credit.medium),
           normalizeNullableString(credit.campaign),
+          normalizeNullableString(credit.campaignId),
           normalizeNullableString(credit.content),
           normalizeNullableString(credit.term),
           normalizeNullableString(credit.clickIdType),
           normalizeNullableString(credit.clickIdValue),
+          normalizeNullableString(credit.accountId),
+          normalizeNullableString(credit.accountName),
+          normalizeNullableString(credit.channelType),
+          normalizeNullableString(credit.channelSubtype),
+          normalizeNullableString(credit.campaignMetadataSource),
+          normalizeNullableString(credit.accountMetadataSource),
+          normalizeNullableString(credit.channelMetadataSource),
           credit.creditWeight,
           credit.revenueCredit,
           credit.isPrimary,
@@ -836,10 +931,18 @@ async function persistAttribution(
         attributed_source,
         attributed_medium,
         attributed_campaign,
+        attributed_campaign_id,
         attributed_content,
         attributed_term,
         attributed_click_id_type,
         attributed_click_id_value,
+        attributed_account_id,
+        attributed_account_name,
+        attributed_channel_type,
+        attributed_channel_subtype,
+        attributed_campaign_metadata_source,
+        attributed_account_metadata_source,
+        attributed_channel_metadata_source,
         confidence_score,
         attribution_reason,
         attributed_at,
@@ -868,16 +971,24 @@ async function persistAttribution(
         $10,
         $11,
         $12,
-        1,
         $13,
         $14,
         $15,
         $16,
         $17,
         $18,
-        $12,
         $19,
-        $20::uuid
+        $20,
+        1,
+        $21,
+        $22,
+        $23,
+        $24,
+        $25,
+        $26,
+        $20,
+        $27,
+        $28::uuid
       )
       ON CONFLICT (shopify_order_id)
       DO UPDATE SET
@@ -886,10 +997,18 @@ async function persistAttribution(
         attributed_source = EXCLUDED.attributed_source,
         attributed_medium = EXCLUDED.attributed_medium,
         attributed_campaign = EXCLUDED.attributed_campaign,
+        attributed_campaign_id = EXCLUDED.attributed_campaign_id,
         attributed_content = EXCLUDED.attributed_content,
         attributed_term = EXCLUDED.attributed_term,
         attributed_click_id_type = EXCLUDED.attributed_click_id_type,
         attributed_click_id_value = EXCLUDED.attributed_click_id_value,
+        attributed_account_id = EXCLUDED.attributed_account_id,
+        attributed_account_name = EXCLUDED.attributed_account_name,
+        attributed_channel_type = EXCLUDED.attributed_channel_type,
+        attributed_channel_subtype = EXCLUDED.attributed_channel_subtype,
+        attributed_campaign_metadata_source = EXCLUDED.attributed_campaign_metadata_source,
+        attributed_account_metadata_source = EXCLUDED.attributed_account_metadata_source,
+        attributed_channel_metadata_source = EXCLUDED.attributed_channel_metadata_source,
         confidence_score = EXCLUDED.confidence_score,
         attribution_reason = EXCLUDED.attribution_reason,
         attributed_at = EXCLUDED.attributed_at,
@@ -909,10 +1028,18 @@ async function persistAttribution(
       normalizeNullableString(primaryCredit?.source),
       normalizeNullableString(primaryCredit?.medium),
       normalizeNullableString(primaryCredit?.campaign),
+      normalizeNullableString(primaryCredit?.campaignId),
       normalizeNullableString(primaryCredit?.content),
       normalizeNullableString(primaryCredit?.term),
       normalizeNullableString(primaryCredit?.clickIdType),
       normalizeNullableString(primaryCredit?.clickIdValue),
+      normalizeNullableString(primaryCredit?.accountId),
+      normalizeNullableString(primaryCredit?.accountName),
+      normalizeNullableString(primaryCredit?.channelType),
+      normalizeNullableString(primaryCredit?.channelSubtype),
+      normalizeNullableString(primaryCredit?.campaignMetadataSource),
+      normalizeNullableString(primaryCredit?.accountMetadataSource),
+      normalizeNullableString(primaryCredit?.channelMetadataSource),
       confidenceMetadata.confidenceScore,
       primaryCredit?.attributionReason ?? journey.attributionReason,
       confidenceMetadata.lastAttributionRunAt,
@@ -926,6 +1053,18 @@ async function persistAttribution(
       decisionArtifactId
     ]
   );
+
+  emitGoogleCpcMissingCampaignNameAttributionWriteLog({
+    writePath: 'attribution_results_upsert',
+    attributionModel: 'last_non_direct',
+    source: primaryCredit?.source,
+    medium: primaryCredit?.medium,
+    effectiveCampaign: primaryCredit?.campaign,
+    campaignId: primaryCredit?.campaignId,
+    accountId: primaryCredit?.accountId,
+    campaignMetadataSource: primaryCredit?.campaignMetadataSource,
+    accountMetadataSource: primaryCredit?.accountMetadataSource
+  });
 
   try {
     await client.query(

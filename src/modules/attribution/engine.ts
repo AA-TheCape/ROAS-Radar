@@ -39,10 +39,18 @@ export type AttributionTouchpoint = {
   source: string | null;
   medium: string | null;
   campaign: string | null;
+  campaignId?: string | null;
   content: string | null;
   term: string | null;
   clickIdType: string | null;
   clickIdValue: string | null;
+  accountId?: string | null;
+  accountName?: string | null;
+  channelType?: string | null;
+  channelSubtype?: string | null;
+  campaignMetadataSource?: string | null;
+  accountMetadataSource?: string | null;
+  channelMetadataSource?: string | null;
   attributionReason: string;
   isDirect: boolean;
   isForced: boolean;
@@ -70,10 +78,18 @@ export type AttributionCredit = {
   source: string | null;
   medium: string | null;
   campaign: string | null;
+  campaignId: string | null;
   content: string | null;
   term: string | null;
   clickIdType: string | null;
   clickIdValue: string | null;
+  accountId: string | null;
+  accountName: string | null;
+  channelType: string | null;
+  channelSubtype: string | null;
+  campaignMetadataSource: string | null;
+  accountMetadataSource: string | null;
+  channelMetadataSource: string | null;
   attributionReason: string;
   evidenceSource: AttributionEvidenceSource | null;
   engagementType: AttributionEngagementType;
@@ -126,6 +142,7 @@ type StrategyContext = {
   deterministicTouchpoints: NormalizedTouchpoint[];
   deterministicClicks: NormalizedTouchpoint[];
   hintedFallbackCandidates: NormalizedTouchpoint[];
+  ga4FallbackCandidates: NormalizedTouchpoint[];
   orderRevenue: number | string;
   normalizationFailuresCount: number;
 };
@@ -335,6 +352,10 @@ function qualifiesSyntheticHint(touchpoint: NormalizedTouchpoint): boolean {
   return qualifiesSyntheticHintSignal(touchpoint);
 }
 
+function qualifiesSyntheticGa4Fallback(touchpoint: NormalizedTouchpoint): boolean {
+  return touchpoint.evidenceSource === 'ga4_fallback' && touchpoint.isSynthetic;
+}
+
 function normalizeTouchpoints(
   rawTouchpoints: AttributionTouchpoint[],
   orderOccurredAt: Date,
@@ -376,6 +397,7 @@ function buildStrategyContext(rawTouchpoints: AttributionTouchpoint[], options: 
   );
   const deterministicClicks = deterministicTouchpoints.filter((touchpoint) => touchpoint.engagementType === 'click');
   const hintedFallbackCandidates = eligibleTouchpoints.filter(qualifiesSyntheticHint);
+  const ga4FallbackCandidates = eligibleTouchpoints.filter(qualifiesSyntheticGa4Fallback);
 
   return {
     eligibleTouchpoints,
@@ -384,6 +406,7 @@ function buildStrategyContext(rawTouchpoints: AttributionTouchpoint[], options: 
     deterministicTouchpoints,
     deterministicClicks,
     hintedFallbackCandidates,
+    ga4FallbackCandidates,
     orderRevenue: options.orderRevenue,
     normalizationFailuresCount: Math.max(0, Math.trunc(options.normalizationFailuresCount ?? 0))
   };
@@ -476,10 +499,18 @@ function buildCredits(
     source: touchpoint.source,
     medium: touchpoint.medium,
     campaign: touchpoint.campaign,
+    campaignId: normalizeNullableString(touchpoint.campaignId),
     content: touchpoint.content,
     term: touchpoint.term,
     clickIdType: touchpoint.clickIdType,
     clickIdValue: touchpoint.clickIdValue,
+    accountId: normalizeNullableString(touchpoint.accountId),
+    accountName: normalizeNullableString(touchpoint.accountName),
+    channelType: normalizeNullableString(touchpoint.channelType),
+    channelSubtype: normalizeNullableString(touchpoint.channelSubtype),
+    campaignMetadataSource: normalizeNullableString(touchpoint.campaignMetadataSource),
+    accountMetadataSource: normalizeNullableString(touchpoint.accountMetadataSource),
+    channelMetadataSource: normalizeNullableString(touchpoint.channelMetadataSource),
     attributionReason: touchpoint.attributionReason,
     evidenceSource: touchpoint.evidenceSource,
     engagementType: touchpoint.engagementType,
@@ -551,15 +582,19 @@ const attributionStrategies: Record<AttributionModel, AttributionStrategy> = {
       };
     }
 
-    const winner = pickWinner(context.hintedFallbackCandidates, compareLastTouchWinner);
+    const fallbackCandidates =
+      context.hintedFallbackCandidates.length > 0
+        ? context.hintedFallbackCandidates
+        : context.ga4FallbackCandidates;
+    const winner = pickWinner(fallbackCandidates, compareLastTouchWinner);
 
     return {
-      touchpoints: context.hintedFallbackCandidates,
-      weights: buildWinnerWeights(context.hintedFallbackCandidates, winner?.touchpointId ?? null),
+      touchpoints: fallbackCandidates,
+      weights: buildWinnerWeights(fallbackCandidates, winner?.touchpointId ?? null),
       allocationStatus: winner ? 'attributed' : 'unattributed',
       directSuppressionApplied: false,
       deterministicBlockApplied: false,
-      lookbackRuleApplied: summarizePool(context.hintedFallbackCandidates).lookbackRuleApplied
+      lookbackRuleApplied: summarizePool(fallbackCandidates).lookbackRuleApplied
     };
   }
 };

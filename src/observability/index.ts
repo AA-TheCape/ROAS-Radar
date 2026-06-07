@@ -103,6 +103,27 @@ type CampaignMetadataCoverageLogInput = {
   source?: string | null;
 };
 
+type GoogleCpcMissingCampaignNameLogInput = {
+  endpoint: 'reporting_orders_list' | 'reporting_order_details' | string;
+  startDate: string | null;
+  endDate: string | null;
+  attributionRowCount: number;
+  missingCampaignNameCount: number;
+  campaignIds?: string[];
+};
+
+type GoogleCpcMissingCampaignNameAttributionWriteLogInput = {
+  writePath: string;
+  attributionModel: string;
+  source: string | null | undefined;
+  medium: string | null | undefined;
+  effectiveCampaign: string | null | undefined;
+  campaignId?: string | null | undefined;
+  accountId?: string | null | undefined;
+  campaignMetadataSource?: string | null | undefined;
+  accountMetadataSource?: string | null | undefined;
+};
+
 type CampaignMetadataFreshnessSnapshotLogInput = {
   platform: 'google_ads' | 'meta_ads';
   entityType: 'campaign' | 'adset' | 'ad';
@@ -643,6 +664,11 @@ function hasMeaningfulValue(value: unknown): boolean {
   return value.trim().length > 0;
 }
 
+function normalizeLowercaseDimension(value: string | null | undefined): string | null {
+  const normalized = value?.trim().toLowerCase();
+  return normalized ? normalized : null;
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 }
@@ -1017,6 +1043,54 @@ export function emitCampaignMetadataResolutionCoverageLog(input: CampaignMetadat
     startDate: input.startDate,
     endDate: input.endDate,
     source: input.source ?? null
+  });
+}
+
+export function emitGoogleCpcMissingCampaignNameLog(input: GoogleCpcMissingCampaignNameLogInput): void {
+  const attributionRowCount = Math.max(0, input.attributionRowCount);
+  const missingCampaignNameCount = Math.max(0, input.missingCampaignNameCount);
+
+  if (missingCampaignNameCount === 0) {
+    return;
+  }
+
+  logInfo('google_cpc_missing_campaign_name', {
+    service: process.env.K_SERVICE ?? 'roas-radar-api',
+    endpoint: input.endpoint,
+    platform: 'google_ads',
+    source: 'google',
+    medium: 'cpc',
+    startDate: input.startDate,
+    endDate: input.endDate,
+    attributionRowCount,
+    missingCampaignNameCount,
+    missingCampaignNameRate:
+      attributionRowCount > 0 ? missingCampaignNameCount / attributionRowCount : 0,
+    campaignIds: [...new Set(input.campaignIds ?? [])].slice(0, 10)
+  });
+}
+
+export function emitGoogleCpcMissingCampaignNameAttributionWriteLog(
+  input: GoogleCpcMissingCampaignNameAttributionWriteLogInput
+): void {
+  const source = normalizeLowercaseDimension(input.source);
+  const medium = normalizeLowercaseDimension(input.medium);
+
+  if (source !== 'google' || medium !== 'cpc' || hasMeaningfulValue(input.effectiveCampaign)) {
+    return;
+  }
+
+  logInfo('google_cpc_missing_campaign_name_attribution_write', {
+    service: process.env.K_SERVICE ?? 'roas-radar',
+    platform: 'google_ads',
+    source,
+    medium,
+    writePath: input.writePath,
+    attributionModel: input.attributionModel,
+    accountId: typeof input.accountId === 'string' && input.accountId.trim() ? input.accountId.trim() : null,
+    hasCampaignId: hasMeaningfulValue(input.campaignId),
+    hasAccountMetadata: hasMeaningfulValue(input.accountMetadataSource),
+    hasCampaignMetadata: hasMeaningfulValue(input.campaignMetadataSource)
   });
 }
 

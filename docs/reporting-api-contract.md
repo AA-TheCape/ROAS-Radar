@@ -136,6 +136,8 @@ Affected endpoints:
 Additive fields:
 
 - `attributionSource`: `string | null`; lookup-backed attribution source code such as `landing_session_id`, `checkout_token`, `shopify_hint_fallback`, `ga4_fallback`, or `unattributed`
+- `campaignName`: `string | null`; resolved campaign name on order list rows when ad-platform metadata is available, including Google CPC-attributed orders whose canonical `campaign` is an ID
+- `attributedCampaignName`: `string | null`; resolved campaign name for the order detail winner
 - `confidenceScore`: `number | null`; persisted attribution confidence score, constrained to `0 <= score <= 1`
 - `matchingMethod`: `string | null`; lookup-backed matching method code such as `matched_by_checkout_token`, `shopify_hint_derived`, `ga4_fallback_derived`, `unattributed`, or `unknown`
 - `lastAttributionRunAt`: `string | null`; ISO-8601 timestamp for the latest attribution run that wrote order metadata
