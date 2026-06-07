@@ -170,7 +170,7 @@ grant_roles_csv "$ORDER_ATTRIBUTION_MATERIALIZATION_JOB_SERVICE_ACCOUNT_NAME" "$
 grant_roles_csv "$MMM_BASELINE_JOB_SERVICE_ACCOUNT_NAME" "${MMM_BASELINE_JOB_SERVICE_ACCOUNT_ROLES:-roles/cloudsql.client,roles/logging.logWriter,roles/monitoring.metricWriter}"
 grant_roles_csv "$MMM_BAYESIAN_JOB_SERVICE_ACCOUNT_NAME" "${MMM_BAYESIAN_JOB_SERVICE_ACCOUNT_ROLES:-roles/cloudsql.client,roles/logging.logWriter,roles/monitoring.metricWriter}"
 grant_roles_csv "$SCHEDULER_INVOKER_SERVICE_ACCOUNT_NAME" "${SCHEDULER_INVOKER_SERVICE_ACCOUNT_ROLES:-roles/logging.logWriter}"
-grant_roles_csv "$DEPLOYER_SERVICE_ACCOUNT_NAME" "${DEPLOYER_SERVICE_ACCOUNT_ROLES:-roles/run.developer,roles/artifactregistry.writer,roles/cloudbuild.builds.editor,roles/iam.serviceAccountUser,roles/cloudscheduler.admin,roles/monitoring.editor,roles/serviceusage.serviceUsageConsumer}"
+grant_roles_csv "$DEPLOYER_SERVICE_ACCOUNT_NAME" "${DEPLOYER_SERVICE_ACCOUNT_ROLES:-roles/run.developer,roles/artifactregistry.writer,roles/cloudbuild.builds.editor,roles/iam.serviceAccountUser,roles/cloudscheduler.admin,roles/monitoring.editor,roles/serviceusage.serviceUsageConsumer,roles/storage.objectAdmin}"
 
 grant_secret_access "$API_SERVICE_ACCOUNT_NAME" "DATABASE_URL"
 grant_secret_access "$API_SERVICE_ACCOUNT_NAME" "REPORTING_API_TOKEN"
