@@ -9,6 +9,17 @@ process.env.REPORTING_API_TOKEN = 'test-reporting-token';
 process.env.SHOPIFY_APP_API_SECRET ??= 'test-app-secret';
 process.env.SHOPIFY_WEBHOOK_SECRET ??= 'test-webhook-secret';
 
+const NULL_ATTRIBUTION_METADATA = {
+  campaignId: null,
+  accountId: null,
+  accountName: null,
+  channelType: null,
+  channelSubtype: null,
+  campaignMetadataSource: null,
+  accountMetadataSource: null,
+  channelMetadataSource: null
+};
+
 async function getModules() {
   const poolModule = await import('../src/db/pool.js');
   const attributionModule = await import('../src/modules/attribution/index.js');
@@ -601,7 +612,10 @@ test('order finalization persists a deterministic last non-direct winner snapsho
           utm_source,
           utm_medium,
           utm_campaign,
-          gclid
+          gclid,
+          payload_size_bytes,
+          payload_hash,
+          raw_payload
         )
         VALUES (
           $1::uuid,
@@ -611,10 +625,18 @@ test('order finalization persists a deterministic last non-direct winner snapsho
           'google',
           'cpc',
           'brand-search',
-          'gclid-123'
+          'gclid-123',
+          $2,
+          $3,
+          $4::jsonb
         )
       `,
-      [paidSessionId]
+      [
+        paidSessionId,
+        emptyRawPayloadFixture.payloadSizeBytes,
+        emptyRawPayloadFixture.payloadHash,
+        emptyRawPayloadFixture.rawPayloadJson
+      ]
     );
 
     const directSessionResult = await pool.query<{ id: string }>(
@@ -796,7 +818,8 @@ test('order finalization persists a deterministic last non-direct winner snapsho
       clickIdValue: 'gclid-123',
       attributionReason: 'matched_by_landing_session',
       ingestionSource: 'landing_session_id',
-      isDirect: false
+      isDirect: false,
+      ...NULL_ATTRIBUTION_METADATA
     });
     assert.equal(Array.isArray(snapshot?.timeline), true);
     assert.equal((snapshot?.timeline as unknown[]).length, 2);
@@ -1307,7 +1330,8 @@ test('same-session evidence is deduped before winner selection and keeps the str
       clickIdValue: null,
       attributionReason: 'matched_by_landing_session',
       ingestionSource: 'landing_session_id',
-      isDirect: false
+      isDirect: false,
+      ...NULL_ATTRIBUTION_METADATA
     });
   } finally {
     await resetIntegrationDatabase();

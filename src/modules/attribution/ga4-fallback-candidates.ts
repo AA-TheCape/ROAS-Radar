@@ -441,11 +441,10 @@ export async function upsertGa4FallbackCandidates(
           $22,
           $23,
           $24,
-          $25,
-          $26::timestamptz,
+          $25::timestamptz,
+          $26,
           $27,
-          $28,
-          $29::timestamptz,
+          $28::timestamptz,
           now()
         )
         ON CONFLICT (candidate_key, occurred_at)
