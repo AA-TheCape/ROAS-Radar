@@ -66,6 +66,7 @@ const CANDIDATE_GROUP_LABELS: Record<
 > = {
 	deterministic_first_party: "First-party",
 	shopify_hint: "Shopify hints",
+	platform_reported_meta: "Meta platform-reported",
 	ga4_fallback: "GA4 fallback",
 };
 
@@ -229,6 +230,12 @@ function sanitizeQaPayloadForDisplay(
 				...candidate,
 				click_id_value: null,
 			})),
+			platform_reported_meta: payload.candidates.platform_reported_meta.map(
+				(candidate) => ({
+					...candidate,
+					click_id_value: null,
+				}),
+			),
 			ga4_fallback: sanitizedGa4Candidates,
 		},
 		model_summaries: payload.model_summaries.map((summary) => ({

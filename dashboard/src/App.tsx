@@ -1855,6 +1855,8 @@ function App() {
       endDate: shopifyBackfillRange.endDate,
       dryRun: shopifyOrderAttributionBackfillOptions.dryRun,
       limit: Number(shopifyOrderAttributionBackfillOptions.limit),
+      reclassificationTarget: 'full_rebuild',
+      organizationIds: [],
       webOrdersOnly: shopifyOrderAttributionBackfillOptions.webOrdersOnly,
       skipShopifyWriteback: shopifyOrderAttributionBackfillOptions.skipShopifyWriteback
     });

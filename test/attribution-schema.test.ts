@@ -137,6 +137,8 @@ test('order attribution backfill request normalizes defaults', () => {
 		endDate: "2026-04-15",
 		dryRun: true,
 		limit: ORDER_ATTRIBUTION_BACKFILL_DEFAULT_LIMIT,
+		reclassificationTarget: "full_rebuild",
+		organizationIds: [],
 		webOrdersOnly: true,
 		skipShopifyWriteback: false,
 	});
@@ -148,6 +150,8 @@ test("order attribution backfill request preserves explicit execution flags at t
 		endDate: "2026-04-15",
 		dryRun: false,
 		limit: ORDER_ATTRIBUTION_BACKFILL_MAX_LIMIT,
+		reclassificationTarget: "full_rebuild",
+		organizationIds: [],
 		webOrdersOnly: false,
 		skipShopifyWriteback: true,
 	});
@@ -157,6 +161,8 @@ test("order attribution backfill request preserves explicit execution flags at t
 		endDate: "2026-04-15",
 		dryRun: false,
 		limit: ORDER_ATTRIBUTION_BACKFILL_MAX_LIMIT,
+		reclassificationTarget: "full_rebuild",
+		organizationIds: [],
 		webOrdersOnly: false,
 		skipShopifyWriteback: true,
 	});

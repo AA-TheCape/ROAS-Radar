@@ -2,8 +2,10 @@ import { z } from "zod";
 
 export {
 	ORDER_ATTRIBUTION_BACKFILL_DEFAULT_LIMIT,
+	ORDER_ATTRIBUTION_BACKFILL_MAX_ORGANIZATION_IDS,
 	ORDER_ATTRIBUTION_BACKFILL_MAX_LIMIT,
 	normalizeOrderAttributionBackfillRequest,
+	orderAttributionTierSchema,
 	orderAttributionBackfillEnqueueResponseSchema,
 	orderAttributionBackfillFailureSchema,
 	orderAttributionBackfillJobResponseSchema,
@@ -309,6 +311,7 @@ export const ATTRIBUTION_EVIDENCE_SOURCES = [
   'cart_token',
   'customer_identity',
   'shopify_marketing_hint',
+  'meta_platform_reported',
   'ga4_fallback'
 ] as const;
 
@@ -353,6 +356,7 @@ export const ATTRIBUTION_QA_OUTCOME_STATUSES = ['success', 'no_match'] as const;
 export const ATTRIBUTION_QA_TIERS = [
   'deterministic_first_party',
   'deterministic_shopify_hint',
+  'platform_reported_meta',
   'ga4_fallback',
   'unattributed'
 ] as const;
@@ -363,6 +367,7 @@ export const ATTRIBUTION_QA_MATCH_SOURCES = [
   'customer_identity',
   'stitched_identity_journey',
   'shopify_marketing_hint',
+  'meta_platform_reported',
   'ga4_fallback',
   'unattributed'
 ] as const;
@@ -370,11 +375,13 @@ export const ATTRIBUTION_QA_CONFIDENCE_LABELS = ['high', 'medium', 'low', 'none'
 export const ATTRIBUTION_QA_CANDIDATE_GROUPS = [
   'deterministic_first_party',
   'shopify_hint',
+  'platform_reported_meta',
   'ga4_fallback'
 ] as const;
 export const ATTRIBUTION_QA_NORMALIZATION_FAILURE_SCOPES = [
   'order',
   'shopify_hint',
+  'platform_reported_meta',
   'ga4_fallback',
   'touchpoint',
   'credit',
@@ -634,6 +641,7 @@ export const attributionQaPayloadV1Schema = z.object({
   candidates: z.object({
     deterministic_first_party: z.array(attributionQaCandidateV1Schema),
     shopify_hint: z.array(attributionQaCandidateV1Schema),
+    platform_reported_meta: z.array(attributionQaCandidateV1Schema).default([]),
     ga4_fallback: z.array(attributionQaCandidateV1Schema)
   }),
   model_summaries: z.array(attributionResultRecordV1Schema),
@@ -647,6 +655,7 @@ export const attributionQaPayloadV1Schema = z.object({
   const selectedCandidates = [
     ...value.candidates.deterministic_first_party,
     ...value.candidates.shopify_hint,
+    ...value.candidates.platform_reported_meta,
     ...value.candidates.ga4_fallback
   ].filter((candidate) => candidate.selected);
 

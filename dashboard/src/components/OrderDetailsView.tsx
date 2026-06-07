@@ -479,7 +479,7 @@ export default function OrderDetailsView({
               {order?.attributionTier === 'unattributed' ? (
                 <EmptyState
                   title="Order is currently unattributed"
-                  description="No eligible first-party, Shopify hint, or GA4 fallback candidate won for this order, so downstream consumers should treat it as unattributed."
+                  description="No eligible first-party, Shopify hint, Meta platform-reported, or GA4 fallback candidate won for this order, so downstream consumers should treat it as unattributed."
                   compact
                   tone="danger"
                 />

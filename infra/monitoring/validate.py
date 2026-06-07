@@ -73,6 +73,28 @@ def validate_alert(path: pathlib.Path) -> list[str]:
 def validate_dashboard(path: pathlib.Path) -> list[str]:
     data = load_json(path)
     issues: list[str] = []
+
+    if "new_tiles" in data:
+        tiles = data.get("new_tiles", [])
+        if not isinstance(tiles, list) or not tiles:
+            return [f"{path.name}: new_tiles must define at least one dashboard tile"]
+
+        for index, tile in enumerate(tiles):
+            if not isinstance(tile, dict):
+                issues.append(f"{path.name}: new_tiles[{index}] must be an object")
+                continue
+            if not isinstance(tile.get("title"), str) or not tile.get("title", "").strip():
+                issues.append(f"{path.name}: new_tiles[{index}].title must be a non-empty string")
+            if not isinstance(tile.get("metric"), str) or not tile.get("metric", "").strip():
+                issues.append(f"{path.name}: new_tiles[{index}].metric must be a non-empty string")
+            group_by = tile.get("group_by", [])
+            if group_by and not (
+                isinstance(group_by, list) and all(isinstance(entry, str) and entry.strip() for entry in group_by)
+            ):
+                issues.append(f"{path.name}: new_tiles[{index}].group_by must be a list of non-empty strings")
+
+        return issues
+
     dashboard = data.get("mosaicLayout") or {}
     tiles = dashboard.get("tiles", [])
 

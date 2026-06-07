@@ -45,6 +45,7 @@ const dateStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const attributionTierSchema = z.enum([
   'deterministic_first_party',
   'deterministic_shopify_hint',
+  'platform_reported_meta',
   'ga4_fallback',
   'unattributed'
 ]);
@@ -53,6 +54,7 @@ type ReportingAttributionTier = z.infer<typeof attributionTierSchema>;
 const ATTRIBUTION_TIER_LABELS: Record<ReportingAttributionTier, string> = {
   deterministic_first_party: 'Deterministic first-party',
   deterministic_shopify_hint: 'Deterministic Shopify hint',
+  platform_reported_meta: 'Meta platform-reported',
   ga4_fallback: 'GA4 fallback',
   unattributed: 'Unattributed'
 };
@@ -62,10 +64,12 @@ const ATTRIBUTION_TIER_DESCRIPTIONS: Record<ReportingAttributionTier, string> = 
     'Resolved from durable ROAS Radar first-party evidence such as a landing session, checkout token, cart token, or stitched identity path.',
   deterministic_shopify_hint:
     'Recovered synthetically from Shopify marketing hints after first-party resolution failed.',
+  platform_reported_meta:
+    'Recovered from Meta platform-reported attribution after first-party and Shopify-hint matches were unavailable.',
   ga4_fallback:
     'Recovered from the GA4 fallback contract only after first-party and Shopify-hint matches were unavailable.',
   unattributed:
-    'No eligible first-party, Shopify hint, or GA4 fallback match qualified, or the required timing data could not be normalized.'
+    'No eligible first-party, Shopify hint, Meta platform-reported, or GA4 fallback match qualified, or the required timing data could not be normalized.'
 };
 
 const baseFiltersObjectSchema = z.object({
@@ -323,6 +327,12 @@ type OrderAttributionRow = {
   attribution_confidence_score: string | number | null;
   last_attribution_run_at: Date | null;
   attribution_snapshot: unknown;
+  meta_attribution_evidence_id: string | null;
+  meta_attribution_evaluation_outcome: string | null;
+  meta_attribution_confidence_score: string | number | null;
+  meta_attribution_confidence_label: string | null;
+  meta_attribution_present: boolean | null;
+  meta_attribution_affected_canonical: boolean | null;
   attributed_source: string | null;
   attributed_medium: string | null;
   attributed_campaign: string | null;
@@ -366,6 +376,25 @@ type OrderDetailsRow = {
   result_attributed_term: string | null;
   result_attributed_click_id_type: string | null;
   result_attributed_click_id_value: string | null;
+  meta_attribution_evidence_id: string | null;
+  meta_attribution_evaluation_outcome: string | null;
+  meta_attribution_confidence_score: string | number | null;
+  meta_attribution_confidence_label: string | null;
+  meta_attribution_present: boolean | null;
+  meta_attribution_affected_canonical: boolean | null;
+  attribution_decision_artifact_id: string | null;
+  attribution_decision_reason: string | null;
+  attribution_decision_reason_detail: string | null;
+  meta_attribution_match_basis: string | null;
+  meta_attribution_window_days: number | null;
+  meta_attribution_touchpoint_occurred_at: Date | null;
+  meta_attribution_reported_at: Date | null;
+  meta_attribution_is_click_through: boolean | null;
+  meta_attribution_is_view_through: boolean | null;
+  meta_attribution_eligibility_reasons: string[] | null;
+  meta_attribution_disqualification_reasons: string[] | null;
+  meta_attribution_parallel_only_reasons: string[] | null;
+  meta_attribution_normalization_failures: string[] | null;
   ingested_at: Date;
   raw_payload: unknown;
 };
@@ -701,6 +730,23 @@ function readNullableString(value: unknown): string | null {
 
 function readNullableNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function readOptionalNumber(value: string | number | null | undefined): number | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function readOptionalDateIso(value: Date | null | undefined): string | null {
+  return value instanceof Date && !Number.isNaN(value.getTime()) ? value.toISOString() : null;
+}
+
+function readStringArray(value: string[] | null | undefined): string[] {
+  return Array.isArray(value) ? value : [];
 }
 
 function extractOrderAttributionMetadata(snapshot: unknown): OrderAttributionMetadata {
@@ -1706,6 +1752,17 @@ export function createReportingRouter(): Router {
             o.attribution_confidence_score::text AS attribution_confidence_score,
             o.last_attribution_run_at,
             o.attribution_snapshot,
+            COALESCE(o.meta_attribution_evidence_id::text, ada.meta_attribution_evidence_id::text) AS meta_attribution_evidence_id,
+            ada.meta_evaluation_outcome AS meta_attribution_evaluation_outcome,
+            ada.confidence_score::text AS meta_attribution_confidence_score,
+            CASE
+              WHEN ada.confidence_score >= 0.75 THEN 'high'
+              WHEN ada.confidence_score >= 0.5 THEN 'medium'
+              WHEN ada.confidence_score > 0 THEN 'low'
+              ELSE NULL
+            END AS meta_attribution_confidence_label,
+            (ada.meta_attribution_evidence_id IS NOT NULL OR o.meta_attribution_evidence_id IS NOT NULL) AS meta_attribution_present,
+            ada.meta_affected_canonical AS meta_attribution_affected_canonical,
             c.attributed_source,
             c.attributed_medium,
             c.attributed_campaign,
@@ -1715,6 +1772,8 @@ export function createReportingRouter(): Router {
             ON sources.id = o.attribution_source_id
           LEFT JOIN matching_methods methods
             ON methods.id = o.matching_method_id
+          LEFT JOIN attribution_decision_artifacts ada
+            ON ada.id = o.latest_attribution_decision_artifact_id
           LEFT JOIN LATERAL (
             SELECT
               attributed_source,
@@ -1745,6 +1804,7 @@ export function createReportingRouter(): Router {
 					input.limit,
 				],
 			);
+
       const orderRowsWithMetadata = result.rows.map((row) => {
         const metadata = extractOrderAttributionMetadata(row.attribution_snapshot);
 
@@ -1772,6 +1832,9 @@ export function createReportingRouter(): Router {
       const rows = orderRowsWithMetadata.map(({ row, metadata, attribution }) => {
           const attributionTier = normalizeAttributionTier(row.attribution_tier);
           const orderAttributionReason = row.order_attribution_reason ?? 'unattributed';
+          const matchingMethod = readAttributionLookupCode(null, row.matching_method_code, row.last_attribution_run_at);
+          const lastAttributionRunAt = row.last_attribution_run_at?.toISOString() ?? null;
+          const hasMetaAttribution = row.meta_attribution_present === true || row.meta_attribution_evidence_id != null;
           const campaignResolution = selectNullableCampaignResolution(campaignMetadata, attribution);
           const creditAttribution = {
             source: row.attributed_source,
@@ -1810,14 +1873,24 @@ export function createReportingRouter(): Router {
               row.attribution_source_code,
               row.last_attribution_run_at
             ),
-            matchingMethod: readAttributionLookupCode(null, row.matching_method_code, row.last_attribution_run_at),
+            ...(matchingMethod ? { matchingMethod } : {}),
             attributionMatchedAt: row.attribution_matched_at?.toISOString() ?? null,
             confidenceScore: readOrderConfidenceScore(
               row.attribution_confidence_score,
               row.last_attribution_run_at,
               metadata.confidenceScore
             ),
-            lastAttributionRunAt: row.last_attribution_run_at?.toISOString() ?? null,
+            ...(hasMetaAttribution
+              ? {
+                  metaAttributionEvidenceId: row.meta_attribution_evidence_id,
+                  metaAttributionEligibilityOutcome: row.meta_attribution_evaluation_outcome,
+                  metaAttributionConfidenceScore: readOptionalNumber(row.meta_attribution_confidence_score),
+                  metaAttributionConfidenceLabel: row.meta_attribution_confidence_label,
+                  metaAttributionPresent: row.meta_attribution_present ?? false,
+                  metaAttributionAffectedCanonical: row.meta_attribution_affected_canonical ?? false
+                }
+              : {}),
+            ...(lastAttributionRunAt ? { lastAttributionRunAt } : {}),
             sessionId: metadata.winner.sessionId
           };
         });
@@ -1883,6 +1956,42 @@ export function createReportingRouter(): Router {
             results.attributed_term AS result_attributed_term,
             results.attributed_click_id_type AS result_attributed_click_id_type,
             results.attributed_click_id_value AS result_attributed_click_id_value,
+            COALESCE(o.meta_attribution_evidence_id::text, ada.meta_attribution_evidence_id::text) AS meta_attribution_evidence_id,
+            ada.meta_evaluation_outcome AS meta_attribution_evaluation_outcome,
+            ada.confidence_score::text AS meta_attribution_confidence_score,
+            CASE
+              WHEN ada.confidence_score >= 0.75 THEN 'high'
+              WHEN ada.confidence_score >= 0.5 THEN 'medium'
+              WHEN ada.confidence_score > 0 THEN 'low'
+              ELSE NULL
+            END AS meta_attribution_confidence_label,
+            (ada.meta_attribution_evidence_id IS NOT NULL OR o.meta_attribution_evidence_id IS NOT NULL) AS meta_attribution_present,
+            ada.meta_affected_canonical AS meta_attribution_affected_canonical,
+            ada.id::text AS attribution_decision_artifact_id,
+            ada.decision_reason AS attribution_decision_reason,
+            ada.decision_reason_detail AS attribution_decision_reason_detail,
+            moe.match_basis AS meta_attribution_match_basis,
+            moe.attribution_window_days AS meta_attribution_window_days,
+            moe.meta_touchpoint_occurred_at_utc AS meta_attribution_touchpoint_occurred_at,
+            moe.reported_at_utc AS meta_attribution_reported_at,
+            moe.is_click_through AS meta_attribution_is_click_through,
+            moe.is_view_through AS meta_attribution_is_view_through,
+            COALESCE(
+              ARRAY(SELECT jsonb_array_elements_text(moe.eligibility_reasons)),
+              ARRAY[]::text[]
+            ) AS meta_attribution_eligibility_reasons,
+            COALESCE(
+              ARRAY(SELECT jsonb_array_elements_text(moe.disqualification_reasons)),
+              ARRAY[]::text[]
+            ) AS meta_attribution_disqualification_reasons,
+            COALESCE(
+              ARRAY(SELECT jsonb_array_elements_text(moe.parallel_only_reasons)),
+              ARRAY[]::text[]
+            ) AS meta_attribution_parallel_only_reasons,
+            COALESCE(
+              ARRAY(SELECT jsonb_array_elements_text(moe.normalization_failures)),
+              ARRAY[]::text[]
+            ) AS meta_attribution_normalization_failures,
             o.ingested_at,
             o.attribution_snapshot,
             o.raw_payload
@@ -1891,6 +2000,10 @@ export function createReportingRouter(): Router {
             ON sources.id = o.attribution_source_id
           LEFT JOIN matching_methods methods
             ON methods.id = o.matching_method_id
+          LEFT JOIN attribution_decision_artifacts ada
+            ON ada.id = o.latest_attribution_decision_artifact_id
+          LEFT JOIN meta_order_attribution_evidence moe
+            ON moe.id = COALESCE(o.meta_attribution_evidence_id, ada.meta_attribution_evidence_id)
           LEFT JOIN attribution_results results
             ON results.shopify_order_id = o.shopify_order_id
           WHERE o.shopify_order_id = $1
@@ -1970,13 +2083,14 @@ export function createReportingRouter(): Router {
         ...creditsResult.rows.map((row) => row.attributed_source)
       ].filter((source): source is string => Boolean(source));
       const scopedAttributionSources = [...new Set(attributionSources)];
+      const orderDate =
+        toDateString(order.processed_at) ??
+        toDateString(order.created_at_shopify) ??
+        toDateString(order.ingested_at) ??
+        new Date().toISOString().slice(0, 10);
       const campaignMetadata = await resolveCampaignDisplayMetadata(
-        order.processed_at?.toISOString().slice(0, 10) ??
-          order.created_at_shopify?.toISOString().slice(0, 10) ??
-          order.ingested_at.toISOString().slice(0, 10),
-        order.processed_at?.toISOString().slice(0, 10) ??
-          order.created_at_shopify?.toISOString().slice(0, 10) ??
-          order.ingested_at.toISOString().slice(0, 10),
+        orderDate,
+        orderDate,
         [
           orderAttribution.campaign,
           ...creditsResult.rows.map((row) => row.attributed_campaign)
@@ -1984,10 +2098,6 @@ export function createReportingRouter(): Router {
         scopedAttributionSources.length === 1 ? scopedAttributionSources[0] : undefined
       );
       const orderCampaignResolution = selectNullableCampaignResolution(campaignMetadata, orderAttribution);
-      const orderDate =
-        toDateString(order.processed_at) ??
-        toDateString(order.created_at_shopify) ??
-        toDateString(order.ingested_at);
       const googleCpcMissingCampaignIds: string[] = [];
       let googleCpcAttributionRowCount = 0;
       const attributionCredits = creditsResult.rows.map((row) => {
@@ -2096,6 +2206,25 @@ export function createReportingRouter(): Router {
           attributedTerm: orderAttribution.term,
           attributedClickIdType: orderAttribution.clickIdType,
           attributedClickIdValue: orderAttribution.clickIdValue,
+          metaAttributionEvidenceId: order.meta_attribution_evidence_id,
+          metaAttributionEligibilityOutcome: order.meta_attribution_evaluation_outcome,
+          metaAttributionConfidenceScore: readOptionalNumber(order.meta_attribution_confidence_score),
+          metaAttributionConfidenceLabel: order.meta_attribution_confidence_label,
+          metaAttributionPresent: order.meta_attribution_present ?? false,
+          metaAttributionAffectedCanonical: order.meta_attribution_affected_canonical ?? false,
+          attributionDecisionArtifactId: order.attribution_decision_artifact_id,
+          attributionDecisionReason: order.attribution_decision_reason,
+          attributionDecisionReasonDetail: order.attribution_decision_reason_detail,
+          metaAttributionMatchBasis: order.meta_attribution_match_basis,
+          metaAttributionWindowDays: order.meta_attribution_window_days,
+          metaAttributionTouchpointOccurredAt: readOptionalDateIso(order.meta_attribution_touchpoint_occurred_at),
+          metaAttributionReportedAt: readOptionalDateIso(order.meta_attribution_reported_at),
+          metaAttributionIsClickThrough: order.meta_attribution_is_click_through,
+          metaAttributionIsViewThrough: order.meta_attribution_is_view_through,
+          metaAttributionEligibilityReasons: readStringArray(order.meta_attribution_eligibility_reasons),
+          metaAttributionDisqualificationReasons: readStringArray(order.meta_attribution_disqualification_reasons),
+          metaAttributionParallelOnlyReasons: readStringArray(order.meta_attribution_parallel_only_reasons),
+          metaAttributionNormalizationFailures: readStringArray(order.meta_attribution_normalization_failures),
           attributionSnapshot: order.attribution_snapshot,
           attributionSnapshotUpdatedAt: order.attribution_snapshot_updated_at?.toISOString() ?? null,
           ingestedAt: order.ingested_at.toISOString(),

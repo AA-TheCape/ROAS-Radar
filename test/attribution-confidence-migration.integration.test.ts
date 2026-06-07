@@ -168,8 +168,8 @@ test('migration 0046 expands confidence metadata without historical backfill, va
       attributedAt: '2026-04-12T10:08:00.000Z'
     });
 
-    await runConfidenceMigration(client);
     await client.query('COMMIT');
+    await runConfidenceMigration(client);
 
     const expandedRows = await pool.query<{
       shopify_order_id: string;
@@ -310,8 +310,8 @@ test('confidence metadata contract is applied only after resumable backfill comp
       attributedAt: '2026-04-12T10:08:00.000Z'
     });
 
-    await runConfidenceMigration(client);
     await client.query('COMMIT');
+    await runConfidenceMigration(client);
 
     await assert.rejects(
       () => runConfidenceContract(pool),

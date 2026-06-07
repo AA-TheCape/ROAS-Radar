@@ -187,12 +187,13 @@ test("compareAttributionEvidenceSources exposes the shared source ordering", () 
 		"cart_token",
 		"customer_identity",
 		"shopify_marketing_hint",
+		"meta_platform_reported",
 		"ga4_fallback",
 	]);
 	assert.equal(
 		compareAttributionEvidenceSources(
 			"shopify_marketing_hint",
-			"ga4_fallback",
+			"meta_platform_reported",
 		) < 0,
 		true,
 	);

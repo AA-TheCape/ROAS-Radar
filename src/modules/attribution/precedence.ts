@@ -3,6 +3,7 @@ export const ATTRIBUTION_ORIGINS = [
 	"unknown",
 	"ad_platform",
 	"ga4_fallback",
+	"platform_reported_meta",
 	"shopify_marketing_hint",
 	"deterministic_first_party",
 ] as const;
@@ -15,6 +16,7 @@ export const ATTRIBUTION_EVIDENCE_SOURCES = [
 	"cart_token",
 	"customer_identity",
 	"shopify_marketing_hint",
+	"meta_platform_reported",
 	"ga4_fallback",
 ] as const;
 
@@ -58,6 +60,7 @@ const ORIGIN_PRECEDENCE: Record<AttributionOrigin, number> = {
 	unknown: 10,
 	ad_platform: 20,
 	ga4_fallback: 30,
+	platform_reported_meta: 35,
 	shopify_marketing_hint: 40,
 	deterministic_first_party: 50,
 };
@@ -68,7 +71,8 @@ const EVIDENCE_SOURCE_ORDER: Record<AttributionEvidenceSource, number> = {
 	cart_token: 2,
 	customer_identity: 3,
 	shopify_marketing_hint: 4,
-	ga4_fallback: 5,
+	meta_platform_reported: 5,
+	ga4_fallback: 6,
 };
 
 function normalizeNullableString(
@@ -135,6 +139,15 @@ export function classifyAttributionOrigin(
 	}
 
 	if (
+		tier === "platform_reported_meta" ||
+		source === "meta_platform_reported" ||
+		matchSource === "meta_platform_reported" ||
+		reason === "meta_platform_reported"
+	) {
+		return "platform_reported_meta";
+	}
+
+	if (
 		tier === "ga4_fallback" ||
 		source === "ga4_fallback" ||
 		matchSource === "ga4_fallback" ||
@@ -179,6 +192,8 @@ export function mapResolvedIngestionSourceToAttributionOrigin(
 			return "deterministic_first_party";
 		case "shopify_marketing_hint":
 			return "shopify_marketing_hint";
+		case "meta_platform_reported":
+			return "platform_reported_meta";
 		case "ga4_fallback":
 			return "ga4_fallback";
 	}

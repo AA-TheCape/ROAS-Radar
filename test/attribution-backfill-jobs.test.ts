@@ -13,6 +13,24 @@ const { buildBackfillExecutionOptions, processOrderAttributionBackfillRuns } =
 	backfillJobsModule;
 const { OrderAttributionBackfillRunError } = backfillModule;
 
+const emptyTierCounts = {
+	deterministic_first_party: 0,
+	deterministic_shopify_hint: 0,
+	platform_reported_meta: 0,
+	ga4_fallback: 0,
+	unattributed: 0,
+};
+
+function expectedReportDefaults(dryRun: boolean) {
+	return {
+		dryRun,
+		reclassificationTarget: "full_rebuild",
+		organizationIds: [],
+		beforeCounts: emptyTierCounts,
+		afterCounts: emptyTierCounts,
+	};
+}
+
 async function captureStructuredLogs<T>(callback: () => Promise<T>): Promise<{
 	entries: Array<Record<string, unknown>>;
 	result: T;
@@ -210,6 +228,7 @@ test("processOrderAttributionBackfillRuns completes queued runs with the shared 
 				recovered: 11,
 				unrecoverable: 6,
 				writebackCompleted: 3,
+				...expectedReportDefaults(true),
 				failures: [
 					{
 						orderId: "order-7",
@@ -368,6 +387,7 @@ test("processOrderAttributionBackfillRuns continues after a failure and preserve
 				recovered: 9,
 				unrecoverable: 9,
 				writebackCompleted: 0,
+				...expectedReportDefaults(false),
 				failures: [],
 			},
 		},
@@ -380,6 +400,7 @@ test("processOrderAttributionBackfillRuns continues after a failure and preserve
 				recovered: 0,
 				unrecoverable: 1,
 				writebackCompleted: 0,
+				...expectedReportDefaults(true),
 				failures: [
 					{
 						orderId: "order-22",
@@ -459,6 +480,7 @@ test("processOrderAttributionBackfillRuns marks failed runs without aborting the
 				recovered: 0,
 				unrecoverable: 0,
 				writebackCompleted: 0,
+				...expectedReportDefaults(false),
 				failures: [],
 			},
 			error: {

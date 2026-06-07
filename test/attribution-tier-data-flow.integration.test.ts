@@ -503,7 +503,7 @@ test('attribution tier precedence persists once per order and is exposed consist
         attributionTier: 'unattributed',
         attributionTierLabel: 'Unattributed',
         attributionTierDescription:
-          'No eligible first-party, Shopify hint, or GA4 fallback match qualified, or the required timing data could not be normalized.',
+          'No eligible first-party, Shopify hint, Meta platform-reported, or GA4 fallback match qualified, or the required timing data could not be normalized.',
         attributionSource: 'unattributed',
         matchingMethod: 'unattributed',
         attributionMatchedAt: '<dynamic>',
@@ -569,7 +569,7 @@ test('attribution tier precedence persists once per order and is exposed consist
           attributionTier: 'unattributed',
           attributionTierLabel: 'Unattributed',
           attributionTierDescription:
-            'No eligible first-party, Shopify hint, or GA4 fallback match qualified, or the required timing data could not be normalized.',
+            'No eligible first-party, Shopify hint, Meta platform-reported, or GA4 fallback match qualified, or the required timing data could not be normalized.',
           attributionSource: 'unattributed',
           matchingMethod: 'unattributed',
           attributionMatchedAt: (ordersResponse.body.rows as Array<Record<string, unknown>>)[2].attributionMatchedAt,

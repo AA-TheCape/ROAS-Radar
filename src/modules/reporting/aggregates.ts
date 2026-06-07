@@ -41,6 +41,7 @@ export async function refreshDailyReportingMetrics(
         SELECT
           DATE(timezone($2::text, s.first_seen_at)) AS metric_date,
           m.attribution_model,
+          'all' AS attribution_tier,
           COALESCE(s.initial_utm_source, 'unknown') AS source,
           COALESCE(s.initial_utm_medium, 'unknown') AS medium,
           COALESCE(s.initial_utm_campaign, 'unknown') AS campaign,
@@ -59,7 +60,7 @@ export async function refreshDailyReportingMetrics(
         FROM tracking_sessions s
         CROSS JOIN attribution_models m
         WHERE DATE(timezone($2::text, s.first_seen_at)) = ANY($1::date[])
-        GROUP BY 1, 2, 3, 4, 5, 6, 7
+        GROUP BY 1, 2, 3, 4, 5, 6, 7, 8
       ),
       order_customer_rankings AS (
         SELECT
@@ -80,6 +81,7 @@ export async function refreshDailyReportingMetrics(
         SELECT
           DATE(timezone($2::text, COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at))) AS metric_date,
           c.attribution_model,
+          COALESCE(o.attribution_tier, 'unattributed') AS attribution_tier,
           COALESCE(c.attributed_source, 'unknown') AS source,
           COALESCE(c.attributed_medium, 'unknown') AS medium,
           COALESCE(c.attributed_campaign, 'unknown') AS campaign,
@@ -102,7 +104,7 @@ export async function refreshDailyReportingMetrics(
           ON r.shopify_order_id = o.shopify_order_id
         WHERE COALESCE(o.source_name, '') = 'web'
           AND DATE(timezone($2::text, COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at))) = ANY($1::date[])
-        GROUP BY 1, 2, 3, 4, 5, 6, 7
+        GROUP BY 1, 2, 3, 4, 5, 6, 7, 8
       ),
       spend_source_rows AS (
         SELECT
@@ -163,6 +165,7 @@ export async function refreshDailyReportingMetrics(
         SELECT
           s.metric_date,
           m.attribution_model,
+          'all' AS attribution_tier,
           COALESCE(s.source, 'unknown') AS source,
           COALESCE(s.medium, 'unknown') AS medium,
           COALESCE(s.campaign, 'unknown') AS campaign,
@@ -180,11 +183,12 @@ export async function refreshDailyReportingMetrics(
           0::numeric(12, 2) AS returning_customer_revenue
         FROM spend_source_rows s
         CROSS JOIN attribution_models m
-        GROUP BY 1, 2, 3, 4, 5, 6, 7
+        GROUP BY 1, 2, 3, 4, 5, 6, 7, 8
       )
       INSERT INTO daily_reporting_metrics (
         metric_date,
         attribution_model,
+        attribution_tier,
         source,
         medium,
         campaign,
@@ -205,6 +209,7 @@ export async function refreshDailyReportingMetrics(
       SELECT
         metric_date,
         attribution_model,
+        attribution_tier,
         source,
         medium,
         campaign,
@@ -228,7 +233,7 @@ export async function refreshDailyReportingMetrics(
         UNION ALL
         SELECT * FROM spend_rows
       ) combined
-      GROUP BY 1, 2, 3, 4, 5, 6, 7
+      GROUP BY 1, 2, 3, 4, 5, 6, 7, 8
     `,
 		[normalizedMetricDates, reportingTimezone, ATTRIBUTION_MODELS],
 	);

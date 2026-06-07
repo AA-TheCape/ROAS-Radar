@@ -38,10 +38,13 @@ import {
   dedupeDeterministicCandidates,
   isDirectTouchpoint,
   resolveAttributionTier,
+  resolveAttributionTierForVersion,
   selectLastNonDirectWinner,
+  type ResolvedAttributionTier,
   type ResolvedJourney,
   type ResolvedAttributionTouchpoint
 } from './resolver.js';
+import { ATTRIBUTION_RESOLVER_RULE_VERSION } from './rule-version.js';
 import {
   loadAttributionPreprocessingSnapshot,
   preprocessAttributionOrders,
@@ -52,6 +55,7 @@ import {
   classifyAttributionOrigin,
   shouldApplyAttributionUpdate
 } from './precedence.js';
+import { insertAttributionDecisionArtifact } from './decision-artifacts.js';
 
 const ATTRIBUTION_MODEL_VERSION = 1;
 const JOB_STALE_AFTER_MINUTES = 15;
@@ -74,6 +78,7 @@ type OrderRow = {
   customer_identity_id: string | null;
   identity_journey_id: string | null;
   source_name: string | null;
+  payload_hash: string | null;
   raw_payload: unknown;
 };
 
@@ -369,6 +374,7 @@ async function fetchOrder(client: PoolClient, shopifyOrderId: string): Promise<O
         customer_identity_id::text AS customer_identity_id,
         identity_journey_id::text AS identity_journey_id,
         source_name,
+        payload_hash,
         raw_payload
       FROM shopify_orders
       WHERE shopify_order_id = $1
@@ -411,6 +417,19 @@ function serializeResolvedTouchpoint(touchpoint: ResolvedAttributionTouchpoint) 
     ingestionSource: touchpoint.ingestionSource,
     isDirect: touchpoint.isDirect
   };
+}
+
+function normalizeResolvedAttributionTier(value: string | null): ResolvedAttributionTier | null {
+  switch (value) {
+    case 'deterministic_first_party':
+    case 'deterministic_shopify_hint':
+    case 'platform_reported_meta':
+    case 'ga4_fallback':
+    case 'unattributed':
+      return value;
+    default:
+      return null;
+  }
 }
 
 async function fetchCurrentAttribution(
@@ -770,20 +789,35 @@ async function persistAttribution(
     execution,
     generatedAt: matchedAt
   });
+  const lookupPair = await resolveActiveAttributionLookupPair(client, {
+    attributionSourceCode: confidenceMetadata.attributionSourceCode,
+    matchingMethodCode: confidenceMetadata.matchingMethodCode
+  });
+  const decisionArtifactId = await insertAttributionDecisionArtifact({
+    client,
+    order: {
+      shopifyOrderId: order.shopify_order_id,
+      payloadHash: order.payload_hash,
+      attributionTier: normalizeResolvedAttributionTier(current?.order_attribution_tier ?? null)
+    },
+    journey,
+    resolverInput: candidateEvaluation,
+    orderAttributionAudit,
+    resolverRunSource: 'forward_processing',
+    resolverTriggeredBy: 'realtime_queue'
+  });
   const attributionSnapshot = {
     tier: journey.tier,
     attributionReason: journey.attributionReason,
     orderOccurredAtUtc: journey.orderOccurredAtUtc?.toISOString() ?? null,
     normalizationFailures: journey.normalizationFailures,
     confidenceScore: confidenceMetadata.confidenceScore,
+    resolverRuleVersion: journey.resolverRuleVersion,
+    decisionArtifactId,
     winner: journey.winner ? serializeResolvedTouchpoint(journey.winner) : null,
     timeline: journey.touchpoints.map(serializeResolvedTouchpoint),
     qaSnapshot
   };
-  const lookupPair = await resolveActiveAttributionLookupPair(client, {
-    attributionSourceCode: confidenceMetadata.attributionSourceCode,
-    matchingMethodCode: confidenceMetadata.matchingMethodCode
-  });
 
   await client.query('DELETE FROM attribution_order_credits WHERE shopify_order_id = $1', [order.shopify_order_id]);
 
@@ -919,7 +953,9 @@ async function persistAttribution(
         attribution_source_id,
         matching_method_id,
         confidence_contract_version,
-        last_attribution_run_at
+        last_attribution_run_at,
+        resolver_rule_version,
+        attribution_decision_artifact_id
       )
       VALUES (
         $1,
@@ -932,25 +968,27 @@ async function persistAttribution(
         $7,
         $8,
         $9,
-	        $10,
-	        $11,
-	        $12,
-	        $13,
-	        $14,
-	        $15,
-	        $16,
-	        $17,
-	        $18,
-	        $19,
-	        $20,
-	        1,
-	        $21,
-	        $22,
-	        $23,
-	        $24,
-	        $25,
-	        $26,
-	        $20
+        $10,
+        $11,
+        $12,
+        $13,
+        $14,
+        $15,
+        $16,
+        $17,
+        $18,
+        $19,
+        $20,
+        1,
+        $21,
+        $22,
+        $23,
+        $24,
+        $25,
+        $26,
+        $20,
+        $27,
+        $28::uuid
       )
       ON CONFLICT (shopify_order_id)
       DO UPDATE SET
@@ -980,7 +1018,9 @@ async function persistAttribution(
         attribution_source_id = EXCLUDED.attribution_source_id,
         matching_method_id = EXCLUDED.matching_method_id,
         confidence_contract_version = EXCLUDED.confidence_contract_version,
-        last_attribution_run_at = EXCLUDED.last_attribution_run_at
+        last_attribution_run_at = EXCLUDED.last_attribution_run_at,
+        resolver_rule_version = EXCLUDED.resolver_rule_version,
+        attribution_decision_artifact_id = EXCLUDED.attribution_decision_artifact_id
     `,
     [
       order.shopify_order_id,
@@ -1008,7 +1048,9 @@ async function persistAttribution(
       confidenceLabel,
       lookupPair.attributionSourceId,
       lookupPair.matchingMethodId,
-      confidenceMetadata.confidenceContractVersion
+      confidenceMetadata.confidenceContractVersion,
+      journey.resolverRuleVersion,
+      decisionArtifactId
     ]
   );
 
@@ -1039,7 +1081,9 @@ async function persistAttribution(
           attribution_confidence_contract_version = $8,
           last_attribution_run_at = $4,
           attribution_snapshot = $7::jsonb,
-          attribution_snapshot_updated_at = $4
+          attribution_snapshot_updated_at = $4,
+          attribution_resolver_rule_version = $11,
+          latest_attribution_decision_artifact_id = $12::uuid
         WHERE shopify_order_id = $1
       `,
       [
@@ -1052,7 +1096,9 @@ async function persistAttribution(
         JSON.stringify(attributionSnapshot),
         confidenceMetadata.confidenceContractVersion,
         lookupPair.attributionSourceId,
-        lookupPair.matchingMethodId
+        lookupPair.matchingMethodId,
+        journey.resolverRuleVersion,
+        decisionArtifactId
       ]
     );
     emitAttributionQaSnapshotWriteLog({
@@ -1242,6 +1288,7 @@ export async function applySyntheticAttributionForOrder(
         winner: touchpoint,
         confidenceScore,
         attributionReason: input.attributionReason,
+        resolverRuleVersion: ATTRIBUTION_RESOLVER_RULE_VERSION,
         orderOccurredAtUtc: orderOccurredAt,
         normalizationFailures: []
       },
@@ -1254,6 +1301,7 @@ export async function applySyntheticAttributionForOrder(
             : 'ingested_at',
         deterministicFirstParty: [],
         shopifyHint: syntheticTier === 'deterministic_shopify_hint' ? [syntheticCandidate] : [],
+        platformReportedMeta: [],
         ga4Fallback: syntheticTier === 'ga4_fallback' ? [syntheticCandidate] : [],
         normalizationFailures: []
       }
@@ -1358,6 +1406,7 @@ export const __attributionTestUtils = {
   selectLastNonDirectWinner,
   confidenceScoreForWinner,
   resolveAttributionTier,
+  resolveAttributionTierForVersion,
   collectDeterministicFirstPartyCandidates,
   extractAttributionCandidatesForOrder,
   preprocessAttributionSnapshot

@@ -264,6 +264,8 @@ function createSettingsHarness(
 					endDate: shopifyBackfillRange.endDate,
 					dryRun: shopifyOrderAttributionBackfillOptions.dryRun,
 					limit: Number(shopifyOrderAttributionBackfillOptions.limit),
+					reclassificationTarget: "full_rebuild",
+					organizationIds: [],
 					webOrdersOnly: shopifyOrderAttributionBackfillOptions.webOrdersOnly,
 					skipShopifyWriteback:
 						shopifyOrderAttributionBackfillOptions.skipShopifyWriteback,
@@ -415,6 +417,8 @@ test("settings recovery harness preserves the existing recovery actions and subm
 				endDate: "2026-04-20",
 				dryRun: true,
 				limit: 500,
+				reclassificationTarget: "full_rebuild",
+				organizationIds: [],
 				webOrdersOnly: true,
 				skipShopifyWriteback: false,
 			});
@@ -517,6 +521,8 @@ test("settings recovery harness gates non-dry-run backfills until the operator c
 				endDate: "2026-04-20",
 				dryRun: false,
 				limit: 500,
+				reclassificationTarget: "full_rebuild",
+				organizationIds: [],
 				webOrdersOnly: false,
 				skipShopifyWriteback: true,
 			});

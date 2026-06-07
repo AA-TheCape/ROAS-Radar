@@ -118,6 +118,13 @@ type ScopeMetrics = {
   ordersMissingAttribution: number;
   ordersWithAttribution: number;
   completenessRate: number;
+  tierCounts: {
+    deterministic_first_party: number;
+    deterministic_shopify_hint: number;
+    platform_reported_meta: number;
+    ga4_fallback: number;
+    unattributed: number;
+  };
 };
 
 type BackfillFailure = {
@@ -132,6 +139,8 @@ type BackfillPreviewRow = {
   recoverable: boolean;
   touchpointCount: number;
   winnerSessionId: string | null;
+  currentTier: 'deterministic_first_party' | 'deterministic_shopify_hint' | 'platform_reported_meta' | 'ga4_fallback' | 'unattributed';
+  resolvedTier: 'deterministic_first_party' | 'deterministic_shopify_hint' | 'platform_reported_meta' | 'ga4_fallback' | 'unattributed';
   attributionReason: string;
 };
 
@@ -139,6 +148,8 @@ type BackfillReport = {
   requestedBy: string;
   workerId: string;
   dryRun: boolean;
+  reclassificationTarget: 'full_rebuild' | 'meta_tier_reclassification';
+  organizationIds: number[];
   scope: {
     windowStart: string;
     windowEnd: string;
@@ -196,6 +207,8 @@ export type OrderAttributionBackfillOptions = {
   windowEnd: Date;
   limit?: number;
   dryRun?: boolean;
+  reclassificationTarget?: 'full_rebuild' | 'meta_tier_reclassification';
+  organizationIds?: number[];
   onlyWebOrders?: boolean;
   writeToShopifyWhenAvailable?: boolean;
   applyWriteback?: (input: ApplyWritebackInput) => Promise<ApplyWritebackResult>;
@@ -245,7 +258,14 @@ function buildEmptyScopeMetrics(): ScopeMetrics {
     totalOrdersInScope: 0,
     ordersMissingAttribution: 0,
     ordersWithAttribution: 0,
-    completenessRate: 1
+    completenessRate: 1,
+    tierCounts: {
+      deterministic_first_party: 0,
+      deterministic_shopify_hint: 0,
+      platform_reported_meta: 0,
+      ga4_fallback: 0,
+      unattributed: 0
+    }
   };
 }
 
@@ -253,6 +273,8 @@ function buildOrderAttributionBackfillReport(input: {
   requestedBy: string;
   workerId: string;
   dryRun: boolean;
+  reclassificationTarget: 'full_rebuild' | 'meta_tier_reclassification';
+  organizationIds: number[];
   windowStart: Date;
   windowEnd: Date;
   onlyWebOrders: boolean;
@@ -274,6 +296,8 @@ function buildOrderAttributionBackfillReport(input: {
     requestedBy: input.requestedBy,
     workerId: input.workerId,
     dryRun: input.dryRun,
+    reclassificationTarget: input.reclassificationTarget,
+    organizationIds: input.organizationIds,
     scope: {
       windowStart: input.windowStart.toISOString(),
       windowEnd: input.windowEnd.toISOString(),
@@ -932,10 +956,15 @@ async function fetchScopeMetrics(client: PoolClient, options: BackfillScopeOptio
     total_orders_in_scope: string;
     orders_missing_attribution: string;
     orders_with_attribution: string;
+    deterministic_first_party: string;
+    deterministic_shopify_hint: string;
+    platform_reported_meta: string;
+    ga4_fallback: string;
+    unattributed: string;
   }>(
     `
       WITH scoped_orders AS (
-        SELECT o.shopify_order_id
+        SELECT o.shopify_order_id, o.attribution_tier
         FROM shopify_orders o
         WHERE COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) >= $1
           AND COALESCE(o.processed_at, o.created_at_shopify, o.ingested_at) <= $2
@@ -944,7 +973,12 @@ async function fetchScopeMetrics(client: PoolClient, options: BackfillScopeOptio
       SELECT
         COUNT(*)::text AS total_orders_in_scope,
         COUNT(*) FILTER (WHERE ${MISSING_ATTRIBUTION_SQL})::text AS orders_missing_attribution,
-        COUNT(*) FILTER (WHERE NOT (${MISSING_ATTRIBUTION_SQL}))::text AS orders_with_attribution
+        COUNT(*) FILTER (WHERE NOT (${MISSING_ATTRIBUTION_SQL}))::text AS orders_with_attribution,
+        COUNT(*) FILTER (WHERE COALESCE(scoped.attribution_tier, 'unattributed') = 'deterministic_first_party')::text AS deterministic_first_party,
+        COUNT(*) FILTER (WHERE COALESCE(scoped.attribution_tier, 'unattributed') = 'deterministic_shopify_hint')::text AS deterministic_shopify_hint,
+        COUNT(*) FILTER (WHERE COALESCE(scoped.attribution_tier, 'unattributed') = 'platform_reported_meta')::text AS platform_reported_meta,
+        COUNT(*) FILTER (WHERE COALESCE(scoped.attribution_tier, 'unattributed') = 'ga4_fallback')::text AS ga4_fallback,
+        COUNT(*) FILTER (WHERE COALESCE(scoped.attribution_tier, 'unattributed') = 'unattributed')::text AS unattributed
       FROM scoped_orders scoped
       LEFT JOIN attribution_results attribution
         ON attribution.shopify_order_id = scoped.shopify_order_id
@@ -960,7 +994,14 @@ async function fetchScopeMetrics(client: PoolClient, options: BackfillScopeOptio
     totalOrdersInScope,
     ordersMissingAttribution,
     ordersWithAttribution,
-    completenessRate: totalOrdersInScope > 0 ? ordersWithAttribution / totalOrdersInScope : 1
+    completenessRate: totalOrdersInScope > 0 ? ordersWithAttribution / totalOrdersInScope : 1,
+    tierCounts: {
+      deterministic_first_party: Number(row?.deterministic_first_party ?? '0'),
+      deterministic_shopify_hint: Number(row?.deterministic_shopify_hint ?? '0'),
+      platform_reported_meta: Number(row?.platform_reported_meta ?? '0'),
+      ga4_fallback: Number(row?.ga4_fallback ?? '0'),
+      unattributed: Number(row?.unattributed ?? '0')
+    }
   };
 }
 
@@ -1009,6 +1050,8 @@ function previewRowForOrder(order: OrderRow, journey: ResolvedJourney): Backfill
     recoverable: Boolean(journey.winner),
     touchpointCount: journey.touchpoints.length,
     winnerSessionId: journey.winner?.sessionId ?? null,
+    currentTier: 'unattributed',
+    resolvedTier: journey.tier,
     attributionReason: journey.winner?.attributionReason ?? 'unattributed'
   };
 }
@@ -1028,6 +1071,8 @@ export async function backfillRecentOrdersWithRecoveredAttribution(options: Orde
 
   const limit = Math.max(1, options.limit ?? 500);
   const dryRun = options.dryRun ?? false;
+  const reclassificationTarget = options.reclassificationTarget ?? 'full_rebuild';
+  const organizationIds = options.organizationIds ?? [];
   const onlyWebOrders = options.onlyWebOrders ?? true;
   const writeToShopifyWhenAvailable = options.writeToShopifyWhenAvailable ?? true;
   const applyWriteback = options.applyWriteback ?? applyShopifyOrderWriteback;
@@ -1239,6 +1284,8 @@ export async function backfillRecentOrdersWithRecoveredAttribution(options: Orde
       limit,
       beforeMetrics,
       afterMetrics,
+      reclassificationTarget,
+      organizationIds,
       scannedOrders,
       recoverableOrders,
       recoveredOrders,
@@ -1264,6 +1311,8 @@ export async function backfillRecentOrdersWithRecoveredAttribution(options: Orde
       limit,
       beforeMetrics,
       afterMetrics,
+      reclassificationTarget,
+      organizationIds,
       scannedOrders,
       recoverableOrders,
       recoveredOrders,
@@ -1303,6 +1352,11 @@ export function toOrderAttributionBackfillJobReport(report: BackfillReport): Ord
     recovered: report.recoveredOrders,
     unrecoverable: report.unrecoverableOrders,
     writebackCompleted: report.shopifyWritebackCompleted,
+    dryRun: report.dryRun,
+    reclassificationTarget: report.reclassificationTarget,
+    organizationIds: report.organizationIds,
+    beforeCounts: report.beforeMetrics.tierCounts,
+    afterCounts: report.afterMetrics.tierCounts,
     failures: report.failures
   };
 }

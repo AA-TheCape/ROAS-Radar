@@ -1,0 +1,29 @@
+{
+  "name": "roas_meta_attribution_confidence_scores",
+  "description": "Distribution of Meta platform-reported attribution confidence scores observed at resolver decision time.",
+  "filter": "resource.type=\"cloud_run_revision\" AND jsonPayload.event=\"attribution_resolver_outcome\" AND jsonPayload.metaPresent=true",
+  "valueExtractor": "EXTRACT(jsonPayload.metaConfidenceScore)",
+  "labelExtractors": {
+    "service": "EXTRACT(jsonPayload.service)",
+    "pipeline": "EXTRACT(jsonPayload.pipeline)",
+    "meta_evaluation_outcome": "EXTRACT(jsonPayload.metaEvaluationOutcome)",
+    "meta_affected_canonical": "EXTRACT(jsonPayload.metaAffectedCanonical)"
+  },
+  "metricDescriptor": {
+    "metricKind": "DELTA",
+    "valueType": "DISTRIBUTION",
+    "unit": "1",
+    "displayName": "ROAS Radar Meta Attribution Confidence Scores",
+    "labels": [
+      { "key": "service", "valueType": "STRING", "description": "Service emitting the resolver decision." },
+      { "key": "pipeline", "valueType": "STRING", "description": "Realtime or backfill resolver path." },
+      { "key": "meta_evaluation_outcome", "valueType": "STRING", "description": "Meta eligibility result observed by the resolver." },
+      { "key": "meta_affected_canonical", "valueType": "STRING", "description": "Whether Meta changed the canonical attribution decision." }
+    ]
+  },
+  "bucketOptions": {
+    "explicitBuckets": {
+      "bounds": [0, 0.25, 0.35, 0.5, 0.75, 0.9, 1]
+    }
+  }
+}
