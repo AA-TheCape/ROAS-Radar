@@ -253,7 +253,7 @@ test('hinted_fallback_only attributes only qualifying synthetic hint rows when d
   assert.equal(result.summariesByModel.hinted_fallback_only.winnerTouchpointId, 'hint-b');
 });
 
-test('hinted_fallback_only ignores ambiguous synthetic hints and ga4 fallback rows when no qualifying hint exists', () => {
+test('hinted_fallback_only uses GA4 fallback when no qualifying Shopify hint exists', () => {
   const result = execute([
     buildTouchpoint('session-hint-ambiguous', '2026-04-12T00:00:00.000Z', {
       touchpointId: 'hint-ambiguous',
@@ -299,10 +299,11 @@ test('hinted_fallback_only ignores ambiguous synthetic hints and ga4 fallback ro
 
   assert.deepEqual(
     result.creditsByModel.hinted_fallback_only.map((credit) => credit.revenueCredit),
-    []
+    ['100.00']
   );
-  assert.equal(result.summariesByModel.hinted_fallback_only.allocationStatus, 'unattributed');
-  assert.equal(result.summariesByModel.hinted_fallback_only.touchpointCountConsidered, 0);
+  assert.equal(result.summariesByModel.hinted_fallback_only.allocationStatus, 'attributed');
+  assert.equal(result.summariesByModel.hinted_fallback_only.winnerTouchpointId, 'ga4-1');
+  assert.equal(result.summariesByModel.hinted_fallback_only.touchpointCountConsidered, 1);
 });
 
 test('core v1 models do not spill fallback evidence into deterministic attribution pools', () => {

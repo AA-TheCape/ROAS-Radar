@@ -395,7 +395,7 @@ async function fetchAttributionResult(shopifyOrderId: string) {
   return result.rows[0];
 }
 
-async function fetchPrimaryLastNonDirectCredit(shopifyOrderId: string) {
+async function fetchPrimaryCredit(shopifyOrderId: string, attributionModel = 'last_non_direct') {
   const { pool } = await getModules();
 
   const result = await pool.query<{
@@ -416,14 +416,18 @@ async function fetchPrimaryLastNonDirectCredit(shopifyOrderId: string) {
         attributed_click_id_value
       FROM attribution_order_credits
       WHERE shopify_order_id = $1
-        AND attribution_model = 'last_non_direct'
+        AND attribution_model = $2
         AND is_primary = true
     `,
-    [shopifyOrderId]
+    [shopifyOrderId, attributionModel]
   );
 
   assert.equal(result.rowCount, 1);
   return result.rows[0];
+}
+
+async function fetchPrimaryLastNonDirectCredit(shopifyOrderId: string) {
+  return fetchPrimaryCredit(shopifyOrderId);
 }
 
 async function fetchOrderSnapshot(shopifyOrderId: string) {
@@ -1169,7 +1173,7 @@ test('Google CPC order attribution persists campaign names only when attribution
     assert.equal(googleCampaignIdFallbackResult.attributed_campaign_id, '987654321');
     assert.equal(googleCampaignIdFallbackResult.attributed_click_id_type, null);
     assert.equal(googleCampaignIdFallbackResult.attributed_click_id_value, null);
-    assert.deepEqual(await fetchPrimaryLastNonDirectCredit('order-google-cpc-campaign-id-fallback-1'), {
+    assert.deepEqual(await fetchPrimaryCredit('order-google-cpc-campaign-id-fallback-1', 'hinted_fallback_only'), {
       attributed_source: 'google',
       attributed_medium: 'cpc',
       attributed_campaign: '987654321',

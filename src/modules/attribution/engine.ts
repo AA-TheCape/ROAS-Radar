@@ -142,6 +142,7 @@ type StrategyContext = {
   deterministicTouchpoints: NormalizedTouchpoint[];
   deterministicClicks: NormalizedTouchpoint[];
   hintedFallbackCandidates: NormalizedTouchpoint[];
+  ga4FallbackCandidates: NormalizedTouchpoint[];
   orderRevenue: number | string;
   normalizationFailuresCount: number;
 };
@@ -351,6 +352,10 @@ function qualifiesSyntheticHint(touchpoint: NormalizedTouchpoint): boolean {
   return qualifiesSyntheticHintSignal(touchpoint);
 }
 
+function qualifiesSyntheticGa4Fallback(touchpoint: NormalizedTouchpoint): boolean {
+  return touchpoint.evidenceSource === 'ga4_fallback' && touchpoint.isSynthetic;
+}
+
 function normalizeTouchpoints(
   rawTouchpoints: AttributionTouchpoint[],
   orderOccurredAt: Date,
@@ -392,6 +397,7 @@ function buildStrategyContext(rawTouchpoints: AttributionTouchpoint[], options: 
   );
   const deterministicClicks = deterministicTouchpoints.filter((touchpoint) => touchpoint.engagementType === 'click');
   const hintedFallbackCandidates = eligibleTouchpoints.filter(qualifiesSyntheticHint);
+  const ga4FallbackCandidates = eligibleTouchpoints.filter(qualifiesSyntheticGa4Fallback);
 
   return {
     eligibleTouchpoints,
@@ -400,6 +406,7 @@ function buildStrategyContext(rawTouchpoints: AttributionTouchpoint[], options: 
     deterministicTouchpoints,
     deterministicClicks,
     hintedFallbackCandidates,
+    ga4FallbackCandidates,
     orderRevenue: options.orderRevenue,
     normalizationFailuresCount: Math.max(0, Math.trunc(options.normalizationFailuresCount ?? 0))
   };
@@ -575,15 +582,19 @@ const attributionStrategies: Record<AttributionModel, AttributionStrategy> = {
       };
     }
 
-    const winner = pickWinner(context.hintedFallbackCandidates, compareLastTouchWinner);
+    const fallbackCandidates =
+      context.hintedFallbackCandidates.length > 0
+        ? context.hintedFallbackCandidates
+        : context.ga4FallbackCandidates;
+    const winner = pickWinner(fallbackCandidates, compareLastTouchWinner);
 
     return {
-      touchpoints: context.hintedFallbackCandidates,
-      weights: buildWinnerWeights(context.hintedFallbackCandidates, winner?.touchpointId ?? null),
+      touchpoints: fallbackCandidates,
+      weights: buildWinnerWeights(fallbackCandidates, winner?.touchpointId ?? null),
       allocationStatus: winner ? 'attributed' : 'unattributed',
       directSuppressionApplied: false,
       deterministicBlockApplied: false,
-      lookbackRuleApplied: summarizePool(context.hintedFallbackCandidates).lookbackRuleApplied
+      lookbackRuleApplied: summarizePool(fallbackCandidates).lookbackRuleApplied
     };
   }
 };
