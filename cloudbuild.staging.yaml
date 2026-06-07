@@ -34,12 +34,12 @@ steps:
         apt-get install -y --no-install-recommends ca-certificates curl xz-utils
         NODE_VERSION="${_NODE_VERSION}"
         NODE_ARCH="$(dpkg --print-architecture)"
-        case "$NODE_ARCH" in
+        case "$$NODE_ARCH" in
           amd64) NODE_DIST_ARCH=x64 ;;
           arm64) NODE_DIST_ARCH=arm64 ;;
-          *) echo "unsupported Node architecture: $NODE_ARCH" >&2; exit 1 ;;
+          *) echo "unsupported Node architecture: $$NODE_ARCH" >&2; exit 1 ;;
         esac
-        curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_DIST_ARCH}.tar.xz" \
+        curl -fsSL "https://nodejs.org/dist/v$${NODE_VERSION}/node-v$${NODE_VERSION}-linux-$${NODE_DIST_ARCH}.tar.xz" \
           | tar -xJ --strip-components=1 -C /usr/local
         node --version
         SHORT_SHA="$SHORT_SHA" \
