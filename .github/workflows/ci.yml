@@ -107,6 +107,12 @@ jobs:
       - run: chmod +x infra/cloud-run/bootstrap-iam.sh
       - run: infra/cloud-run/bootstrap-iam.sh staging
 
+      - name: Verify Cloud Build submit identity
+        run: |
+          gcloud auth list --filter=status:ACTIVE --format='value(account)'
+          gcloud config list --format='value(core.project,core.account)'
+          gcloud storage buckets describe gs://roas-radar-staging_cloudbuild --format='value(name)'
+
       - name: Build and deploy staging
         run: |
           gcloud builds submit \
