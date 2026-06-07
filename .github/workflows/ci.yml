@@ -104,11 +104,15 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
-      - run: chmod +x infra/cloud-run/bootstrap-iam.sh infra/cloud-run/deploy.sh
+      - run: chmod +x infra/cloud-run/bootstrap-iam.sh
       - run: infra/cloud-run/bootstrap-iam.sh staging
-      - run: infra/cloud-run/deploy.sh staging
-        env:
-          RUN_MIGRATIONS_ON_DEPLOY: "true"
+
+      - name: Build and deploy staging
+        run: |
+          gcloud builds submit \
+            --config=cloudbuild.staging.yaml \
+            --substitutions=SHORT_SHA="${GITHUB_SHA::7}" \
+            .
 
   deploy-production:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
@@ -135,8 +139,12 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
-      - run: chmod +x infra/cloud-run/bootstrap-iam.sh infra/cloud-run/deploy.sh
+      - run: chmod +x infra/cloud-run/bootstrap-iam.sh
       - run: infra/cloud-run/bootstrap-iam.sh production
-      - run: infra/cloud-run/deploy.sh production
-        env:
-          RUN_MIGRATIONS_ON_DEPLOY: "true"
+
+      - name: Promote release
+        run: |
+          gcloud builds submit \
+            --config=cloudbuild.release.yaml \
+            --substitutions=SHORT_SHA="${GITHUB_SHA::7}",_SKIP_BUILDS=true \
+            .
