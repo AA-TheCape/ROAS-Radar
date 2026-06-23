@@ -471,7 +471,24 @@ function normalizeGoogleAdsCustomerId(value: string): string {
 	return normalized;
 }
 
-function normalizeRedirectPath(rawValue: string | undefined): string | null {
+function getDashboardBaseUrl(): string | null {
+	const rawValue = env.SHOPIFY_APP_POST_INSTALL_REDIRECT_URL.trim();
+
+	if (!rawValue) {
+		return null;
+	}
+
+	try {
+		return new URL(rawValue).toString().replace(/\/$/, "");
+	} catch {
+		return null;
+	}
+}
+
+function normalizeRedirectPath(
+	rawValue: string | undefined,
+	appBaseUrl: string,
+): string | null {
 	if (!rawValue) {
 		return null;
 	}
@@ -482,15 +499,46 @@ function normalizeRedirectPath(rawValue: string | undefined): string | null {
 		return null;
 	}
 
+	const dashboardBaseUrl = getDashboardBaseUrl();
+
+	if (/^https?:\/\//i.test(trimmed)) {
+		const redirectUrl = new URL(trimmed);
+		const allowedOrigins = new Set([new URL(appBaseUrl).origin]);
+
+		if (dashboardBaseUrl) {
+			allowedOrigins.add(new URL(dashboardBaseUrl).origin);
+		}
+
+		if (!allowedOrigins.has(redirectUrl.origin)) {
+			throw new GoogleAdsHttpError(
+				400,
+				"invalid_redirect_path",
+				"redirectPath origin is not allowed",
+			);
+		}
+
+		return redirectUrl.toString();
+	}
+
+	if (trimmed.startsWith("//")) {
+		throw new GoogleAdsHttpError(
+			400,
+			"invalid_redirect_path",
+			"redirectPath must not be protocol-relative",
+		);
+	}
+
 	if (!trimmed.startsWith("/")) {
 		throw new GoogleAdsHttpError(
 			400,
 			"invalid_redirect_path",
-			"redirectPath must be a root-relative path",
+			"redirectPath must be a root-relative path or allowlisted URL",
 		);
 	}
 
-	return trimmed;
+	return dashboardBaseUrl
+		? new URL(trimmed, `${dashboardBaseUrl}/`).toString()
+		: trimmed;
 }
 
 async function getStoredGoogleAdsSettings(): Promise<GoogleAdsSettingsRow | null> {
@@ -2787,7 +2835,10 @@ export function createGoogleAdsAdminRouter(): Router {
 			const loginCustomerId = payload.loginCustomerId
 				? normalizeGoogleAdsCustomerId(payload.loginCustomerId)
 				: null;
-			const redirectPath = normalizeRedirectPath(payload.redirectPath);
+			const redirectPath = normalizeRedirectPath(
+				payload.redirectPath,
+				config.appBaseUrl,
+			);
 			const state = await insertOAuthState({
 				redirectPath,
 				customerId: normalizedCustomerId,

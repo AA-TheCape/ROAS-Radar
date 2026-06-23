@@ -1669,7 +1669,7 @@ function App() {
         throw new Error('Save the Meta Ads configuration first. Some required fields are still missing.');
       }
 
-      const response = await startMetaAdsOauth(window.location.pathname);
+      const response = await startMetaAdsOauth(window.location.href);
       setActionFeedback({
         context: 'meta-connect',
         loading: null,
@@ -2041,7 +2041,7 @@ function App() {
           customerId: googleForm.customerId.trim(),
           loginCustomerId: googleForm.loginCustomerId.trim() || undefined
         },
-        window.location.pathname
+        window.location.href
       );
       setActionFeedback({
         context: 'google-connect',
