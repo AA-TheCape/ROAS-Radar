@@ -872,7 +872,10 @@ async function upsertMetaAdsConnection(params: {
   account: MetaAdsAccountResponse;
   encryptionKey: string;
 }): Promise<void> {
-  await query(
+  const rawPayloadMetadata = buildRawPayloadStorageMetadata(params.account);
+  const { rawPayloadJson, payloadSizeBytes, payloadHash } = rawPayloadMetadata;
+
+  const upsertResult = await query<RawPayloadIntegrityRow>(
     `
       INSERT INTO meta_ads_connections (
         ad_account_id,
@@ -885,6 +888,9 @@ async function upsertMetaAdsConnection(params: {
         account_name,
         account_currency,
         raw_account_data,
+        raw_account_external_id,
+        raw_account_payload_size_bytes,
+        raw_account_payload_hash,
         updated_at
       )
       VALUES (
@@ -898,6 +904,9 @@ async function upsertMetaAdsConnection(params: {
         $7,
         $8,
         $9::jsonb,
+        $10,
+        $11,
+        $12,
         now()
       )
       ON CONFLICT (ad_account_id)
@@ -911,7 +920,14 @@ async function upsertMetaAdsConnection(params: {
         account_name = $7,
         account_currency = $8,
         raw_account_data = $9::jsonb,
+        raw_account_external_id = $10,
+        raw_account_payload_size_bytes = $11,
+        raw_account_payload_hash = $12,
         updated_at = now()
+      RETURNING
+        raw_account_payload_size_bytes AS "storedPayloadSizeBytes",
+        raw_account_payload_hash AS "storedPayloadHash",
+        raw_account_data AS "persistedRawPayload"
     `,
     [
       params.adAccountId,
@@ -922,9 +938,18 @@ async function upsertMetaAdsConnection(params: {
       params.tokenExpiresAt,
       params.account.name ?? null,
       params.account.currency ?? params.account.account_currency ?? null,
-      JSON.stringify(params.account)
+      rawPayloadJson,
+      params.adAccountId,
+      payloadSizeBytes,
+      payloadHash
     ]
   );
+
+  logRawPayloadIntegrityMismatch(rawPayloadMetadata, upsertResult.rows[0], {
+    surface: 'meta_ads_connections.raw_account_data',
+    operation: 'upsert',
+    recordId: params.adAccountId
+  });
 }
 
 async function getActiveMetaAdsConnection(): Promise<MetaAdsConnectionRow | null> {
